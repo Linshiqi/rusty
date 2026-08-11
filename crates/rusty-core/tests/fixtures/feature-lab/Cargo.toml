@@ -1,0 +1,31 @@
+# A deliberately small workspace whose only job is to exercise feature
+# resolution. Every optional dependency here is already in rusty's own lockfile,
+# so resolving this fixture needs no new downloads.
+#
+# The shape under test:
+#   - `default` expands transitively (default -> migrations -> paths -> camino)
+#   - features gate real crates, so flipping one moves the crate count
+#   - `iter` is off by default, so it exercises the "flip on" direction
+#   - `graph` pulls a crate with its own subtree, not just a leaf
+
+[workspace]
+
+[package]
+name = "feature-lab"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", optional = true }
+itertools = { version = "0.14", optional = true }
+petgraph = { version = "0.8", optional = true }
+camino = { version = "1", optional = true }
+
+[features]
+default = ["json", "migrations"]
+json = ["dep:serde"]
+paths = ["dep:camino"]
+migrations = ["paths"]
+graph = ["dep:petgraph"]
+iter = ["dep:itertools"]

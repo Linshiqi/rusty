@@ -1,0 +1,636 @@
+//! Wire types for the embedded workbench.
+//!
+//! Like `rusty_core::model`, this is compiled unconditionally and must stay
+//! free of IO so the Leptos frontend can `use` these types directly.
+
+use serde::{Deserialize, Serialize};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chips
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Who makes the part.
+///
+/// Present from the start even though only Espressif is populated: vendor is
+/// what decides *how* to detect a chip, which toolchain to demand, and which
+/// flasher to reach for. Threading it through later would mean touching every
+/// one of those paths at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Vendor {
+    Espressif,
+    St,
+}
+
+impl Vendor {
+    pub fn label(self) -> &'static str {
+        match self {
+            Vendor::Espressif => "Espressif",
+            Vendor::St => "STMicroelectronics",
+        }
+    }
+
+    /// Crates that carry the part number as a cargo feature, most
+    /// authoritative first.
+    ///
+    /// This is the main thing that differs per vendor: `esp-hal` names the chip
+    /// `esp32c3`, while `embassy-stm32` names it `stm32f411ce`. Detection reads
+    /// the same shape from both, but has to know where to look.
+    pub fn chip_feature_crates(self) -> &'static [&'static str] {
+        match self {
+            Vendor::Espressif => &["esp-hal", "esp-idf-svc", "esp-idf-hal", "esp-wifi"],
+            Vendor::St => &["embassy-stm32", "stm32f4xx-hal", "stm32f1xx-hal", "stm32h7xx-hal"],
+        }
+    }
+}
+
+/// Instruction set the chip's main cores run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Arch {
+    Xtensa,
+    RiscV,
+    CortexM,
+}
+
+impl Arch {
+    pub fn label(self) -> &'static str {
+        match self {
+            Arch::Xtensa => "Xtensa",
+            Arch::RiscV => "RISC-V",
+            Arch::CortexM => "Arm Cortex-M",
+        }
+    }
+}
+
+/// What has to be installed before this part can be built for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolchainRequirement {
+    /// A stock rustup toolchain plus `rustup target add`.
+    Stock,
+    /// Espressif's forked LLVM, installed by espup as the `esp` toolchain.
+    ///
+    /// Upstream rustc cannot emit Xtensa code at all, and the error it gives
+    /// says nothing about espup — which is why this is modelled rather than
+    /// inferred from the triple at each call site.
+    EspXtensa,
+}
+
+impl ToolchainRequirement {
+    pub fn install_command(self) -> Option<&'static str> {
+        match self {
+            ToolchainRequirement::Stock => None,
+            ToolchainRequirement::EspXtensa => Some("espup install"),
+        }
+    }
+}
+
+/// A tool that can put a binary on the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Flasher {
+    /// Espressif's serial flasher. Needs only the USB cable.
+    Espflash,
+    /// Flashes and debugs through a JTAG/SWD probe, and decodes defmt over RTT.
+    /// The only option for parts with no serial bootloader.
+    ProbeRs,
+}
+
+impl Flasher {
+    pub fn binary(self) -> &'static str {
+        match self {
+            Flasher::Espflash => "espflash",
+            Flasher::ProbeRs => "probe-rs",
+        }
+    }
+
+    pub fn install_command(self) -> &'static str {
+        match self {
+            Flasher::Espflash => "cargo install espflash",
+            Flasher::ProbeRs => "cargo install probe-rs-tools",
+        }
+    }
+}
+
+/// Whether the project links the ESP-IDF C framework and gets `std`, or runs
+/// bare-metal against `esp-hal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Runtime {
+    /// `no_std` on `esp-hal`. Smaller, faster to build, no C toolchain.
+    BareMetal,
+    /// `std` on `esp-idf-hal` / `esp-idf-svc`. Threads, sockets, filesystem —
+    /// at the cost of pulling in the whole ESP-IDF build.
+    EspIdf,
+}
+
+impl Runtime {
+    pub fn label(self) -> &'static str {
+        match self {
+            Runtime::BareMetal => "no_std (esp-hal)",
+            Runtime::EspIdf => "std (esp-idf)",
+        }
+    }
+}
+
+/// A supported microcontroller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chip {
+    /// Canonical lowercase id, e.g. `esp32c3`. Matches the HAL's feature name
+    /// and what the flasher expects on the command line.
+    pub id: String,
+    /// Marketing name, e.g. `ESP32-C3`.
+    pub name: String,
+    pub vendor: Vendor,
+    pub arch: Arch,
+    pub cores: u8,
+    /// Nominal on-chip SRAM in bytes, from the datasheet.
+    ///
+    /// The usable figure is always lower — the linker script and the ROM
+    /// bootloader both take a share — so the memory dashboard reports regions
+    /// read from the ELF and treats this only as headline context.
+    pub sram_bytes: u32,
+    /// On-chip flash in bytes, when the part has any. Espressif modules pair
+    /// with an external chip whose real size is only knowable once connected;
+    /// most STM32 parts have it on die.
+    pub flash_bytes: Option<u32>,
+    /// Rust target for a bare-metal build.
+    pub bare_metal_target: String,
+    /// Rust target for a `std` build, where one exists. Espressif provides
+    /// these through ESP-IDF; no STM32 part has one.
+    pub std_target: Option<String>,
+    pub toolchain: ToolchainRequirement,
+    /// Ways to put a binary on this part, preferred first.
+    pub flashers: Vec<Flasher>,
+    /// What `probe-rs --chip` expects for this part.
+    ///
+    /// `None` where the name depends on package and flash size rather than on
+    /// the die — most of the STM32 range — in which case the user has to pick
+    /// from `probe-rs chip list`. Guessing would produce a plausible name that
+    /// flashes the wrong memory map.
+    pub probe_rs_target: Option<String>,
+    /// Radios the part provides, for the wizard to explain what it is choosing.
+    pub radios: Vec<String>,
+}
+
+impl Chip {
+    /// The target triple for a given runtime, if that combination is supported.
+    pub fn target_for(&self, runtime: Runtime) -> Option<&str> {
+        match runtime {
+            Runtime::BareMetal => Some(&self.bare_metal_target),
+            Runtime::EspIdf => self.std_target.as_deref(),
+        }
+    }
+
+    pub fn needs_esp_toolchain(&self) -> bool {
+        self.toolchain == ToolchainRequirement::EspXtensa
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boards
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A development board: a chip plus everything the chip cannot tell you.
+///
+/// This is what is actually on the desk. `ESP32-C3` is a die;
+/// `ESP32-C3-DevKitM-1` is the thing with a USB socket, 4 MB of flash, and an
+/// LED on a particular pin. Flash size, USB identity, and pin names are all
+/// board facts, and without them the port list can only say "COM3 (CP210x)".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Board {
+    pub id: String,
+    pub name: String,
+    /// Chip id this board carries.
+    pub chip: String,
+    /// Flash fitted on this board.
+    pub flash_bytes: Option<u32>,
+    /// External PSRAM, where the module has it.
+    pub psram_bytes: Option<u32>,
+    /// USB devices this board can enumerate as.
+    ///
+    /// More than one is normal: an S3 devkit has both a UART bridge and the
+    /// chip's own USB peripheral, on separate sockets, and they look like
+    /// different devices to the OS.
+    pub usb: Vec<UsbMatch>,
+    /// Flashing baud this board is known to tolerate.
+    pub flash_baud: Option<u32>,
+    /// Named pins, e.g. `led = 8`.
+    pub pins: Vec<PinAssignment>,
+    /// Which layer this definition came from, so the UI can distinguish a
+    /// built-in entry from one the user or their team wrote.
+    pub source: CatalogSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsbMatch {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    /// What this particular enumeration is, e.g. `CP210x bridge`.
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinAssignment {
+    pub name: String,
+    pub gpio: u32,
+}
+
+/// Where a catalogue entry came from.
+///
+/// Layered so a team can correct or extend the built-ins without forking:
+/// built-in loses to the user's own files, which lose to the project's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CatalogSource {
+    /// Shipped inside the binary.
+    Builtin,
+    /// From the user's config directory.
+    User,
+    /// From `.rusty/` in the open project — checked in, so the whole team gets
+    /// it.
+    Project,
+}
+
+impl CatalogSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            CatalogSource::Builtin => "built in",
+            CatalogSource::User => "your config",
+            CatalogSource::Project => "this project",
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Project detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What rusty could work out about an opened project.
+///
+/// Every field is optional because a half-configured project is the normal
+/// state of the world — and saying "I could not tell, here is why" is more
+/// useful than guessing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedProject {
+    pub root: String,
+    /// Chip id, if it could be determined.
+    pub chip: Option<String>,
+    /// How the chip was determined, so the user can correct a wrong guess.
+    pub chip_source: Option<String>,
+    pub runtime: Option<Runtime>,
+    /// Target triple from `.cargo/config.toml`, if set.
+    pub configured_target: Option<String>,
+    /// Toolchain channel from `rust-toolchain.toml`, if set.
+    pub configured_toolchain: Option<String>,
+    /// HAL and framework crates found in the manifest.
+    pub frameworks: Vec<String>,
+    /// Whether `defmt` is a dependency — decides whether the monitor should
+    /// decode logs or show them raw.
+    pub uses_defmt: bool,
+    /// Whether `embassy-executor` is present.
+    pub uses_embassy: bool,
+    /// Files that informed the detection, relative to the root.
+    pub evidence: Vec<String>,
+    /// Things that will stop a build, in the order worth fixing them.
+    pub problems: Vec<Problem>,
+}
+
+/// Something wrong with the project or the machine, stated in terms of what to
+/// do about it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Problem {
+    pub severity: Severity,
+    /// One line, what is wrong.
+    pub title: String,
+    /// Why it matters, in the user's terms.
+    pub detail: String,
+    /// A command that fixes it, when one exists. Shown as a copyable button
+    /// rather than run automatically — installing toolchains is the user's
+    /// call, not ours.
+    pub fix_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Severity {
+    /// The build cannot succeed until this is fixed.
+    Blocking,
+    /// The build works but something is inconsistent or suboptimal.
+    Warning,
+    /// Worth knowing, no action required.
+    Info,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New project
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WizardChoice {
+    pub chip: String,
+    pub runtime: Runtime,
+    /// Crate name for the new project.
+    pub name: String,
+    /// Generator option ids, e.g. `embassy`, `wifi`, `alloc`.
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+/// What one choice in the wizard commits the user to.
+///
+/// The reason the wizard exists. A list of chip names tells a beginner nothing
+/// about the fact that half of them require downloading a forked compiler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Explanation {
+    pub topic: String,
+    pub detail: String,
+    /// A concrete follow-on — a command to run, a target that gets used.
+    pub consequence: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Devices
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsbIdentity {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial_number: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerialPort {
+    /// OS name: `COM3`, `/dev/ttyUSB0`, `/dev/cu.usbserial-0001`.
+    pub name: String,
+    /// The USB-to-UART bridge, named as it is printed on the board — `CP210x`,
+    /// `CH340`. The fallback when no board in the catalogue matches.
+    pub bridge: Option<String>,
+    /// Boards whose USB identity matches this port.
+    ///
+    /// Usually zero or one. More than one means several boards share a bridge
+    /// chip — very common, since a CP210x is a CP210x — and the UI has to let
+    /// the user pick rather than guessing.
+    pub boards: Vec<String>,
+    /// True when this looks like a development board rather than a modem or a
+    /// virtual port, which would only waste the user's time.
+    pub likely_board: bool,
+    pub usb: Option<UsbIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Probe {
+    /// What `probe-rs --probe` expects.
+    pub identifier: String,
+    pub description: String,
+}
+
+/// How to reach the board.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Transport {
+    /// Through the ROM serial bootloader. No extra hardware; Espressif only.
+    Serial { port: String },
+    /// Through a JTAG/SWD probe. Adds breakpoints and RTT, and is the only way
+    /// onto a part with no serial bootloader.
+    Probe { identifier: Option<String> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FlashAction {
+    /// Write the image and stop.
+    Flash,
+    /// Attach to a board already running, without rewriting flash.
+    Monitor,
+    /// Write, then stay attached for logs. The usual inner loop.
+    FlashAndMonitor,
+}
+
+/// A command that is about to be run, in full.
+///
+/// Produced without spawning anything so it can be tested without hardware —
+/// and shown to the user verbatim before it runs. Embedded developers reach for
+/// the terminal constantly; hiding the command behind a button is how a tool
+/// becomes something to work around rather than with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandPlan {
+    pub program: String,
+    pub args: Vec<String>,
+    /// The whole thing as one copy-pasteable line.
+    pub display: String,
+    /// Why this tool and these flags, in one sentence.
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LogStream {
+    Stdout,
+    Stderr,
+}
+
+/// One line of output from a flash or monitor session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogLine {
+    pub stream: LogStream,
+    pub text: String,
+    /// Severity parsed out of a defmt or ESP-IDF log line, when present.
+    pub level: Option<LogLevel>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Memory
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What a loaded ELF section costs the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SectionKindDto {
+    /// Executable code. Lives in flash.
+    Code,
+    /// Constants and string literals. Lives in flash.
+    ReadOnlyData,
+    /// Mutable data with a non-zero initial value. Costs flash *and* RAM: the
+    /// initialiser is stored in the image and copied into RAM at startup.
+    InitialisedData,
+    /// Mutable data that starts zeroed (`.bss`). Costs RAM only.
+    ZeroedData,
+}
+
+impl SectionKindDto {
+    /// Whether one byte of this kind occupies (flash, RAM).
+    pub fn budget(self) -> (bool, bool) {
+        match self {
+            SectionKindDto::Code | SectionKindDto::ReadOnlyData => (true, false),
+            SectionKindDto::InitialisedData => (true, true),
+            SectionKindDto::ZeroedData => (false, true),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SectionKindDto::Code => "code",
+            SectionKindDto::ReadOnlyData => "read-only",
+            SectionKindDto::InitialisedData => "data",
+            SectionKindDto::ZeroedData => "bss",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionSize {
+    pub name: String,
+    pub address: u64,
+    pub size: u64,
+    pub kind: SectionKindDto,
+}
+
+/// One crate's contribution to the image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrateSize {
+    /// Crate name as it appears in symbols, so underscores rather than hyphens.
+    pub name: String,
+    pub code: u64,
+    pub read_only_data: u64,
+    pub data: u64,
+    pub bss: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryTotals {
+    /// Bytes stored in the flash image.
+    pub flash_bytes: u64,
+    /// Bytes resident in RAM once running.
+    pub ram_bytes: u64,
+    /// Nominal on-chip SRAM, when the part is known.
+    ///
+    /// Headline capacity, not what the linker will grant — some is reserved by
+    /// the ROM bootloader and by the cache configuration. Treat a reading close
+    /// to this number as trouble well before it reaches it.
+    pub ram_capacity: Option<u32>,
+}
+
+impl MemoryTotals {
+    /// Static RAM use as a fraction of nominal capacity.
+    ///
+    /// Static only: the stack and any heap grow on top of this at runtime,
+    /// which is exactly why a number that looks comfortable here can still
+    /// overflow in the field.
+    pub fn ram_fraction(&self) -> Option<f32> {
+        let capacity = self.ram_capacity?;
+        (capacity > 0).then(|| self.ram_bytes as f32 / capacity as f32)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryReport {
+    pub elf_path: String,
+    pub chip: Option<String>,
+    /// Loaded sections, largest first.
+    pub sections: Vec<SectionSize>,
+    pub totals: MemoryTotals,
+    /// Per-crate attribution, largest first.
+    pub crates: Vec<CrateSize>,
+    /// Bytes belonging to symbols with no identifiable crate — assembly, C from
+    /// ESP-IDF, ROM stubs. Reported separately rather than distributed, so the
+    /// per-crate figures stay honest.
+    pub unattributed_bytes: u64,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Toolchain
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The state of the machine's Rust and Espressif tooling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolchainStatus {
+    /// `rustup toolchain list`, normalized to channel names.
+    pub toolchains: Vec<Toolchain>,
+    /// Targets installed for the active toolchain.
+    pub installed_targets: Vec<String>,
+    /// Espressif and probe tooling found on PATH.
+    pub tools: Vec<ToolStatus>,
+    /// True when a toolchain named `esp` is present — the Xtensa one espup
+    /// installs.
+    pub has_esp_toolchain: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Toolchain {
+    pub name: String,
+    pub is_default: bool,
+    /// True for the espup-installed Xtensa toolchain.
+    pub is_esp: bool,
+}
+
+/// One external binary the workbench can drive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolStatus {
+    /// Executable name, e.g. `espflash`.
+    pub name: String,
+    /// What it is for, shown when it is missing so the user can decide whether
+    /// they need it at all.
+    pub purpose: String,
+    pub version: Option<String>,
+    /// How to install it, if absent.
+    pub install_command: String,
+    /// False when this tool is only needed for some projects.
+    pub required: bool,
+}
+
+impl ToolStatus {
+    pub fn is_installed(&self) -> bool {
+        self.version.is_some()
+    }
+}
+
+/// Everything the toolchain panel shows: machine state plus what this
+/// particular project needs from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolchainReport {
+    pub status: ToolchainStatus,
+    /// Target triple this project needs, when it is known.
+    pub required_target: Option<String>,
+    /// Whether that target is installed.
+    pub required_target_installed: bool,
+    /// Whether this project needs the Xtensa toolchain.
+    pub needs_esp_toolchain: bool,
+    pub problems: Vec<Problem>,
+}

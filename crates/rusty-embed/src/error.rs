@@ -1,0 +1,46 @@
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("`{path}` could not be read")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("`{path}` is not valid TOML")]
+    Toml {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("no Cargo.toml at `{0}` — open the folder that contains one")]
+    NotACargoProject(String),
+
+    #[error("`{path}` is not a readable ELF ({detail}) — build the project first")]
+    Elf { path: String, detail: String },
+
+    #[error("could not run `{tool}` — is it on PATH?")]
+    Spawn {
+        tool: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{chip} has no serial bootloader — flash it through a debug probe instead")]
+    NoSerialBootloader { chip: String },
+
+    #[error("`{chip}` is not a part rusty knows about")]
+    UnknownChip { chip: String },
+
+    #[error("{chip} has no {runtime} target — that combination cannot be built")]
+    UnsupportedRuntime { chip: String, runtime: String },
+
+    #[error(
+        "probe-rs needs an exact target name for `{chip}`, which depends on package and \
+         flash size. Run `probe-rs chip list` and pick the one matching your board."
+    )]
+    UnknownProbeTarget { chip: String },
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

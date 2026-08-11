@@ -1,0 +1,40 @@
+[package]
+name = "rusty-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The chip catalogue and the wire types are rendered by the frontend, so the
+# unconditional half of this crate must compile to wasm32.
+serde = { version = "1.0.229", features = ["derive"] }
+
+toml = { version = "1.1.4", optional = true }
+thiserror = { version = "2.0.20", optional = true }
+object = { version = "0.40.0", optional = true }
+rustc-demangle = { version = "0.1.28", optional = true }
+# `libudev` is what supplies USB vendor/product ids on Linux, which is how a
+# dev board is told apart from a modem. It costs a system library at build
+# time; the default feature set keeps it, and a packager who cannot have it can
+# turn it off and lose only the board-name guess.
+serialport = { version = "4.9.0", optional = true }
+
+[features]
+default = ["backend"]
+backend = [
+    "dep:toml",
+    "dep:thiserror",
+    "dep:object",
+    "dep:rustc-demangle",
+    "dep:serialport",
+]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+object = { version = "0.40.0", features = ["write"] }
+tempfile = "3.27.0"

@@ -1,0 +1,97 @@
+# Development boards.
+#
+# A board is what is actually on the desk. The chip alone cannot say how much
+# flash is fitted, which USB device it enumerates as, or which pin the LED is
+# on — those are board facts, and getting them from a table is the difference
+# between "COM3 (CP210x)" and "ESP32-C3-DevKitM-1 on COM3".
+#
+# Users add their own by dropping a file into:
+#
+#   ~/.config/rusty/boards/*.toml     (or %APPDATA%\rusty\boards on Windows)
+#   <project>/.rusty/boards/*.toml    (checked in, so a team shares them)
+#
+# Later layers win by `id`, so a project file can correct a built-in entry.
+#
+# ⚠️ TOML scoping: every scalar key must come *before* the first `[[board.usb]]`
+# or `[board.pins]` header. Once a sub-table is opened, later keys belong to it,
+# and a stray `flash_baud` after the usb block is read as a usb field.
+#
+# `[[board.usb]]` is a list because some boards enumerate differently depending
+# on which socket you plug into — the S3 devkits expose both a UART bridge and
+# the chip's native USB, and those are different devices to the OS.
+
+[[board]]
+id = "esp32c3-devkitm-1"
+name = "ESP32-C3-DevKitM-1"
+chip = "esp32c3"
+flash_bytes = 4_194_304
+[[board.usb]]
+vendor_id = 0x303A
+product_id = 0x1001
+note = "native USB Serial/JTAG"
+[board.pins]
+led = 8
+
+[[board]]
+id = "esp32c6-devkitc-1"
+name = "ESP32-C6-DevKitC-1"
+chip = "esp32c6"
+flash_bytes = 8_388_608
+[[board.usb]]
+vendor_id = 0x303A
+product_id = 0x1001
+note = "native USB Serial/JTAG"
+[board.pins]
+led = 8
+
+[[board]]
+id = "esp32s3-devkitc-1"
+name = "ESP32-S3-DevKitC-1"
+chip = "esp32s3"
+flash_bytes = 8_388_608
+psram_bytes = 8_388_608
+[[board.usb]]
+vendor_id = 0x303A
+product_id = 0x1001
+note = "native USB (USB socket)"
+[[board.usb]]
+vendor_id = 0x10C4
+product_id = 0xEA60
+note = "CP210x bridge (UART socket)"
+[board.pins]
+led = 48
+
+[[board]]
+id = "esp32-devkitc-v4"
+name = "ESP32-DevKitC V4"
+chip = "esp32"
+flash_bytes = 4_194_304
+[[board.usb]]
+vendor_id = 0x10C4
+product_id = 0xEA60
+note = "CP210x bridge"
+[board.pins]
+led = 2
+
+[[board]]
+id = "seeed-xiao-esp32c3"
+name = "Seeed XIAO ESP32C3"
+chip = "esp32c3"
+flash_bytes = 4_194_304
+[[board.usb]]
+vendor_id = 0x303A
+product_id = 0x1001
+note = "native USB Serial/JTAG"
+
+[[board]]
+id = "m5stamp-c3"
+name = "M5Stamp C3"
+chip = "esp32c3"
+flash_bytes = 4_194_304
+flash_baud = 921_600
+[[board.usb]]
+vendor_id = 0x1A86
+product_id = 0x7523
+note = "CH340 bridge"
+[board.pins]
+led = 2

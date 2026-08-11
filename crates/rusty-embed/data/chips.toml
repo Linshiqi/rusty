@@ -1,0 +1,164 @@
+# The part catalogue.
+#
+# Embedded into the binary at build time, and the schema a user's own file must
+# follow. Everything here is a property of the die; anything that depends on the
+# module or the board around it — flash size, USB ids, pin names — belongs in
+# boards.toml.
+#
+# `sram_bytes` is datasheet headline capacity. It is not what the linker will
+# grant you: the ROM bootloader and the cache configuration both take a share.
+# The memory dashboard reads real regions from the ELF and uses this only as
+# context.
+
+# ── Espressif ────────────────────────────────────────────────────────────────
+
+[[chip]]
+id = "esp32"
+name = "ESP32"
+vendor = "espressif"
+arch = "xtensa"
+cores = 2
+sram_bytes = 532_480
+bare_metal_target = "xtensa-esp32-none-elf"
+std_target = "xtensa-esp32-espidf"
+toolchain = "esp-xtensa"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32"
+radios = ["Wi-Fi 4", "Bluetooth Classic", "BLE"]
+
+[[chip]]
+id = "esp32s2"
+name = "ESP32-S2"
+vendor = "espressif"
+arch = "xtensa"
+cores = 1
+sram_bytes = 327_680
+bare_metal_target = "xtensa-esp32s2-none-elf"
+std_target = "xtensa-esp32s2-espidf"
+toolchain = "esp-xtensa"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32s2"
+radios = ["Wi-Fi 4", "USB OTG"]
+
+[[chip]]
+id = "esp32s3"
+name = "ESP32-S3"
+vendor = "espressif"
+arch = "xtensa"
+cores = 2
+sram_bytes = 524_288
+bare_metal_target = "xtensa-esp32s3-none-elf"
+std_target = "xtensa-esp32s3-espidf"
+toolchain = "esp-xtensa"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32s3"
+radios = ["Wi-Fi 4", "BLE 5", "USB OTG"]
+
+[[chip]]
+id = "esp32c2"
+name = "ESP32-C2"
+vendor = "espressif"
+arch = "risc-v"
+cores = 1
+sram_bytes = 278_528
+bare_metal_target = "riscv32imc-unknown-none-elf"
+std_target = "riscv32imc-esp-espidf"
+toolchain = "stock"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32c2"
+radios = ["Wi-Fi 4", "BLE 5"]
+
+[[chip]]
+id = "esp32c3"
+name = "ESP32-C3"
+vendor = "espressif"
+arch = "risc-v"
+cores = 1
+sram_bytes = 409_600
+bare_metal_target = "riscv32imc-unknown-none-elf"
+std_target = "riscv32imc-esp-espidf"
+toolchain = "stock"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32c3"
+radios = ["Wi-Fi 4", "BLE 5"]
+
+[[chip]]
+id = "esp32c6"
+name = "ESP32-C6"
+vendor = "espressif"
+arch = "risc-v"
+cores = 1
+sram_bytes = 524_288
+bare_metal_target = "riscv32imac-unknown-none-elf"
+std_target = "riscv32imac-esp-espidf"
+toolchain = "stock"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32c6"
+radios = ["Wi-Fi 6", "BLE 5", "802.15.4 (Thread/Zigbee)"]
+
+[[chip]]
+id = "esp32h2"
+name = "ESP32-H2"
+vendor = "espressif"
+arch = "risc-v"
+cores = 1
+sram_bytes = 327_680
+bare_metal_target = "riscv32imac-unknown-none-elf"
+std_target = "riscv32imac-esp-espidf"
+toolchain = "stock"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32h2"
+radios = ["BLE 5", "802.15.4 (Thread/Zigbee)"]
+
+[[chip]]
+id = "esp32p4"
+name = "ESP32-P4"
+vendor = "espressif"
+arch = "risc-v"
+cores = 2
+sram_bytes = 786_432
+bare_metal_target = "riscv32imafc-unknown-none-elf"
+toolchain = "stock"
+flashers = ["espflash", "probe-rs"]
+probe_rs_target = "esp32p4"
+radios = ["no radio"]
+
+# ── ST: a seam, not coverage ─────────────────────────────────────────────────
+#
+# These two exist so the vendor abstraction is exercised by something rather
+# than being a single-implementation interface that quietly assumes Espressif
+# everywhere. Extending the range is a matter of adding entries here.
+#
+# `probe_rs_target` is deliberately absent: probe-rs names STM32 parts by
+# package and flash size, which the die alone does not determine. Guessing one
+# produces a plausible name with the wrong memory map, so rusty asks the user to
+# run `probe-rs chip list` instead.
+
+[[chip]]
+id = "stm32f103"
+name = "STM32F103 (Blue Pill)"
+vendor = "st"
+arch = "cortex-m"
+cores = 1
+sram_bytes = 20_480
+flash_bytes = 65_536
+bare_metal_target = "thumbv7m-none-eabi"
+toolchain = "stock"
+# No serial bootloader, so a probe is the only way in.
+flashers = ["probe-rs"]
+radios = ["none"]
+
+[[chip]]
+id = "stm32f411"
+name = "STM32F411"
+vendor = "st"
+arch = "cortex-m"
+cores = 1
+sram_bytes = 131_072
+flash_bytes = 524_288
+# The `hf` suffix matters: this part has a hardware FPU, and building for the
+# soft-float target silently costs performance.
+bare_metal_target = "thumbv7em-none-eabihf"
+toolchain = "stock"
+flashers = ["probe-rs"]
+radios = ["none"]

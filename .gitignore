@@ -1,0 +1,14 @@
+# Unanchored: test fixtures are standalone workspaces and grow their own target/
+target/
+**/*.rs.bk
+*.pdb
+
+# Trunk output and its wasm-bindgen cache
+dist/
+.trunk/
+
+# Tauri codegen
+/crates/rusty-app/gen
+
+.DS_Store
+Thumbs.db

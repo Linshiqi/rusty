@@ -1,0 +1,52 @@
+[package]
+name = "rusty-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The conversation, tool, and provider-config types are rendered by the
+# frontend, so the unconditional half of this crate must compile to wasm32.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+async-stream = { version = "0.3.6", optional = true }
+async-trait = { version = "0.1.92", optional = true }
+eventsource-stream = { version = "0.2.3", optional = true }
+futures-util = { version = "0.3.33", optional = true }
+keyring = { version = "4.1.6", optional = true }
+reqwest = { version = "0.13.4", features = ["json", "stream", "gzip"], optional = true }
+thiserror = { version = "2.0.20", optional = true }
+tokio = { version = "1.53.1", features = ["rt", "macros", "sync"], optional = true }
+
+rusty-core = { version = "0.1.0", path = "../rusty-core", default-features = false, optional = true }
+rusty-embed = { version = "0.1.0", path = "../rusty-embed", default-features = false, optional = true }
+
+[features]
+default = ["backend"]
+
+# Providers, the keychain, the tool registry, and the agent loop. The frontend
+# takes this crate with `default-features = false` and gets only the wire types.
+backend = [
+    "dep:async-stream",
+    "dep:async-trait",
+    "dep:eventsource-stream",
+    "dep:futures-util",
+    "dep:keyring",
+    "dep:reqwest",
+    "dep:thiserror",
+    "dep:tokio",
+    "dep:rusty-core",
+    "dep:rusty-embed",
+    "rusty-core/backend",
+    "rusty-embed/backend",
+]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,0 +1,30 @@
+[package]
+name = "rusty-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The only unconditional dependency. Everything the Leptos frontend links
+# against lives in `model`, which must compile to wasm32.
+serde = { version = "1.0.229", features = ["derive"] }
+
+camino = { version = "1.2.5", optional = true }
+guppy = { version = "0.17.26", optional = true }
+semver = { version = "1.0.28", optional = true }
+serde_json = { version = "1.0.151", optional = true }
+thiserror = { version = "2.0.20", optional = true }
+
+[features]
+default = ["backend"]
+
+# Everything that runs a process, touches the filesystem, or walks a dependency
+# graph. The frontend takes this crate with `default-features = false` and gets
+# only the serde types.
+backend = ["dep:camino", "dep:guppy", "dep:semver", "dep:serde_json", "dep:thiserror"]
+
+[lints]
+workspace = true
