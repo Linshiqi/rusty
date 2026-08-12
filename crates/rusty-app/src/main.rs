@@ -76,8 +76,24 @@ fn main() {
             window::window_close,
             window::window_is_maximized,
         ])
-        .run(tauri::generate_context!())
-        .expect("rusty failed to start");
+        .build(tauri::generate_context!())
+        .expect("rusty failed to start")
+        .run(|app, event| {
+            // Kill the children on the way out. rust-analyzer does not reliably
+            // exit when its stdin closes — its proc-macro server keeps the pipe
+            // alive — so every exit that skipped this leaked a server holding
+            // hundreds of megabytes and the project's target directory. Three
+            // of them were found grazing after a day of dev restarts.
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                let state = app.state::<state::AppState>();
+                tauri::async_runtime::block_on(async {
+                    state.set_lsp(None).await;
+                    state.set_terminal(None).await;
+                    state.stop_session().await;
+                });
+            }
+        });
 }
 
 /// The frontend calls these commands by the names in `rusty-ipc`; this file
