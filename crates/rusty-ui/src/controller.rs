@@ -212,6 +212,7 @@ fn project_opened(state: AppState, result: OpenResult) {
             state.search_query.set(String::new());
             state.search_results.set(None);
             state.search_word.set(false);
+            state.search_regex.set(false);
             state.search_include.set(String::new());
             state.search_exclude.set(String::new());
             state.file_tree.set(Vec::new());
@@ -539,6 +540,7 @@ fn run_search(state: AppState, generation: u64) {
         query: String,
         case_sensitive: bool,
         whole_word: bool,
+        regex: bool,
         include: String,
         exclude: String,
     }
@@ -552,6 +554,7 @@ fn run_search(state: AppState, generation: u64) {
         query,
         case_sensitive: state.search_case.get_untracked(),
         whole_word: state.search_word.get_untracked(),
+        regex: state.search_regex.get_untracked(),
         include: state.search_include.get_untracked(),
         exclude: state.search_exclude.get_untracked(),
     };

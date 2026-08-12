@@ -156,6 +156,7 @@
         { path: "src/main.rs", line: 5, col: 7, text: "struct Radio;", spanStart: 7, spanEnd: 12 },
         { path: "Cargo.toml", line: 0, col: 0, text: "radio = \"0.1\"", spanStart: 0, spanEnd: 5 },
       ];
+      if (a.regex === undefined) return { hits: [], files: 0, truncated: false, error: "mock: regex arg missing" };
       const hits = a.include && a.include.includes(".rs")
         ? all.filter((h) => h.path.endsWith(".rs"))
         : all;

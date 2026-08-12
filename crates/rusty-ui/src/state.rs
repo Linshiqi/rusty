@@ -301,6 +301,7 @@ pub struct AppState {
     pub search_query: RwSignal<String>,
     pub search_case: RwSignal<bool>,
     pub search_word: RwSignal<bool>,
+    pub search_regex: RwSignal<bool>,
     /// `*.rs, src/**` — gitignore-style globs, as the boxes in the panel.
     pub search_include: RwSignal<String>,
     pub search_exclude: RwSignal<String>,
@@ -430,6 +431,7 @@ impl AppState {
             search_query: RwSignal::new(String::new()),
             search_case: RwSignal::new(false),
             search_word: RwSignal::new(false),
+            search_regex: RwSignal::new(false),
             search_include: RwSignal::new(String::new()),
             search_exclude: RwSignal::new(String::new()),
             show_hidden: RwSignal::new(false),

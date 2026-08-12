@@ -81,6 +81,7 @@ pub async fn search_project(
     query: String,
     case_sensitive: bool,
     whole_word: bool,
+    regex: bool,
     include: String,
     exclude: String,
     state: State<'_, AppState>,
@@ -90,6 +91,7 @@ pub async fn search_project(
         text: query,
         case_sensitive,
         whole_word,
+        regex,
         include,
         exclude,
     };

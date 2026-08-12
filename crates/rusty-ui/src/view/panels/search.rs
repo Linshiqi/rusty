@@ -59,6 +59,11 @@ pub fn SearchPanel() -> impl IntoView {
                             help="Whole word only"
                             on=state.search_word
                         />
+                        <Toggle
+                            label=".*"
+                            help="Regular expression"
+                            on=state.search_regex
+                        />
                     </div>
                     <GlobBox
                         placeholder="files to include, e.g. *.rs, src/**"

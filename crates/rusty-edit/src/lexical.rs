@@ -13,6 +13,17 @@
 
 use crate::model::{Span, Token};
 
+/// The primitive types. VSCode's TextMate grammar lists exactly these as
+/// `storage.type`; Zed's tree-sitter maps the `primitive_type` node to
+/// `@type.builtin`. Both are a fixed word list — the language cannot shadow
+/// what these names mean in type position often enough to matter, and a
+/// buffer where `u64` reads as an ordinary variable looks broken next to
+/// either editor.
+const PRIMITIVES: &[&str] = &[
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32",
+    "i64", "i128", "isize", "f32", "f64",
+];
+
 /// Rust's keywords, for contexts where no grammar has run (hover snippets).
 const KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
@@ -65,6 +76,8 @@ fn split_plain(text: &str, out: &mut Vec<Span>) {
             let next = bytes.get(end).copied();
             let token = if KEYWORDS.contains(&word) {
                 Some(Token::Keyword)
+            } else if PRIMITIVES.contains(&word) {
+                Some(Token::Type)
             } else if next == Some(b'!') && word.chars().next().is_some_and(char::is_lowercase) {
                 Some(Token::Macro)
             } else if word.chars().next().is_some_and(char::is_uppercase)
@@ -167,6 +180,20 @@ mod tests {
         assert!(spans.contains(&("vec".to_string(), Token::Macro)), "{spans:?}");
         assert!(spans.contains(&("fn".to_string(), Token::Keyword)), "{spans:?}");
         assert!(spans.contains(&("main".to_string(), Token::Function)), "{spans:?}");
+    }
+
+    #[test]
+    fn primitive_types_read_as_types() {
+        // The user's screenshot: `from_millis(val: u64)` with u64 in plain
+        // white beside a highlighted buffer.
+        let spans = spans_of("pub const fn from_millis(val: u64) -> Self");
+        assert!(spans.contains(&("u64".to_string(), Token::Type)), "{spans:?}");
+        assert!(
+            spans.contains(&("from_millis".to_string(), Token::Function)),
+            "{spans:?}"
+        );
+        let spans = spans_of("can_unwind: bool,");
+        assert!(spans.contains(&("bool".to_string(), Token::Type)), "{spans:?}");
     }
 
     #[test]
