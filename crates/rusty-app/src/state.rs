@@ -38,6 +38,12 @@ pub struct AppState {
     /// `SyntaxSet::load_defaults_newlines` parses a bundled binary dump, which
     /// is slow enough to notice if it happens per file opened.
     files: std::sync::OnceLock<Arc<rusty_edit::Files>>,
+    /// The language server for the open project, if one is running.
+    ///
+    /// Killed and replaced on project switch: rust-analyzer holds the old
+    /// project's target directory open, and a server answering questions about
+    /// a workspace nobody is looking at is pure cost.
+    lsp: Mutex<Option<Arc<rusty_lsp::LspClient>>>,
 }
 
 #[derive(Default, Clone)]
@@ -65,6 +71,9 @@ impl AppState {
         guard.workspace = workspace.map(Arc::new);
         // A different project's binary is worse than none.
         guard.firmware = None;
+        drop(guard);
+        // The old project's server has nothing true left to say.
+        self.set_lsp(None).await;
     }
 
     /// The layered catalogue, falling back to the built-ins before anything is
@@ -82,6 +91,16 @@ impl AppState {
 
     pub async fn root(&self) -> Option<PathBuf> {
         self.inner.lock().await.root.clone()
+    }
+
+    pub async fn lsp(&self) -> Option<Arc<rusty_lsp::LspClient>> {
+        self.lsp.lock().await.clone()
+    }
+
+    /// Register the project's language server, dropping — and thereby killing —
+    /// whatever it replaces.
+    pub async fn set_lsp(&self, client: Option<Arc<rusty_lsp::LspClient>>) {
+        *self.lsp.lock().await = client;
     }
 
     pub fn files(&self) -> Arc<rusty_edit::Files> {

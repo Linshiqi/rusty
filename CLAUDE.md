@@ -44,6 +44,10 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
 | `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
+| `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
+| `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write |
+| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion/hover/definition |
+| `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm) |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface |
@@ -126,6 +130,21 @@ UI contributions are declarative — extensions never ship markup or styles.
   off `SectionFlags::Elf` rather than trusting `SectionKind`, because these
   linker scripts invent section names (`.rwtext`, `.rodata_wifi`) that no
   heuristic classifies correctly.
+- **rustup's `rust-analyzer` proxy dispatches by the project's pinned
+  toolchain.** An ESP project pins `esp`, which has no rust-analyzer component,
+  so spawning the bare name fails with `unknown binary 'rust-analyzer' in
+  toolchain 'esp'` — precisely for the projects this workbench serves. Resolve
+  `rustup which --toolchain stable rust-analyzer` first; the stable binary
+  analyses any toolchain's project and reads the pinned sysroot itself.
+- **rust-analyzer's `check.allTargets` default buries no_std projects.** It
+  builds tests and benches, which need a test harness `no_std` does not have,
+  so every real diagnostic drowns in "can't find crate for `test`". The client
+  sets it false and passes `cargo.target` from chip detection.
+- **LSP positions are UTF-16 code units unless negotiated otherwise.** One CJK
+  comment shifts every column after it. The client offers utf-8 (rust-analyzer
+  takes it), converts to Unicode-scalar columns at the boundary, and the
+  integration test keeps a 中文 comment above the assertions so ASCII-only
+  arithmetic cannot pass.
 - **ConPTY will not start the shell until the terminal answers `ESC [ 6 n`.**
   Its first act is to ask where the cursor is, and it blocks on the reply. The
   symptom is total: the pty yields exactly four bytes and then silence for

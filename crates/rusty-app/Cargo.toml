@@ -13,6 +13,7 @@ rusty-core = { version = "0.1.0", path = "../rusty-core" }
 rusty-edit = { version = "0.1.0", path = "../rusty-edit" }
 rusty-embed = { version = "0.1.0", path = "../rusty-embed" }
 rusty-ipc = { version = "0.1.0", path = "../rusty-ipc" }
+rusty-lsp = { version = "0.1.0", path = "../rusty-lsp" }
 rusty-term = { version = "0.1.0", path = "../rusty-term" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

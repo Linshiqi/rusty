@@ -311,6 +311,39 @@ fn StatusBar() -> impl IntoView {
             }}
 
             {move || {
+                let (errors, _) = state.diag_counts();
+                // Absence explains itself: no chip means the status has nothing
+                // to say, but a missing language server looks like "the editor
+                // is broken" unless something names it.
+                let lsp = state.lsp_status.get();
+                (state.has_project() && lsp != crate::state::LspStatus::Off)
+                    .then(|| {
+                        let (text, tone) = match lsp {
+                            crate::state::LspStatus::Starting => {
+                                ("rust-analyzer starting".to_string(), Tone::Neutral)
+                            }
+                            crate::state::LspStatus::Ready if errors > 0 => {
+                                (format!("{errors} errors"), Tone::Crimson)
+                            }
+                            crate::state::LspStatus::Ready => {
+                                ("rust-analyzer".to_string(), Tone::Patina)
+                            }
+                            _ => ("rust-analyzer missing".to_string(), Tone::Crimson),
+                        };
+                        view! {
+                            <Status
+                                text=text
+                                tone=tone
+                                title="The language server behind the editor"
+                                on_click=Callback::new(move |_| {
+                                    state.show_dock(crate::state::DockTab::Problems)
+                                })
+                            />
+                        }
+                    })
+            }}
+
+            {move || {
                 let blocking = state.blocking_count();
                 let total = state.problems().len();
                 (total > 0)

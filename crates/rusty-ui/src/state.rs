@@ -7,7 +7,8 @@
 use leptos::prelude::*;
 
 use rusty_ai::{Message, Preset, ProviderConfig, ToolDef};
-use rusty_edit::{Document, Entry};
+use rusty_edit::{Document, Entry, Line};
+use rusty_lsp::FileDiagnostic;
 use rusty_term::Screen as TermScreen;
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
 use rusty_embed::{
@@ -15,7 +16,21 @@ use rusty_embed::{
     Problem, SerialPort, Severity, ToolchainReport, Transport, WizardChoice, WizardOption,
 };
 
+use std::collections::HashMap;
+
 use crate::ipc::IpcError;
+
+/// Whether the language server behind the editor is up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LspStatus {
+    /// No project, or the server was never asked for.
+    Off,
+    Starting,
+    Ready,
+    /// Could not start — usually not installed. The editor still works; the
+    /// squiggles and completion do not.
+    Missing,
+}
 
 /// One tool call the assistant made while answering.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +223,24 @@ pub struct AppState {
     pub file_tree: RwSignal<Vec<Entry>>,
     pub document: RwSignal<Option<Document>>,
     pub draft: RwSignal<String>,
+    /// The lines being painted, live. Seeded from the opened document, patched
+    /// plainly on each keystroke so typed text appears instantly, replaced by a
+    /// re-highlight when typing pauses.
+    pub highlighted: RwSignal<Vec<Line>>,
+    /// The text `highlighted` currently depicts — the reference for the
+    /// keystroke patch. Not the same as `draft` for the milliseconds between
+    /// an input event and the patch.
+    pub echo_text: RwSignal<String>,
+    /// Bumped on every keystroke; a re-highlight result is dropped unless the
+    /// generation it was requested at is still current.
+    pub pulse_gen: RwSignal<u64>,
+
+    /// What the compiler and rust-analyzer think is wrong, by file.
+    pub diagnostics: RwSignal<HashMap<String, Vec<FileDiagnostic>>>,
+    pub lsp_status: RwSignal<LspStatus>,
+    /// Which start_lsp call owns the event channel; stale channels' events are
+    /// dropped rather than fighting the new server over the status signal.
+    pub lsp_session: RwSignal<u64>,
     /// Directories the user has opened. Collapsed by default, because a tree
     /// that unfolds everything is a list.
     pub expanded: RwSignal<Vec<String>>,
@@ -299,6 +332,12 @@ impl AppState {
             file_tree: RwSignal::new(Vec::new()),
             document: RwSignal::new(None),
             draft: RwSignal::new(String::new()),
+            highlighted: RwSignal::new(Vec::new()),
+            echo_text: RwSignal::new(String::new()),
+            pulse_gen: RwSignal::new(0),
+            diagnostics: RwSignal::new(HashMap::new()),
+            lsp_status: RwSignal::new(LspStatus::Off),
+            lsp_session: RwSignal::new(0),
             expanded: RwSignal::new(Vec::new()),
             terminal: RwSignal::new(None),
             session_running: RwSignal::new(false),
@@ -401,6 +440,24 @@ impl AppState {
                 .or_else(|| all.iter().find(|f| f.matches_configured_target))
                 .or_else(|| all.first())
                 .cloned()
+        })
+    }
+
+    /// Compiler errors and warnings, across every file the server has spoken
+    /// about. The dock badge and the status bar both read this — one derivation
+    /// so they cannot disagree.
+    pub fn diag_counts(&self) -> (usize, usize) {
+        self.diagnostics.with(|by_file| {
+            let mut errors = 0;
+            let mut warnings = 0;
+            for diagnostic in by_file.values().flatten() {
+                match diagnostic.severity {
+                    rusty_lsp::DiagSeverity::Error => errors += 1,
+                    rusty_lsp::DiagSeverity::Warning => warnings += 1,
+                    _ => {}
+                }
+            }
+            (errors, warnings)
         })
     }
 

@@ -7,6 +7,7 @@ mod commands;
 mod error;
 mod files;
 mod flash;
+mod lsp;
 mod state;
 mod terminal;
 mod window;
@@ -31,6 +32,14 @@ fn main() {
             files::file_tree,
             files::open_file,
             files::save_file,
+            files::highlight_text,
+            lsp::lsp_start,
+            lsp::lsp_open,
+            lsp::lsp_change,
+            lsp::lsp_saved,
+            lsp::lsp_complete,
+            lsp::lsp_hover,
+            lsp::lsp_definition,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -94,7 +103,7 @@ mod wire_names {
 
     #[test]
     fn every_constant_names_a_real_handler() {
-        use crate::{ai, commands, files, flash, terminal, window};
+        use crate::{ai, commands, files, flash, lsp, terminal, window};
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
@@ -111,6 +120,15 @@ mod wire_names {
             cmd::files::TREE => files::file_tree,
             cmd::files::OPEN => files::open_file,
             cmd::files::SAVE => files::save_file,
+            cmd::files::HIGHLIGHT => files::highlight_text,
+
+            cmd::lsp::START => lsp::lsp_start,
+            cmd::lsp::OPEN => lsp::lsp_open,
+            cmd::lsp::CHANGE => lsp::lsp_change,
+            cmd::lsp::SAVED => lsp::lsp_saved,
+            cmd::lsp::COMPLETE => lsp::lsp_complete,
+            cmd::lsp::HOVER => lsp::lsp_hover,
+            cmd::lsp::DEFINITION => lsp::lsp_definition,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

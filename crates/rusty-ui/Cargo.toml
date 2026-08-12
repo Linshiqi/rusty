@@ -16,6 +16,7 @@ rusty-core = { version = "0.1.0", path = "../rusty-core", default-features = fal
 rusty-edit = { version = "0.1.0", path = "../rusty-edit", default-features = false }
 rusty-embed = { version = "0.1.0", path = "../rusty-embed", default-features = false }
 rusty-ipc = { version = "0.1.0", path = "../rusty-ipc" }
+rusty-lsp = { version = "0.1.0", path = "../rusty-lsp", default-features = false }
 rusty-term = { version = "0.1.0", path = "../rusty-term", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"

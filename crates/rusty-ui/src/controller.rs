@@ -15,12 +15,13 @@ use rusty_embed::{
 };
 
 use rusty_ai::{AgentEvent, ChatEvent, Message, Preset, ProviderConfig, ToolDef};
-use rusty_edit::{Document, Entry};
+use rusty_edit::{Document, Entry, Line as EditLine};
+use rusty_lsp::LspEvent;
 use rusty_term::Screen as TermScreen;
 
 use crate::{
     ipc::{self, Answer, cmd},
-    state::{AppState, ToolRun, remember_provider},
+    state::{AppState, LspStatus, ToolRun, remember_provider},
 };
 
 /// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
@@ -143,6 +144,9 @@ pub fn open_project(state: AppState, path: String) {
             state.draft.set(String::new());
             state.file_tree.set(Vec::new());
             state.expanded.set(Vec::new());
+            state.highlighted.set(Vec::new());
+            state.echo_text.set(String::new());
+            state.diagnostics.set(std::collections::HashMap::new());
             // The selection names a member of the *previous* workspace, so
             // keeping it would ask the backend to resolve features for a package
             // that is not there.
@@ -154,6 +158,7 @@ pub fn open_project(state: AppState, path: String) {
             refresh_toolchain(state);
             refresh_firmware(state);
             refresh_tree(state);
+            start_lsp(state);
         },
     );
 }
@@ -186,6 +191,7 @@ fn reload_project(state: AppState) {
             refresh_firmware(state);
             refresh_workspace(state);
             refresh_tree(state);
+            start_lsp(state);
         },
     );
 }
@@ -760,6 +766,11 @@ pub fn open_file(state: AppState, path: String) {
             // The draft is seeded from the document exactly once, here. Setting
             // it anywhere else would overwrite whatever had been typed.
             state.draft.set(document.text.clone());
+            state.echo_text.set(document.text.clone());
+            state.highlighted.set(document.lines.clone());
+            if state.lsp_status.get_untracked() == LspStatus::Ready {
+                lsp_open_doc(document.path.clone(), document.text.clone());
+            }
             state.document.set(Some(document));
         },
     );
@@ -784,12 +795,178 @@ pub fn save_file(state: AppState) {
         state,
         async move { ipc::call::<_, ()>(cmd::files::SAVE, &args).await },
         move |()| {
+            lsp_saved_doc(path.clone());
             // Re-read so the highlighting matches what is now on disk, and so
             // the saved/unsaved marker clears against real content rather than
             // against an assumption that the write did what was asked.
             open_file(state, path.clone());
         },
     );
+}
+
+// ─── the language server ─────────────────────────────────────────────────────
+
+/// Start rust-analyzer for the open project and route what it says into state.
+pub fn start_lsp(state: AppState) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
+    if !state.has_project() {
+        return;
+    }
+    // A stale channel keeps sending after a restart; the session number is how
+    // its events are told apart from the live one.
+    let session = state.lsp_session.get_untracked() + 1;
+    state.lsp_session.set(session);
+    state.lsp_status.set(LspStatus::Starting);
+
+    let channel = ipc::Channel::new();
+    let on_event = Closure::wrap(Box::new(move |value: JsValue| {
+        if state.lsp_session.get_untracked() != session {
+            return;
+        }
+        if let Ok(event) = serde_wasm_bindgen::from_value::<LspEvent>(value) {
+            apply_lsp_event(state, event);
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    channel.set_onmessage(&on_event);
+    on_event.forget();
+
+    #[derive(serde::Serialize)]
+    struct Args {}
+
+    spawn_local(async move {
+        let _ = ipc::call_streaming::<_, ()>(cmd::lsp::START, &Args {}, "onEvent", &channel).await;
+        // The stream ended: the server exited or was replaced. Only the owner
+        // of the current session gets to say so.
+        if state.lsp_session.get_untracked() == session
+            && state.lsp_status.get_untracked() == LspStatus::Ready
+        {
+            state.lsp_status.set(LspStatus::Off);
+        }
+    });
+}
+
+fn apply_lsp_event(state: AppState, event: LspEvent) {
+    match event {
+        LspEvent::Ready {} => {
+            state.lsp_status.set(LspStatus::Ready);
+            // A file opened before the server came up was never announced.
+            if let Some(path) =
+                state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
+            {
+                lsp_open_doc(path, state.draft.get_untracked());
+            }
+        }
+        LspEvent::Unavailable { message, install } => {
+            state.lsp_status.set(LspStatus::Missing);
+            state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: message,
+                level: Some(LogLevel::Warn),
+            });
+            if let Some(install) = install {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("$ {install}"),
+                    level: None,
+                });
+            }
+        }
+        LspEvent::Diagnostics { path, items } => {
+            state.diagnostics.update(|by_file| {
+                if items.is_empty() {
+                    by_file.remove(&path);
+                } else {
+                    by_file.insert(path, items);
+                }
+            });
+        }
+        LspEvent::Exited {} => {
+            if state.lsp_status.get_untracked() == LspStatus::Ready {
+                state.lsp_status.set(LspStatus::Off);
+            }
+        }
+    }
+}
+
+/// Fire-and-forget document sync. Failures are dropped, not bannered: the
+/// editor works without a server, and every keystroke would otherwise be a
+/// chance to cry wolf.
+fn lsp_sync(command: &'static str, args: impl serde::Serialize + 'static) {
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(command, &args).await;
+    });
+}
+
+pub fn lsp_open_doc(path: String, text: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+    lsp_sync(cmd::lsp::OPEN, Args { path, text });
+}
+
+fn lsp_saved_doc(path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+    lsp_sync(cmd::lsp::SAVED, Args { path });
+}
+
+/// The debounced follow-up to typing: re-highlight the draft and tell the
+/// server what it says now.
+///
+/// Scheduled rather than immediate — each is a round trip, and per keystroke
+/// that would re-highlight every letter of a word nobody finished typing.
+pub fn schedule_pulse(state: AppState) {
+    let generation = state.pulse_gen.get_untracked() + 1;
+    state.pulse_gen.set(generation);
+    set_timeout(
+        move || {
+            if state.pulse_gen.get_untracked() == generation {
+                edit_pulse(state, generation);
+            }
+        },
+        std::time::Duration::from_millis(250),
+    );
+}
+
+fn edit_pulse(state: AppState, generation: u64) {
+    let Some(path) = state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
+    else {
+        return;
+    };
+    let text = state.draft.get_untracked();
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+
+    if state.lsp_status.get_untracked() == LspStatus::Ready {
+        lsp_sync(
+            cmd::lsp::CHANGE,
+            Args {
+                path: path.clone(),
+                text: text.clone(),
+            },
+        );
+    }
+
+    let args = Args { path, text };
+    spawn_local(async move {
+        if let Ok(lines) = ipc::call::<_, Vec<EditLine>>(cmd::files::HIGHLIGHT, &args).await {
+            // Typing continued while this was in flight: the reply describes a
+            // text that no longer exists, and painting it would visibly revert
+            // the newest keystrokes until the next pulse.
+            if state.pulse_gen.get_untracked() == generation {
+                state.highlighted.set(lines);
+            }
+        }
+    });
 }
 
 // ─── the terminal ────────────────────────────────────────────────────────────

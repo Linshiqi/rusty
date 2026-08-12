@@ -39,6 +39,15 @@ impl Files {
         }
     }
 
+    /// Highlight text that is not (or not yet) what is on disk.
+    ///
+    /// The editor calls this as the user types, so the colours track the draft
+    /// rather than the last save — without it the painted layer under the
+    /// caret shows stale text, which reads as corruption.
+    pub fn highlight_source(&self, path: &str, text: &str) -> Vec<crate::model::Line> {
+        crate::highlight::lines(&self.syntaxes, path, text).0
+    }
+
     /// Read a file under `root`, highlighted.
     pub fn open(&self, root: &Path, relative: &str) -> Result<Document> {
         let path = resolve(root, relative)?;

@@ -51,6 +51,12 @@ const TOOLS: &[(&str, &str, &str, bool)] = &[
         false,
     ),
     (
+        "rust-analyzer",
+        "Completion, diagnostics and navigation in the editor",
+        "rustup component add rust-analyzer",
+        false,
+    ),
+    (
         "ldproxy",
         "Linker shim required by ESP-IDF (std) builds",
         "cargo install ldproxy",

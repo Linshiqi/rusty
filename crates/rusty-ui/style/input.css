@@ -311,3 +311,20 @@ body {
 .tok-function { color: var(--term-4); }
 .tok-macro { color: var(--term-1); }
 .tok-punctuation { color: var(--label-2); }
+
+/* Diagnostic underlines. In the text flow rather than overlaid, so they stay
+   glued to their glyphs whatever width those glyphs are. */
+.diag-error {
+  text-decoration: underline wavy var(--crimson);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.diag-warning {
+  text-decoration: underline wavy var(--amber);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.diag-hint {
+  text-decoration: underline dotted var(--slate);
+  text-underline-offset: 3px;
+}

@@ -12,7 +12,8 @@
 
 use leptos::{ev, html, prelude::*};
 
-use rusty_edit::{Document, Entry, Token};
+use rusty_edit::{Document, Entry, Line, Span, Token};
+use rusty_lsp::{DiagSeverity, FileDiagnostic};
 
 use crate::{controller, state::AppState, view::components::Empty};
 
@@ -252,13 +253,20 @@ fn Header(document: Document) -> impl IntoView {
     }
 }
 
-/// The two stacked layers: highlighted text underneath, a transparent text area
-/// on top taking every keystroke.
+/// The two stacked layers: highlighted text underneath, a transparent text
+/// area on top taking every keystroke.
+///
+/// The painted layer follows `state.highlighted`, not the document: on each
+/// keystroke the edited lines are patched in plainly so the text under the
+/// caret is never stale, and a debounced re-highlight restores the colours.
+/// Without the immediate patch, typed characters are invisible for a quarter
+/// of a second — the textarea's own glyphs are transparent by design.
 #[component]
 fn Surface(document: Document) -> impl IntoView {
     let state = AppState::expect();
     let area: NodeRef<html::Textarea> = NodeRef::new();
-    let gutter_width = format!("{}ch", document.lines.len().to_string().len().max(2) + 1);
+    let path = document.path.clone();
+    let read_only = document.truncated;
 
     // Both layers carry this verbatim. Any difference in font, size or line
     // height and the caret walks away from its glyph.
@@ -268,19 +276,35 @@ fn Surface(document: Document) -> impl IntoView {
          tab-size: 4"
     );
 
+    let on_input = move |event: ev::Event| {
+        let new = event_target_value(&event);
+        echo_edit(state, &new);
+        state.draft.set(new);
+        controller::schedule_pulse(state);
+    };
+
     view! {
         <div class="relative min-h-0 flex-1 overflow-auto">
             <div class="flex min-h-full">
                 // Line numbers scroll with the text rather than floating, so a
                 // long file's numbers stay beside their lines.
-                <div
-                    class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
-                    style=format!("{metrics}; width: {gutter_width}")
-                >
-                    {(1..=document.lines.len().max(1))
-                        .map(|n| view! { <div>{n.to_string()}</div> })
-                        .collect_view()}
-                </div>
+                {
+                    let metrics = metrics.clone();
+                    move || {
+                        let count = state.highlighted.with(Vec::len).max(1);
+                        let width = format!("{}ch", count.to_string().len().max(2) + 1);
+                        view! {
+                            <div
+                                class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
+                                style=format!("{metrics}; width: {width}")
+                            >
+                                {(1..=count)
+                                    .map(|n| view! { <div>{n.to_string()}</div> })
+                                    .collect_view()}
+                            </div>
+                        }
+                    }
+                }
 
                 <div class="relative min-w-0 flex-1">
                     <pre
@@ -288,31 +312,33 @@ fn Surface(document: Document) -> impl IntoView {
                         style=metrics.clone()
                         aria-hidden="true"
                     >
-                        {document
-                            .lines
-                            .into_iter()
-                            .map(|line| {
-                                view! {
-                                    <div>
-                                        {line
-                                            .spans
-                                            .into_iter()
-                                            .map(|span| {
-                                                view! {
-                                                    <span class=class_of(
-                                                        span.token,
-                                                    )>{span.text}</span>
-                                                }
-                                            })
-                                            .collect_view()}
-                                        // An empty line still has to occupy one,
-                                        // or the transparent caret above it sits
-                                        // a row too high for the rest of the file.
-                                        {"\u{200b}"}
-                                    </div>
-                                }
-                            })
-                            .collect_view()}
+                        {
+                            let path = path.clone();
+                            move || {
+                                let diags = state
+                                    .diagnostics
+                                    .with(|by_file| by_file.get(&path).cloned())
+                                    .unwrap_or_default();
+                                state
+                                    .highlighted
+                                    .get()
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, line)| {
+                                        view! {
+                                            <div>
+                                                {decorate(line, index as u32, &diags)}
+                                                // An empty line still occupies
+                                                // one, or the caret above sits a
+                                                // row too high for the rest of
+                                                // the file.
+                                                {"\u{200b}"}
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()
+                            }
+                        }
                     </pre>
 
                     <textarea
@@ -320,10 +346,11 @@ fn Surface(document: Document) -> impl IntoView {
                         spellcheck="false"
                         autocapitalize="off"
                         autocomplete="off"
+                        disabled=read_only
                         class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 whitespace-pre text-transparent caret-rust outline-none"
                         style=metrics
                         prop:value=move || state.draft.get()
-                        on:input=move |event| state.draft.set(event_target_value(&event))
+                        on:input=on_input
                         on:keydown=move |event: ev::KeyboardEvent| {
                             if (event.ctrl_key() || event.meta_key())
                                 && event.key().eq_ignore_ascii_case("s")
@@ -348,20 +375,160 @@ fn Surface(document: Document) -> impl IntoView {
     }
 }
 
-/// Put four spaces at the caret and leave it after them.
-fn insert_tab(area: &web_sys::HtmlTextAreaElement, state: AppState) {
-    let start = area.selection_start().ok().flatten().unwrap_or(0) as usize;
-    let end = area.selection_end().ok().flatten().unwrap_or(0) as usize;
-    let mut text = state.draft.get_untracked();
-    if start > text.len() || end > text.len() {
+/// Patch the painted lines for an edit, without waiting for the re-highlight.
+///
+/// A line diff against what the paint currently shows: unchanged lines keep
+/// their colours, edited ones are swapped for plain text immediately. The
+/// debounced pulse recolours them a beat later — the same catch-up every
+/// editor's highlighting does, built from a splice instead of a parser.
+fn echo_edit(state: AppState, new: &str) {
+    let old = state.echo_text.get_untracked();
+    if old == new {
         return;
     }
+
+    let old_lines: Vec<&str> = old.split('\n').collect();
+    let new_lines: Vec<&str> = new.split('\n').collect();
+
+    let prefix = old_lines
+        .iter()
+        .zip(&new_lines)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let suffix = old_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(new_lines[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let replacement: Vec<Line> = new_lines[prefix..new_lines.len() - suffix]
+        .iter()
+        .map(|text| Line {
+            spans: vec![Span {
+                text: (*text).to_string(),
+                token: Token::Plain,
+            }],
+        })
+        .collect();
+
+    state.highlighted.update(|lines| {
+        // The paint can be shorter than the text (a truncated open); clamp so
+        // a splice out of range cannot panic the whole window.
+        let end = (old_lines.len() - suffix).min(lines.len());
+        let start = prefix.min(end);
+        lines.splice(start..end, replacement);
+    });
+    state.echo_text.set(new.to_string());
+}
+
+/// A line's spans with the diagnostics for that line woven in.
+///
+/// Splitting the highlight runs at the diagnostic's scalar columns keeps the
+/// squiggle in the text flow — an absolutely-positioned overlay multiplied by
+/// `ch` would drift on every CJK glyph, which is two columns wide.
+fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyView {
+    let mut segments: Vec<(u32, u32, DiagSeverity, String)> = Vec::new();
+    let length = line.spans.iter().map(|s| s.text.chars().count() as u32).sum::<u32>();
+    for d in diags {
+        if index < d.start_line || index > d.end_line {
+            continue;
+        }
+        let from = if index == d.start_line { d.start_col } else { 0 };
+        let to = if index == d.end_line { d.end_col } else { length };
+        // A zero-width diagnostic still deserves a visible squiggle.
+        let to = to.max(from + 1).min(length.max(from + 1));
+        segments.push((from, to, d.severity, d.message.clone()));
+    }
+
+    if segments.is_empty() {
+        return line
+            .spans
+            .into_iter()
+            .map(|span| view! { <span class=class_of(span.token)>{span.text}</span> })
+            .collect_view()
+            .into_any();
+    }
+
+    // Worst severity wins where ranges overlap; DiagSeverity orders worst-first.
+    let mark_at = |col: u32| -> Option<(DiagSeverity, &str)> {
+        segments
+            .iter()
+            .filter(|(from, to, ..)| (*from..*to).contains(&col))
+            .min_by_key(|(_, _, severity, _)| *severity)
+            .map(|(_, _, severity, message)| (*severity, message.as_str()))
+    };
+
+    // One painted run: its text, its syntax class, and the squiggle over it.
+    type Run = (String, Token, Option<(DiagSeverity, String)>);
+    let mut out: Vec<Run> = Vec::new();
+    let mut col = 0u32;
+    for span in line.spans {
+        for ch in span.text.chars() {
+            let mark = mark_at(col).map(|(severity, message)| (severity, message.to_string()));
+            match out.last_mut() {
+                Some((text, token, last_mark))
+                    if *token == span.token && *last_mark == mark =>
+                {
+                    text.push(ch);
+                }
+                _ => out.push((ch.to_string(), span.token, mark)),
+            }
+            col += 1;
+        }
+    }
+
+    out.into_iter()
+        .map(|(text, token, mark)| {
+            let base = class_of(token);
+            match mark {
+                None => view! { <span class=base>{text}</span> }.into_any(),
+                Some((severity, message)) => {
+                    let squiggle = match severity {
+                        DiagSeverity::Error => "diag-error",
+                        DiagSeverity::Warning => "diag-warning",
+                        _ => "diag-hint",
+                    };
+                    view! {
+                        <span class=format!("{base} {squiggle}") title=message>{text}</span>
+                    }
+                        .into_any()
+                }
+            }
+        })
+        .collect_view()
+        .into_any()
+}
+
+/// Put four spaces at the caret and leave it after them.
+fn insert_tab(area: &web_sys::HtmlTextAreaElement, state: AppState) {
+    // selectionStart counts UTF-16 units — it is a JS string index. Feeding it
+    // to `replace_range` as bytes panics on the first CJK comment, so convert.
+    let byte_at = |text: &str, utf16: usize| -> usize {
+        let mut units = 0usize;
+        for (offset, ch) in text.char_indices() {
+            if units >= utf16 {
+                return offset;
+            }
+            units += ch.len_utf16();
+        }
+        text.len()
+    };
+
+    let start_units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
+    let end_units = area.selection_end().ok().flatten().unwrap_or(0) as usize;
+    let mut text = state.draft.get_untracked();
+    let start = byte_at(&text, start_units);
+    let end = byte_at(&text, end_units).max(start);
+
     text.replace_range(start..end, "    ");
+    echo_edit(state, &text);
     state.draft.set(text.clone());
     area.set_value(&text);
-    let at = (start + 4) as u32;
+    let at = (start_units + 4) as u32;
     let _ = area.set_selection_start(Some(at));
     let _ = area.set_selection_end(Some(at));
+    controller::schedule_pulse(state);
 }
 
 /// Token to a class the stylesheet owns.

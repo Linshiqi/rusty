@@ -4565,6 +4565,7 @@ dependencies = [
  "rusty-edit",
  "rusty-embed",
  "rusty-ipc",
+ "rusty-lsp",
  "rusty-term",
  "serde",
  "serde_json",
@@ -4627,6 +4628,16 @@ name = "rusty-ipc"
 version = "0.1.0"
 
 [[package]]
+name = "rusty-lsp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "rusty-term"
 version = "0.1.0"
 dependencies = [
@@ -4648,6 +4659,7 @@ dependencies = [
  "rusty-edit",
  "rusty-embed",
  "rusty-ipc",
+ "rusty-lsp",
  "rusty-term",
  "serde",
  "serde-wasm-bindgen",

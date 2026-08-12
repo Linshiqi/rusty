@@ -1,0 +1,156 @@
+//! Driven against a real rust-analyzer, when one is installed.
+//!
+//! The unit tests prove the arithmetic; they cannot prove the handshake, the
+//! framing against a real peer, or that diagnostics actually arrive — the
+//! parts that fail in ways no mock predicts. Skips with a message when
+//! rust-analyzer is absent, so a machine without it still gets a green suite.
+
+use std::time::{Duration, Instant};
+
+use rusty_lsp::{DiagSeverity, LspClient, LspEvent, find_rust_analyzer};
+
+/// A CJK comment above the interesting lines, so a position system that
+/// silently assumes ASCII cannot pass.
+fn source() -> String {
+    [
+        "// 中文注释：逼出 UTF-8 与 UTF-16 位置换算的差异",
+        "struct Widget;",
+        "",
+        "impl Widget {",
+        "    fn frobnicate(&self) -> u32 {",
+        "        7",
+        "    }",
+        "}",
+        "",
+        "fn build() -> Widget {",
+        "    Widget",
+        "}",
+        "",
+        "fn main() {",
+        "    let w = build();",
+        "    let _n = w.frobnicate();",
+        "    let _mistake: u32 = \"seven\";",
+        "}",
+        "",
+    ]
+    .join("\n")
+}
+
+fn line_of(text: &str, needle: &str) -> u32 {
+    text.lines()
+        .position(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no line contains {needle}")) as u32
+}
+
+/// Retry a request while the index warms up. Cold rust-analyzer answers
+/// slowly, emptily, or with "content modified" — none of which is a failure,
+/// just earliness.
+fn eventually<T>(within: Duration, mut attempt: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + within;
+    loop {
+        if let Some(value) = attempt() {
+            return Some(value);
+        }
+        if Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+#[test]
+fn rust_analyzer_end_to_end() {
+    if find_rust_analyzer().is_none() {
+        eprintln!("skipping: rust-analyzer is not installed on this machine");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    let text = source();
+    std::fs::write(dir.path().join("src/main.rs"), &text).unwrap();
+
+    let (client, events) = LspClient::spawn(dir.path(), None).expect("spawn rust-analyzer");
+    client.did_open("src/main.rs", &text).expect("didOpen");
+
+    // ── diagnostics are pushed, and land on the right line ───────────────────
+    let mistake_line = line_of(&text, "_mistake");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let diagnostic = loop {
+        assert!(
+            Instant::now() < deadline,
+            "no type-mismatch diagnostic arrived within 90s",
+        );
+        match events.recv_timeout(Duration::from_secs(5)) {
+            Some(LspEvent::Diagnostics { path, items }) if path == "src/main.rs" => {
+                if let Some(found) = items
+                    .iter()
+                    .find(|d| d.severity == DiagSeverity::Error && d.message.contains("expected"))
+                {
+                    break found.clone();
+                }
+            }
+            Some(LspEvent::Exited {}) => panic!("rust-analyzer exited during the test"),
+            _ => {}
+        }
+    };
+    assert_eq!(
+        diagnostic.start_line, mistake_line,
+        "the CJK comment above must not shift the diagnostic: {diagnostic:?}",
+    );
+    let mistake_text = text.lines().nth(mistake_line as usize).unwrap();
+    let string_col = mistake_text.find('"').unwrap() as u32;
+    assert_eq!(
+        diagnostic.start_col, string_col,
+        "the squiggle starts under the string literal: {diagnostic:?}",
+    );
+
+    // ── completion mid-identifier ────────────────────────────────────────────
+    let call_line = line_of(&text, "w.frobnicate");
+    let call_text = text.lines().nth(call_line as usize).unwrap();
+    let partial_col = (call_text.find("frobnicate").unwrap() + 3) as u32; // after "fro"
+    let completions = eventually(Duration::from_secs(45), || {
+        client
+            .completion("src/main.rs", call_line, partial_col)
+            .ok()
+            .filter(|items| items.iter().any(|i| i.label.starts_with("frobnicate")))
+    })
+    .expect("completion never offered `frobnicate`");
+    let item = completions
+        .iter()
+        .find(|i| i.label.starts_with("frobnicate"))
+        .unwrap();
+    assert_eq!(item.kind.as_deref(), Some("method"));
+
+    // ── hover says what it is ────────────────────────────────────────────────
+    let hover = eventually(Duration::from_secs(30), || {
+        client
+            .hover("src/main.rs", call_line, partial_col)
+            .ok()
+            .flatten()
+            .filter(|text| text.contains("frobnicate"))
+    })
+    .expect("hover never described frobnicate");
+    assert!(hover.contains("u32"), "the signature names the return type: {hover}");
+
+    // ── definition lands on the declaration ──────────────────────────────────
+    let use_line = line_of(&text, "let w = build");
+    let use_text = text.lines().nth(use_line as usize).unwrap();
+    let use_col = (use_text.find("build").unwrap() + 1) as u32;
+    let location = eventually(Duration::from_secs(30), || {
+        client
+            .definition("src/main.rs", use_line, use_col)
+            .ok()
+            .flatten()
+    })
+    .expect("definition never resolved");
+    assert_eq!(location.path, "src/main.rs");
+    assert_eq!(location.line, line_of(&text, "fn build"));
+
+    drop(client); // kills the server; the events channel closes behind it
+}

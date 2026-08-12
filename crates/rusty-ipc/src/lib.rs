@@ -74,6 +74,18 @@ pub mod files {
     pub const TREE: &str = "file_tree";
     pub const OPEN: &str = "open_file";
     pub const SAVE: &str = "save_file";
+    pub const HIGHLIGHT: &str = "highlight_text";
+}
+
+/// The language server behind the editor.
+pub mod lsp {
+    pub const START: &str = "lsp_start";
+    pub const OPEN: &str = "lsp_open";
+    pub const CHANGE: &str = "lsp_change";
+    pub const SAVED: &str = "lsp_saved";
+    pub const COMPLETE: &str = "lsp_complete";
+    pub const HOVER: &str = "lsp_hover";
+    pub const DEFINITION: &str = "lsp_definition";
 }
 
 pub mod features {

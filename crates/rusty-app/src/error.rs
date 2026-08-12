@@ -83,6 +83,12 @@ impl From<rusty_edit::Error> for CommandError {
     }
 }
 
+impl From<rusty_lsp::Error> for CommandError {
+    fn from(error: rusty_lsp::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
 impl From<serde_json::Error> for CommandError {
     fn from(error: serde_json::Error) -> Self {
         Self::from_source(&error)

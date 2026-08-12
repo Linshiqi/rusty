@@ -21,6 +21,19 @@ pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Docum
     Ok(state.files().open(&root, &path)?)
 }
 
+/// Re-highlight an unsaved buffer.
+#[tauri::command]
+pub async fn highlight_text(
+    path: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_edit::Line>, CommandError> {
+    let files = state.files();
+    tokio::task::spawn_blocking(move || files.highlight_source(&path, &text))
+        .await
+        .map_err(|e| CommandError::new(format!("highlighting panicked: {e}")))
+}
+
 #[tauri::command]
 pub async fn save_file(
     path: String,
