@@ -545,6 +545,48 @@ pub struct SimRgb {
     pub y: Option<f64>,
 }
 
+/// A seven-segment digit: seven GPIO pins, one per segment a..g. Lit
+/// segment by segment from the same gpio report channel as every lamp —
+/// the most honest display there is, because it is not a display at all,
+/// just seven LEDs in a font.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimSeven {
+    /// Segments a, b, c, d, e, f, g in order.
+    pub pins: [u8; 7],
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+}
+
+/// A small text screen fed by the `[rusty:disp]` serial channel — the
+/// firmware prints what the screen shows. Stands in for OLED/LCD until a
+/// protocol decoder exists; the caption on the panel says whose word it is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimDisplay {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+}
+
+/// A potentiometer: a slider in the UI that sends `P<pin>=<0..255>` into
+/// the firmware's UART as it moves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimPot {
+    pub pin: u8,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+}
+
 /// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never
 /// heard of still gets drawn and driven. v1 parts behave as lamps on the
 /// gpio report channel; richer behaviours grow on this same record.
@@ -566,6 +608,12 @@ pub struct SimBoard {
     pub buttons: Vec<SimButton>,
     #[serde(default)]
     pub rgbs: Vec<SimRgb>,
+    #[serde(default)]
+    pub sevens: Vec<SimSeven>,
+    #[serde(default)]
+    pub displays: Vec<SimDisplay>,
+    #[serde(default)]
+    pub pots: Vec<SimPot>,
 }
 
 /// How this project would be simulated, or exactly why it cannot be.
@@ -831,6 +879,13 @@ pub fn parse_gpio_report(line: &str) -> Option<Vec<(u8, bool)>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// Parse one `[rusty:disp]` line: the text the firmware wants shown.
+/// An empty payload clears the screen.
+pub fn parse_display_report(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("[rusty:disp]")?;
+    Some(rest.trim().to_string())
+}
+
 #[cfg(test)]
 mod gpio_report_tests {
     use super::parse_gpio_report;
@@ -844,5 +899,16 @@ mod gpio_report_tests {
         assert_eq!(parse_gpio_report("  [rusty:gpio] 4=high "), Some(vec![(4, true)]));
         assert_eq!(parse_gpio_report("I (44) boot: Loaded app"), None);
         assert_eq!(parse_gpio_report("[rusty:gpio] nonsense"), None);
+    }
+
+    #[test]
+    fn display_reports_carry_their_text() {
+        use super::parse_display_report;
+        assert_eq!(
+            parse_display_report("[rusty:disp] tick 42"),
+            Some("tick 42".to_string()),
+        );
+        assert_eq!(parse_display_report("[rusty:disp]"), Some(String::new()));
+        assert_eq!(parse_display_report("I (44) boot: x"), None);
     }
 }

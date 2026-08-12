@@ -302,6 +302,8 @@ pub struct AppState {
     pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
     /// The assistant drawer on the right, toggled from the title bar.
     pub assistant_open: RwSignal<bool>,
+    /// What the firmware last printed to the `[rusty:disp]` channel.
+    pub sim_display: RwSignal<String>,
     /// Pin levels the running firmware has reported, for the board view.
     pub sim_gpio: RwSignal<std::collections::HashMap<u8, bool>>,
     /// The simulation plan for the open project, when the panel asked.
@@ -455,6 +457,7 @@ impl AppState {
             actions: RwSignal::new(None),
             crate_rows: RwSignal::new(None),
             assistant_open: RwSignal::new(false),
+            sim_display: RwSignal::new(String::new()),
             sim_gpio: RwSignal::new(std::collections::HashMap::new()),
             sim_plan: RwSignal::new(None),
             sim_install_failed: RwSignal::new(Vec::new()),

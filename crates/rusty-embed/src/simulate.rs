@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::model::{
-    CommandPlan, EmbeddedProject, PartDef, SimBoard, SimButton, SimLed, SimPlan, SimRgb,
-    SimTool,
+    CommandPlan, EmbeddedProject, PartDef, SimBoard, SimButton, SimDisplay, SimLed, SimPlan,
+    SimPot, SimRgb, SimSeven, SimTool,
 };
 
 /// Chips Espressif's QEMU actually models, with the system emulator each
@@ -175,6 +175,32 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         button: Vec<FileButton>,
         #[serde(default)]
         rgb: Vec<FileRgb>,
+        #[serde(default)]
+        seven: Vec<FileSeven>,
+        #[serde(default)]
+        display: Vec<FileDisplay>,
+        #[serde(default)]
+        pot: Vec<FilePot>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FileSeven {
+        pins: [u8; 7],
+        label: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FileDisplay {
+        label: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FilePot {
+        pin: u8,
+        label: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
     }
     #[derive(serde::Deserialize)]
     struct FileButton {
@@ -207,7 +233,13 @@ fn board_view(root: &Path) -> Option<SimBoard> {
 
     let text = std::fs::read_to_string(root.join(".rusty/sim.toml")).ok()?;
     let parsed: File = toml::from_str(&text).ok()?;
-    if parsed.led.is_empty() && parsed.button.is_empty() && parsed.rgb.is_empty() {
+    if parsed.led.is_empty()
+        && parsed.button.is_empty()
+        && parsed.rgb.is_empty()
+        && parsed.seven.is_empty()
+        && parsed.display.is_empty()
+        && parsed.pot.is_empty()
+    {
         return None;
     }
     Some(SimBoard {
@@ -246,6 +278,35 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 b: rgb.b,
                 x: rgb.x,
                 y: rgb.y,
+            })
+            .collect(),
+        sevens: parsed
+            .seven
+            .into_iter()
+            .map(|seven| SimSeven {
+                label: seven.label.unwrap_or_else(|| "7SEG".to_string()),
+                pins: seven.pins,
+                x: seven.x,
+                y: seven.y,
+            })
+            .collect(),
+        displays: parsed
+            .display
+            .into_iter()
+            .map(|display| SimDisplay {
+                label: display.label.unwrap_or_else(|| "DISPLAY".to_string()),
+                x: display.x,
+                y: display.y,
+            })
+            .collect(),
+        pots: parsed
+            .pot
+            .into_iter()
+            .map(|pot| SimPot {
+                label: pot.label.unwrap_or_else(|| format!("POT{}", pot.pin)),
+                pin: pot.pin,
+                x: pot.x,
+                y: pot.y,
             })
             .collect(),
     })
@@ -664,6 +725,38 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         button: Vec<FileButton<'a>>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         rgb: Vec<FileRgb<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        seven: Vec<FileSeven<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        display: Vec<FileDisplay<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pot: Vec<FilePot<'a>>,
+    }
+    #[derive(serde::Serialize)]
+    struct FileSeven<'a> {
+        pins: [u8; 7],
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+    }
+    #[derive(serde::Serialize)]
+    struct FileDisplay<'a> {
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+    }
+    #[derive(serde::Serialize)]
+    struct FilePot<'a> {
+        pin: u8,
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     }
     #[derive(serde::Serialize)]
     struct FileButton<'a> {
@@ -733,6 +826,35 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &rgb.label,
                 x: rgb.x.map(|v| v.round()),
                 y: rgb.y.map(|v| v.round()),
+            })
+            .collect(),
+        seven: board
+            .sevens
+            .iter()
+            .map(|seven| FileSeven {
+                pins: seven.pins,
+                label: &seven.label,
+                x: seven.x.map(|v| v.round()),
+                y: seven.y.map(|v| v.round()),
+            })
+            .collect(),
+        display: board
+            .displays
+            .iter()
+            .map(|display| FileDisplay {
+                label: &display.label,
+                x: display.x.map(|v| v.round()),
+                y: display.y.map(|v| v.round()),
+            })
+            .collect(),
+        pot: board
+            .pots
+            .iter()
+            .map(|pot| FilePot {
+                pin: pot.pin,
+                label: &pot.label,
+                x: pot.x.map(|v| v.round()),
+                y: pot.y.map(|v| v.round()),
             })
             .collect(),
     };
@@ -837,6 +959,23 @@ mod tests {
                 label: "RGB".to_string(),
                 x: None,
                 y: None,
+            }],
+            sevens: vec![SimSeven {
+                pins: [1, 2, 3, 4, 5, 6, 7],
+                label: "7SEG".to_string(),
+                x: Some(200.0),
+                y: Some(40.0),
+            }],
+            displays: vec![SimDisplay {
+                label: "DISPLAY".to_string(),
+                x: None,
+                y: None,
+            }],
+            pots: vec![SimPot {
+                pin: 34,
+                label: "POT34".to_string(),
+                x: Some(20.0),
+                y: Some(200.0),
             }],
         };
         save_board(dir.path(), &board).expect("save");

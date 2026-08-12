@@ -171,3 +171,31 @@ Decided now so the UI can be built against it. Implementation is deferred.
 - MCP's per-call overhead turns out to matter for analyses invoked on every
   keystroke. Then that category moves in-process via WASM, while everything
   else stays on MCP.
+
+## Simulator parts
+
+The Simulate panel's part library extends the same way everything else does:
+data first. A file in the project's `.rusty/parts/` adds a part:
+
+```toml
+# .rusty/parts/relay.toml
+name = "relay"
+color = "red"      # glow hue: green, blue, red, yellow
+```
+
+A part defined this way appears in the library's Custom section and behaves
+as a lamp on the gpio report channel. Everything on the board rides two
+serial directions:
+
+| line | direction | meaning |
+|---|---|---|
+| `[rusty:gpio] 26=1,27=0` | firmware → board | pin levels; lamps, RGB mixes and 7-segment digits light from these |
+| `[rusty:disp] tick 42` | firmware → board | text for the display part; empty payload clears it |
+| `B14=1` / `B14=0` | board → firmware | button pressed / released |
+| `P34=200` | board → firmware | potentiometer moved, 0..255 |
+
+The firmware side needs nothing but `println!` for the reports and a UART
+read loop for the commands — `E:/embeded/blinky` is the worked example.
+Richer behaviours (framebuffers, protocol decoders) grow on these same two
+directions. What does not exist yet, honestly: I2C/SPI decoding, analog
+waveform views, and Wokwi diagram import.

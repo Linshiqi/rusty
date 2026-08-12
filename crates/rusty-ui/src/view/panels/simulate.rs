@@ -137,6 +137,9 @@ pub fn Simulate() -> impl IntoView {
                         leds: Vec::new(),
                         buttons: Vec::new(),
                         rgbs: Vec::new(),
+                        sevens: Vec::new(),
+                        displays: Vec::new(),
+                        pots: Vec::new(),
                     })
                     blocked=blocked
                     user_parts=plan.parts.clone()
@@ -156,16 +159,26 @@ enum PartKind {
     Led { color: String },
     Button,
     Rgb,
+    /// pins are segments a..g.
+    Seven,
+    /// Shows the `[rusty:disp]` channel; needs no pins.
+    Display,
+    /// A slider sending `P<pin>=<0..255>`.
+    Pot,
 }
 
 #[derive(Clone, PartialEq)]
 struct EditPart {
     kind: PartKind,
-    /// pins[0] is the pin for LEDs and buttons; RGB uses all three.
-    pins: [u8; 3],
+    /// pins[0] for LEDs, buttons and pots; RGB uses three; seven uses all.
+    pins: [u8; 7],
     label: String,
     x: f64,
     y: f64,
+}
+
+fn pins3(a: u8, b: u8, c: u8) -> [u8; 7] {
+    [a, b, c, 0, 0, 0, 0]
 }
 
 fn parts_of(board: &SimBoard) -> Vec<EditPart> {
@@ -175,7 +188,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             kind: PartKind::Led {
                 color: led.color.clone(),
             },
-            pins: [led.pin, 0, 0],
+            pins: pins3(led.pin, 0, 0),
             label: led.label.clone(),
             x: led.x.unwrap_or(60.0),
             y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
@@ -184,7 +197,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
     for button in &board.buttons {
         out.push(EditPart {
             kind: PartKind::Button,
-            pins: [button.pin, 0, 0],
+            pins: pins3(button.pin, 0, 0),
             label: button.label.clone(),
             x: button.x.unwrap_or(60.0),
             y: button.y.unwrap_or(180.0),
@@ -193,10 +206,37 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
     for rgb in &board.rgbs {
         out.push(EditPart {
             kind: PartKind::Rgb,
-            pins: [rgb.r, rgb.g, rgb.b],
+            pins: pins3(rgb.r, rgb.g, rgb.b),
             label: rgb.label.clone(),
             x: rgb.x.unwrap_or(60.0),
             y: rgb.y.unwrap_or(240.0),
+        });
+    }
+    for seven in &board.sevens {
+        out.push(EditPart {
+            kind: PartKind::Seven,
+            pins: seven.pins,
+            label: seven.label.clone(),
+            x: seven.x.unwrap_or(160.0),
+            y: seven.y.unwrap_or(60.0),
+        });
+    }
+    for display in &board.displays {
+        out.push(EditPart {
+            kind: PartKind::Display,
+            pins: [0; 7],
+            label: display.label.clone(),
+            x: display.x.unwrap_or(160.0),
+            y: display.y.unwrap_or(160.0),
+        });
+    }
+    for pot in &board.pots {
+        out.push(EditPart {
+            kind: PartKind::Pot,
+            pins: pins3(pot.pin, 0, 0),
+            label: pot.label.clone(),
+            x: pot.x.unwrap_or(60.0),
+            y: pot.y.unwrap_or(280.0),
         });
     }
     out
@@ -208,6 +248,9 @@ fn board_of(chip: &str, parts: &[EditPart]) -> SimBoard {
         leds: Vec::new(),
         buttons: Vec::new(),
         rgbs: Vec::new(),
+        sevens: Vec::new(),
+        displays: Vec::new(),
+        pots: Vec::new(),
     };
     for part in parts {
         match &part.kind {
@@ -228,6 +271,23 @@ fn board_of(chip: &str, parts: &[EditPart]) -> SimBoard {
                 r: part.pins[0],
                 g: part.pins[1],
                 b: part.pins[2],
+                label: part.label.clone(),
+                x: Some(part.x),
+                y: Some(part.y),
+            }),
+            PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
+                pins: part.pins,
+                label: part.label.clone(),
+                x: Some(part.x),
+                y: Some(part.y),
+            }),
+            PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
+                label: part.label.clone(),
+                x: Some(part.x),
+                y: Some(part.y),
+            }),
+            PartKind::Pot => board.pots.push(rusty_embed::SimPot {
+                pin: part.pins[0],
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
@@ -294,10 +354,21 @@ fn BoardEditor(
                 PartKind::Led { .. } => format!("GPIO{pin}"),
                 PartKind::Button => format!("BTN{pin}"),
                 PartKind::Rgb => label_stub.clone(),
+                PartKind::Seven => "7SEG".to_string(),
+                PartKind::Display => "DISPLAY".to_string(),
+                PartKind::Pot => format!("POT{pin}"),
             };
             list.push(EditPart {
                 kind,
-                pins: [pin, pin + 1, pin + 2],
+                pins: [
+                    pin,
+                    pin.saturating_add(1),
+                    pin.saturating_add(2),
+                    pin.saturating_add(3),
+                    pin.saturating_add(4),
+                    pin.saturating_add(5),
+                    pin.saturating_add(6),
+                ],
                 label,
                 x: 50.0 + (list.len() as f64 * 16.0) % 90.0,
                 y: 40.0 + (list.len() as f64 * 52.0) % 240.0,
@@ -418,6 +489,37 @@ fn BoardEditor(
                         <span class="size-3.5 rounded-full bg-[conic-gradient(#ff5c5c,#3ddc84,#4aa8ff,#ff5c5c)]" />
                         <span>"RGB LED"</span>
                     </button>
+                    <button
+                        type="button"
+                        title="Seven segments, one GPIO each — a display made of LEDs"
+                        on:click=move |_| add_part(PartKind::Seven, String::new())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="grid size-3.5 place-items-center rounded-[3px] bg-[#3a2323] font-mono text-[9px] leading-none text-[#ff5c5c]">
+                            "8"
+                        </span>
+                        <span>"7-segment"</span>
+                    </button>
+                    <button
+                        type="button"
+                        title="A text screen fed by [rusty:disp] serial lines"
+                        on:click=move |_| add_part(PartKind::Display, String::new())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="h-3 w-4 rounded-[2px] bg-[#0d1a12] ring-1 ring-[#1d4a2f]" />
+                        <span>"display"</span>
+                    </button>
+                    <button
+                        type="button"
+                        title="A slider that sends P<pin>=<0..255> into the firmware's UART"
+                        on:click=move |_| add_part(PartKind::Pot, String::new())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="grid size-3.5 place-items-center rounded-full bg-line-strong">
+                            <span class="h-2 w-0.5 bg-[#c9a227]" />
+                        </span>
+                        <span>"potentiometer"</span>
+                    </button>
                     {(!user_parts.is_empty())
                         .then(|| {
                             view! {
@@ -501,12 +603,26 @@ fn BoardEditor(
                                 .get()
                                 .iter()
                                 .enumerate()
+                                .filter(|(_, part)| !matches!(part.kind, PartKind::Display))
                                 .map(|(index, part)| {
                                     let x = part.x + 10.0;
                                     let y = part.y + 10.0;
                                     let pin_y = kit_top + 22.0 + (index as f64 % 14.0) * 14.0;
                                     let pin_x = kit_left + 20.0;
                                     let mid = (x + pin_x) / 2.0;
+                                    // The wire says which GPIO it lands on —
+                                    // pin-level wiring you can read.
+                                    let pin_label = match part.kind {
+                                        PartKind::Rgb => format!(
+                                            "{}·{}·{}",
+                                            part.pins[0], part.pins[1], part.pins[2],
+                                        ),
+                                        PartKind::Seven => format!(
+                                            "{}..{}",
+                                            part.pins[0], part.pins[6],
+                                        ),
+                                        _ => part.pins[0].to_string(),
+                                    };
                                     view! {
                                         <polyline
                                             points=format!(
@@ -516,6 +632,16 @@ fn BoardEditor(
                                             stroke="#4a4f58"
                                             stroke-width="2"
                                         />
+                                        <text
+                                            x=pin_x - 6.0
+                                            y=pin_y - 4.0
+                                            text-anchor="end"
+                                            font-family="ui-monospace"
+                                            font-size="9"
+                                            fill="#8b909a"
+                                        >
+                                            {pin_label}
+                                        </text>
                                     }
                                 })
                                 .collect_view()
@@ -579,6 +705,67 @@ fn BoardEditor(
                                                 level(pins[1]),
                                                 level(pins[2]),
                                             )
+                                        />
+                                    }
+                                        .into_any(),
+                                    PartKind::Seven => view! {
+                                        <svg width="26" height="42" viewBox="0 0 26 42">
+                                            {
+                                                // Segments a..g as bars; each
+                                                // lights from its own pin.
+                                                let seg = move |slot: usize| {
+                                                    if level(pins[slot]) {
+                                                        "#ff5c5c"
+                                                    } else {
+                                                        "#3a2323"
+                                                    }
+                                                };
+                                                view! {
+                                                    <rect x="6" y="2" width="14" height="4" rx="2" fill=move || seg(0) />
+                                                    <rect x="19" y="5" width="4" height="13" rx="2" fill=move || seg(1) />
+                                                    <rect x="19" y="23" width="4" height="13" rx="2" fill=move || seg(2) />
+                                                    <rect x="6" y="36" width="14" height="4" rx="2" fill=move || seg(3) />
+                                                    <rect x="3" y="23" width="4" height="13" rx="2" fill=move || seg(4) />
+                                                    <rect x="3" y="5" width="4" height="13" rx="2" fill=move || seg(5) />
+                                                    <rect x="6" y="19" width="14" height="4" rx="2" fill=move || seg(6) />
+                                                }
+                                            }
+                                        </svg>
+                                    }
+                                        .into_any(),
+                                    PartKind::Display => view! {
+                                        <span class="grid min-h-[34px] min-w-[110px] place-items-center rounded-[4px] bg-[#0d1a12] px-2 py-1 font-mono text-caption text-[#3ddc84] ring-1 ring-[#1d4a2f]">
+                                            {move || {
+                                                let text = state.sim_display.get();
+                                                if text.is_empty() {
+                                                    "········".to_string()
+                                                } else {
+                                                    text
+                                                }
+                                            }}
+                                        </span>
+                                    }
+                                        .into_any(),
+                                    PartKind::Pot => view! {
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="255"
+                                            value="128"
+                                            on:pointerdown=move |event: ev::PointerEvent| {
+                                                // The slider owns its drag.
+                                                event.stop_propagation();
+                                            }
+                                            on:input=move |event: ev::Event| {
+                                                if let Ok(value) =
+                                                    event_target_value(&event).parse::<u8>()
+                                                {
+                                                    controller::sim_pot(
+                                                        state, pins[0], value,
+                                                    );
+                                                }
+                                            }
+                                            class="w-[80px] accent-[#c9a227]"
                                         />
                                     }
                                         .into_any(),
@@ -720,6 +907,9 @@ fn BoardEditor(
                                         PartKind::Led { .. } => "LED",
                                         PartKind::Button => "Button",
                                         PartKind::Rgb => "RGB LED",
+                                        PartKind::Seven => "7-segment",
+                                        PartKind::Display => "Display",
+                                        PartKind::Pot => "Potentiometer",
                                     }}
                                 </span>
                                 {match part.kind.clone() {
@@ -727,6 +917,23 @@ fn BoardEditor(
                                         {pin_field(0, "r")}
                                         {pin_field(1, "g")}
                                         {pin_field(2, "b")}
+                                    }
+                                        .into_any(),
+                                    PartKind::Seven => view! {
+                                        {pin_field(0, "a")}
+                                        {pin_field(1, "b")}
+                                        {pin_field(2, "c")}
+                                        {pin_field(3, "d")}
+                                        {pin_field(4, "e")}
+                                        {pin_field(5, "f")}
+                                        {pin_field(6, "g")}
+                                    }
+                                        .into_any(),
+                                    PartKind::Display => view! {
+                                        <p class="text-footnote leading-snug text-label-4">
+                                            "Shows whatever the firmware prints as \
+                                             [rusty:disp] <text> — no pins to wire."
+                                        </p>
                                     }
                                         .into_any(),
                                     _ => pin_field(0, "pin").into_any(),

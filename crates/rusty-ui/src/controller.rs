@@ -729,6 +729,7 @@ pub fn run_simulation(state: AppState) {
         return;
     }
     state.sim_gpio.set(std::collections::HashMap::new());
+    state.sim_display.set(String::new());
 
     // Like stream_to_terminal, with one interception: the firmware's pin
     // reports drive the board view instead of scrolling the dock at 2Hz.
@@ -742,6 +743,8 @@ pub fn run_simulation(state: AppState) {
                             gpio.insert(pin, level);
                         }
                     });
+                } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
+                    state.sim_display.set(text);
                 } else {
                     state.push_log(line);
                 }
@@ -839,6 +842,23 @@ pub fn sim_press(state: AppState, pin: u8, down: bool) {
     }
     let args = Args {
         text: format!("B{pin}={}", if down { 1 } else { 0 }),
+    };
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::sim::SEND, &args).await;
+    });
+}
+
+/// A potentiometer moved: `P<pin>=<0..255>` into the firmware's UART.
+pub fn sim_pot(state: AppState, pin: u8, value: u8) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        text: String,
+    }
+    if !state.session_running.get_untracked() {
+        return;
+    }
+    let args = Args {
+        text: format!("P{pin}={value}"),
     };
     spawn_local(async move {
         let _ = ipc::call::<_, ()>(cmd::sim::SEND, &args).await;
