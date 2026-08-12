@@ -137,16 +137,23 @@ UI contributions are declarative — extensions never ship markup or styles.
   toolchain 'esp'` — precisely for the projects this workbench serves. Resolve
   `rustup which --toolchain stable rust-analyzer` first; the stable binary
   analyses any toolchain's project and reads the pinned sysroot itself.
-- **rust-analyzer's cargo phases wipe diagnostics on `build-std` projects.**
-  esp-generate emits `[unstable] build-std` for Xtensa, and any cargo run
-  rust-analyzer makes under that config — flycheck *or* the build-script
-  phase — emits compiler messages for from-source std crates that
-  `cargo metadata` never listed. r-a errors on each, and when the phase ends
-  it reloads the workspace in a state that clears every diagnostic already
-  published: squiggles appear at ~2s and vanish by ~45s. Both phases are off
-  (`checkOnSave: false`, `cargo.buildScripts.enable: false`, proc macros
-  declared off with them). Probed live with `--example probe`, which injects
-  an error in-buffer and watches for the wipe.
+- **Pushed diagnostics die at rust-analyzer's workspace switch; pull them.**
+  When build data arrives, r-a switches workspaces and never recomputes pushed
+  diagnostics for files already open — they are wiped and stay gone, on every
+  project shape. Editors do not see this because they speak LSP 3.17 pull:
+  the server sends `workspace/diagnostic/refresh` after the switch and the
+  client re-requests. `rusty-lsp` declares the pull capability, re-pulls on
+  refresh/didOpen/didChange with busy-retry, and treats a pushed empty set
+  for an open file as a poke to re-pull, not as truth.
+- **`procMacro.enable: false` is not a lighter mode — it is poison.** It
+  takes the built-in derives down with it, sysroot trait resolution collapses,
+  and any open file containing an `impl` with `&self` gets *no diagnostics at
+  all*, silently. Leave proc macros on; the only thing rusty disables is
+  flycheck (`checkOnSave: false`), because `cargo check` under `build-std`
+  emits messages for packages `cargo metadata` never listed and r-a drowns.
+  Probed live with `--example probe`, which injects an in-buffer error and
+  asserts it is still present at the end of a 45s watch, on a host project
+  and on a real Xtensa `build-std` project.
 - **A flattened `"cargo.buildScripts.enable"` key beside a `"cargo"` object is
   silently ignored** in rust-analyzer's initializationOptions. The first
   attempt at the fix above failed while looking applied, because the sibling

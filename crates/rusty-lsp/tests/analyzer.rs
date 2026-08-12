@@ -65,17 +65,27 @@ fn rust_analyzer_end_to_end() {
         return;
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir(dir.path().join("src")).unwrap();
+    // No dot-named component anywhere in the path. rust-analyzer's VFS treats
+    // dot-directories as hidden — with one anywhere above the project, native
+    // analysis silently never loads: no diagnostics, and no message saying
+    // why. tempfile's default `.tmpXXXX` has exactly that shape; flycheck used
+    // to paper over the hole with rustc's own errors, which is how this test
+    // passed before flycheck was turned off.
+    let dir = tempfile::Builder::new()
+        .prefix("rusty-lsp-")
+        .tempdir()
+        .expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
-        dir.path().join("Cargo.toml"),
+        root.join("Cargo.toml"),
         "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     )
     .unwrap();
     let text = source();
-    std::fs::write(dir.path().join("src/main.rs"), &text).unwrap();
+    std::fs::write(root.join("src/main.rs"), &text).unwrap();
 
-    let (client, events) = LspClient::spawn(dir.path(), None).expect("spawn rust-analyzer");
+    let (client, events) = LspClient::spawn(&root, None).expect("spawn rust-analyzer");
     client.did_open("src/main.rs", &text).expect("didOpen");
 
     // ── diagnostics are pushed, and land on the right line ───────────────────

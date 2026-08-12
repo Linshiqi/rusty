@@ -32,7 +32,11 @@ fn main() {
     client.did_open(&file, &injected).expect("didOpen");
     eprintln!("opened {file} with an injected error at line {error_line}");
 
-    let deadline = Instant::now() + Duration::from_secs(180);
+    let patience = std::env::var("RUSTY_PROBE_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(180);
+    let deadline = Instant::now() + Duration::from_secs(patience);
     while Instant::now() < deadline {
         match events.recv_timeout(Duration::from_secs(5)) {
             Some(LspEvent::Diagnostics { path, items }) => {
@@ -55,20 +59,34 @@ fn main() {
                         started.elapsed(),
                     );
                     // The failure mode being probed is not "never arrives" but
-                    // "arrives and is wiped moments later" — so hold on and see.
+                    // "arrives and stays gone". A transient empty publish during
+                    // a workspace reload is survivable — what matters is the
+                    // state the window ENDS in.
                     let quiet_until = Instant::now() + Duration::from_secs(45);
+                    let mut present = true;
+                    let mut gaps = 0u32;
                     while Instant::now() < quiet_until {
                         if let Some(LspEvent::Diagnostics { path, items }) =
                             events.recv_timeout(Duration::from_secs(5))
                             && path == file
-                            && !items.iter().any(|d| d.start_line == error_line)
                         {
-                            eprintln!("PROBE FAILED: the diagnostic was wiped");
-                            std::process::exit(1);
+                            let now = items.iter().any(|d| d.start_line == error_line);
+                            if present && !now {
+                                gaps += 1;
+                                eprintln!("… wiped (gap {gaps}); watching for recovery");
+                            }
+                            if !present && now {
+                                eprintln!("… recovered");
+                            }
+                            present = now;
                         }
                     }
-                    eprintln!("PROBE OK: the diagnostic survived 45s");
-                    return;
+                    if present {
+                        eprintln!("PROBE OK: present at the end of 45s ({gaps} transient gaps)");
+                        return;
+                    }
+                    eprintln!("PROBE FAILED: wiped and never restored");
+                    std::process::exit(1);
                 }
             }
             Some(LspEvent::Exited {}) => {

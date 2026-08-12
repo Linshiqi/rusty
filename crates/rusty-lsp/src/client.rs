@@ -16,6 +16,10 @@
 //! - `check.allTargets` defaults to on, which builds tests and benches. A
 //!   `no_std` firmware has no test harness, so that default drowns every real
 //!   diagnostic in "can't find crate for `test`". It is turned off.
+//! - Diagnostics are **pulled** (LSP 3.17), not just received. After the
+//!   build-data workspace switch, r-a never recomputes pushed diagnostics for
+//!   open files — they wipe and stay gone. Under pull, it asks the client to
+//!   re-request instead, and the puller thread owns freshness.
 
 use std::{
     collections::HashMap,
@@ -77,6 +81,10 @@ struct Doc {
 
 struct Shared {
     writer: Mutex<Box<dyn Write + Send>>,
+    /// Wake the puller for a path. Requests cannot be made from the reader
+    /// thread — it would wait on a reply only itself can read — so refreshes
+    /// hop threads through this.
+    poke: Mutex<Option<Sender<String>>>,
     pending: Mutex<HashMap<i64, Sender<Value>>>,
     docs: Mutex<HashMap<String, Doc>>,
     next_id: AtomicI64,
@@ -119,6 +127,7 @@ impl LspClient {
         let (events_tx, events_rx) = mpsc::channel();
         let shared = Arc::new(Shared {
             writer: Mutex::new(Box::new(stdin) as Box<dyn Write + Send>),
+            poke: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
@@ -136,6 +145,10 @@ impl LspClient {
             let _ = child.wait();
             return Err(e);
         }
+
+        let (poke_tx, poke_rx) = mpsc::channel();
+        *shared.poke.lock().expect("lsp poke") = Some(poke_tx);
+        pull_loop(poke_rx, Arc::clone(&shared));
 
         Ok((
             LspClient {
@@ -162,6 +175,7 @@ impl LspClient {
                 },
             );
         }
+        self.shared.poke_pull(path);
         let language = match path.rsplit('.').next() {
             Some("rs") => "rust",
             Some("toml") => "toml",
@@ -202,6 +216,7 @@ impl LspClient {
             (doc.version, start, end, replacement)
         };
 
+        self.shared.poke_pull(path);
         self.shared.notify(
             "textDocument/didChange",
             json!({
@@ -401,6 +416,19 @@ impl Drop for LspClient {
 }
 
 impl Shared {
+    fn poke_pull(&self, path: &str) {
+        if let Some(poke) = self.poke.lock().expect("lsp poke").as_ref() {
+            let _ = poke.send(path.to_string());
+        }
+    }
+
+    fn poke_all_open(&self) {
+        let open: Vec<String> = self.docs.lock().expect("lsp docs").keys().cloned().collect();
+        for path in open {
+            self.poke_pull(&path);
+        }
+    }
+
     fn encoding(&self) -> Encoding {
         *self.encoding.get().unwrap_or(&Encoding::Utf16)
     }
@@ -449,18 +477,6 @@ impl Shared {
 /// The `initialize` round trip.
 fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<()> {
     let mut cargo = serde_json::Map::new();
-    // No build-script phase. It runs `cargo check` under the project's own
-    // config — which for these projects means `build-std` — and the messages
-    // for from-source std crates are for packages `cargo metadata` never
-    // listed. rust-analyzer errors on every one, and when the phase completes
-    // it reloads the workspace in a state that wipes the diagnostics already
-    // on screen. Probed live on a real Xtensa project: with the phase on, the
-    // injected error arrives at 2s and is gone by 45s; with it off, it stays.
-    //
-    // The key must live INSIDE the `cargo` object: a flattened
-    // "cargo.buildScripts.enable" beside a `cargo` object is ignored, which is
-    // exactly how the first attempt at this fix failed while looking applied.
-    cargo.insert("buildScripts".into(), json!({ "enable": false }));
     // Tests and benches do not build in `no_std` — there is no test harness —
     // so the default of checking `--all-targets` buries every real diagnostic
     // under "can't find crate for `test`".
@@ -479,6 +495,12 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
             "textDocument": {
                 "synchronization": { "didSave": true },
                 "publishDiagnostics": {},
+                // Pull, not just push. After the build-data workspace switch,
+                // rust-analyzer stops recomputing pushed diagnostics for open
+                // files — they get wiped and stay gone. Under the pull model it
+                // asks the client to re-request instead, and freshness becomes
+                // this client's job, which it can actually do.
+                "diagnostic": { "relatedDocumentSupport": false },
                 // No snippet support declared, so inserts arrive as plain text
                 // rather than `$0` placeholders nothing here interprets.
                 "completion": { "completionItem": { "snippetSupport": false } },
@@ -486,16 +508,14 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "definition": {},
             },
             "window": { "workDoneProgress": false },
-            "workspace": { "workspaceFolders": false, "configuration": false },
+            "workspace": {
+                "workspaceFolders": false,
+                "configuration": false,
+                "diagnostics": { "refreshSupport": true },
+            },
         },
         "initializationOptions": {
             "cargo": Value::Object(cargo),
-            // Proc macros need the build-script phase, which is off (see
-            // above) — so expansion is declared off rather than left to fail.
-            // The cost: macro-heavy code is analysed unexpanded, and shows
-            // hint-level "expansion is disabled" markers instead of wrong
-            // errors.
-            "procMacro": { "enable": false },
             "check": { "allTargets": false },
             // Off, deliberately. Embedded projects here use `build-std`, and
             // `cargo check` under build-std emits messages for packages that
@@ -543,6 +563,14 @@ fn dispatch(shared: &Shared, message: Value) {
         // declared capabilities is satisfied by an empty answer — but it must
         // *get* one, or it waits forever and the session silently stalls.
         (Some(id), Some(method)) => {
+            if method == "workspace/diagnostic/refresh" {
+                // The server just switched workspaces (build data arrived, a
+                // dependency changed) and wants every diagnostic re-requested.
+                // This is the moment the push model silently wiped instead.
+                let _ = shared.respond(id, Value::Null);
+                shared.poke_all_open();
+                return;
+            }
             let result = if method == "workspace/configuration" {
                 let asked = message["params"]["items"]
                     .as_array()
@@ -568,6 +596,54 @@ fn dispatch(shared: &Shared, message: Value) {
     }
 }
 
+/// Pull diagnostics for pokes, forever, coalescing bursts.
+///
+/// Retries while the server is busy: a pull during indexing answers with
+/// "content modified" or blocks, and both mean "later", not "never".
+fn pull_loop(poke: mpsc::Receiver<String>, shared: Arc<Shared>) {
+    thread::spawn(move || {
+        while let Ok(first) = poke.recv() {
+            // Typing produces a poke per pulse; only the newest matters.
+            let mut wanted = vec![first];
+            while let Ok(more) = poke.try_recv() {
+                if !wanted.contains(&more) {
+                    wanted.push(more);
+                }
+            }
+            for path in wanted {
+                for attempt in 0..10 {
+                    match pull(&shared, &path) {
+                        Ok(items) => {
+                            let _ = shared.events.send(LspEvent::Diagnostics {
+                                path: path.clone(),
+                                items,
+                            });
+                            break;
+                        }
+                        Err(_) if attempt < 9 => {
+                            thread::sleep(Duration::from_millis(600));
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// One `textDocument/diagnostic` round trip.
+fn pull(shared: &Shared, path: &str) -> Result<Vec<FileDiagnostic>> {
+    let uri = path_to_uri(&shared.root.join(path));
+    let report = shared.request(
+        "textDocument/diagnostic",
+        json!({ "textDocument": { "uri": uri } }),
+    )?;
+    // A "full" report carries items; "unchanged" cannot happen because no
+    // previousResultId is ever sent.
+    let items = report.get("items").cloned().unwrap_or(Value::Array(Vec::new()));
+    Ok(convert_items(shared, path, &items))
+}
+
 /// Convert one publishDiagnostics into the wire model and emit it.
 fn publish(shared: &Shared, params: &Value) {
     let Some(uri) = params["uri"].as_str() else {
@@ -579,14 +655,29 @@ fn publish(shared: &Shared, params: &Value) {
         return;
     };
 
+    // Pushed emptiness for a document the puller owns is exactly the wipe this
+    // client moved to the pull model to escape; the pull that follows the next
+    // refresh or edit is authoritative. Pushes still matter for files nothing
+    // has opened — whole-project results land there.
+    let items = convert_items(shared, &path, &params["diagnostics"]);
+    if items.is_empty() && shared.docs.lock().expect("lsp docs").contains_key(&path) {
+        shared.poke_pull(&path);
+        return;
+    }
+
+    let _ = shared.events.send(LspEvent::Diagnostics { path, items });
+}
+
+/// LSP diagnostics as the wire model, columns already scalar.
+fn convert_items(shared: &Shared, path: &str, diagnostics: &Value) -> Vec<FileDiagnostic> {
     let encoding = shared.encoding();
     let text = shared
         .docs
         .lock()
         .expect("lsp docs")
-        .get(&path)
+        .get(path)
         .map(|doc| doc.text.clone())
-        .or_else(|| std::fs::read_to_string(shared.root.join(&path)).ok());
+        .or_else(|| std::fs::read_to_string(shared.root.join(path)).ok());
 
     let scalar = |line: u32, character: u32| -> u32 {
         text.as_deref()
@@ -595,7 +686,7 @@ fn publish(shared: &Shared, params: &Value) {
             .unwrap_or(character)
     };
 
-    let mut items: Vec<FileDiagnostic> = params["diagnostics"]
+    let mut items: Vec<FileDiagnostic> = diagnostics
         .as_array()
         .into_iter()
         .flatten()
@@ -627,8 +718,7 @@ fn publish(shared: &Shared, params: &Value) {
         })
         .collect();
     items.sort_by_key(|d| (d.start_line, d.start_col, d.severity));
-
-    let _ = shared.events.send(LspEvent::Diagnostics { path, items });
+    items
 }
 
 /// Where rust-analyzer actually is.
