@@ -40,7 +40,8 @@ use serde_json::{Value, json};
 use crate::{
     error::{Error, Result},
     model::{
-        CompletionItem, DiagSeverity, EditRange, FileDiagnostic, Location, LspEvent,
+        CompletionItem, DiagSeverity, EditRange, FileDiagnostic, HoverInfo, Location,
+        LspEvent,
     },
     positions::{
         Encoding, character_to_scalar, content_change, scalar_to_character,
@@ -305,8 +306,10 @@ impl LspClient {
         }).collect())
     }
 
-    /// What the thing under this position is, as prose.
-    pub fn hover(&self, path: &str, line: u32, col: u32) -> Result<Option<String>> {
+    /// What the thing under this position is, as prose, and how much text the
+    /// answer covers — the range is what lets a tooltip stay up while the
+    /// pointer moves within the same token.
+    pub fn hover(&self, path: &str, line: u32, col: u32) -> Result<Option<HoverInfo>> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/hover",
@@ -332,14 +335,36 @@ impl LspClient {
                 })
             })
             .filter(|t| !t.is_empty());
-        Ok(text)
+
+        let range = result.get("range").and_then(|range| {
+            let encoding = self.shared.encoding();
+            let docs = self.shared.docs.lock().expect("lsp docs");
+            let text = docs.get(path)?.text.as_str();
+            let scalar = |position: &Value| -> Option<(u32, u32)> {
+                let line = position["line"].as_u64()? as u32;
+                let character = position["character"].as_u64()? as u32;
+                let line_text = text.split('\n').nth(line as usize)?;
+                Some((line, character_to_scalar(line_text, character, encoding)))
+            };
+            let start = scalar(&range["start"])?;
+            let end = scalar(&range["end"])?;
+            Some(EditRange {
+                start_line: start.0,
+                start_col: start.1,
+                end_line: end.0,
+                end_col: end.1,
+            })
+        });
+
+        Ok(text.map(|text| HoverInfo { text, range }))
     }
 
     /// Where the thing under this position is defined.
     ///
-    /// `None` when the definition is outside the project — `core`, a
-    /// dependency — because the file panel refuses paths that climb out of the
-    /// root, and a location nothing can open is worse than none.
+    /// A definition in a dependency or the sysroot comes back with `external`
+    /// set and an absolute path — most of what anyone Ctrl+clicks in firmware
+    /// lives in esp-hal or `core`, and answering `None` for all of it made the
+    /// gesture look broken.
     pub fn definition(&self, path: &str, line: u32, col: u32) -> Result<Option<Location>> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
@@ -357,17 +382,40 @@ impl LspClient {
         let Some(uri) = first["uri"].as_str() else {
             return Ok(None);
         };
-        let Some(rel) = uri_to_relative(uri, &self.shared.root) else {
-            return Ok(None);
-        };
-
         let line = first["range"]["start"]["line"].as_u64().unwrap_or(0) as u32;
         let character = first["range"]["start"]["character"].as_u64().unwrap_or(0) as u32;
-        let col = self.scalarize(&rel, line, character);
+
+        if let Some(rel) = uri_to_relative(uri, &self.shared.root) {
+            let col = self.scalarize(&rel, line, character);
+            return Ok(Some(Location {
+                path: rel,
+                line,
+                col,
+                external: false,
+            }));
+        }
+
+        // Outside the project. The absolute path travels; the viewer decides
+        // whether it is somewhere it is willing to read.
+        let Some(absolute) = uri_to_absolute(uri) else {
+            return Ok(None);
+        };
+        let col = std::fs::read_to_string(&absolute)
+            .ok()
+            .and_then(|text| {
+                let line_text = text.split('\n').nth(line as usize)?;
+                Some(character_to_scalar(
+                    line_text,
+                    character,
+                    self.shared.encoding(),
+                ))
+            })
+            .unwrap_or(character);
         Ok(Some(Location {
-            path: rel,
+            path: absolute.replace('\\', "/"),
             line,
             col,
+            external: true,
         }))
     }
 
@@ -777,6 +825,28 @@ fn path_to_uri(path: &Path) -> String {
         }
     }
     uri
+}
+
+/// A `file://` URI as an absolute native path.
+fn uri_to_absolute(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    let mut bytes = Vec::with_capacity(rest.len());
+    let mut input = rest.bytes();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let high = input.next()?;
+            let low = input.next()?;
+            let hex = |b: u8| (b as char).to_digit(16);
+            bytes.push((hex(high)? * 16 + hex(low)?) as u8);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    let mut decoded = String::from_utf8(bytes).ok()?;
+    if decoded.len() >= 3 && decoded.as_bytes()[0] == b'/' && decoded.as_bytes()[2] == b':' {
+        decoded.remove(0);
+    }
+    Some(decoded)
 }
 
 /// A `file://` URI as a path relative to `root`, or `None` if it is elsewhere.

@@ -82,4 +82,10 @@ pub struct Document {
     pub binary: bool,
     /// Set when the file was too large to highlight in full.
     pub truncated: bool,
+    /// Not this project's file — a dependency's source, opened to read.
+    /// The editor refuses to write it: the registry cache is shared by every
+    /// project on the machine, and "I fixed it in the library" there is a
+    /// change the next `cargo build` may silently revert or spread.
+    #[serde(default)]
+    pub read_only: bool,
 }

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use rusty_lsp::{CompletionItem, Location, LspClient, LspEvent};
+use rusty_lsp::{CompletionItem, HoverInfo, Location, LspClient, LspEvent};
 use tauri::{State, ipc::Channel};
 
 use crate::{error::CommandError, state::AppState};
@@ -140,7 +140,7 @@ pub async fn lsp_hover(
     line: u32,
     col: u32,
     state: State<'_, AppState>,
-) -> Result<Option<String>, CommandError> {
+) -> Result<Option<HoverInfo>, CommandError> {
     let Some(client) = state.lsp().await else {
         return Ok(None);
     };

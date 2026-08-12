@@ -75,6 +75,7 @@ pub mod files {
     pub const OPEN: &str = "open_file";
     pub const SAVE: &str = "save_file";
     pub const HIGHLIGHT: &str = "highlight_text";
+    pub const OPEN_EXTERNAL: &str = "open_external";
 }
 
 /// The language server behind the editor.

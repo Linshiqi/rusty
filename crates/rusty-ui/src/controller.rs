@@ -16,7 +16,7 @@ use rusty_embed::{
 
 use rusty_ai::{AgentEvent, ChatEvent, Message, Preset, ProviderConfig, ToolDef};
 use rusty_edit::{Document, Entry, Line as EditLine};
-use rusty_lsp::LspEvent;
+use rusty_lsp::{HoverInfo, LspEvent};
 use rusty_term::Screen as TermScreen;
 
 use crate::{
@@ -778,8 +778,42 @@ pub fn open_file(state: AppState, path: String) {
     );
 }
 
+/// Open a dependency's source read-only — where goto-definition lands when the
+/// answer lives in esp-hal or `core`.
+pub fn open_external(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    let args = Args { path };
+    track(
+        state,
+        async move { ipc::call::<_, Document>(cmd::files::OPEN_EXTERNAL, &args).await },
+        move |document| {
+            state.draft.set(document.text.clone());
+            state.echo_text.set(document.text.clone());
+            state.highlighted.set(document.lines.clone());
+            // Deliberately no lsp_open: the server already knows this file as
+            // part of the sysroot or a dependency, and announcing it as an
+            // editable document would be a lie the read-only flag exists to
+            // prevent.
+            state.document.set(Some(document));
+        },
+    );
+}
+
 /// Write the current draft back.
 pub fn save_file(state: AppState) {
+    // A dependency's source is not this project's to change; the backend would
+    // refuse the path anyway, but a red banner for pressing Ctrl+S in a file
+    // that *looks* editable would blame the user for our affordance.
+    if state
+        .document
+        .with_untracked(|d| d.as_ref().is_some_and(|d| d.read_only))
+    {
+        return;
+    }
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
@@ -936,12 +970,20 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
         col,
     };
     spawn_local(async move {
-        if let Ok(Some(text)) = ipc::call::<_, Option<String>>(cmd::lsp::HOVER, &args).await {
+        if let Ok(Some(info)) = ipc::call::<_, Option<HoverInfo>>(cmd::lsp::HOVER, &args).await {
             let current = state
                 .document
                 .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
             if current.as_deref() == Some(path.as_str()) {
-                state.hover.set(Some((path, line, col, text)));
+                // No range from the server means "just this cell" — the card
+                // still needs one to decide what counts as moving away.
+                let range = info.range.unwrap_or(rusty_lsp::EditRange {
+                    start_line: line,
+                    start_col: col,
+                    end_line: line,
+                    end_col: col + 1,
+                });
+                state.hover.set(Some((path, range, info.text)));
             }
         }
     });
@@ -970,7 +1012,11 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
                 .document
                 .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
             if current.as_deref() != Some(location.path.as_str()) {
-                open_file(state, location.path.clone());
+                if location.external {
+                    open_external(state, location.path.clone());
+                } else {
+                    open_file(state, location.path.clone());
+                }
             }
             state.reveal.set(Some(location));
         }

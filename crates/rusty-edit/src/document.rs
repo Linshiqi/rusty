@@ -83,8 +83,69 @@ impl Files {
             language,
             binary: false,
             truncated,
+            read_only: false,
         })
     }
+
+    /// Open a file outside the project, read-only — where goto-definition
+    /// lands when the answer is in a dependency.
+    ///
+    /// Only paths under the places library source actually lives: the cargo
+    /// registry cache, cargo's git checkouts, and rustup's toolchains (which
+    /// hold `core` and friends). Everything else is refused — this is the one
+    /// door out of the project sandbox, and it opens exactly wide enough for
+    /// "show me the definition" and no wider.
+    pub fn open_external(&self, absolute: &str) -> Result<Document> {
+        let path = std::path::PathBuf::from(absolute);
+        if !is_library_source(&path) {
+            return Err(Error::Outside {
+                path: absolute.to_string(),
+            });
+        }
+
+        let bytes = std::fs::read(&path).map_err(|source| Error::Read {
+            path: absolute.to_string(),
+            source,
+        })?;
+        let Ok(text) = String::from_utf8(bytes) else {
+            let mut document = binary(absolute);
+            document.read_only = true;
+            return Ok(document);
+        };
+
+        let (lines, language, truncated) = highlight::lines(&self.syntaxes, absolute, &text);
+        Ok(Document {
+            path: absolute.replace('\\', "/"),
+            lines,
+            text,
+            language,
+            binary: false,
+            truncated,
+            read_only: true,
+        })
+    }
+}
+
+/// Whether a path is somewhere dependency source lives.
+fn is_library_source(path: &std::path::Path) -> bool {
+    let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+        return false;
+    };
+    let home = std::path::PathBuf::from(home);
+    let cargo = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".cargo"));
+    let rustup = std::env::var_os("RUSTUP_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".rustup"));
+
+    [
+        cargo.join("registry").join("src"),
+        cargo.join("git").join("checkouts"),
+        rustup.join("toolchains"),
+    ]
+    .iter()
+    .any(|root| path.starts_with(root))
 }
 
 /// Write a file under `root`.
@@ -125,6 +186,7 @@ fn binary(relative: &str) -> Document {
         language: None,
         binary: true,
         truncated: false,
+        read_only: false,
     }
 }
 

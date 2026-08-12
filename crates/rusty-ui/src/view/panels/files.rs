@@ -232,6 +232,20 @@ fn Header(document: Document) -> impl IntoView {
             }}
             <span class="flex-1" />
             {document
+                .read_only
+                .then(|| {
+                    view! {
+                        <span
+                            class="rounded-full bg-sunken px-2 text-footnote text-label-2"
+                            title="A dependency's source. rusty will not edit the shared \
+                                   registry cache — a fix made here would bleed into every \
+                                   project on the machine and vanish on the next update."
+                        >
+                            "read-only"
+                        </span>
+                    }
+                })}
+            {document
                 .truncated
                 .then(|| {
                     view! {
@@ -268,7 +282,7 @@ fn Surface(document: Document) -> impl IntoView {
     let area: NodeRef<html::Textarea> = NodeRef::new();
     let scroller: NodeRef<html::Div> = NodeRef::new();
     let path = document.path.clone();
-    let read_only = document.truncated;
+    let read_only = document.truncated || document.read_only;
     // Hover only means something where a language server is listening.
     let is_rust = path.ends_with(".rs");
 
@@ -277,6 +291,9 @@ fn Surface(document: Document) -> impl IntoView {
     // nothing while the mouse is moving and only speak once it has settled.
     let hover_cell = RwSignal::new(None::<(u32, u32)>);
     let hover_gen = RwSignal::new(0u64);
+    // True while the pointer is over the card itself. Reading the card —
+    // scrolling it, selecting from it — must not count as leaving.
+    let on_card = RwSignal::new(false);
 
     // Apply a pending goto once this document is the one on screen.
     {
@@ -433,17 +450,36 @@ fn Surface(document: Document) -> impl IntoView {
                                     return;
                                 }
                                 hover_cell.set(cell);
-                                // Moving off the tooltip's cell dismisses it.
-                                if state
-                                    .hover
-                                    .with_untracked(|h| h.as_ref().is_some_and(
-                                        |(_, l, c, _)| cell != Some((*l, *c)),
-                                    ))
-                                {
-                                    state.hover.set(None);
+
+                                // Inside the shown token, there is nothing to
+                                // dismiss and nothing to re-request.
+                                let inside = state.hover.with_untracked(|h| {
+                                    h.as_ref().is_some_and(|(_, range, _)| {
+                                        cell.is_some_and(|(l, c)| within(range, l, c))
+                                    })
+                                });
+                                if inside {
+                                    return;
                                 }
+
+                                // Outside it: a short grace before the card
+                                // goes, so the pointer can cross the gap onto
+                                // the card without killing it en route.
                                 let generation = hover_gen.get_untracked() + 1;
                                 hover_gen.set(generation);
+                                if state.hover.with_untracked(Option::is_some) {
+                                    set_timeout(
+                                        move || {
+                                            if hover_gen.get_untracked() == generation
+                                                && !on_card.get_untracked()
+                                            {
+                                                state.hover.set(None);
+                                            }
+                                        },
+                                        std::time::Duration::from_millis(300),
+                                    );
+                                }
+
                                 let Some((line, col)) = cell else { return };
                                 let path = path.clone();
                                 set_timeout(
@@ -460,7 +496,18 @@ fn Surface(document: Document) -> impl IntoView {
                         }
                         on:mouseleave=move |_| {
                             hover_cell.set(None);
-                            state.hover.set(None);
+                            let generation = hover_gen.get_untracked() + 1;
+                            hover_gen.set(generation);
+                            set_timeout(
+                                move || {
+                                    if hover_gen.get_untracked() == generation
+                                        && !on_card.get_untracked()
+                                    {
+                                        state.hover.set(None);
+                                    }
+                                },
+                                std::time::Duration::from_millis(300),
+                            );
                         }
                         on:keydown=move |event: ev::KeyboardEvent| {
                             // While an IME is composing, Enter confirms the
@@ -497,11 +544,13 @@ fn Surface(document: Document) -> impl IntoView {
                         }
                     />
 
-                    // What the server said about the spot the mouse settled on.
+                    // What the server said about the token the mouse settled
+                    // on. Interactive: long documentation scrolls inside it,
+                    // and reading is not leaving.
                     {
                         let path = path.clone();
                         move || {
-                            let Some((for_path, line, col, text)) = state.hover.get() else {
+                            let Some((for_path, range, text)) = state.hover.get() else {
                                 return ().into_any();
                             };
                             if for_path != path {
@@ -510,14 +559,19 @@ fn Surface(document: Document) -> impl IntoView {
                             let x = 8.0
                                 + column_px(
                                     &state.draft.get_untracked(),
-                                    line,
-                                    col,
+                                    range.start_line,
+                                    range.start_col,
                                 );
-                            let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT + 2.0;
+                            let y = 8.0 + f64::from(range.end_line + 1) * LINE_HEIGHT + 2.0;
                             view! {
                                 <div
-                                    class="pointer-events-none absolute z-20 max-w-[70ch] overflow-hidden rounded-[8px] bg-raised px-3 py-2 font-mono text-footnote leading-relaxed whitespace-pre-wrap shadow-2xl ring-1 ring-line-strong"
+                                    class="absolute z-20 max-w-[70ch] overflow-y-auto rounded-[8px] bg-raised px-3 py-2 font-mono text-footnote leading-relaxed whitespace-pre-wrap shadow-2xl ring-1 ring-line-strong select-text"
                                     style=format!("left: {x}px; top: {y}px; max-height: 40vh")
+                                    on:mouseenter=move |_| on_card.set(true)
+                                    on:mouseleave=move |_| {
+                                        on_card.set(false);
+                                        state.hover.set(None);
+                                    }
                                 >
                                     {prose_of(&text)}
                                 </div>
@@ -654,6 +708,20 @@ fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyView {
         })
         .collect_view()
         .into_any()
+}
+
+/// Whether a cell sits inside a hover range.
+fn within(range: &rusty_lsp::EditRange, line: u32, col: u32) -> bool {
+    if line < range.start_line || line > range.end_line {
+        return false;
+    }
+    if line == range.start_line && col < range.start_col {
+        return false;
+    }
+    if line == range.end_line && col >= range.end_col.max(range.start_col + 1) {
+        return false;
+    }
+    true
 }
 
 /// The caret's byte offset into the draft.

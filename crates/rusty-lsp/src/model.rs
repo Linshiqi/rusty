@@ -85,13 +85,32 @@ pub struct EditRange {
     pub end_col: u32,
 }
 
-/// Somewhere in the project.
+/// Somewhere — in the project, or in a dependency's source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Location {
-    /// Relative to the project root, `/`-separated — the same identity the
-    /// file tree uses.
+    /// Project-relative and `/`-separated when `external` is false — the same
+    /// identity the file tree uses. Absolute when `external` is true, because
+    /// a dependency's source has no relative spelling.
     pub path: String,
     pub line: u32,
     pub col: u32,
+    /// Outside the project: `core`, a registry crate, a git checkout. Shown
+    /// read-only — the definition of the thing you clicked is exactly as
+    /// interesting when it lives in esp-hal as when it lives in your crate,
+    /// and "nothing happens" was how most Ctrl+clicks used to end.
+    pub external: bool,
+}
+
+/// What the server said about a position, and how much text it covers.
+///
+/// The range is what makes the tooltip liveable: while the pointer stays on
+/// the same token there is nothing to re-request and nothing to dismiss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoverInfo {
+    pub text: String,
+    /// Scalar columns, like everything the frontend touches. Absent when the
+    /// server did not say; the caller falls back to the queried cell.
+    pub range: Option<EditRange>,
 }

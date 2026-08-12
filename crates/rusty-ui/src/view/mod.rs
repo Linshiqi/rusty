@@ -252,6 +252,8 @@ fn Sidebar() -> impl IntoView {
 #[component]
 fn Status(
     #[prop(into)] text: String,
+    /// A dim prefix naming what the value is.
+    #[prop(optional, into)] label: Option<String>,
     #[prop(optional)] tone: Option<Tone>,
     #[prop(optional, into)] title: Option<String>,
     #[prop(optional)] on_click: Option<Callback<()>>,
@@ -283,6 +285,7 @@ fn Status(
                  disabled:pointer-events-none {colour} {interactive}",
             )
         >
+            {label.map(|label| view! { <span class="text-label-3">{label}</span> })}
             {text}
         </button>
     }
@@ -381,10 +384,22 @@ fn StatusBar() -> impl IntoView {
                             .configured_toolchain
                             .clone()
                             .unwrap_or_else(|| "unpinned".into());
+                        // Labelled inline, not only by tooltip: three bare
+                        // values reading "esp32 · xtensa-esp32-none-elf · esp"
+                        // are a riddle, and nobody hovers a status bar to solve
+                        // one.
                         view! {
-                            <Status text=chip title="Detected chip" />
-                            <Status text=target title="Target triple from .cargo/config.toml" />
-                            <Status text=toolchain title="Toolchain from rust-toolchain.toml" />
+                            <Status label="chip" text=chip title="Detected chip" />
+                            <Status
+                                label="target"
+                                text=target
+                                title="Target triple from .cargo/config.toml"
+                            />
+                            <Status
+                                label="toolchain"
+                                text=toolchain
+                                title="Toolchain from rust-toolchain.toml"
+                            />
                         }
                     })
             }}

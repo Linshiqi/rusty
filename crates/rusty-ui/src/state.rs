@@ -8,7 +8,7 @@ use leptos::prelude::*;
 
 use rusty_ai::{Message, Preset, ProviderConfig, ToolDef};
 use rusty_edit::{Document, Entry, Line};
-use rusty_lsp::FileDiagnostic;
+use rusty_lsp::{EditRange, FileDiagnostic};
 use rusty_term::Screen as TermScreen;
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
 use rusty_embed::{
@@ -237,9 +237,10 @@ pub struct AppState {
 
     /// What the compiler and rust-analyzer think is wrong, by file.
     pub diagnostics: RwSignal<HashMap<String, Vec<FileDiagnostic>>>,
-    /// What the server said about the position under the mouse: path, line,
-    /// scalar column, and the prose. The panel renders it as a tooltip.
-    pub hover: RwSignal<Option<(String, u32, u32, String)>>,
+    /// What the server said about the position under the mouse: path, the
+    /// token's range, and the prose. The range is what keeps the card up while
+    /// the pointer moves within the same token.
+    pub hover: RwSignal<Option<(String, EditRange, String)>>,
     /// Somewhere the editor should go — the result of goto-definition. Kept in
     /// state because the target file may still be opening when it is decided.
     pub reveal: RwSignal<Option<rusty_lsp::Location>>,

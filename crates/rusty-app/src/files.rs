@@ -21,6 +21,19 @@ pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Docum
     Ok(state.files().open(&root, &path)?)
 }
 
+/// Open a dependency's source read-only — where goto-definition lands when
+/// the answer lives in esp-hal or `core` rather than in the project.
+#[tauri::command]
+pub async fn open_external(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Document, CommandError> {
+    let files = state.files();
+    Ok(tokio::task::spawn_blocking(move || files.open_external(&path))
+        .await
+        .map_err(|e| CommandError::new(format!("opening panicked: {e}")))??)
+}
+
 /// Re-highlight an unsaved buffer.
 #[tauri::command]
 pub async fn highlight_text(

@@ -33,6 +33,7 @@ fn main() {
             files::open_file,
             files::save_file,
             files::highlight_text,
+            files::open_external,
             lsp::lsp_start,
             lsp::lsp_open,
             lsp::lsp_change,
@@ -121,6 +122,7 @@ mod wire_names {
             cmd::files::OPEN => files::open_file,
             cmd::files::SAVE => files::save_file,
             cmd::files::HIGHLIGHT => files::highlight_text,
+            cmd::files::OPEN_EXTERNAL => files::open_external,
 
             cmd::lsp::START => lsp::lsp_start,
             cmd::lsp::OPEN => lsp::lsp_open,
