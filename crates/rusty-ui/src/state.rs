@@ -7,6 +7,7 @@
 use leptos::prelude::*;
 
 use rusty_ai::{Message, Preset, ProviderConfig, ToolDef};
+use rusty_edit::{Document, Entry};
 use rusty_term::Screen as TermScreen;
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
 use rusty_embed::{
@@ -198,6 +199,19 @@ pub struct AppState {
     /// because with bring-your-own keys every token is the user's money.
     pub ai_usage: RwSignal<Option<(u32, u32)>>,
 
+    /// The project's files, and the one being looked at.
+    ///
+    /// The draft is held apart from the document so an unsaved edit survives
+    /// re-highlighting: the highlighted lines come from the backend and are
+    /// replaced wholesale, and folding the text into them would lose whatever
+    /// had been typed since.
+    pub file_tree: RwSignal<Vec<Entry>>,
+    pub document: RwSignal<Option<Document>>,
+    pub draft: RwSignal<String>,
+    /// Directories the user has opened. Collapsed by default, because a tree
+    /// that unfolds everything is a list.
+    pub expanded: RwSignal<Vec<String>>,
+
     /// The terminal's latest frame, when a shell is open.
     ///
     /// Whole screens rather than an append-only log: a pty is a screen, and
@@ -282,6 +296,10 @@ impl AppState {
             ai_activity: RwSignal::new(Vec::new()),
             ai_streaming: RwSignal::new(false),
             ai_usage: RwSignal::new(None),
+            file_tree: RwSignal::new(Vec::new()),
+            document: RwSignal::new(None),
+            draft: RwSignal::new(String::new()),
+            expanded: RwSignal::new(Vec::new()),
             terminal: RwSignal::new(None),
             session_running: RwSignal::new(false),
             active_panel: RwSignal::new("overview".to_string()),

@@ -6,6 +6,7 @@
 
 mod assistant;
 mod features;
+mod files;
 mod flash;
 mod memory;
 mod monitor;
@@ -23,6 +24,14 @@ pub use session::Devices;
 
 pub fn all() -> Vec<Panel> {
     vec![
+        Panel {
+            id: "files",
+            title: "Files",
+            section: "Project",
+            icon: Icon::Files,
+            needs_project: true,
+            render: || files::FilesPanel().into_any(),
+        },
         Panel {
             id: "overview",
             title: "Overview",

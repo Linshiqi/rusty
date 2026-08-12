@@ -10,6 +10,7 @@ authors.workspace = true
 [dependencies]
 rusty-ai = { version = "0.1.0", path = "../rusty-ai" }
 rusty-core = { version = "0.1.0", path = "../rusty-core" }
+rusty-edit = { version = "0.1.0", path = "../rusty-edit" }
 rusty-embed = { version = "0.1.0", path = "../rusty-embed" }
 rusty-ipc = { version = "0.1.0", path = "../rusty-ipc" }
 rusty-term = { version = "0.1.0", path = "../rusty-term" }

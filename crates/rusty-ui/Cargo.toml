@@ -13,6 +13,7 @@ js-sys = "0.3.104"
 leptos = { version = "0.8.20", features = ["csr"] }
 rusty-ai = { version = "0.1.0", path = "../rusty-ai", default-features = false }
 rusty-core = { version = "0.1.0", path = "../rusty-core", default-features = false }
+rusty-edit = { version = "0.1.0", path = "../rusty-edit", default-features = false }
 rusty-embed = { version = "0.1.0", path = "../rusty-embed", default-features = false }
 rusty-ipc = { version = "0.1.0", path = "../rusty-ipc" }
 rusty-term = { version = "0.1.0", path = "../rusty-term", default-features = false }

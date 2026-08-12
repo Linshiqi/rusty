@@ -1,9 +1,17 @@
 # rusty — embedded Rust workbench
 
-A desktop workbench for embedded Rust, ESP32 first, STM32 next. Not an editor:
-it owns the half of the job rust-analyzer does not — which chip, which
+A desktop IDE for embedded Rust, ESP32 first, STM32 next.
+
+It began as "not an editor — it owns the half of the job rust-analyzer does
+not". That half is still where the differentiation lives: which chip, which
 toolchain, what fits in flash, what is on the serial port, and an assistant that
-can call all of it.
+can call all of it. But a tool you cannot read or change a file in is a
+dashboard about work you do somewhere else, so the editor is in scope too:
+files, highlighting, and rust-analyzer behind it for completion, diagnostics
+and navigation.
+
+That is a deliberate reversal of the original positioning, not drift. Anything
+in this file that still reads as "we do not edit code" is stale.
 
 ## Commands
 

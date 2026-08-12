@@ -15,6 +15,7 @@ use rusty_embed::{
 };
 
 use rusty_ai::{AgentEvent, ChatEvent, Message, Preset, ProviderConfig, ToolDef};
+use rusty_edit::{Document, Entry};
 use rusty_term::Screen as TermScreen;
 
 use crate::{
@@ -138,6 +139,10 @@ pub fn open_project(state: AppState, path: String) {
             // against this project's chip and report plausible nonsense.
             state.selected_firmware.set(None);
             state.memory.set(None);
+            state.document.set(None);
+            state.draft.set(String::new());
+            state.file_tree.set(Vec::new());
+            state.expanded.set(Vec::new());
             // The selection names a member of the *previous* workspace, so
             // keeping it would ask the backend to resolve features for a package
             // that is not there.
@@ -148,6 +153,7 @@ pub fn open_project(state: AppState, path: String) {
             // it has to follow rather than run alongside.
             refresh_toolchain(state);
             refresh_firmware(state);
+            refresh_tree(state);
         },
     );
 }
@@ -179,6 +185,7 @@ fn reload_project(state: AppState) {
             refresh_toolchain(state);
             refresh_firmware(state);
             refresh_workspace(state);
+            refresh_tree(state);
         },
     );
 }
@@ -721,6 +728,67 @@ pub fn run_session(state: AppState, plan: CommandPlan) {
             ipc::call_streaming::<_, Option<i32>>(cmd::flash::RUN, &args, "onLine", &channel).await
         },
         move |code| note_exit(state, code),
+    );
+}
+
+// ─── files ───────────────────────────────────────────────────────────────────
+
+/// Re-read the project tree.
+pub fn refresh_tree(state: AppState) {
+    if !state.has_project() {
+        return;
+    }
+    track(
+        state,
+        ipc::get::<Vec<Entry>>(cmd::files::TREE),
+        move |entries| state.file_tree.set(entries),
+    );
+}
+
+/// Open a file for reading and editing.
+pub fn open_file(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    let args = Args { path };
+    track(
+        state,
+        async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
+        move |document| {
+            // The draft is seeded from the document exactly once, here. Setting
+            // it anywhere else would overwrite whatever had been typed.
+            state.draft.set(document.text.clone());
+            state.document.set(Some(document));
+        },
+    );
+}
+
+/// Write the current draft back.
+pub fn save_file(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+
+    let Some(path) = state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone())) else {
+        return;
+    };
+    let args = Args {
+        path: path.clone(),
+        text: state.draft.get_untracked(),
+    };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::files::SAVE, &args).await },
+        move |()| {
+            // Re-read so the highlighting matches what is now on disk, and so
+            // the saved/unsaved marker clears against real content rather than
+            // against an assumption that the write did what was asked.
+            open_file(state, path.clone());
+        },
     );
 }
 

@@ -33,6 +33,11 @@ pub struct AppState {
     /// One at a time, because the panel shows one. Opening a second replaces
     /// the first — a shell nobody can see is a shell nobody can stop.
     terminal: Mutex<Option<Arc<rusty_term::Terminal>>>,
+    /// Syntax grammars, loaded once.
+    ///
+    /// `SyntaxSet::load_defaults_newlines` parses a bundled binary dump, which
+    /// is slow enough to notice if it happens per file opened.
+    files: std::sync::OnceLock<Arc<rusty_edit::Files>>,
 }
 
 #[derive(Default, Clone)]
@@ -77,6 +82,13 @@ impl AppState {
 
     pub async fn root(&self) -> Option<PathBuf> {
         self.inner.lock().await.root.clone()
+    }
+
+    pub fn files(&self) -> Arc<rusty_edit::Files> {
+        Arc::clone(
+            self.files
+                .get_or_init(|| Arc::new(rusty_edit::Files::new())),
+        )
     }
 
     pub async fn terminal(&self) -> Option<Arc<rusty_term::Terminal>> {

@@ -299,3 +299,15 @@ body {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Syntax colours. Semantic classes rather than inline styles, because the
+   highlighter sends what a run *means* and the theme decides how it looks —
+   the same reason the terminal's indexed colours stay indexed. */
+.tok-keyword { color: var(--term-5); }
+.tok-string { color: var(--term-2); }
+.tok-number { color: var(--term-3); }
+.tok-comment { color: var(--label-3); font-style: italic; }
+.tok-type { color: var(--term-6); }
+.tok-function { color: var(--term-4); }
+.tok-macro { color: var(--term-1); }
+.tok-punctuation { color: var(--label-2); }

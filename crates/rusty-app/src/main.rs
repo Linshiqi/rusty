@@ -5,6 +5,7 @@
 mod ai;
 mod commands;
 mod error;
+mod files;
 mod flash;
 mod state;
 mod terminal;
@@ -27,6 +28,9 @@ fn main() {
             commands::catalog_problems,
             commands::toolchain_report,
             commands::firmware_list,
+            files::file_tree,
+            files::open_file,
+            files::save_file,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -90,7 +94,7 @@ mod wire_names {
 
     #[test]
     fn every_constant_names_a_real_handler() {
-        use crate::{ai, commands, flash, terminal, window};
+        use crate::{ai, commands, files, flash, terminal, window};
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
@@ -104,6 +108,9 @@ mod wire_names {
 
             cmd::toolchain::REPORT => commands::toolchain_report,
             cmd::firmware::LIST => commands::firmware_list,
+            cmd::files::TREE => files::file_tree,
+            cmd::files::OPEN => files::open_file,
+            cmd::files::SAVE => files::save_file,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

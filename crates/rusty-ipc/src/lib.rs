@@ -69,6 +69,13 @@ pub mod terminal {
     pub const CLOSE: &str = "terminal_close";
 }
 
+/// Looking at and changing the project's files.
+pub mod files {
+    pub const TREE: &str = "file_tree";
+    pub const OPEN: &str = "open_file";
+    pub const SAVE: &str = "save_file";
+}
+
 pub mod features {
     pub const ROWS: &str = "feature_rows";
     pub const IMPACT: &str = "feature_impact";
