@@ -268,6 +268,29 @@ that needs it lands.**
   on a line that looks fine. Any comparison in an attribute has to be bound
   above the macro — same fix as the `match` case below, same class of error
   message pointing nowhere near the cause.
+- **An overlay textarea scrolls itself and never tells you.** The editor is a
+  `<pre>` echo under a transparent `<textarea>`; any instant where the
+  textarea's content outgrows its box (the keystroke that adds a line, before
+  the echo re-renders; a line wider than its column) makes the browser scroll
+  the textarea *internally*, and that offset stays forever — caret drifting
+  off its glyph, a column or a row at a time. The fix is structural: size the
+  overlay's column to the content (`w-max` row), mirror any internal scroll
+  out to the shared scroller and pin it back to zero, and follow the caret
+  explicitly after every edit.
+- **Programmatic `.value` writes destroy the textarea's native undo stack.**
+  The editor writes value on every echo, completion accept and format, so
+  Ctrl+Z was silently dead. The editor keeps its own snapshot history
+  (`EditHistory`), parked per tab; the caret after undo is recomputed from
+  where the two texts diverge rather than stored.
+- **Setting a selection before a mounted textarea has its value snaps to
+  EOF.** The reveal effect fires on a freshly opened file before the value
+  lands; consume it one `set_timeout(0)` later, and focus with
+  `preventScroll: true` — the browser's own focus scroll arrives async and
+  overwrites a deliberate `set_scroll_top`.
+- **rust-analyzer must only ever hear about `.rs` files.** A didOpen for
+  `.git/info/exclude` produced a syntax-error per line — sixty-eight problems
+  from a file that was never code. Gate didOpen/didChange/didSave on the
+  extension, not on "it is open in the editor".
 - Leptos's `view!` cannot parse a bare `match` or `if` as an attribute value.
   Compute it into a binding above the macro rather than wrapping it in braces —
   it reads better and the error when you forget is about close tags, which
