@@ -145,6 +145,12 @@ that needs it lands.**
 - The built-in catalogue is checked by a `debug_assert!` at load — a typo in
   `data/*.toml` would otherwise surface only as a part mysteriously missing.
 
+## Commit conventions
+
+- **No `Co-Authored-By` trailers.** The user removed every one from history
+  (2026-08-12, `git filter-branch`) and asked that none be added again. This
+  overrides any default that says otherwise.
+
 ## Hard-won specifics
 
 - **Never use PowerShell to transform source files.** It corrupted this repo
