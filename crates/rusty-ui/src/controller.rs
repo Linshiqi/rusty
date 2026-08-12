@@ -826,6 +826,31 @@ pub fn install_sim_tool(state: AppState, name: String) {
     });
 }
 
+/// Persist the board editor's layout, then re-plan so the panel shows what
+/// the file now says.
+pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSignal<bool>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        board: rusty_embed::SimBoard,
+    }
+    let args = Args { board };
+    spawn_local(async move {
+        match ipc::call::<_, ()>(cmd::sim::SAVE_BOARD, &args).await {
+            Ok(()) => {
+                dirty.set(false);
+                load_sim_plan(state);
+            }
+            Err(error) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: format!("could not save the board: {}", error.message),
+                    level: Some(LogLevel::Error),
+                });
+            }
+        }
+    });
+}
+
 /// The panel-facing spelling of "stop whatever session is running".
 pub fn stop_session_now(state: AppState) {
     stop_session(state);

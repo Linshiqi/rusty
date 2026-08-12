@@ -1,9 +1,19 @@
 //! Simulation commands: plan the three steps, then run them end to end.
 
-use rusty_embed::{LogLine, LogStream, SimPlan, process, project, simulate};
+use rusty_embed::{LogLine, LogStream, SimBoard, SimPlan, process, project, simulate};
 use tauri::{State, ipc::Channel};
 
 use crate::{error::CommandError, state::AppState};
+
+/// Persist the board editor's layout into the project's `.rusty/sim.toml`.
+#[tauri::command]
+pub async fn save_sim_board(
+    board: SimBoard,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    simulate::save_board(&root, &board).map_err(CommandError::new)
+}
 
 /// How this project would be simulated, or exactly why it cannot be.
 #[tauri::command]

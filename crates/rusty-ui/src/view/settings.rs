@@ -74,11 +74,7 @@ pub fn Settings(open: RwSignal<bool>) -> impl IntoView {
     let selected = RwSignal::new(Category::Appearance);
 
     view! {
-        <Show when=move || open.get()>
-            <div class="absolute inset-0 z-20 flex flex-col bg-content">
-                // No drag region needed: this covers the working area only, so
-                // the menu bar above it stays visible and draggable — and, more
-                // to the point, this header's own Done button stays on screen.
+        <div class="flex min-h-0 flex-1 flex-col bg-content">
                 <header class="flex h-10 flex-none items-center gap-3 border-b border-line px-4">
                     <span class="text-strong font-semibold tracking-tight">"Settings"</span>
                     <span class="flex-1" />
@@ -133,8 +129,7 @@ pub fn Settings(open: RwSignal<bool>) -> impl IntoView {
                         }}
                     </div>
                 </div>
-            </div>
-        </Show>
+        </div>
     }
 }
 

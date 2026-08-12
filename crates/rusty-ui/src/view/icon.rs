@@ -21,6 +21,7 @@ pub enum Icon {
     Monitor,
     Features,
     Crates,
+    Settings,
     Wizard,
     Assistant,
 }
@@ -46,6 +47,8 @@ impl Icon {
             Icon::Monitor => "M2.5 4.5h15v11h-15zM5.5 8.5l2.5 2-2.5 2M10.5 12.5h4",
             // Sliders.
             Icon::Features => "M3 6h9M15 6h2M3 14h3M9 14h8M12.5 4v4M6.5 12v4",
+            // A gear.
+            Icon::Settings => "M10 6.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zM10 2v2.4M10 15.6V18M18 10h-2.4M4.4 10H2M15.7 4.3l-1.7 1.7M6 14l-1.7 1.7M15.7 15.7L14 14M6 6L4.3 4.3",
             // A parcel — a crate, literally.
             Icon::Crates => "M10 2.5 17 6.5v7l-7 4-7-4v-7zM10 2.5v8M3 6.5l7 4 7-4",
             // A plus in a rounded square.

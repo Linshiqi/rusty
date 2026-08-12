@@ -174,6 +174,8 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         pin: u8,
         color: Option<String>,
         label: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
     }
 
     let text = std::fs::read_to_string(root.join(".rusty/sim.toml")).ok()?;
@@ -193,6 +195,8 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 label: led.label.unwrap_or_else(|| format!("GPIO{}", led.pin)),
                 color: led.color.unwrap_or_else(|| "green".to_string()),
                 pin: led.pin,
+                x: led.x,
+                y: led.y,
             })
             .collect(),
     })
@@ -561,6 +565,52 @@ fn parse_proxy_server(value: &str) -> Option<String> {
     http
 }
 
+/// Write the board back to `.rusty/sim.toml`, the file the editor edits.
+///
+/// Serialised through the file structs, not the wire ones — the file format
+/// is a contract with people who write it by hand, and it stays stable when
+/// the wire model grows.
+pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), String> {
+    #[derive(serde::Serialize)]
+    struct File<'a> {
+        board: FileBoard<'a>,
+        led: Vec<FileLed<'a>>,
+    }
+    #[derive(serde::Serialize)]
+    struct FileBoard<'a> {
+        chip: &'a str,
+    }
+    #[derive(serde::Serialize)]
+    struct FileLed<'a> {
+        pin: u8,
+        color: &'a str,
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+    }
+
+    let file = File {
+        board: FileBoard { chip: &board.chip },
+        led: board
+            .leds
+            .iter()
+            .map(|led| FileLed {
+                pin: led.pin,
+                color: &led.color,
+                label: &led.label,
+                x: led.x.map(|v| v.round()),
+                y: led.y.map(|v| v.round()),
+            })
+            .collect(),
+    };
+    let text = toml::to_string_pretty(&file).map_err(|e| format!("could not encode: {e}"))?;
+    let dir = root.join(".rusty");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create .rusty: {e}"))?;
+    std::fs::write(dir.join("sim.toml"), text).map_err(|e| format!("could not write: {e}"))
+}
+
 fn exe(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
@@ -627,6 +677,27 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn the_board_round_trips_through_save_and_load() {
+        let dir = tempfile::Builder::new()
+            .prefix("rusty-sim-rt")
+            .tempdir()
+            .expect("tempdir");
+        let board = SimBoard {
+            chip: "esp32".to_string(),
+            leds: vec![SimLed {
+                pin: 26,
+                color: "green".to_string(),
+                label: "G".to_string(),
+                x: Some(40.0),
+                y: Some(60.0),
+            }],
+        };
+        save_board(dir.path(), &board).expect("save");
+        let loaded = board_view(dir.path()).expect("load");
+        assert_eq!(loaded, board);
+    }
 
     #[test]
     fn the_board_file_converts_to_the_wire_model() {

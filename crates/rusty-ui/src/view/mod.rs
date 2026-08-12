@@ -87,7 +87,7 @@ pub fn App() -> impl IntoView {
             // button ended up underneath the menu bar and the page became a
             // room with no door.
             <div class="relative flex min-h-0 flex-1">
-                <settings::Settings open=settings_open />
+
                 <palette::Palette open=palette_open chrome=chrome />
                 <Sidebar />
                 <split::Handle divider=crate::state::Divider::Sidebar />
@@ -112,7 +112,13 @@ pub fn App() -> impl IntoView {
                     // navigation and stays whole, the output belongs to the
                     // thing being worked on.
                     <div class="flex min-h-0 flex-1 flex-col">
-                        <Stage />
+                        {move || {
+                            if settings_open.get() {
+                                view! { <settings::Settings open=settings_open /> }.into_any()
+                            } else {
+                                view! { <Stage /> }.into_any()
+                            }
+                        }}
                     </div>
                     <dock::Dock />
                 </main>
@@ -283,7 +289,12 @@ fn Sidebar() -> impl IntoView {
                                                     title.to_string()
                                                 }
                                             }
-                                            on:click=move |_| state.active_panel.set(id.to_string())
+                                            on:click=move |_| {
+                                                let SettingsOpen(settings) =
+                                                    expect_context::<SettingsOpen>();
+                                                settings.set(false);
+                                                state.active_panel.set(id.to_string());
+                                            }
                                             class=move || {
                                                 let base = "flex w-full items-center gap-2.5 rounded-[6px] \
                                                     px-2 py-[5px] text-body transition-colors \
@@ -307,6 +318,30 @@ fn Sidebar() -> impl IntoView {
                     }
                 })
                 .collect_view()}
+            <div class="mt-auto px-2 pb-2">
+                {
+                    let SettingsOpen(settings) = expect_context::<SettingsOpen>();
+                    view! {
+                        <button
+                            type="button"
+                            title="Settings (Ctrl+,)"
+                            on:click=move |_| settings.update(|open| *open = !*open)
+                            class=move || {
+                                let base = "flex w-full items-center gap-2.5 rounded-[6px] px-2 \
+                                            py-[5px] text-body transition-colors";
+                                if settings.get() {
+                                    format!("{base} bg-selection font-medium text-rust")
+                                } else {
+                                    format!("{base} text-label-2 hover:bg-sunken hover:text-label")
+                                }
+                            }
+                        >
+                            <IconView icon=Icon::Settings />
+                            <span>"Settings"</span>
+                        </button>
+                    }
+                }
+            </div>
         </nav>
     }
 }

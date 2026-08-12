@@ -113,6 +113,7 @@ pub mod crates {
 pub mod sim {
     pub const PLAN: &str = "plan_simulation";
     pub const RUN: &str = "run_simulation";
+    pub const SAVE_BOARD: &str = "save_sim_board";
     pub const INSTALL: &str = "install_sim_tool";
 }
 

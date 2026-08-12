@@ -502,17 +502,23 @@ pub struct SimTool {
 }
 
 /// One LED on the simulated board view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimLed {
     pub pin: u8,
     /// `green`, `blue`, `red`, `yellow` — the stylesheet's palette names.
     pub color: String,
     pub label: String,
+    /// Canvas position, when the editor has placed it. Absent means "lay it
+    /// out automatically", which is what hand-written files get.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
 }
 
 /// The board view beside the serial output, when the project describes one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimBoard {
     pub chip: String,
