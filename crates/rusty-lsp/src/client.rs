@@ -102,8 +102,14 @@ impl LspClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // rust-analyzer narrates progress on stderr. Piped-but-undrained
-            // would fill the pipe and deadlock the server mid-index.
-            .stderr(Stdio::null());
+            // would fill the pipe and deadlock the server mid-index, so it is
+            // discarded — except when someone is diagnosing "no diagnostics",
+            // which is exactly when the server's own complaints are the answer.
+            .stderr(if std::env::var_os("RUSTY_LSP_LOG").is_some() {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            });
         no_console_window(&mut command);
 
         let mut child = command.spawn().map_err(Error::Spawn)?;
@@ -443,6 +449,18 @@ impl Shared {
 /// The `initialize` round trip.
 fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<()> {
     let mut cargo = serde_json::Map::new();
+    // No build-script phase. It runs `cargo check` under the project's own
+    // config — which for these projects means `build-std` — and the messages
+    // for from-source std crates are for packages `cargo metadata` never
+    // listed. rust-analyzer errors on every one, and when the phase completes
+    // it reloads the workspace in a state that wipes the diagnostics already
+    // on screen. Probed live on a real Xtensa project: with the phase on, the
+    // injected error arrives at 2s and is gone by 45s; with it off, it stays.
+    //
+    // The key must live INSIDE the `cargo` object: a flattened
+    // "cargo.buildScripts.enable" beside a `cargo` object is ignored, which is
+    // exactly how the first attempt at this fix failed while looking applied.
+    cargo.insert("buildScripts".into(), json!({ "enable": false }));
     // Tests and benches do not build in `no_std` — there is no test harness —
     // so the default of checking `--all-targets` buries every real diagnostic
     // under "can't find crate for `test`".
@@ -472,8 +490,21 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
         },
         "initializationOptions": {
             "cargo": Value::Object(cargo),
+            // Proc macros need the build-script phase, which is off (see
+            // above) — so expansion is declared off rather than left to fail.
+            // The cost: macro-heavy code is analysed unexpanded, and shows
+            // hint-level "expansion is disabled" markers instead of wrong
+            // errors.
+            "procMacro": { "enable": false },
             "check": { "allTargets": false },
-            "checkOnSave": true,
+            // Off, deliberately. Embedded projects here use `build-std`, and
+            // `cargo check` under build-std emits messages for packages that
+            // are not in `cargo metadata` — rust-analyzer logs an error storm
+            // and, when the run completes, publishes empty diagnostics that
+            // wipe the native ones. Observed as: squiggles appear for a few
+            // seconds, then vanish. Native diagnostics — type errors,
+            // unresolved names — are the ones the editor needs live anyway.
+            "checkOnSave": false,
         },
     });
 

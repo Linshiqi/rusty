@@ -137,6 +137,20 @@ UI contributions are declarative — extensions never ship markup or styles.
   toolchain 'esp'` — precisely for the projects this workbench serves. Resolve
   `rustup which --toolchain stable rust-analyzer` first; the stable binary
   analyses any toolchain's project and reads the pinned sysroot itself.
+- **rust-analyzer's cargo phases wipe diagnostics on `build-std` projects.**
+  esp-generate emits `[unstable] build-std` for Xtensa, and any cargo run
+  rust-analyzer makes under that config — flycheck *or* the build-script
+  phase — emits compiler messages for from-source std crates that
+  `cargo metadata` never listed. r-a errors on each, and when the phase ends
+  it reloads the workspace in a state that clears every diagnostic already
+  published: squiggles appear at ~2s and vanish by ~45s. Both phases are off
+  (`checkOnSave: false`, `cargo.buildScripts.enable: false`, proc macros
+  declared off with them). Probed live with `--example probe`, which injects
+  an error in-buffer and watches for the wipe.
+- **A flattened `"cargo.buildScripts.enable"` key beside a `"cargo"` object is
+  silently ignored** in rust-analyzer's initializationOptions. The first
+  attempt at the fix above failed while looking applied, because the sibling
+  `procMacro` object *did* take effect. Nest keys in their object.
 - **rust-analyzer's `check.allTargets` default buries no_std projects.** It
   builds tests and benches, which need a test harness `no_std` does not have,
   so every real diagnostic drowns in "can't find crate for `test`". The client
