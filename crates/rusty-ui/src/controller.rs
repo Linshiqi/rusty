@@ -651,6 +651,58 @@ pub fn run_simulation(state: AppState) {
     });
 }
 
+/// One-click install of a missing simulator tool, streamed to the dock.
+/// Success refreshes the plan; failure reveals the manual instructions.
+pub fn install_sim_tool(state: AppState, name: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        name: String,
+    }
+
+    if state.session_running.get_untracked() {
+        return;
+    }
+    let args = Args { name: name.clone() };
+    let channel = stream_to_terminal(state);
+    spawn_local(async move {
+        let outcome =
+            ipc::call_streaming::<_, Option<i32>>(cmd::sim::INSTALL, &args, "onLine", &channel)
+                .await;
+        match outcome {
+            Ok(Some(0)) => {
+                note_exit(state, Some(0));
+                state
+                    .sim_install_failed
+                    .update(|failed| failed.retain(|t| t != &name));
+            }
+            Ok(code) => {
+                note_exit(state, code);
+                state.sim_install_failed.update(|failed| {
+                    if !failed.contains(&name) {
+                        failed.push(name.clone());
+                    }
+                });
+            }
+            Err(error) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: error.message,
+                    level: Some(LogLevel::Error),
+                });
+                note_exit(state, Some(-1));
+                state.sim_install_failed.update(|failed| {
+                    if !failed.contains(&name) {
+                        failed.push(name.clone());
+                    }
+                });
+            }
+        }
+        // Either way the plan is re-asked: a success clears the card, and
+        // even a failure may have changed the world (a partial unpack).
+        load_sim_plan(state);
+    });
+}
+
 /// The panel-facing spelling of "stop whatever session is running".
 pub fn stop_session_now(state: AppState) {
     stop_session(state);

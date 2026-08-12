@@ -300,6 +300,9 @@ pub struct AppState {
     pub find_index: RwSignal<usize>,
     /// The simulation plan for the open project, when the panel asked.
     pub sim_plan: RwSignal<Option<rusty_embed::SimPlan>>,
+    /// Tools whose one-click install failed — those cards reveal the manual
+    /// instructions, which stay hidden while the button still deserves trust.
+    pub sim_install_failed: RwSignal<Vec<String>>,
     /// Quick fixes offered at the caret, when the user asked (Ctrl+.).
     pub actions: RwSignal<Option<(String, u32, Vec<rusty_lsp::CodeActionFix>)>>,
     /// Semantic colouring for the active document, as rust-analyzer sees it.
@@ -445,6 +448,7 @@ impl AppState {
             semantic: RwSignal::new(None),
             actions: RwSignal::new(None),
             sim_plan: RwSignal::new(None),
+            sim_install_failed: RwSignal::new(Vec::new()),
             find_open: RwSignal::new(false),
             find_replace_open: RwSignal::new(false),
             find_query: RwSignal::new(String::new()),

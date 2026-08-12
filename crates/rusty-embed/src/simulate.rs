@@ -149,6 +149,85 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
     }
 }
 
+/// The QEMU release every install pulls — the version this pipeline is
+/// proven against. Bumped deliberately, not discovered at run time: an
+/// installer that fetches "latest" breaks the day upstream changes layout.
+const QEMU_RELEASE: &str = "esp-develop-9.2.2-20260417";
+const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
+
+/// How to install a tool the plan reported missing, as inspectable steps —
+/// one click in the panel, the dock shows every line, and only a failure
+/// sends anyone to the manual instructions.
+pub fn install_steps(tool: &str) -> std::result::Result<Vec<CommandPlan>, String> {
+    if tool == "espflash" {
+        return Ok(vec![CommandPlan {
+            program: "cargo".to_string(),
+            args: vec![
+                "install".to_string(),
+                "espflash".to_string(),
+                "--locked".to_string(),
+            ],
+            display: "cargo install espflash --locked".to_string(),
+            rationale: "builds espflash into ~/.cargo/bin, where the simulator looks"
+                .to_string(),
+        }]);
+    }
+
+    if let Some(arch) = tool.strip_prefix("qemu-system-") {
+        if !cfg!(windows) {
+            return Err(format!(
+                "one-click install only knows the Windows build so far — download the                  {tool} build from https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE}                  and unpack it into the data directory's tools/qemu/"
+            ));
+        }
+        let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
+            return Err("the data directory could not be resolved".to_string());
+        };
+        std::fs::create_dir_all(&tools)
+            .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
+        let archive = tools.join(format!("qemu-{arch}.tar.xz"));
+        let url = format!(
+            "https://github.com/espressif/qemu/releases/download/{QEMU_RELEASE}/qemu-{arch}-softmmu-{QEMU_VERSION}-x86_64-w64-mingw32.tar.xz"
+        );
+        let archive_text = archive.to_string_lossy().into_owned();
+        let tools_text = tools.to_string_lossy().into_owned();
+        return Ok(vec![
+            CommandPlan {
+                program: "curl".to_string(),
+                args: vec![
+                    "-L".to_string(),
+                    "--fail".to_string(),
+                    "-o".to_string(),
+                    archive_text.clone(),
+                    url.clone(),
+                ],
+                display: format!("curl -L --fail -o {archive_text} {url}"),
+                rationale: "downloads Espressif's own QEMU build — curl ships with Windows 10+"
+                    .to_string(),
+            },
+            CommandPlan {
+                program: "tar".to_string(),
+                args: vec![
+                    "-xf".to_string(),
+                    archive_text.clone(),
+                    "-C".to_string(),
+                    tools_text.clone(),
+                ],
+                display: format!("tar -xf {archive_text} -C {tools_text}"),
+                rationale: "unpacks into the data directory's tools/qemu — bsdtar handles                             .tar.xz and also ships with Windows"
+                    .to_string(),
+            },
+            CommandPlan {
+                program: "cmd".to_string(),
+                args: vec!["/c".to_string(), "del".to_string(), archive_text.clone()],
+                display: format!("del {archive_text}"),
+                rationale: "drops the 38MB archive now that it is unpacked".to_string(),
+            },
+        ]);
+    }
+
+    Err(format!("no installer for {tool}"))
+}
+
 /// Create the directory the image step writes into. espflash does not make
 /// parent directories, and "os error 3" from a missing folder reads like a
 /// broken tool rather than a missing mkdir.
@@ -244,6 +323,22 @@ mod tests {
             evidence: Vec::new(),
             problems: Vec::new(),
         }
+    }
+
+    #[test]
+    fn install_steps_know_their_tools_and_refuse_strangers() {
+        let espflash = install_steps("espflash").expect("espflash installs");
+        assert_eq!(espflash.len(), 1);
+        assert!(espflash[0].display.contains("cargo install espflash"));
+
+        if cfg!(windows) {
+            let qemu = install_steps("qemu-system-xtensa").expect("qemu installs");
+            assert!(qemu[0].display.contains("qemu-xtensa-softmmu"), "{}", qemu[0].display);
+            assert!(qemu[0].display.contains(super::QEMU_RELEASE));
+            assert!(qemu[1].display.starts_with("tar -xf"));
+        }
+
+        assert!(install_steps("probe-rs").is_err(), "unknown tools are named, not guessed");
     }
 
     #[test]

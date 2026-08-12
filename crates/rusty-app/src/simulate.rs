@@ -13,6 +13,47 @@ pub async fn plan_simulation(state: State<'_, AppState>) -> Result<SimPlan, Comm
     Ok(simulate::plan(&detected))
 }
 
+/// Install one missing tool, streaming every line — the panel's one-click.
+#[tauri::command]
+pub async fn install_sim_tool(
+    name: String,
+    on_line: Channel<LogLine>,
+    state: State<'_, AppState>,
+) -> Result<Option<i32>, CommandError> {
+    let steps = simulate::install_steps(&name).map_err(CommandError::new)?;
+
+    let mut last_code = None;
+    for step in steps {
+        let _ = on_line.send(LogLine {
+            stream: LogStream::Stdout,
+            text: format!("$ {}", step.display),
+            level: None,
+        });
+        let session = process::spawn(&step, None)?;
+        state.start_session(session.stopper()).await;
+
+        let feed = on_line.clone();
+        let code = tokio::task::spawn_blocking(move || {
+            while let Some(line) = session.recv() {
+                if feed.send(line).is_err() {
+                    break;
+                }
+            }
+            session.wait()
+        })
+        .await
+        .map_err(|e| CommandError::new(format!("install step panicked: {e}")))?;
+
+        last_code = code;
+        if code != Some(0) {
+            break;
+        }
+    }
+
+    state.stop_session().await;
+    Ok(last_code)
+}
+
 /// Build, image, boot — streaming every line, stoppable at any step.
 ///
 /// The first two steps must exit zero before the next runs; QEMU itself runs

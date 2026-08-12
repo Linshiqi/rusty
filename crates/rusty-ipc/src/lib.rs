@@ -106,6 +106,7 @@ pub mod lsp {
 pub mod sim {
     pub const PLAN: &str = "plan_simulation";
     pub const RUN: &str = "run_simulation";
+    pub const INSTALL: &str = "install_sim_tool";
 }
 
 pub mod features {

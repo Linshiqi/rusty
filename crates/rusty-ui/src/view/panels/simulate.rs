@@ -65,14 +65,68 @@ pub fn Simulate() -> impl IntoView {
                                 {missing
                                     .iter()
                                     .map(|tool| {
+                                        let name = tool.name.clone();
+                                        let install_name = name.clone();
+                                        let manual = tool.install.clone();
+                                        let failed = {
+                                            let name = name.clone();
+                                            Signal::derive(move || {
+                                                state
+                                                    .sim_install_failed
+                                                    .with(|f| f.contains(&name))
+                                            })
+                                        };
                                         view! {
-                                            <div class="flex flex-col gap-1">
-                                                <span class="font-mono text-footnote">
-                                                    {tool.name.clone()}
-                                                </span>
-                                                <code class="rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote select-text">
-                                                    {tool.install.clone()}
-                                                </code>
+                                            <div class="flex flex-col gap-1.5">
+                                                <div class="flex items-center gap-2.5">
+                                                    <span class="font-mono text-footnote">
+                                                        {name.clone()}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        disabled=move || running.get()
+                                                        on:click=move |_| {
+                                                            controller::install_sim_tool(
+                                                                state,
+                                                                install_name.clone(),
+                                                            )
+                                                        }
+                                                        class="rounded-[6px] bg-rust px-2.5 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                                    >
+                                                        "Install"
+                                                    </button>
+                                                    {move || {
+                                                        running
+                                                            .get()
+                                                            .then(|| {
+                                                                view! {
+                                                                    <span class="text-footnote text-label-3">
+                                                                        "output in the panel below"
+                                                                    </span>
+                                                                }
+                                                            })
+                                                    }}
+                                                </div>
+                                                // Manual instructions earn
+                                                // their place only after the
+                                                // button has failed.
+                                                {move || {
+                                                    let manual = manual.clone();
+                                                    failed
+                                                        .get()
+                                                        .then(|| {
+                                                            view! {
+                                                                <div class="flex flex-col gap-1">
+                                                                    <span class="text-footnote text-label-2">
+                                                                        "Automatic install failed — by hand:"
+                                                                    </span>
+                                                                    <code class="rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote select-text">
+                                                                        {manual}
+                                                                    </code>
+                                                                </div>
+                                                            }
+                                                        })
+                                                }}
                                             </div>
                                         }
                                     })

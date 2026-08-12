@@ -53,6 +53,7 @@ fn main() {
             lsp::lsp_code_actions,
             simulate::plan_simulation,
             simulate::run_simulation,
+            simulate::install_sim_tool,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -170,6 +171,7 @@ mod wire_names {
             cmd::lsp::ACTIONS => lsp::lsp_code_actions,
             cmd::sim::PLAN => simulate::plan_simulation,
             cmd::sim::RUN => simulate::run_simulation,
+            cmd::sim::INSTALL => simulate::install_sim_tool,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,
