@@ -35,6 +35,7 @@ use crate::{
 pub struct Session {
     child: Arc<Mutex<Child>>,
     lines: Receiver<LogLine>,
+    input: Input,
 }
 
 impl Session {
@@ -49,6 +50,11 @@ impl Session {
     /// Separate from the session itself because the reader loop blocks on
     /// `recv`: whoever wants to stop a monitor cannot be the thread that is
     /// sitting inside it.
+    /// A handle that can write to the child's stdin from another thread.
+    pub fn input(&self) -> Input {
+        self.input.clone()
+    }
+
     pub fn stopper(&self) -> Stopper {
         Stopper {
             child: Arc::clone(&self.child),
@@ -63,6 +69,28 @@ impl Session {
         child.wait().ok().and_then(|status| status.code())
     }
 
+}
+
+/// Writes into a running session's stdin. Cloneable; dies with the child.
+#[derive(Clone)]
+pub struct Input {
+    stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+}
+
+impl Input {
+    /// Send one line. A dead or closed child is not an error worth surfacing
+    /// — the press simply lands nowhere, like clicking a board that is off.
+    pub fn send_line(&self, text: &str) {
+        use std::io::Write;
+        if let Ok(mut guard) = self.stdin.lock()
+            && let Some(stdin) = guard.as_mut()
+        {
+            let _ = stdin.write_all(text.as_bytes());
+            let _ = stdin.write_all(b"
+");
+            let _ = stdin.flush();
+        }
+    }
 }
 
 /// Ends a session from outside its reader loop.
@@ -89,7 +117,10 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
         .args(&plan.args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null())
+        // Piped, not null: the simulator injects button presses through the
+        // child's stdin (QEMU's `-serial mon:stdio` reads it as UART RX).
+        // Tools that never read stdin just ignore an empty pipe.
+        .stdin(Stdio::piped())
         // Launched from `cargo tauri dev`, this process inherits the
         // RUSTUP_TOOLCHAIN the rustup shim set for *rusty's own* build —
         // and rustup lets that variable outrank the project's
@@ -114,10 +145,14 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
     if let Some(stderr) = child.stderr.take() {
         pump(stderr, LogStream::Stderr, tx);
     }
+    let input = Input {
+        stdin: Arc::new(Mutex::new(child.stdin.take())),
+    };
 
     Ok(Session {
         child: Arc::new(Mutex::new(child)),
         lines,
+        input,
     })
 }
 

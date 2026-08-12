@@ -826,6 +826,25 @@ pub fn install_sim_tool(state: AppState, name: String) {
     });
 }
 
+/// A button transition on the board view, into the firmware's UART.
+/// Fire-and-forget: a press against a stopped board lands nowhere, which is
+/// what pressing a powered-off board does.
+pub fn sim_press(state: AppState, pin: u8, down: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        text: String,
+    }
+    if !state.session_running.get_untracked() {
+        return;
+    }
+    let args = Args {
+        text: format!("B{pin}={}", if down { 1 } else { 0 }),
+    };
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::sim::SEND, &args).await;
+    });
+}
+
 /// Persist the board editor's layout, then re-plan so the panel shows what
 /// the file now says.
 pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSignal<bool>) {

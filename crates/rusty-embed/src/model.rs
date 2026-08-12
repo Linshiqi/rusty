@@ -517,12 +517,55 @@ pub struct SimLed {
     pub y: Option<f64>,
 }
 
+/// A push button on the board. Pressing it sends `B<pin>=1` (and release
+/// `=0`) into the firmware's UART through the simulator's stdin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimButton {
+    pub pin: u8,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+}
+
+/// An RGB LED: three pins, one lens. The lit colour is the additive mix of
+/// whichever channels the firmware reports high.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimRgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+}
+
+/// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never
+/// heard of still gets drawn and driven. v1 parts behave as lamps on the
+/// gpio report channel; richer behaviours grow on this same record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartDef {
+    pub name: String,
+    /// Glow hue, one of the palette names.
+    pub color: String,
+}
+
 /// The board view beside the serial output, when the project describes one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimBoard {
     pub chip: String,
     pub leds: Vec<SimLed>,
+    #[serde(default)]
+    pub buttons: Vec<SimButton>,
+    #[serde(default)]
+    pub rgbs: Vec<SimRgb>,
 }
 
 /// How this project would be simulated, or exactly why it cannot be.
@@ -539,6 +582,9 @@ pub struct SimPlan {
     /// Drawn beside the serial output when `.rusty/sim.toml` describes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<SimBoard>,
+    /// User-defined parts from `.rusty/parts/`, offered in the library.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<PartDef>,
 }
 
 /// Where rusty keeps its data, for the settings screen to show.

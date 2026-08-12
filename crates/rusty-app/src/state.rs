@@ -21,6 +21,9 @@ pub struct AppState {
     /// Only the stopper is kept, not the session: the reader loop blocks on
     /// `recv`, so whoever ends a monitor cannot be the thread sitting inside it.
     session: Mutex<Option<rusty_embed::process::Stopper>>,
+    /// The running session's stdin, when it has one worth writing — the
+    /// simulator's board input path. Cleared with the session.
+    session_input: Mutex<Option<rusty_embed::process::Input>>,
     /// Chips and boards, after layering in the user's and the project's files.
     ///
     /// Held here rather than rebuilt per call so every surface — the port list,
@@ -137,6 +140,14 @@ impl AppState {
     /// Two monitors on the same serial port cannot both work — the second gets
     /// an access-denied that reads like a driver problem — so starting one
     /// always stops the last.
+    pub async fn set_session_input(&self, input: Option<rusty_embed::process::Input>) {
+        *self.session_input.lock().await = input;
+    }
+
+    pub async fn session_input(&self) -> Option<rusty_embed::process::Input> {
+        self.session_input.lock().await.clone()
+    }
+
     pub async fn start_session(&self, stopper: rusty_embed::process::Stopper) {
         let previous = self.session.lock().await.replace(stopper);
         if let Some(previous) = previous {
@@ -145,6 +156,7 @@ impl AppState {
     }
 
     pub async fn stop_session(&self) {
+        *self.session_input.lock().await = None;
         if let Some(stopper) = self.session.lock().await.take() {
             stopper.stop();
         }

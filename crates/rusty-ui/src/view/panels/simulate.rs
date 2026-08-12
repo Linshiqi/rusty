@@ -16,7 +16,7 @@
 
 use leptos::{ev, prelude::*};
 
-use rusty_embed::{SimBoard, SimLed};
+use rusty_embed::SimBoard;
 
 use crate::{controller, state::AppState, view::components::Empty};
 
@@ -135,8 +135,11 @@ pub fn Simulate() -> impl IntoView {
                     board=plan.board.clone().unwrap_or_else(|| SimBoard {
                         chip: "esp32".to_string(),
                         leds: Vec::new(),
+                        buttons: Vec::new(),
+                        rgbs: Vec::new(),
                     })
                     blocked=blocked
+                    user_parts=plan.parts.clone()
                 />
 
 
@@ -146,44 +149,158 @@ pub fn Simulate() -> impl IntoView {
     }
 }
 
+/// One thing on the canvas, whatever its kind — the editor edits these and
+/// splits them back into the wire model on save.
+#[derive(Clone, PartialEq)]
+enum PartKind {
+    Led { color: String },
+    Button,
+    Rgb,
+}
+
+#[derive(Clone, PartialEq)]
+struct EditPart {
+    kind: PartKind,
+    /// pins[0] is the pin for LEDs and buttons; RGB uses all three.
+    pins: [u8; 3],
+    label: String,
+    x: f64,
+    y: f64,
+}
+
+fn parts_of(board: &SimBoard) -> Vec<EditPart> {
+    let mut out = Vec::new();
+    for (index, led) in board.leds.iter().enumerate() {
+        out.push(EditPart {
+            kind: PartKind::Led {
+                color: led.color.clone(),
+            },
+            pins: [led.pin, 0, 0],
+            label: led.label.clone(),
+            x: led.x.unwrap_or(60.0),
+            y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
+        });
+    }
+    for button in &board.buttons {
+        out.push(EditPart {
+            kind: PartKind::Button,
+            pins: [button.pin, 0, 0],
+            label: button.label.clone(),
+            x: button.x.unwrap_or(60.0),
+            y: button.y.unwrap_or(180.0),
+        });
+    }
+    for rgb in &board.rgbs {
+        out.push(EditPart {
+            kind: PartKind::Rgb,
+            pins: [rgb.r, rgb.g, rgb.b],
+            label: rgb.label.clone(),
+            x: rgb.x.unwrap_or(60.0),
+            y: rgb.y.unwrap_or(240.0),
+        });
+    }
+    out
+}
+
+fn board_of(chip: &str, parts: &[EditPart]) -> SimBoard {
+    let mut board = SimBoard {
+        chip: chip.to_string(),
+        leds: Vec::new(),
+        buttons: Vec::new(),
+        rgbs: Vec::new(),
+    };
+    for part in parts {
+        match &part.kind {
+            PartKind::Led { color } => board.leds.push(rusty_embed::SimLed {
+                pin: part.pins[0],
+                color: color.clone(),
+                label: part.label.clone(),
+                x: Some(part.x),
+                y: Some(part.y),
+            }),
+            PartKind::Button => board.buttons.push(rusty_embed::SimButton {
+                pin: part.pins[0],
+                label: part.label.clone(),
+                x: Some(part.x),
+                y: Some(part.y),
+            }),
+            PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
+                r: part.pins[0],
+                g: part.pins[1],
+                b: part.pins[2],
+                label: part.label.clone(),
+                x: Some(part.x),
+                y: Some(part.y),
+            }),
+        }
+    }
+    board
+}
+
+/// Colour classes for a single-hue lamp.
+fn lamp_classes(color: &str, lit: bool) -> &'static str {
+    match (color, lit) {
+        ("green", true) => "bg-[#3ddc84] shadow-[0_0_12px_3px_rgba(61,220,132,0.55)]",
+        ("green", false) => "bg-[#1d4a2f]",
+        ("blue", true) => "bg-[#4aa8ff] shadow-[0_0_12px_3px_rgba(74,168,255,0.55)]",
+        ("blue", false) => "bg-[#1d3350]",
+        ("red", true) => "bg-[#ff5c5c] shadow-[0_0_12px_3px_rgba(255,92,92,0.55)]",
+        ("red", false) => "bg-[#4a1d1d]",
+        ("yellow", true) => "bg-[#ffd75c] shadow-[0_0_12px_3px_rgba(255,215,92,0.5)]",
+        ("yellow", false) => "bg-[#4a3f1d]",
+        (_, true) => "bg-label shadow-[0_0_12px_3px_rgba(255,255,255,0.4)]",
+        (_, false) => "bg-line-strong",
+    }
+}
+
+/// Additive mix for the RGB lens, from three channel levels.
+fn rgb_style(r: bool, g: bool, b: bool) -> &'static str {
+    match (r, g, b) {
+        (false, false, false) => "background: #2a2d33",
+        (true, false, false) => "background: #ff5c5c; box-shadow: 0 0 12px 3px rgba(255,92,92,0.55)",
+        (false, true, false) => "background: #3ddc84; box-shadow: 0 0 12px 3px rgba(61,220,132,0.55)",
+        (false, false, true) => "background: #4aa8ff; box-shadow: 0 0 12px 3px rgba(74,168,255,0.55)",
+        (true, true, false) => "background: #ffd75c; box-shadow: 0 0 12px 3px rgba(255,215,92,0.55)",
+        (true, false, true) => "background: #d97cff; box-shadow: 0 0 12px 3px rgba(217,124,255,0.55)",
+        (false, true, true) => "background: #5ce8e8; box-shadow: 0 0 12px 3px rgba(92,232,232,0.55)",
+        (true, true, true) => "background: #f4f4f4; box-shadow: 0 0 12px 3px rgba(255,255,255,0.5)",
+    }
+}
+
 /// The editor: library, canvas, toolbar. Local state until Save writes it
 /// into `.rusty/sim.toml` and the plan reloads.
 #[component]
-fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
+fn BoardEditor(
+    board: SimBoard,
+    blocked: bool,
+    user_parts: Vec<rusty_embed::PartDef>,
+) -> impl IntoView {
     let state = AppState::expect();
     let running = state.session_running;
     let chip = board.chip.clone();
     let chip_label = board.chip.to_uppercase();
 
-    // Positions materialise on load so dragging always has coordinates.
-    let leds = RwSignal::new(
-        board
-            .leds
-            .iter()
-            .enumerate()
-            .map(|(index, led)| SimLed {
-                x: Some(led.x.unwrap_or(60.0)),
-                y: Some(led.y.unwrap_or(40.0 + index as f64 * 56.0)),
-                ..led.clone()
-            })
-            .collect::<Vec<_>>(),
-    );
+    let parts = RwSignal::new(parts_of(&board));
     let dirty = RwSignal::new(false);
     let selected = RwSignal::new(None::<usize>);
-    // (index, grab offset x, grab offset y) while a drag is live.
     let dragging = RwSignal::new(None::<(usize, f64, f64)>);
     let canvas: NodeRef<leptos::html::Div> = NodeRef::new();
     let kit: NodeRef<leptos::html::Div> = NodeRef::new();
 
-    let add_led = move |color: &'static str| {
-        leds.update(|list| {
+    let add_part = move |kind: PartKind, label_stub: String| {
+        parts.update(|list| {
             let pin = 2 + list.len() as u8;
-            list.push(SimLed {
-                pin,
-                color: color.to_string(),
-                label: format!("GPIO{pin}"),
-                x: Some(50.0 + (list.len() as f64 * 14.0) % 80.0),
-                y: Some(40.0 + (list.len() as f64 * 48.0) % 220.0),
+            let label = match &kind {
+                PartKind::Led { .. } => format!("GPIO{pin}"),
+                PartKind::Button => format!("BTN{pin}"),
+                PartKind::Rgb => label_stub.clone(),
+            };
+            list.push(EditPart {
+                kind,
+                pins: [pin, pin + 1, pin + 2],
+                label,
+                x: 50.0 + (list.len() as f64 * 16.0) % 90.0,
+                y: 40.0 + (list.len() as f64 * 52.0) % 240.0,
             });
             selected.set(Some(list.len() - 1));
         });
@@ -191,19 +308,9 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
     };
 
     let save = move |_| {
-        let board = SimBoard {
-            chip: chip.clone(),
-            leds: leds.get_untracked(),
-        };
+        let board = board_of(&chip, &parts.get_untracked());
         controller::save_sim_board(state, board, dirty);
     };
-
-    let library = [
-        ("green", "bg-[#3ddc84]"),
-        ("blue", "bg-[#4aa8ff]"),
-        ("red", "bg-[#ff5c5c]"),
-        ("yellow", "bg-[#ffd75c]"),
-    ];
 
     view! {
         <div class="flex min-h-0 flex-1 flex-col">
@@ -249,7 +356,7 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                         .then(|| {
                             view! {
                                 <span class="text-footnote text-label-3">
-                                    "running — serial output is in the panel below"
+                                    "running — buttons are live, serial below"
                                 </span>
                             }
                         })
@@ -265,14 +372,24 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                     <span class="px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                         "Parts"
                     </span>
-                    {library
+                    {[
+                        ("green", "bg-[#3ddc84]"),
+                        ("blue", "bg-[#4aa8ff]"),
+                        ("red", "bg-[#ff5c5c]"),
+                        ("yellow", "bg-[#ffd75c]"),
+                    ]
                         .into_iter()
                         .map(|(color, swatch)| {
                             view! {
                                 <button
                                     type="button"
                                     title=format!("Add a {color} LED")
-                                    on:click=move |_| add_led(color)
+                                    on:click=move |_| add_part(
+                                        PartKind::Led {
+                                            color: color.to_string(),
+                                        },
+                                        String::new(),
+                                    )
                                     class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
                                 >
                                     <span class=format!("size-3.5 rounded-full {swatch}") />
@@ -281,8 +398,73 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                             }
                         })
                         .collect_view()}
+                    <button
+                        type="button"
+                        title="Add a push button — pressing it sends B<pin>=1/0 into the firmware's UART"
+                        on:click=move |_| add_part(PartKind::Button, String::new())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="grid size-3.5 place-items-center rounded-[4px] bg-line-strong">
+                            <span class="size-1.5 rounded-full bg-label-3" />
+                        </span>
+                        <span>"button"</span>
+                    </button>
+                    <button
+                        type="button"
+                        title="Add an RGB LED — three pins, additive colour"
+                        on:click=move |_| add_part(PartKind::Rgb, "RGB".to_string())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="size-3.5 rounded-full bg-[conic-gradient(#ff5c5c,#3ddc84,#4aa8ff,#ff5c5c)]" />
+                        <span>"RGB LED"</span>
+                    </button>
+                    {(!user_parts.is_empty())
+                        .then(|| {
+                            view! {
+                                <span class="mt-2 px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                                    "Custom"
+                                </span>
+                            }
+                        })}
+                    {user_parts
+                        .iter()
+                        .map(|def| {
+                            let name = def.name.clone();
+                            let color = def.color.clone();
+                            let add_color = color.clone();
+                            let add_name = name.clone();
+                            view! {
+                                <button
+                                    type="button"
+                                    title=format!(
+                                        "{name} — defined in .rusty/parts/, lights from the gpio report channel",
+                                    )
+                                    on:click=move |_| {
+                                        add_part(
+                                            PartKind::Led {
+                                                color: add_color.clone(),
+                                            },
+                                            add_name.clone(),
+                                        )
+                                    }
+                                    class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                                >
+                                    <span class=format!(
+                                        "size-3.5 rounded-full {}",
+                                        match color.as_str() {
+                                            "blue" => "bg-[#4aa8ff]",
+                                            "red" => "bg-[#ff5c5c]",
+                                            "yellow" => "bg-[#ffd75c]",
+                                            _ => "bg-[#3ddc84]",
+                                        },
+                                    ) />
+                                    <span>{name.clone()}</span>
+                                </button>
+                            }
+                        })
+                        .collect_view()}
                     <p class="mt-1 px-1 text-caption leading-snug text-label-4">
-                        "buttons and displays: coming"
+                        "your own parts: .rusty/parts/*.toml"
                     </p>
                 </div>
 
@@ -300,10 +482,10 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                             .clamp(4.0, (rect.width() - 70.0).max(4.0));
                         let y = (f64::from(event.client_y()) - rect.top() - grab_y)
                             .clamp(4.0, (rect.height() - 30.0).max(4.0));
-                        leds.update(|list| {
-                            if let Some(led) = list.get_mut(index) {
-                                led.x = Some(x);
-                                led.y = Some(y);
+                        parts.update(|list| {
+                            if let Some(part) = list.get_mut(index) {
+                                part.x = x;
+                                part.y = y;
                             }
                         });
                         dirty.set(true);
@@ -314,15 +496,14 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                 >
                     <svg class="pointer-events-none absolute inset-0 h-full w-full">
                         {move || {
-                            // The devkit is CSS-docked to the right edge, so
-                            // its pin anchors are measured, not assumed.
                             let (kit_left, kit_top) = kit_origin(canvas, kit);
-                            leds.get()
+                            parts
+                                .get()
                                 .iter()
                                 .enumerate()
-                                .map(|(index, led)| {
-                                    let x = led.x.unwrap_or(60.0) + 10.0;
-                                    let y = led.y.unwrap_or(40.0) + 10.0;
+                                .map(|(index, part)| {
+                                    let x = part.x + 10.0;
+                                    let y = part.y + 10.0;
                                     let pin_y = kit_top + 22.0 + (index as f64 % 14.0) * 14.0;
                                     let pin_x = kit_left + 20.0;
                                     let mid = (x + pin_x) / 2.0;
@@ -342,47 +523,105 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                     </svg>
 
                     <div node_ref=kit class="pointer-events-none absolute top-8 right-10">
-                    <svg width="150" height="230" viewBox="0 0 150 230">
-                        <rect x="10" y="6" width="130" height="218" rx="10" fill="#16181c" stroke="#2c2f36" />
-                        {(0..14)
-                            .map(|i| {
-                                let y = 22 + i * 14;
-                                view! {
-                                    <circle cx="20" cy=y r="3.2" fill="#c9a227" />
-                                    <circle cx="130" cy=y r="3.2" fill="#c9a227" />
-                                }
-                            })
-                            .collect_view()}
-                        <rect x="38" y="14" width="74" height="86" rx="4" fill="#2a2d33" stroke="#3a3e46" />
-                        <text x="75" y="66" text-anchor="middle" font-family="ui-monospace" font-size="14" fill="#8b909a">
-                            {chip_label}
-                        </text>
-                        <rect x="60" y="206" width="30" height="16" rx="2" fill="#3a3e46" />
-                    </svg>
+                        <svg width="150" height="230" viewBox="0 0 150 230">
+                            <rect x="10" y="6" width="130" height="218" rx="10" fill="#16181c" stroke="#2c2f36" />
+                            {(0..14)
+                                .map(|i| {
+                                    let y = 22 + i * 14;
+                                    view! {
+                                        <circle cx="20" cy=y r="3.2" fill="#c9a227" />
+                                        <circle cx="130" cy=y r="3.2" fill="#c9a227" />
+                                    }
+                                })
+                                .collect_view()}
+                            <rect x="38" y="14" width="74" height="86" rx="4" fill="#2a2d33" stroke="#3a3e46" />
+                            <text x="75" y="66" text-anchor="middle" font-family="ui-monospace" font-size="14" fill="#8b909a">
+                                {chip_label}
+                            </text>
+                            <rect x="60" y="206" width="30" height="16" rx="2" fill="#3a3e46" />
+                        </svg>
                     </div>
 
                     {move || {
-                        leds.get()
+                        parts
+                            .get()
                             .iter()
                             .enumerate()
-                            .map(|(index, led)| {
-                                let pin = led.pin;
-                                let color = led.color.clone();
-                                let label = led.label.clone();
-                                let x = led.x.unwrap_or(60.0);
-                                let y = led.y.unwrap_or(40.0);
-                                let lit = Signal::derive(move || {
+                            .map(|(index, part)| {
+                                let x = part.x;
+                                let y = part.y;
+                                let label = part.label.clone();
+                                let kind = part.kind.clone();
+                                let pins = part.pins;
+                                let is_selected =
+                                    Signal::derive(move || selected.get() == Some(index));
+                                let level = move |pin: u8| {
                                     state
                                         .sim_gpio
                                         .with(|gpio| gpio.get(&pin).copied().unwrap_or(false))
-                                });
-                                let is_selected =
-                                    Signal::derive(move || selected.get() == Some(index));
+                                };
+
+                                let face = match kind.clone() {
+                                    PartKind::Led { color } => view! {
+                                        <span class=move || {
+                                            format!(
+                                                "size-4 rounded-full transition-all duration-150 {}",
+                                                lamp_classes(&color, level(pins[0])),
+                                            )
+                                        } />
+                                    }
+                                        .into_any(),
+                                    PartKind::Rgb => view! {
+                                        <span
+                                            class="size-4 rounded-full transition-all duration-150"
+                                            style=move || rgb_style(
+                                                level(pins[0]),
+                                                level(pins[1]),
+                                                level(pins[2]),
+                                            )
+                                        />
+                                    }
+                                        .into_any(),
+                                    PartKind::Button => view! {
+                                        <span
+                                            on:pointerdown=move |event: ev::PointerEvent| {
+                                                if running.get_untracked() {
+                                                    event.stop_propagation();
+                                                    controller::sim_press(state, pins[0], true);
+                                                }
+                                            }
+                                            on:pointerup=move |_| {
+                                                if running.get_untracked() {
+                                                    controller::sim_press(state, pins[0], false);
+                                                }
+                                            }
+                                            class=move || {
+                                                let pressed = running.get()
+                                                    && level(pins[0]);
+                                                format!(
+                                                    "grid size-5 cursor-pointer place-items-center rounded-[5px] ring-1 ring-line-strong {}",
+                                                    if pressed { "bg-rust" } else { "bg-raised" },
+                                                )
+                                            }
+                                        >
+                                            <span class="size-2 rounded-full bg-label-3" />
+                                        </span>
+                                    }
+                                        .into_any(),
+                                };
+
                                 view! {
                                     <div
                                         on:pointerdown=move |event: ev::PointerEvent| {
                                             event.prevent_default();
                                             selected.set(Some(index));
+                                            // A live board's buttons press; a
+                                            // powered-off board's parts drag.
+                                            if matches!(kind, PartKind::Button)
+                                                && running.get_untracked()
+                                            {
+                                                return;
+                                            }
                                             let Some(element) = canvas.get_untracked() else {
                                                 return;
                                             };
@@ -405,22 +644,7 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                                         }
                                         style=format!("left: {x}px; top: {y}px")
                                     >
-                                        <span class=move || {
-                                            let base = "size-4 rounded-full transition-all duration-150";
-                                            let hue = match (color.as_str(), lit.get()) {
-                                                ("green", true) => "bg-[#3ddc84] shadow-[0_0_12px_3px_rgba(61,220,132,0.55)]",
-                                                ("green", false) => "bg-[#1d4a2f]",
-                                                ("blue", true) => "bg-[#4aa8ff] shadow-[0_0_12px_3px_rgba(74,168,255,0.55)]",
-                                                ("blue", false) => "bg-[#1d3350]",
-                                                ("red", true) => "bg-[#ff5c5c] shadow-[0_0_12px_3px_rgba(255,92,92,0.55)]",
-                                                ("red", false) => "bg-[#4a1d1d]",
-                                                ("yellow", true) => "bg-[#ffd75c] shadow-[0_0_12px_3px_rgba(255,215,92,0.5)]",
-                                                ("yellow", false) => "bg-[#4a3f1d]",
-                                                (_, true) => "bg-label",
-                                                (_, false) => "bg-line-strong",
-                                            };
-                                            format!("{base} {hue}")
-                                        } />
+                                        {face}
                                         <span class="font-mono text-caption text-label-3">
                                             {label}
                                         </span>
@@ -431,38 +655,53 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                     }}
                 </div>
 
-                <div class="flex w-[180px] flex-none flex-col border-l border-line bg-sidebar">
-                {move || {
-                    let Some(index) = selected.get() else {
-                        return view! {
-                            <p class="p-3 text-footnote text-label-4">
-                                "Select a part to edit its pin and colour."
-                            </p>
-                        }
-                            .into_any();
-                    };
-                    let Some(led) = leds.with(|list| list.get(index).cloned()) else {
-                        return ().into_any();
-                    };
-                    view! {
-                            <div class="flex flex-col gap-2 p-3">
-                                <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                                    "LED"
-                                </span>
+                <div class="flex w-[190px] flex-none flex-col border-l border-line bg-sidebar">
+                    {move || {
+                        let Some(index) = selected.get() else {
+                            return view! {
+                                <p class="p-3 text-footnote text-label-4">
+                                    "Select a part to edit its pins and colour. While the \
+                                     simulation runs, buttons press instead of dragging."
+                                </p>
+                            }
+                                .into_any();
+                        };
+                        let Some(part) = parts.with(|list| list.get(index).cloned()) else {
+                            return ().into_any();
+                        };
+
+                        let pin_field = move |slot: usize, name: &'static str| {
+                            let value = parts
+                                .with_untracked(|list| {
+                                    list.get(index).map(|p| p.pins[slot]).unwrap_or(0)
+                                });
+                            view! {
                                 <label class="flex items-center gap-2 text-footnote text-label-2">
-                                    "pin"
+                                    {name}
                                     <input
                                         type="number"
                                         min="0"
                                         max="48"
-                                        prop:value=led.pin.to_string()
+                                        prop:value=value.to_string()
                                         on:change=move |event: ev::Event| {
-                                            let value = event_target_value(&event);
-                                            if let Ok(pin) = value.trim().parse::<u8>() {
-                                                leds.update(|list| {
-                                                    if let Some(led) = list.get_mut(index) {
-                                                        led.pin = pin;
-                                                        led.label = format!("GPIO{pin}");
+                                            let text = event_target_value(&event);
+                                            if let Ok(pin) = text.trim().parse::<u8>() {
+                                                parts.update(|list| {
+                                                    if let Some(part) = list.get_mut(index) {
+                                                        part.pins[slot] = pin;
+                                                        if slot == 0
+                                                            && matches!(
+                                                                part.kind,
+                                                                PartKind::Led { .. }
+                                                            )
+                                                        {
+                                                            part.label = format!("GPIO{pin}");
+                                                        }
+                                                        if slot == 0
+                                                            && matches!(part.kind, PartKind::Button)
+                                                        {
+                                                            part.label = format!("BTN{pin}");
+                                                        }
                                                     }
                                                 });
                                                 dirty.set(true);
@@ -471,39 +710,69 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                                         class="w-[7ch] rounded-[5px] bg-sunken px-1.5 py-0.5 font-mono text-footnote text-label"
                                     />
                                 </label>
-                                <div class="flex items-center gap-1.5">
-                                    {[
-                                        ("green", "bg-[#3ddc84]"),
-                                        ("blue", "bg-[#4aa8ff]"),
-                                        ("red", "bg-[#ff5c5c]"),
-                                        ("yellow", "bg-[#ffd75c]"),
-                                    ]
-                                        .into_iter()
-                                        .map(|(name, swatch)| {
-                                            view! {
-                                                <button
-                                                    type="button"
-                                                    title=name
-                                                    on:click=move |_| {
-                                                        leds.update(|list| {
-                                                            if let Some(led) = list.get_mut(index) {
-                                                                led.color = name.to_string();
-                                                            }
-                                                        });
-                                                        dirty.set(true);
-                                                    }
-                                                    class=format!(
-                                                        "size-5 rounded-full ring-1 ring-line hover:ring-2 {swatch}",
-                                                    )
-                                                />
-                                            }
-                                        })
-                                        .collect_view()}
-                                </div>
+                            }
+                        };
+
+                        view! {
+                            <div class="flex flex-col gap-2 p-3">
+                                <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                                    {match part.kind {
+                                        PartKind::Led { .. } => "LED",
+                                        PartKind::Button => "Button",
+                                        PartKind::Rgb => "RGB LED",
+                                    }}
+                                </span>
+                                {match part.kind.clone() {
+                                    PartKind::Rgb => view! {
+                                        {pin_field(0, "r")}
+                                        {pin_field(1, "g")}
+                                        {pin_field(2, "b")}
+                                    }
+                                        .into_any(),
+                                    _ => pin_field(0, "pin").into_any(),
+                                }}
+                                {matches!(part.kind, PartKind::Led { .. })
+                                    .then(|| {
+                                        view! {
+                                            <div class="flex items-center gap-1.5">
+                                                {[
+                                                    ("green", "bg-[#3ddc84]"),
+                                                    ("blue", "bg-[#4aa8ff]"),
+                                                    ("red", "bg-[#ff5c5c]"),
+                                                    ("yellow", "bg-[#ffd75c]"),
+                                                ]
+                                                    .into_iter()
+                                                    .map(|(name, swatch)| {
+                                                        view! {
+                                                            <button
+                                                                type="button"
+                                                                title=name
+                                                                on:click=move |_| {
+                                                                    parts.update(|list| {
+                                                                        if let Some(part) =
+                                                                            list.get_mut(index)
+                                                                        {
+                                                                            part.kind = PartKind::Led {
+                                                                                color: name.to_string(),
+                                                                            };
+                                                                        }
+                                                                    });
+                                                                    dirty.set(true);
+                                                                }
+                                                                class=format!(
+                                                                    "size-5 rounded-full ring-1 ring-line hover:ring-2 {swatch}",
+                                                                )
+                                                            />
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                            </div>
+                                        }
+                                    })}
                                 <button
                                     type="button"
                                     on:click=move |_| {
-                                        leds.update(|list| {
+                                        parts.update(|list| {
                                             if index < list.len() {
                                                 list.remove(index);
                                             }
@@ -516,9 +785,9 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                                     "Remove"
                                 </button>
                             </div>
-                    }
-                        .into_any()
-                }}
+                        }
+                            .into_any()
+                    }}
                 </div>
             </div>
         </div>

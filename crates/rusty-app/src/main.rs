@@ -58,6 +58,7 @@ fn main() {
             simulate::run_simulation,
             simulate::install_sim_tool,
             simulate::save_sim_board,
+            simulate::sim_send,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -180,6 +181,7 @@ mod wire_names {
             cmd::sim::RUN => simulate::run_simulation,
             cmd::sim::INSTALL => simulate::install_sim_tool,
             cmd::sim::SAVE_BOARD => simulate::save_sim_board,
+            cmd::sim::SEND => simulate::sim_send,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

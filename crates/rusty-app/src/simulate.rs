@@ -67,6 +67,16 @@ pub async fn install_sim_tool(
     Ok(last_code)
 }
 
+/// A line into the running simulation's stdin — how a button press on the
+/// board view reaches the firmware's UART.
+#[tauri::command]
+pub async fn sim_send(text: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    if let Some(input) = state.session_input().await {
+        input.send_line(&text);
+    }
+    Ok(())
+}
+
 /// QEMU: in-process download with a mirror fallback, then tar extraction.
 ///
 /// The download runs on rustls rather than through curl — the user's curl
@@ -163,6 +173,8 @@ pub async fn run_simulation(
 
         let session = process::spawn(&step, Some(root.as_path()))?;
         state.start_session(session.stopper()).await;
+        // The boot step is QEMU; its stdin is the board's input path.
+        state.set_session_input(Some(session.input())).await;
 
         let feed = on_line.clone();
         let code = tokio::task::spawn_blocking(move || {

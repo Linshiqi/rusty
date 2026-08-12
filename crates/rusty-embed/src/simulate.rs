@@ -20,7 +20,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::config;
-use crate::model::{CommandPlan, EmbeddedProject, SimBoard, SimLed, SimPlan, SimTool};
+use crate::model::{
+    CommandPlan, EmbeddedProject, PartDef, SimBoard, SimButton, SimLed, SimPlan, SimRgb,
+    SimTool,
+};
 
 /// Chips Espressif's QEMU actually models, with the system emulator each
 /// needs. Kept small and honest — c6/h2/p4 have no machine model yet.
@@ -43,6 +46,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             missing: Vec::new(),
             steps: Vec::new(),
             board: None,
+            parts: Vec::new(),
         };
     };
 
@@ -57,6 +61,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             missing: Vec::new(),
             steps: Vec::new(),
             board: None,
+            parts: Vec::new(),
         };
     };
 
@@ -97,6 +102,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             missing,
             steps: Vec::new(),
             board: None,
+            parts: Vec::new(),
         };
     };
     let binary = package_name(Path::new(&project.root)).unwrap_or_else(|| "app".to_string());
@@ -150,6 +156,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         missing,
         steps: vec![build, image_step, run],
         board: board_view(Path::new(&project.root)),
+        parts: user_parts(Path::new(&project.root)),
     }
 }
 
@@ -164,6 +171,26 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         board: Option<FileBoard>,
         #[serde(default)]
         led: Vec<FileLed>,
+        #[serde(default)]
+        button: Vec<FileButton>,
+        #[serde(default)]
+        rgb: Vec<FileRgb>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FileButton {
+        pin: u8,
+        label: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FileRgb {
+        r: u8,
+        g: u8,
+        b: u8,
+        label: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
     }
     #[derive(serde::Deserialize)]
     struct FileBoard {
@@ -180,7 +207,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
 
     let text = std::fs::read_to_string(root.join(".rusty/sim.toml")).ok()?;
     let parsed: File = toml::from_str(&text).ok()?;
-    if parsed.led.is_empty() {
+    if parsed.led.is_empty() && parsed.button.is_empty() && parsed.rgb.is_empty() {
         return None;
     }
     Some(SimBoard {
@@ -199,7 +226,64 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: led.y,
             })
             .collect(),
+        buttons: parsed
+            .button
+            .into_iter()
+            .map(|b| SimButton {
+                label: b.label.unwrap_or_else(|| format!("BTN{}", b.pin)),
+                pin: b.pin,
+                x: b.x,
+                y: b.y,
+            })
+            .collect(),
+        rgbs: parsed
+            .rgb
+            .into_iter()
+            .map(|rgb| SimRgb {
+                label: rgb.label.unwrap_or_else(|| "RGB".to_string()),
+                r: rgb.r,
+                g: rgb.g,
+                b: rgb.b,
+                x: rgb.x,
+                y: rgb.y,
+            })
+            .collect(),
     })
+}
+
+/// The user's own part definitions, from `.rusty/parts/*.toml`.
+///
+/// A file that does not parse is skipped rather than sinking the whole
+/// library; the panel offers what could be read.
+pub fn user_parts(root: &Path) -> Vec<PartDef> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        name: String,
+        color: Option<String>,
+    }
+
+    let Ok(entries) = std::fs::read_dir(root.join(".rusty/parts")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(parsed) = toml::from_str::<File>(&text) else {
+            continue;
+        };
+        out.push(PartDef {
+            name: parsed.name,
+            color: parsed.color.unwrap_or_else(|| "green".to_string()),
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 
@@ -574,7 +658,32 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
     #[derive(serde::Serialize)]
     struct File<'a> {
         board: FileBoard<'a>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         led: Vec<FileLed<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        button: Vec<FileButton<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        rgb: Vec<FileRgb<'a>>,
+    }
+    #[derive(serde::Serialize)]
+    struct FileButton<'a> {
+        pin: u8,
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+    }
+    #[derive(serde::Serialize)]
+    struct FileRgb<'a> {
+        r: u8,
+        g: u8,
+        b: u8,
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     }
     #[derive(serde::Serialize)]
     struct FileBoard<'a> {
@@ -602,6 +711,28 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &led.label,
                 x: led.x.map(|v| v.round()),
                 y: led.y.map(|v| v.round()),
+            })
+            .collect(),
+        button: board
+            .buttons
+            .iter()
+            .map(|b| FileButton {
+                pin: b.pin,
+                label: &b.label,
+                x: b.x.map(|v| v.round()),
+                y: b.y.map(|v| v.round()),
+            })
+            .collect(),
+        rgb: board
+            .rgbs
+            .iter()
+            .map(|rgb| FileRgb {
+                r: rgb.r,
+                g: rgb.g,
+                b: rgb.b,
+                label: &rgb.label,
+                x: rgb.x.map(|v| v.round()),
+                y: rgb.y.map(|v| v.round()),
             })
             .collect(),
     };
@@ -693,10 +824,46 @@ mod tests {
                 x: Some(40.0),
                 y: Some(60.0),
             }],
+            buttons: vec![SimButton {
+                pin: 14,
+                label: "BTN14".to_string(),
+                x: Some(30.0),
+                y: Some(120.0),
+            }],
+            rgbs: vec![SimRgb {
+                r: 21,
+                g: 22,
+                b: 23,
+                label: "RGB".to_string(),
+                x: None,
+                y: None,
+            }],
         };
         save_board(dir.path(), &board).expect("save");
         let loaded = board_view(dir.path()).expect("load");
         assert_eq!(loaded, board);
+    }
+
+    #[test]
+    fn user_parts_load_and_bad_files_are_skipped() {
+        let dir = tempfile::Builder::new()
+            .prefix("rusty-parts")
+            .tempdir()
+            .expect("tempdir");
+        let parts = dir.path().join(".rusty/parts");
+        std::fs::create_dir_all(&parts).expect("dirs");
+        std::fs::write(parts.join("relay.toml"), "name = \"relay\"\ncolor = \"red\"\n")
+            .expect("write");
+        std::fs::write(parts.join("buzzer.toml"), "name = \"buzzer\"\n").expect("write");
+        std::fs::write(parts.join("broken.toml"), "not = = toml").expect("write");
+
+        let defs = user_parts(dir.path());
+        assert_eq!(defs.len(), 2, "{defs:?}");
+        assert_eq!(defs[0].name, "buzzer");
+        assert_eq!(defs[0].color, "green");
+        assert_eq!(defs[1].name, "relay");
+        assert_eq!(defs[1].color, "red");
+        assert!(user_parts(Path::new("nowhere")).is_empty());
     }
 
     #[test]
