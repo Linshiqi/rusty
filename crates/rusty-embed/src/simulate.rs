@@ -173,59 +173,155 @@ pub fn install_steps(tool: &str) -> std::result::Result<Vec<CommandPlan>, String
         }]);
     }
 
-    if let Some(arch) = tool.strip_prefix("qemu-system-") {
-        if !cfg!(windows) {
-            return Err(format!(
-                "one-click install only knows the Windows build so far — download the                  {tool} build from https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE}                  and unpack it into the data directory's tools/qemu/"
-            ));
-        }
-        let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
-            return Err("the data directory could not be resolved".to_string());
-        };
-        std::fs::create_dir_all(&tools)
-            .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
-        let archive = tools.join(format!("qemu-{arch}.tar.xz"));
-        let url = format!(
-            "https://github.com/espressif/qemu/releases/download/{QEMU_RELEASE}/qemu-{arch}-softmmu-{QEMU_VERSION}-x86_64-w64-mingw32.tar.xz"
-        );
-        let archive_text = archive.to_string_lossy().into_owned();
-        let tools_text = tools.to_string_lossy().into_owned();
-        return Ok(vec![
-            CommandPlan {
-                program: "curl".to_string(),
-                args: vec![
-                    "-L".to_string(),
-                    "--fail".to_string(),
-                    "-o".to_string(),
-                    archive_text.clone(),
-                    url.clone(),
-                ],
-                display: format!("curl -L --fail -o {archive_text} {url}"),
-                rationale: "downloads Espressif's own QEMU build — curl ships with Windows 10+"
-                    .to_string(),
-            },
-            CommandPlan {
-                program: "tar".to_string(),
-                args: vec![
-                    "-xf".to_string(),
-                    archive_text.clone(),
-                    "-C".to_string(),
-                    tools_text.clone(),
-                ],
-                display: format!("tar -xf {archive_text} -C {tools_text}"),
-                rationale: "unpacks into the data directory's tools/qemu — bsdtar handles                             .tar.xz and also ships with Windows"
-                    .to_string(),
-            },
-            CommandPlan {
-                program: "cmd".to_string(),
-                args: vec!["/c".to_string(), "del".to_string(), archive_text.clone()],
-                display: format!("del {archive_text}"),
-                rationale: "drops the 38MB archive now that it is unpacked".to_string(),
-            },
-        ]);
+    if tool.starts_with("qemu-system-") {
+        return Err(format!(
+            "qemu installs through its own download path — this is a bug if it surfaces; \
+             manual fallback: https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE} \
+             into the data directory's tools/qemu/"
+        ));
     }
 
     Err(format!("no installer for {tool}"))
+}
+
+/// The QEMU archive for one architecture: where to put it, the URLs to try
+/// in order, and the extraction step.
+///
+/// Two hosts, because the first is unreachable from some networks entirely:
+/// GitHub itself, then Espressif's own asset mirror (`dl.espressif.com`),
+/// which exists precisely for this situation and serves identical bytes.
+pub struct QemuDownload {
+    pub archive: std::path::PathBuf,
+    pub urls: Vec<String>,
+    pub extract: CommandPlan,
+}
+
+pub fn qemu_download(tool: &str) -> std::result::Result<QemuDownload, String> {
+    let Some(arch) = tool.strip_prefix("qemu-system-") else {
+        return Err(format!("{tool} is not a qemu emulator name"));
+    };
+    if !cfg!(windows) {
+        return Err(format!(
+            "one-click install only knows the Windows build so far — download the {tool} \
+             build from https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE} and \
+             unpack it into the data directory's tools/qemu/"
+        ));
+    }
+    let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
+        return Err("the data directory could not be resolved".to_string());
+    };
+    std::fs::create_dir_all(&tools)
+        .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
+
+    let asset = format!("qemu-{arch}-softmmu-{QEMU_VERSION}-x86_64-w64-mingw32.tar.xz");
+    let archive = tools.join(format!("qemu-{arch}.tar.xz"));
+    let urls = vec![
+        format!("https://github.com/espressif/qemu/releases/download/{QEMU_RELEASE}/{asset}"),
+        format!(
+            "https://dl.espressif.com/github_assets/espressif/qemu/releases/download/{QEMU_RELEASE}/{asset}"
+        ),
+    ];
+    let archive_text = archive.to_string_lossy().into_owned();
+    let tools_text = tools.to_string_lossy().into_owned();
+    let extract = CommandPlan {
+        program: "tar".to_string(),
+        args: vec![
+            "-xf".to_string(),
+            archive_text.clone(),
+            "-C".to_string(),
+            tools_text.clone(),
+        ],
+        display: format!("tar -xf {archive_text} -C {tools_text}"),
+        rationale: "unpacks into the data directory's tools/qemu — bsdtar handles .tar.xz \
+                    and ships with Windows"
+            .to_string(),
+    };
+    Ok(QemuDownload {
+        archive,
+        urls,
+        extract,
+    })
+}
+
+/// Fetch `urls` in order until one delivers, streaming progress through
+/// `progress`. In-process on rustls: the OS TLS stack (schannel) aborts on
+/// some CDNs with "server closed abruptly", and a spawned curl cannot be
+/// relied on to exist unbroken everywhere.
+pub fn download(
+    urls: &[String],
+    dest: &Path,
+    mut progress: impl FnMut(String),
+) -> std::result::Result<(), String> {
+    use std::io::{Read, Write};
+
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        .build();
+    let agent: ureq::Agent = config.into();
+
+    let mut last_error = String::new();
+    for url in urls {
+        progress(format!("downloading {url}"));
+        let response = match agent.get(url).call() {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = format!("{url}: {error}");
+                progress(format!("  failed: {error} — trying the next mirror"));
+                continue;
+            }
+        };
+        let total = response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+
+        let mut reader = response.into_body().into_reader();
+        let mut file = match std::fs::File::create(dest) {
+            Ok(file) => file,
+            Err(error) => return Err(format!("could not create {}: {error}", dest.display())),
+        };
+        let mut buffer = [0u8; 64 * 1024];
+        let mut done: u64 = 0;
+        let mut last_mark: u64 = 0;
+        let mut interrupted = false;
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Err(error) = file.write_all(&buffer[..n]) {
+                        return Err(format!("could not write {}: {error}", dest.display()));
+                    }
+                    done += n as u64;
+                    if done - last_mark >= 4 * 1024 * 1024 {
+                        last_mark = done;
+                        match total {
+                            Some(total) => progress(format!(
+                                "  {:.1} / {:.1} MB",
+                                done as f64 / 1e6,
+                                total as f64 / 1e6,
+                            )),
+                            None => progress(format!("  {:.1} MB", done as f64 / 1e6)),
+                        }
+                    }
+                }
+                Err(error) => {
+                    last_error = format!("{url}: interrupted mid-body: {error}");
+                    progress(format!("  {last_error} — trying the next mirror"));
+                    interrupted = true;
+                    break;
+                }
+            }
+        }
+        let complete = !interrupted
+            && done > 0
+            && total.is_none_or(|total| done == total);
+        if complete {
+            progress(format!("  done, {:.1} MB", done as f64 / 1e6));
+            return Ok(());
+        }
+    }
+    Err(format!("every mirror failed; last error: {last_error}"))
 }
 
 /// Create the directory the image step writes into. espflash does not make
@@ -331,14 +427,28 @@ mod tests {
         assert_eq!(espflash.len(), 1);
         assert!(espflash[0].display.contains("cargo install espflash"));
 
-        if cfg!(windows) {
-            let qemu = install_steps("qemu-system-xtensa").expect("qemu installs");
-            assert!(qemu[0].display.contains("qemu-xtensa-softmmu"), "{}", qemu[0].display);
-            assert!(qemu[0].display.contains(super::QEMU_RELEASE));
-            assert!(qemu[1].display.starts_with("tar -xf"));
-        }
-
+        assert!(
+            install_steps("qemu-system-xtensa").is_err(),
+            "qemu goes through its own download path",
+        );
         assert!(install_steps("probe-rs").is_err(), "unknown tools are named, not guessed");
+    }
+
+    #[test]
+    fn qemu_download_tries_github_then_espressifs_mirror() {
+        if !cfg!(windows) {
+            return;
+        }
+        let plan = qemu_download("qemu-system-xtensa").expect("windows plan");
+        assert_eq!(plan.urls.len(), 2);
+        assert!(plan.urls[0].contains("github.com/espressif/qemu"), "{}", plan.urls[0]);
+        assert!(
+            plan.urls[1].contains("dl.espressif.com/github_assets"),
+            "{}",
+            plan.urls[1],
+        );
+        assert!(plan.urls.iter().all(|u| u.contains("qemu-xtensa-softmmu")));
+        assert!(plan.extract.display.starts_with("tar -xf"));
     }
 
     #[test]

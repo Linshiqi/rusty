@@ -20,6 +20,9 @@ pub async fn install_sim_tool(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
+    if name.starts_with("qemu-system-") {
+        return install_qemu(&name, on_line, state).await;
+    }
     let steps = simulate::install_steps(&name).map_err(CommandError::new)?;
 
     let mut last_code = None;
@@ -52,6 +55,62 @@ pub async fn install_sim_tool(
 
     state.stop_session().await;
     Ok(last_code)
+}
+
+/// QEMU: in-process download with a mirror fallback, then tar extraction.
+///
+/// The download runs on rustls rather than through curl — the user's curl
+/// died with a schannel abort and then could not reach github.com at all;
+/// the Espressif mirror is the second URL for exactly that network.
+async fn install_qemu(
+    name: &str,
+    on_line: Channel<LogLine>,
+    state: State<'_, AppState>,
+) -> Result<Option<i32>, CommandError> {
+    let plan = simulate::qemu_download(name).map_err(CommandError::new)?;
+
+    let feed = on_line.clone();
+    let archive = plan.archive.clone();
+    let urls = plan.urls.clone();
+    let downloaded = tokio::task::spawn_blocking(move || {
+        simulate::download(&urls, &archive, |line| {
+            let _ = feed.send(LogLine {
+                stream: LogStream::Stdout,
+                text: line,
+                level: None,
+            });
+        })
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("download panicked: {e}")))?;
+    if let Err(error) = downloaded {
+        return Err(CommandError::new(error));
+    }
+
+    let _ = on_line.send(LogLine {
+        stream: LogStream::Stdout,
+        text: format!("$ {}", plan.extract.display),
+        level: None,
+    });
+    let session = process::spawn(&plan.extract, None)?;
+    state.start_session(session.stopper()).await;
+    let feed = on_line.clone();
+    let code = tokio::task::spawn_blocking(move || {
+        while let Some(line) = session.recv() {
+            if feed.send(line).is_err() {
+                break;
+            }
+        }
+        session.wait()
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("extraction panicked: {e}")))?;
+    state.stop_session().await;
+
+    if code == Some(0) {
+        let _ = std::fs::remove_file(&plan.archive);
+    }
+    Ok(code)
 }
 
 /// Build, image, boot — streaming every line, stoppable at any step.

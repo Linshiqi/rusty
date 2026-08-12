@@ -13,6 +13,9 @@ authors.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 
 toml = { version = "1.1.4", optional = true }
+# In-process downloads for tool installs: rustls instead of the OS TLS —
+# Windows schannel aborts on some CDNs — and a mirror can be tried in turn.
+ureq = { version = "3.4.0", optional = true }
 thiserror = { version = "2.0.20", optional = true }
 object = { version = "0.40.0", optional = true }
 rustc-demangle = { version = "0.1.28", optional = true }
@@ -26,7 +29,7 @@ serialport = { version = "4.9.0", optional = true }
 default = ["backend"]
 backend = [
     "dep:toml",
-    "dep:thiserror",
+    "dep:ureq", "dep:thiserror",
     "dep:object",
     "dep:rustc-demangle",
     "dep:serialport",
