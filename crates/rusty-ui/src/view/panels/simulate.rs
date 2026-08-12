@@ -533,7 +533,10 @@ fn kit_origin(
     canvas: NodeRef<leptos::html::Div>,
     kit: NodeRef<leptos::html::Div>,
 ) -> (f64, f64) {
-    let (Some(canvas), Some(kit)) = (canvas.get_untracked(), kit.get_untracked()) else {
+    // Tracked reads, deliberately: the first wire paint happens before these
+    // nodes mount, and an untracked read froze the fallback coordinates in
+    // forever — wires that stopped in mid-air, attached to nothing.
+    let (Some(canvas), Some(kit)) = (canvas.get(), kit.get()) else {
         return (360.0, 30.0);
     };
     let c = canvas.get_bounding_client_rect();
