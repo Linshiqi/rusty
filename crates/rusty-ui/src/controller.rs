@@ -147,6 +147,8 @@ pub fn open_project(state: AppState, path: String) {
             state.highlighted.set(Vec::new());
             state.echo_text.set(String::new());
             state.diagnostics.set(std::collections::HashMap::new());
+            state.hover.set(None);
+            state.reveal.set(None);
             // The selection names a member of the *previous* workspace, so
             // keeping it would ask the backend to resolve features for a package
             // that is not there.
@@ -913,6 +915,66 @@ fn lsp_saved_doc(path: String) {
         path: String,
     }
     lsp_sync(cmd::lsp::SAVED, Args { path });
+}
+
+/// Ask what the thing at this position is, for the tooltip.
+///
+/// Silent on failure and on `None`: hover is ambient, and a banner about a
+/// hover would be absurd. The reply is dropped if the user has moved to
+/// another file by the time it lands.
+pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    let args = Args {
+        path: path.clone(),
+        line,
+        col,
+    };
+    spawn_local(async move {
+        if let Ok(Some(text)) = ipc::call::<_, Option<String>>(cmd::lsp::HOVER, &args).await {
+            let current = state
+                .document
+                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+            if current.as_deref() == Some(path.as_str()) {
+                state.hover.set(Some((path, line, col, text)));
+            }
+        }
+    });
+}
+
+/// Jump to wherever the thing at this position is defined.
+///
+/// The target lands in `state.reveal`; if it is in another file, that file is
+/// opened first and the editor applies the reveal once the document arrives.
+pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    let args = Args { path, line, col };
+    spawn_local(async move {
+        // "No definition" is a normal answer over whitespace or a keyword, and
+        // an error here is the server warming up. Neither is worth a banner.
+        if let Ok(Some(location)) =
+            ipc::call::<_, Option<rusty_lsp::Location>>(cmd::lsp::DEFINITION, &args).await
+        {
+            let current = state
+                .document
+                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+            if current.as_deref() != Some(location.path.as_str()) {
+                open_file(state, location.path.clone());
+            }
+            state.reveal.set(Some(location));
+        }
+    });
 }
 
 /// The debounced follow-up to typing: re-highlight the draft and tell the

@@ -237,6 +237,12 @@ pub struct AppState {
 
     /// What the compiler and rust-analyzer think is wrong, by file.
     pub diagnostics: RwSignal<HashMap<String, Vec<FileDiagnostic>>>,
+    /// What the server said about the position under the mouse: path, line,
+    /// scalar column, and the prose. The panel renders it as a tooltip.
+    pub hover: RwSignal<Option<(String, u32, u32, String)>>,
+    /// Somewhere the editor should go — the result of goto-definition. Kept in
+    /// state because the target file may still be opening when it is decided.
+    pub reveal: RwSignal<Option<rusty_lsp::Location>>,
     pub lsp_status: RwSignal<LspStatus>,
     /// Which start_lsp call owns the event channel; stale channels' events are
     /// dropped rather than fighting the new server over the status signal.
@@ -270,6 +276,11 @@ pub struct AppState {
     /// Which divider is being dragged, if any. Held centrally so the window
     /// listeners are set up once rather than per handle.
     pub dragging: RwSignal<Option<Divider>>,
+    /// Where the grab started: pointer coordinate and the size at that moment.
+    /// Dragging moves relative to this — absolute window arithmetic has to
+    /// know about every bar between the divider and the window edge, and got
+    /// it wrong by exactly their sum.
+    pub drag_from: RwSignal<(f64, f64)>,
 
     /// The bottom dock. Open by default: a build or flash that writes into a
     /// hidden drawer is a build whose failure the user finds out about later.
@@ -336,6 +347,8 @@ impl AppState {
             echo_text: RwSignal::new(String::new()),
             pulse_gen: RwSignal::new(0),
             diagnostics: RwSignal::new(HashMap::new()),
+            hover: RwSignal::new(None),
+            reveal: RwSignal::new(None),
             lsp_status: RwSignal::new(LspStatus::Off),
             lsp_session: RwSignal::new(0),
             expanded: RwSignal::new(Vec::new()),
@@ -345,6 +358,7 @@ impl AppState {
             sidebar_width: RwSignal::new(stored_size(Divider::Sidebar, 188.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
             dragging: RwSignal::new(None),
+            drag_from: RwSignal::new((0.0, 0.0)),
             dock_open: RwSignal::new(true),
             dock_tab: RwSignal::new(DockTab::Problems),
             log: RwSignal::new(Vec::new()),

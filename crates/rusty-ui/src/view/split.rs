@@ -18,22 +18,21 @@ pub fn install(state: AppState) {
         let Some(divider) = state.dragging.get_untracked() else {
             return;
         };
+        let (from_pointer, from_size) = state.drag_from.get_untracked();
         let (min, max) = divider.bounds();
+        // Delta from where the grab started, not absolute window geometry.
+        // "Height is the distance to the bottom of the window" ignored the
+        // status bar and the dock's own tab strip — 59 pixels between them —
+        // so the divider ran that far from the pointer for the whole drag.
         match divider {
-            // The sidebar starts at the window's left edge, so the pointer's x
-            // is the width.
             Divider::Sidebar => {
-                let width = (event.client_x() as f64).clamp(min, max);
+                let width = (from_size + (event.client_x() as f64 - from_pointer))
+                    .clamp(min, max);
                 state.sidebar_width.set(width);
             }
-            // The dock is anchored to the bottom, so its height is the distance
-            // from the pointer to the bottom of the window.
+            // Anchored to the bottom, so dragging up grows it.
             Divider::Dock => {
-                let height = web_sys::window()
-                    .and_then(|w| w.inner_height().ok())
-                    .and_then(|h| h.as_f64())
-                    .map(|window_height| window_height - event.client_y() as f64)
-                    .unwrap_or(min)
+                let height = (from_size + (from_pointer - event.client_y() as f64))
                     .clamp(min, max);
                 state.dock_height.set(height);
             }
@@ -79,6 +78,15 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                 // Without this the drag selects text across the whole window,
                 // which looks like the app has broken.
                 event.prevent_default();
+                let (pointer, size) = match divider {
+                    Divider::Sidebar => {
+                        (event.client_x() as f64, state.sidebar_width.get_untracked())
+                    }
+                    Divider::Dock => {
+                        (event.client_y() as f64, state.dock_height.get_untracked())
+                    }
+                };
+                state.drag_from.set((pointer, size));
                 state.dragging.set(Some(divider));
             }
             class=move || {

@@ -11,6 +11,7 @@
 //! pin number without leaving the window.
 
 use leptos::{ev, html, prelude::*};
+use wasm_bindgen::JsCast;
 
 use rusty_edit::{Document, Entry, Line, Span, Token};
 use rusty_lsp::{DiagSeverity, FileDiagnostic};
@@ -265,8 +266,46 @@ fn Header(document: Document) -> impl IntoView {
 fn Surface(document: Document) -> impl IntoView {
     let state = AppState::expect();
     let area: NodeRef<html::Textarea> = NodeRef::new();
+    let scroller: NodeRef<html::Div> = NodeRef::new();
     let path = document.path.clone();
     let read_only = document.truncated;
+    // Hover only means something where a language server is listening.
+    let is_rust = path.ends_with(".rs");
+
+    // The cell the mouse was last over, and a generation so only the newest
+    // 400ms-old position asks the server. Hover is ambient: it must cost
+    // nothing while the mouse is moving and only speak once it has settled.
+    let hover_cell = RwSignal::new(None::<(u32, u32)>);
+    let hover_gen = RwSignal::new(0u64);
+
+    // Apply a pending goto once this document is the one on screen.
+    {
+        let path = path.clone();
+        Effect::new(move |_| {
+            let Some(target) = state.reveal.get() else {
+                return;
+            };
+            if target.path != path || state.highlighted.with(Vec::is_empty) {
+                return;
+            }
+            state.reveal.set(None);
+            let Some(element) = area.get_untracked() else {
+                return;
+            };
+            let offset = utf16_offset_of(&state.draft.get_untracked(), target.line, target.col);
+            let _ = element.focus();
+            let _ = element.set_selection_start(Some(offset));
+            let _ = element.set_selection_end(Some(offset));
+            // The manual scroll goes last, so whatever focus did to the
+            // viewport is overruled by the position that shows the target.
+            if let Some(scroller) = scroller.get_untracked() {
+                // A third of the viewport above the target line, so the jump
+                // lands in context rather than at the very top edge.
+                let top = f64::from(target.line) * LINE_HEIGHT - 120.0;
+                scroller.set_scroll_top(top.max(0.0) as i32);
+            }
+        });
+    }
 
     // Both layers carry this verbatim. Any difference in font, size or line
     // height and the caret walks away from its glyph.
@@ -284,7 +323,7 @@ fn Surface(document: Document) -> impl IntoView {
     };
 
     view! {
-        <div class="relative min-h-0 flex-1 overflow-auto">
+        <div node_ref=scroller class="relative min-h-0 flex-1 overflow-auto">
             <div class="flex min-h-full">
                 // Line numbers scroll with the text rather than floating, so a
                 // long file's numbers stay beside their lines.
@@ -356,7 +395,80 @@ fn Surface(document: Document) -> impl IntoView {
                         style=metrics
                         prop:value=move || state.draft.get()
                         on:input=on_input
+                        on:mousedown={
+                            let path = path.clone();
+                            move |event: ev::MouseEvent| {
+                                // Ctrl+Click asks where this is defined — the
+                                // gesture every editor has taught.
+                                if !(event.ctrl_key() || event.meta_key()) || !is_rust {
+                                    return;
+                                }
+                                event.prevent_default();
+                                if let Some((line, col)) = cell_under(
+                                    &state.draft.get_untracked(),
+                                    event.offset_x() as f64,
+                                    event.offset_y() as f64,
+                                ) {
+                                    controller::goto_definition(
+                                        state,
+                                        path.clone(),
+                                        line,
+                                        col,
+                                    );
+                                }
+                            }
+                        }
+                        on:mousemove={
+                            let path = path.clone();
+                            move |event: ev::MouseEvent| {
+                                if !is_rust {
+                                    return;
+                                }
+                                let cell = cell_under(
+                                    &state.draft.get_untracked(),
+                                    event.offset_x() as f64,
+                                    event.offset_y() as f64,
+                                );
+                                if hover_cell.get_untracked() == cell {
+                                    return;
+                                }
+                                hover_cell.set(cell);
+                                // Moving off the tooltip's cell dismisses it.
+                                if state
+                                    .hover
+                                    .with_untracked(|h| h.as_ref().is_some_and(
+                                        |(_, l, c, _)| cell != Some((*l, *c)),
+                                    ))
+                                {
+                                    state.hover.set(None);
+                                }
+                                let generation = hover_gen.get_untracked() + 1;
+                                hover_gen.set(generation);
+                                let Some((line, col)) = cell else { return };
+                                let path = path.clone();
+                                set_timeout(
+                                    move || {
+                                        if hover_gen.get_untracked() == generation
+                                            && hover_cell.get_untracked() == Some((line, col))
+                                        {
+                                            controller::request_hover(state, path, line, col);
+                                        }
+                                    },
+                                    std::time::Duration::from_millis(400),
+                                );
+                            }
+                        }
+                        on:mouseleave=move |_| {
+                            hover_cell.set(None);
+                            state.hover.set(None);
+                        }
                         on:keydown=move |event: ev::KeyboardEvent| {
+                            // While an IME is composing, Enter confirms the
+                            // candidate and Tab moves through them. Stealing
+                            // either would break Chinese input entirely.
+                            if event.is_composing() {
+                                return;
+                            }
                             if (event.ctrl_key() || event.meta_key())
                                 && event.key().eq_ignore_ascii_case("s")
                             {
@@ -364,16 +476,55 @@ fn Surface(document: Document) -> impl IntoView {
                                 controller::save_file(state);
                                 return;
                             }
+                            if event.key() == "Enter" {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    let caret = caret_byte(&element, state);
+                                    let insert =
+                                        newline_indent(&state.draft.get_untracked(), caret);
+                                    insert_at_caret(&element, state, &insert);
+                                }
+                                return;
+                            }
                             // A text area would move focus on Tab. In an editor
                             // that is never what was meant.
                             if event.key() == "Tab" {
                                 event.prevent_default();
                                 if let Some(element) = area.get_untracked() {
-                                    insert_tab(&element, state);
+                                    insert_at_caret(&element, state, "    ");
                                 }
                             }
                         }
                     />
+
+                    // What the server said about the spot the mouse settled on.
+                    {
+                        let path = path.clone();
+                        move || {
+                            let Some((for_path, line, col, text)) = state.hover.get() else {
+                                return ().into_any();
+                            };
+                            if for_path != path {
+                                return ().into_any();
+                            }
+                            let x = 8.0
+                                + column_px(
+                                    &state.draft.get_untracked(),
+                                    line,
+                                    col,
+                                );
+                            let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT + 2.0;
+                            view! {
+                                <div
+                                    class="pointer-events-none absolute z-20 max-w-[70ch] overflow-hidden rounded-[8px] bg-raised px-3 py-2 font-mono text-footnote leading-relaxed whitespace-pre-wrap shadow-2xl ring-1 ring-line-strong"
+                                    style=format!("left: {x}px; top: {y}px; max-height: 40vh")
+                                >
+                                    {prose_of(&text)}
+                                </div>
+                            }
+                            .into_any()
+                        }
+                    }
                 </div>
             </div>
         </div>
@@ -505,35 +656,180 @@ fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyView {
         .into_any()
 }
 
-/// Put four spaces at the caret and leave it after them.
-fn insert_tab(area: &web_sys::HtmlTextAreaElement, state: AppState) {
-    // selectionStart counts UTF-16 units — it is a JS string index. Feeding it
-    // to `replace_range` as bytes panics on the first CJK comment, so convert.
-    let byte_at = |text: &str, utf16: usize| -> usize {
-        let mut units = 0usize;
-        for (offset, ch) in text.char_indices() {
-            if units >= utf16 {
-                return offset;
-            }
-            units += ch.len_utf16();
-        }
-        text.len()
-    };
+/// The caret's byte offset into the draft.
+fn caret_byte(area: &web_sys::HtmlTextAreaElement, state: AppState) -> usize {
+    let units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
+    byte_of_utf16(&state.draft.get_untracked(), units)
+}
 
+/// selectionStart counts UTF-16 units — it is a JS string index. Treating it
+/// as bytes panics on the first CJK comment.
+fn byte_of_utf16(text: &str, units: usize) -> usize {
+    let mut seen = 0usize;
+    for (offset, ch) in text.char_indices() {
+        if seen >= units {
+            return offset;
+        }
+        seen += ch.len_utf16();
+    }
+    text.len()
+}
+
+/// A (line, scalar column) as a UTF-16 offset, for placing the caret.
+fn utf16_offset_of(text: &str, line: u32, col: u32) -> u32 {
+    let mut offset = 0u32;
+    for (index, content) in text.split('\n').enumerate() {
+        if index as u32 == line {
+            offset += content
+                .chars()
+                .take(col as usize)
+                .map(|ch| ch.len_utf16() as u32)
+                .sum::<u32>();
+            return offset;
+        }
+        offset += content.encode_utf16().count() as u32 + 1;
+    }
+    offset
+}
+
+/// Put `insert` at the caret and leave the caret after it.
+fn insert_at_caret(area: &web_sys::HtmlTextAreaElement, state: AppState, insert: &str) {
     let start_units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
     let end_units = area.selection_end().ok().flatten().unwrap_or(0) as usize;
     let mut text = state.draft.get_untracked();
-    let start = byte_at(&text, start_units);
-    let end = byte_at(&text, end_units).max(start);
+    let start = byte_of_utf16(&text, start_units);
+    let end = byte_of_utf16(&text, end_units).max(start);
 
-    text.replace_range(start..end, "    ");
+    text.replace_range(start..end, insert);
     echo_edit(state, &text);
     state.draft.set(text.clone());
     area.set_value(&text);
-    let at = (start_units + 4) as u32;
+    let at = (start_units + insert.encode_utf16().count()) as u32;
     let _ = area.set_selection_start(Some(at));
     let _ = area.set_selection_end(Some(at));
     controller::schedule_pulse(state);
+}
+
+/// What pressing Enter at `caret` should insert: a newline and the indentation
+/// the next line starts with.
+///
+/// The current line's leading whitespace, plus one level when the caret sits
+/// right after an opening bracket — the two rules that cover nearly every
+/// Enter press in Rust. Anything cleverer belongs to the language server.
+fn newline_indent(text: &str, caret: usize) -> String {
+    let before = &text[..caret.min(text.len())];
+    let line_start = before.rfind('\n').map(|at| at + 1).unwrap_or(0);
+    let line = &before[line_start..];
+    let indent: String = line
+        .chars()
+        .take_while(|ch| *ch == ' ' || *ch == '\t')
+        .collect();
+
+    let deeper = matches!(line.trim_end().chars().last(), Some('{' | '(' | '['));
+    if deeper {
+        format!("\n{indent}    ")
+    } else {
+        format!("\n{indent}")
+    }
+}
+
+/// Which (line, scalar column) sits under a point in the text column.
+///
+/// The column is found by measuring, not dividing: a CJK glyph is two cells
+/// wide in a monospace font, so `x / ch` drifts one column per ideograph and
+/// hover would describe the wrong token on any line with a Chinese comment.
+fn cell_under(text: &str, offset_x: f64, offset_y: f64) -> Option<(u32, u32)> {
+    // The 8s are the text column's pl-2 / py-2.
+    let line = ((offset_y - 8.0) / LINE_HEIGHT).floor();
+    if line < 0.0 {
+        return None;
+    }
+    let line = line as u32;
+    let content = text.split('\n').nth(line as usize)?;
+
+    let x = offset_x - 8.0;
+    if x < 0.0 {
+        return Some((line, 0));
+    }
+    let mut reached = 0.0;
+    for (index, ch) in content.chars().enumerate() {
+        let advance = advance_of(ch);
+        if reached + advance > x {
+            return Some((line, index as u32));
+        }
+        reached += advance;
+    }
+    // Past the end of the line: the last column, where "what is this?" still
+    // usually means the token the line ends with.
+    Some((line, content.chars().count() as u32))
+}
+
+/// Pixels from the line start to a scalar column, for anchoring the tooltip.
+fn column_px(text: &str, line: u32, col: u32) -> f64 {
+    text.split('\n')
+        .nth(line as usize)
+        .map(|content| {
+            content
+                .chars()
+                .take(col as usize)
+                .map(advance_of)
+                .sum()
+        })
+        .unwrap_or(0.0)
+}
+
+/// One glyph's advance in the editor's font, measured once per character via
+/// canvas and cached — measuring is what makes CJK correct, caching is what
+/// makes it affordable on every mouse move.
+fn advance_of(ch: char) -> f64 {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<char, f64>> = RefCell::new(HashMap::new());
+        static CONTEXT: RefCell<Option<web_sys::CanvasRenderingContext2d>> =
+            const { RefCell::new(None) };
+    }
+
+    CACHE.with(|cache| {
+        if let Some(width) = cache.borrow().get(&ch) {
+            return *width;
+        }
+        let width = CONTEXT.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.create_element("canvas").ok())
+                    .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+                    .and_then(|c| c.get_context("2d").ok().flatten())
+                    .and_then(|c| c.dyn_into::<web_sys::CanvasRenderingContext2d>().ok())
+                    .inspect(|context| {
+                        context.set_font(
+                            "12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                        );
+                    });
+            }
+            slot.as_ref()
+                .and_then(|context| context.measure_text(&ch.to_string()).ok())
+                .map(|m| m.width())
+                // The monospace advance at 12.5px, if the canvas is somehow
+                // unavailable; wrong for CJK but never absurd.
+                .unwrap_or(7.5)
+        });
+        cache.borrow_mut().insert(ch, width);
+        width
+    })
+}
+
+/// Hover text arrives as markdown with code fences; the tooltip is plain.
+fn prose_of(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Token to a class the stylesheet owns.
@@ -552,5 +848,29 @@ fn class_of(token: Token) -> &'static str {
         Token::Macro => "tok-macro",
         Token::Punctuation => "tok-punctuation",
         Token::Variable => "text-label",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{newline_indent, utf16_offset_of};
+
+    #[test]
+    fn enter_copies_the_indent_and_deepens_after_an_opener() {
+        let text = "fn main() {\n    let x = 1;\n";
+        // After the opening brace: one level deeper.
+        assert_eq!(newline_indent(text, 11), "\n    ");
+        // After the statement: same level.
+        assert_eq!(newline_indent(text, text.len()), "\n");
+        let nested = "    if x {\n";
+        assert_eq!(newline_indent(nested, nested.len() - 1), "\n        ");
+    }
+
+    #[test]
+    fn caret_offsets_survive_cjk() {
+        let text = "// 中文\nfn main() {}\n";
+        // Line 1 col 3: past "fn " — offset counts the CJK line as utf16.
+        // "// 中文" = 5 utf16 units, +1 newline.
+        assert_eq!(utf16_offset_of(text, 1, 3), 6 + 3);
     }
 }
