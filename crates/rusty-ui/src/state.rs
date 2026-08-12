@@ -20,6 +20,18 @@ use std::collections::HashMap;
 
 use crate::ipc::IpcError;
 
+/// A completion request's results, anchored where they were asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletionPopup {
+    pub path: String,
+    pub line: u32,
+    /// Where the word being completed starts — what typed text filters
+    /// against, and what an accepted item replaces when the server sent no
+    /// edit range of its own.
+    pub word_start: u32,
+    pub items: Vec<rusty_lsp::CompletionItem>,
+}
+
 /// Whether the language server behind the editor is up.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LspStatus {
@@ -241,6 +253,8 @@ pub struct AppState {
     /// token's range, and the prose. The range is what keeps the card up while
     /// the pointer moves within the same token.
     pub hover: RwSignal<Option<(String, EditRange, String)>>,
+    /// The completion popup, when one is up.
+    pub completion: RwSignal<Option<CompletionPopup>>,
     /// Somewhere the editor should go — the result of goto-definition. Kept in
     /// state because the target file may still be opening when it is decided.
     pub reveal: RwSignal<Option<rusty_lsp::Location>>,
@@ -353,6 +367,7 @@ impl AppState {
             pulse_gen: RwSignal::new(0),
             diagnostics: RwSignal::new(HashMap::new()),
             hover: RwSignal::new(None),
+            completion: RwSignal::new(None),
             reveal: RwSignal::new(None),
             lsp_status: RwSignal::new(LspStatus::Off),
             lsp_session: RwSignal::new(0),

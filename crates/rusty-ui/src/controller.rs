@@ -408,6 +408,57 @@ pub fn restore(state: AppState) {
     });
 }
 
+/// Ask what could complete at the caret.
+///
+/// The buffer is synced to the server first, without waiting for the pulse:
+/// completion after typing `.` is about the text as of *that keystroke*, and a
+/// 250ms-stale server answers about the wrong world. `did_change` dedups, so
+/// the extra sync costs nothing when the pulse already ran.
+pub fn request_completion(state: AppState, path: String, line: u32, col: u32, word_start: u32) {
+    #[derive(serde::Serialize)]
+    struct Sync {
+        path: String,
+        text: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Ask {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    if state.lsp_status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    let sync = Sync {
+        path: path.clone(),
+        text: state.draft.get_untracked(),
+    };
+    let ask = Ask {
+        path: path.clone(),
+        line,
+        col,
+    };
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
+        if let Ok(items) =
+            ipc::call::<_, Vec<rusty_lsp::CompletionItem>>(cmd::lsp::COMPLETE, &ask).await
+        {
+            let current = state
+                .document
+                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+            if current.as_deref() == Some(path.as_str()) && !items.is_empty() {
+                state.completion.set(Some(crate::state::CompletionPopup {
+                    path,
+                    line,
+                    word_start,
+                    items,
+                }));
+            }
+        }
+    });
+}
+
 // ─── storage ─────────────────────────────────────────────────────────────────
 
 /// Where the data directory is, for the settings screen.

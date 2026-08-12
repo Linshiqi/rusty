@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rusty-ui",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set NO_COLOR=&& cd crates\\rusty-ui && trunk serve"],
+      "port": 1425
+    }
+  ]
+}

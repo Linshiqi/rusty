@@ -14,7 +14,7 @@ use leptos::{ev, html, prelude::*};
 use wasm_bindgen::JsCast;
 
 use rusty_edit::{Document, Entry, Line, Span, Token};
-use rusty_lsp::{DiagSeverity, FileDiagnostic};
+use rusty_lsp::{CompletionItem, DiagSeverity, FileDiagnostic};
 
 use crate::{controller, state::AppState, view::components::Empty};
 
@@ -294,6 +294,12 @@ fn Surface(document: Document) -> impl IntoView {
     // True while the pointer is over the card itself. Reading the card —
     // scrolling it, selecting from it — must not count as leaving.
     let on_card = RwSignal::new(false);
+    // Which completion row the keyboard is on. Reset when a new popup arrives.
+    let picked = RwSignal::new(0usize);
+    Effect::new(move |_| {
+        let _ = state.completion.get();
+        picked.set(0);
+    });
 
     // Apply a pending goto once this document is the one on screen.
     {
@@ -332,11 +338,47 @@ fn Surface(document: Document) -> impl IntoView {
          tab-size: 4"
     );
 
-    let on_input = move |event: ev::Event| {
-        let new = event_target_value(&event);
-        echo_edit(state, &new);
-        state.draft.set(new);
-        controller::schedule_pulse(state);
+    let on_input = {
+        let path = path.clone();
+        move |event: ev::Event| {
+            let new = event_target_value(&event);
+            echo_edit(state, &new);
+            state.draft.set(new.clone());
+            controller::schedule_pulse(state);
+
+            // Completion triggers, judged by the character behind the caret.
+            if !is_rust {
+                return;
+            }
+            let Some(element) = area.get_untracked() else { return };
+            let Some((line, col)) = caret_line_col(&element, &new) else {
+                return;
+            };
+            let line_text = new.split('\n').nth(line as usize).unwrap_or_default();
+            let before: Vec<char> = line_text.chars().take(col as usize).collect();
+            let last = before.last().copied();
+
+            let popup_open = state.completion.with_untracked(Option::is_some);
+            match last {
+                // `foo.` and `foo::` are the moments completion answers a
+                // question the typist actually has.
+                Some('.') => {
+                    controller::request_completion(state, path.clone(), line, col, col);
+                }
+                Some(':') if before.len() >= 2 && before[before.len() - 2] == ':' => {
+                    controller::request_completion(state, path.clone(), line, col, col);
+                }
+                // Inside a word, the open popup narrows reactively — the
+                // filter derives from the draft, so nothing to do here.
+                Some(c) if c.is_alphanumeric() || c == '_' => {}
+                // Anything else ends the word the popup was about.
+                _ => {
+                    if popup_open {
+                        state.completion.set(None);
+                    }
+                }
+            }
+        }
     };
 
     view! {
@@ -418,6 +460,7 @@ fn Surface(document: Document) -> impl IntoView {
                                 // Ctrl+Click asks where this is defined — the
                                 // gesture every editor has taught.
                                 if !(event.ctrl_key() || event.meta_key()) || !is_rust {
+                                    state.completion.set(None);
                                     return;
                                 }
                                 event.prevent_default();
@@ -509,11 +552,67 @@ fn Surface(document: Document) -> impl IntoView {
                                 std::time::Duration::from_millis(300),
                             );
                         }
-                        on:keydown=move |event: ev::KeyboardEvent| {
+                        on:keydown={
+                            let path = path.clone();
+                            move |event: ev::KeyboardEvent| {
                             // While an IME is composing, Enter confirms the
                             // candidate and Tab moves through them. Stealing
                             // either would break Chinese input entirely.
                             if event.is_composing() {
+                                return;
+                            }
+                            // The popup owns its keys while it is up.
+                            if state.completion.with_untracked(Option::is_some) {
+                                match event.key().as_str() {
+                                    "ArrowDown" => {
+                                        event.prevent_default();
+                                        picked.update(|i| *i += 1);
+                                        return;
+                                    }
+                                    "ArrowUp" => {
+                                        event.prevent_default();
+                                        picked.update(|i| *i = i.saturating_sub(1));
+                                        return;
+                                    }
+                                    "Enter" | "Tab" => {
+                                        event.prevent_default();
+                                        if let Some(element) = area.get_untracked() {
+                                            accept_completion(
+                                                state,
+                                                &element,
+                                                picked.get_untracked(),
+                                            );
+                                        }
+                                        return;
+                                    }
+                                    "Escape" => {
+                                        event.prevent_default();
+                                        // Swallowed here so the window's own
+                                        // Escape handling does not also close
+                                        // an overlay behind the editor.
+                                        event.stop_propagation();
+                                        state.completion.set(None);
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Ctrl+Space asks without a trigger character.
+                            if event.ctrl_key() && event.key() == " " {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    let text = state.draft.get_untracked();
+                                    if let Some((line, col)) = caret_line_col(&element, &text) {
+                                        let start = word_start_before(&text, line, col);
+                                        controller::request_completion(
+                                            state,
+                                            path.clone(),
+                                            line,
+                                            col,
+                                            start,
+                                        );
+                                    }
+                                }
                                 return;
                             }
                             if (event.ctrl_key() || event.meta_key())
@@ -541,7 +640,7 @@ fn Surface(document: Document) -> impl IntoView {
                                     insert_at_caret(&element, state, "    ");
                                 }
                             }
-                        }
+                        }}
                     />
 
                     // What the server said about the token the mouse settled
@@ -574,6 +673,96 @@ fn Surface(document: Document) -> impl IntoView {
                                     }
                                 >
                                     {prose_of(&text)}
+                                </div>
+                            }
+                            .into_any()
+                        }
+                    }
+
+                    // The completion popup, anchored under the word it is
+                    // completing.
+                    {
+                        let path = path.clone();
+                        move || {
+                            let Some(popup) = state.completion.get() else {
+                                return ().into_any();
+                            };
+                            if popup.path != path {
+                                return ().into_any();
+                            }
+                            let draft = state.draft.get();
+                            let word = typed_word(&draft, popup.line, popup.word_start);
+                            let shown: Vec<(usize, CompletionItem)> = popup
+                                .items
+                                .iter()
+                                .filter(|item| {
+                                    word.is_empty()
+                                        || item
+                                            .label
+                                            .to_lowercase()
+                                            .starts_with(&word.to_lowercase())
+                                })
+                                .take(50)
+                                .cloned()
+                                .enumerate()
+                                .collect();
+                            if shown.is_empty() {
+                                return ().into_any();
+                            }
+                            let chosen = picked.get().min(shown.len() - 1);
+                            let x = 8.0 + column_px(&draft, popup.line, popup.word_start);
+                            let y = 8.0 + f64::from(popup.line + 1) * LINE_HEIGHT + 2.0;
+                            // A window around the selection rather than a
+                            // scrollbar: nine rows is what the eye takes in,
+                            // and the arrows walk the rest into view.
+                            let from = chosen.saturating_sub(4).min(shown.len().saturating_sub(9));
+                            view! {
+                                <div
+                                    class="absolute z-20 min-w-[260px] rounded-[8px] bg-raised py-1 font-mono text-footnote shadow-2xl ring-1 ring-line-strong"
+                                    style=format!("left: {x}px; top: {y}px")
+                                >
+                                    {shown
+                                        .into_iter()
+                                        .skip(from)
+                                        .take(9)
+                                        .map(|(index, item)| {
+                                            let selected = index == chosen;
+                                            let kind = item.kind.clone().unwrap_or_default();
+                                            let detail = item.detail.clone().unwrap_or_default();
+                                            view! {
+                                                <button
+                                                    type="button"
+                                                    on:mousedown=move |event: ev::MouseEvent| {
+                                                        // Before the textarea's
+                                                        // own mousedown closes
+                                                        // the popup.
+                                                        event.prevent_default();
+                                                        event.stop_propagation();
+                                                        if let Some(element) =
+                                                            area.get_untracked()
+                                                        {
+                                                            accept_completion(
+                                                                state, &element, index,
+                                                            );
+                                                        }
+                                                    }
+                                                    class=if selected {
+                                                        "flex w-full items-baseline gap-2 bg-selection px-2.5 py-0.5 text-left text-rust"
+                                                    } else {
+                                                        "flex w-full items-baseline gap-2 px-2.5 py-0.5 text-left text-label-2"
+                                                    }
+                                                >
+                                                    <span class="w-[7ch] shrink-0 truncate text-label-3">
+                                                        {kind}
+                                                    </span>
+                                                    <span class="shrink-0">{item.label.clone()}</span>
+                                                    <span class="min-w-0 flex-1 truncate text-label-3">
+                                                        {detail}
+                                                    </span>
+                                                </button>
+                                            }
+                                        })
+                                        .collect_view()}
                                 </div>
                             }
                             .into_any()
@@ -708,6 +897,90 @@ fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyView {
         })
         .collect_view()
         .into_any()
+}
+
+/// The caret as (line, scalar column) in `text`.
+fn caret_line_col(area: &web_sys::HtmlTextAreaElement, text: &str) -> Option<(u32, u32)> {
+    let units = area.selection_start().ok().flatten()? as usize;
+    let byte = byte_of_utf16(text, units);
+    let before = &text[..byte];
+    let line = before.matches('\n').count() as u32;
+    let line_start = before.rfind('\n').map(|at| at + 1).unwrap_or(0);
+    let col = before[line_start..].chars().count() as u32;
+    Some((line, col))
+}
+
+/// Where the identifier under the caret begins, for Ctrl+Space.
+fn word_start_before(text: &str, line: u32, col: u32) -> u32 {
+    let Some(line_text) = text.split('\n').nth(line as usize) else {
+        return col;
+    };
+    let chars: Vec<char> = line_text.chars().take(col as usize).collect();
+    let mut start = chars.len();
+    while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+        start -= 1;
+    }
+    start as u32
+}
+
+/// The word typed since the popup opened — what the list narrows against.
+fn typed_word(text: &str, line: u32, word_start: u32) -> String {
+    text.split('\n')
+        .nth(line as usize)
+        .map(|line_text| {
+            line_text
+                .chars()
+                .skip(word_start as usize)
+                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Apply the chosen completion to the draft.
+fn accept_completion(state: AppState, area: &web_sys::HtmlTextAreaElement, index: usize) {
+    let Some(popup) = state.completion.get_untracked() else {
+        return;
+    };
+    let draft = state.draft.get_untracked();
+    let word = typed_word(&draft, popup.line, popup.word_start);
+    let shown: Vec<&CompletionItem> = popup
+        .items
+        .iter()
+        .filter(|item| {
+            word.is_empty() || item.label.to_lowercase().starts_with(&word.to_lowercase())
+        })
+        .collect();
+    let Some(item) = shown.get(index.min(shown.len().saturating_sub(1))).copied() else {
+        return;
+    };
+
+    // The server's own edit range wins; without one, the typed word is what
+    // the insertion replaces.
+    let (start_line, start_col, end_line, end_col) = match &item.edit {
+        Some(edit) => (edit.start_line, edit.start_col, edit.end_line, edit.end_col),
+        None => (
+            popup.line,
+            popup.word_start,
+            popup.line,
+            popup.word_start + word.chars().count() as u32,
+        ),
+    };
+
+    let start = byte_of_utf16(&draft, utf16_offset_of(&draft, start_line, start_col) as usize);
+    let end = byte_of_utf16(&draft, utf16_offset_of(&draft, end_line, end_col) as usize);
+    let mut text = draft;
+    text.replace_range(start.min(end)..end.max(start), &item.insert);
+
+    echo_edit(state, &text);
+    state.draft.set(text.clone());
+    area.set_value(&text);
+    let caret = utf16_offset_of(&text, start_line, start_col)
+        + item.insert.encode_utf16().count() as u32;
+    let _ = area.set_selection_start(Some(caret));
+    let _ = area.set_selection_end(Some(caret));
+    state.completion.set(None);
+    controller::schedule_pulse(state);
 }
 
 /// Whether a cell sits inside a hover range.
