@@ -1718,6 +1718,7 @@ fn semantic_token(kind: &str) -> Option<Token> {
         "struct" | "enum" | "union" | "trait" | "typeAlias" | "type" | "builtinType"
         | "class" | "interface" | "enumMember" | "typeParameter" => Token::Type,
         "variable" | "parameter" | "property" | "field" | "const" | "static" => Token::Variable,
+        "namespace" => Token::Namespace,
         _ => return None,
     })
 }
@@ -1784,6 +1785,7 @@ fn class_of(token: Token) -> &'static str {
         Token::Macro => "tok-macro",
         Token::Punctuation => "tok-punctuation",
         Token::Variable => "tok-variable",
+        Token::Namespace => "tok-namespace",
     }
 }
 

@@ -317,11 +317,16 @@ body {
 .tok-comment { color: var(--label-3); font-style: italic; }
 .tok-type { color: var(--term-6); }
 .tok-function { color: var(--term-4); }
-.tok-macro { color: var(--term-1); }
+/* The function family's yellow, as VSCode taught — red made every
+   #[attribute] block read as an error. */
+.tok-macro { color: var(--term-11); }
 .tok-punctuation { color: var(--label-2); }
 /* Semantic tokens only — the lexical pass never produces Variable. The hue
    matches what VSCode dark+ taught everyone a local means. */
 .tok-variable { color: var(--term-12); }
+/* Semantic only. A shade back: the path prefix is the least important part
+   of the line, and at full brightness it was the loudest. */
+.tok-namespace { color: var(--label-2); }
 
 /* Diagnostic underlines. In the text flow rather than overlaid, so they stay
    glued to their glyphs whatever width those glyphs are. */

@@ -46,6 +46,10 @@ pub enum Token {
     Punctuation,
     /// `let`, `self`, lifetimes — bindings rather than keywords.
     Variable,
+    /// Module paths — `esp_hal::interrupt::` — stepped back a shade. Only
+    /// semantic tokens produce this: the path prefix is the least important
+    /// part of a line, and unstyled it was the brightest.
+    Namespace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
