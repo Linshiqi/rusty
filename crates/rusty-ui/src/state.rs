@@ -298,6 +298,8 @@ pub struct AppState {
     pub find_replace: RwSignal<String>,
     /// Which match is current, clamped to the match count at use.
     pub find_index: RwSignal<usize>,
+    /// The simulation plan for the open project, when the panel asked.
+    pub sim_plan: RwSignal<Option<rusty_embed::SimPlan>>,
     /// Quick fixes offered at the caret, when the user asked (Ctrl+.).
     pub actions: RwSignal<Option<(String, u32, Vec<rusty_lsp::CodeActionFix>)>>,
     /// Semantic colouring for the active document, as rust-analyzer sees it.
@@ -442,6 +444,7 @@ impl AppState {
             signature: RwSignal::new(None),
             semantic: RwSignal::new(None),
             actions: RwSignal::new(None),
+            sim_plan: RwSignal::new(None),
             find_open: RwSignal::new(false),
             find_replace_open: RwSignal::new(false),
             find_query: RwSignal::new(String::new()),

@@ -13,6 +13,7 @@ mod monitor;
 mod overview;
 mod search;
 mod session;
+mod simulate;
 mod toolchain;
 mod wizard;
 
@@ -82,6 +83,14 @@ pub fn all() -> Vec<Panel> {
             icon: Icon::Flash,
             needs_project: true,
             render: || flash::Flash().into_any(),
+        },
+        Panel {
+            id: "simulate",
+            title: "Simulate",
+            section: "Device",
+            icon: Icon::Simulate,
+            needs_project: true,
+            render: || simulate::Simulate().into_any(),
         },
         Panel {
             id: "monitor",

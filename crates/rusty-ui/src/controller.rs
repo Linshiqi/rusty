@@ -610,6 +610,52 @@ pub fn request_semantic(state: AppState, path: String) {
     });
 }
 
+// ─── simulation ──────────────────────────────────────────────────────────────
+
+/// Ask how this project would be simulated.
+pub fn load_sim_plan(state: AppState) {
+    if !state.has_project() {
+        return;
+    }
+    track(
+        state,
+        ipc::get::<rusty_embed::SimPlan>(cmd::sim::PLAN),
+        move |plan| state.sim_plan.set(Some(plan)),
+    );
+}
+
+/// Build, image and boot in QEMU, streaming into the dock. One at a time —
+/// the shared session slot enforces it the same way flashing does.
+pub fn run_simulation(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {}
+
+    if state.session_running.get_untracked() {
+        return;
+    }
+    let channel = stream_to_terminal(state);
+    spawn_local(async move {
+        match ipc::call_streaming::<_, Option<i32>>(cmd::sim::RUN, &Args {}, "onLine", &channel)
+            .await
+        {
+            Ok(code) => note_exit(state, code),
+            Err(error) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: error.message,
+                    level: Some(LogLevel::Error),
+                });
+                note_exit(state, Some(-1));
+            }
+        }
+    });
+}
+
+/// The panel-facing spelling of "stop whatever session is running".
+pub fn stop_session_now(state: AppState) {
+    stop_session(state);
+}
+
 // ─── session restore ─────────────────────────────────────────────────────────
 
 /// localStorage key for a project's open tabs. Per the storage doctrine this

@@ -8,6 +8,7 @@ mod error;
 mod files;
 mod flash;
 mod lsp;
+mod simulate;
 mod state;
 mod terminal;
 mod window;
@@ -50,6 +51,8 @@ fn main() {
             lsp::lsp_signature,
             lsp::lsp_semantic,
             lsp::lsp_code_actions,
+            simulate::plan_simulation,
+            simulate::run_simulation,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -129,7 +132,7 @@ mod wire_names {
 
     #[test]
     fn every_constant_names_a_real_handler() {
-        use crate::{ai, commands, files, flash, lsp, terminal, window};
+        use crate::{ai, commands, files, flash, lsp, simulate, terminal, window};
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
@@ -165,6 +168,8 @@ mod wire_names {
             cmd::lsp::SIGNATURE => lsp::lsp_signature,
             cmd::lsp::SEMANTIC => lsp::lsp_semantic,
             cmd::lsp::ACTIONS => lsp::lsp_code_actions,
+            cmd::sim::PLAN => simulate::plan_simulation,
+            cmd::sim::RUN => simulate::run_simulation,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

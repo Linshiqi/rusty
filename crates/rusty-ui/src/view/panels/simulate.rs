@@ -1,0 +1,145 @@
+//! Running firmware with no hardware on the desk.
+//!
+//! Espressif's QEMU boots the same merged flash image `espflash` would burn,
+//! and its serial console streams into the dock — the Wokwi experience,
+//! entirely local. The plan is shown before anything runs: three commands,
+//! each with its why, plus honest refusals when the chip has no machine
+//! model or a tool is missing.
+
+use leptos::prelude::*;
+
+use crate::{controller, state::AppState, view::components::Empty};
+
+#[component]
+pub fn Simulate() -> impl IntoView {
+    let state = AppState::expect();
+
+    Effect::new(move |first: Option<()>| {
+        if first.is_none() {
+            controller::load_sim_plan(state);
+        }
+    });
+
+    move || {
+        if !state.has_project() {
+            return view! {
+                <Empty
+                    title="No project open"
+                    detail="Open a firmware project to run it in the simulator."
+                />
+            }
+            .into_any();
+        }
+        let Some(plan) = state.sim_plan.get() else {
+            return view! {
+                <p class="px-5 py-4 text-callout text-label-3">"Working out the plan…"</p>
+            }
+            .into_any();
+        };
+
+        if !plan.supported {
+            let reason = plan.reason.unwrap_or_default();
+            return view! {
+                <div class="px-5 py-4">
+                    <p class="max-w-[64ch] text-callout leading-relaxed text-label-2 select-text">
+                        {reason}
+                    </p>
+                </div>
+            }
+            .into_any();
+        }
+
+        let missing = plan.missing.clone();
+        let blocked = !missing.is_empty();
+        let running = state.session_running;
+
+        view! {
+            <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
+                {(!missing.is_empty())
+                    .then(|| {
+                        view! {
+                            <div class="flex max-w-[70ch] flex-col gap-2 rounded-[8px] bg-amber-fill px-4 py-3">
+                                <p class="text-callout font-medium">
+                                    "The simulator needs tools that are not installed."
+                                </p>
+                                {missing
+                                    .iter()
+                                    .map(|tool| {
+                                        view! {
+                                            <div class="flex flex-col gap-1">
+                                                <span class="font-mono text-footnote">
+                                                    {tool.name.clone()}
+                                                </span>
+                                                <code class="rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote select-text">
+                                                    {tool.install.clone()}
+                                                </code>
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        }
+                    })}
+
+                <div class="flex max-w-[76ch] flex-col gap-2">
+                    {plan
+                        .steps
+                        .iter()
+                        .enumerate()
+                        .map(|(index, step)| {
+                            view! {
+                                <div class="rounded-[8px] bg-raised px-4 py-2.5 ring-1 ring-line">
+                                    <div class="flex items-baseline gap-2">
+                                        <span class="shrink-0 font-mono text-footnote text-label-3">
+                                            {format!("{}.", index + 1)}
+                                        </span>
+                                        <code class="min-w-0 flex-1 font-mono text-footnote break-all select-text">
+                                            {step.display.clone()}
+                                        </code>
+                                    </div>
+                                    <p class="mt-1 pl-5 text-footnote leading-relaxed text-label-3">
+                                        {step.rationale.clone()}
+                                    </p>
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+
+                <div class="flex items-center gap-2">
+                    {move || {
+                        if running.get() {
+                            view! {
+                                <button
+                                    type="button"
+                                    on:click=move |_| controller::stop_session_now(state)
+                                    class="rounded-[7px] bg-crimson px-4 py-1.5 text-callout font-medium text-white hover:opacity-90"
+                                >
+                                    "Stop"
+                                </button>
+                                <span class="text-footnote text-label-3">
+                                    "running — serial output is in the panel below"
+                                </span>
+                            }
+                                .into_any()
+                        } else {
+                            let disabled = blocked;
+                            view! {
+                                <button
+                                    type="button"
+                                    disabled=disabled
+                                    on:click=move |_| controller::run_simulation(state)
+                                    class="rounded-[7px] bg-rust px-4 py-1.5 text-callout font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                >
+                                    "Build and simulate"
+                                </button>
+                            }
+                                .into_any()
+                        }
+                    }}
+                </div>
+            </div>
+        }
+        .into_any()
+    }
+}

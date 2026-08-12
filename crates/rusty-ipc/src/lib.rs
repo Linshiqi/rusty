@@ -102,6 +102,12 @@ pub mod lsp {
     pub const ACTIONS: &str = "lsp_code_actions";
 }
 
+/// Running firmware without hardware: Espressif's QEMU.
+pub mod sim {
+    pub const PLAN: &str = "plan_simulation";
+    pub const RUN: &str = "run_simulation";
+}
+
 pub mod features {
     pub const ROWS: &str = "feature_rows";
     pub const IMPACT: &str = "feature_impact";

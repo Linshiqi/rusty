@@ -493,6 +493,27 @@ pub enum LogLevel {
 // Storage
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A tool the simulator needs and cannot find, with the way to get it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimTool {
+    pub name: String,
+    pub install: String,
+}
+
+/// How this project would be simulated, or exactly why it cannot be.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimPlan {
+    pub supported: bool,
+    /// Set when `supported` is false — the refusal, in actionable terms.
+    pub reason: Option<String>,
+    /// Tools to install before the steps can run.
+    pub missing: Vec<SimTool>,
+    /// build → image → boot, each inspectable before anything runs.
+    pub steps: Vec<CommandPlan>,
+}
+
 /// Where rusty keeps its data, for the settings screen to show.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

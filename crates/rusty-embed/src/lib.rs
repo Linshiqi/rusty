@@ -34,6 +34,8 @@ pub mod memory;
 #[cfg(feature = "backend")]
 pub mod process;
 #[cfg(feature = "backend")]
+pub mod simulate;
+#[cfg(feature = "backend")]
 pub mod project;
 #[cfg(feature = "backend")]
 pub mod toolchain;

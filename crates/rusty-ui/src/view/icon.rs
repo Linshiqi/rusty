@@ -17,6 +17,7 @@ pub enum Icon {
     Toolchain,
     Memory,
     Flash,
+    Simulate,
     Monitor,
     Features,
     Wizard,
@@ -38,6 +39,8 @@ impl Icon {
             Icon::Memory => "M3 5h14M3 10h9M3 15h12",
             // A bolt.
             Icon::Flash => "M11 2.5 4.5 11.5H9l-1 6 6.5-9H10z",
+            // A play triangle in a rounded frame — run, without hardware.
+            Icon::Simulate => "M4 4.5h12v11H4zM8.5 7.5l4 2.5-4 2.5z",
             // A terminal.
             Icon::Monitor => "M2.5 4.5h15v11h-15zM5.5 8.5l2.5 2-2.5 2M10.5 12.5h4",
             // Sliders.

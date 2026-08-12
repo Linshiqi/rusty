@@ -1,0 +1,80 @@
+//! Simulation commands: plan the three steps, then run them end to end.
+
+use rusty_embed::{LogLine, LogStream, SimPlan, process, project, simulate};
+use tauri::{State, ipc::Channel};
+
+use crate::{error::CommandError, state::AppState};
+
+/// How this project would be simulated, or exactly why it cannot be.
+#[tauri::command]
+pub async fn plan_simulation(state: State<'_, AppState>) -> Result<SimPlan, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let detected = project::detect(&root)?;
+    Ok(simulate::plan(&detected))
+}
+
+/// Build, image, boot — streaming every line, stoppable at any step.
+///
+/// The first two steps must exit zero before the next runs; QEMU itself runs
+/// until the user stops it (the same session Stop every panel shares).
+#[tauri::command]
+pub async fn run_simulation(
+    on_line: Channel<LogLine>,
+    state: State<'_, AppState>,
+) -> Result<Option<i32>, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let detected = project::detect(&root)?;
+    let plan = simulate::plan(&detected);
+
+    if !plan.supported {
+        return Err(CommandError::new(plan.reason.unwrap_or_else(|| {
+            "this project cannot be simulated".to_string()
+        })));
+    }
+    if !plan.missing.is_empty() {
+        let mut lines = vec!["simulation needs tools that are not installed:".to_string()];
+        for tool in &plan.missing {
+            lines.push(format!("  {} — {}", tool.name, tool.install));
+        }
+        return Err(CommandError::new(lines.join("\n")));
+    }
+
+    simulate::prepare(&root)
+        .map_err(|e| CommandError::new(format!("could not create target/rusty-sim: {e}")))?;
+
+    let mut last_code = None;
+    let total = plan.steps.len();
+    for (index, step) in plan.steps.into_iter().enumerate() {
+        let _ = on_line.send(LogLine {
+            stream: LogStream::Stdout,
+            text: format!("$ {}", step.display),
+            level: None,
+        });
+
+        let session = process::spawn(&step, Some(root.as_path()))?;
+        state.start_session(session.stopper()).await;
+
+        let feed = on_line.clone();
+        let code = tokio::task::spawn_blocking(move || {
+            while let Some(line) = session.recv() {
+                if feed.send(line).is_err() {
+                    break;
+                }
+            }
+            session.wait()
+        })
+        .await
+        .map_err(|e| CommandError::new(format!("simulation step panicked: {e}")))?;
+
+        last_code = code;
+        let is_boot = index + 1 == total;
+        if !is_boot && code != Some(0) {
+            // A failed build or image stops the pipeline; the lines that
+            // explain it are already in the dock.
+            break;
+        }
+    }
+
+    state.stop_session().await;
+    Ok(last_code)
+}

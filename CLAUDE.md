@@ -42,6 +42,12 @@ cd crates/rusty-ui && trunk serve
 # The whole app
 cd crates/rusty-app && cargo tauri dev
 
+# The simulation pipeline, proven end to end on a real project without the
+# window: detect, plan, build, image, boot in Espressif QEMU, count serial
+# lines. Needs espflash and qemu-system-* findable (PATH or the data
+# directory's tools/).
+cargo run -p rusty-embed --example sim_probe -- <project-dir> [seconds]
+
 # The workbench without the window
 cargo run -p rusty-cli -- check .
 cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
@@ -121,7 +127,8 @@ that needs it lands.**
 
 - The data directory (`config::data_dir()`) holds `boards/` and
   `workbench.toml` — plain TOML, user-readable, checked by tests. Its location
-  is configurable: a fixed anchor (`%APPDATA%usty`) holds `location.toml`
+  is configurable: a fixed anchor (`%APPDATA%
+usty`) holds `location.toml`
   pointing at the real directory. Relocation copies and switches the pointer;
   the originals stay until the user deletes them. Pointing it at a synced
   folder is the cloud-sync story.
@@ -230,6 +237,9 @@ that needs it lands.**
 - `serde_json` sends `i64` as a plain JSON number, so model deltas are `i32` —
   a 64-bit integer would have generated a TypeScript `bigint` that never matched
   the wire.
+- **espflash `save-image` does not create parent directories** — a missing
+  `target/rusty-sim/` fails as `os error 3`, which reads like a broken tool
+  rather than a missing mkdir. `simulate::prepare` runs first.
 - Child processes get `CREATE_NO_WINDOW` on Windows; the toolchain panel probes
   six tools on open and would otherwise flash six console windows.
 - **`NO_COLOR=1` breaks Trunk.** It maps the variable onto its `--no-color`
