@@ -102,6 +102,24 @@ pub struct Location {
     pub external: bool,
 }
 
+/// The signature of the call the caret is inside, with the parameter it is on.
+///
+/// One signature, not a list: Rust has no overloading, so the "active
+/// signature" the protocol allows for is the only one worth shipping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureInfo {
+    /// The whole signature as text, e.g. `fn set_gain(&mut self, db: i8)`.
+    pub label: String,
+    /// Byte range of the active parameter inside `label` — bytes, so the
+    /// frontend slices directly; the backend has already unwound the
+    /// protocol's UTF-16 offsets.
+    pub param_start: Option<u32>,
+    pub param_end: Option<u32>,
+    /// The signature's documentation, when the server sent any.
+    pub doc: Option<String>,
+}
+
 /// What the server said about a position, and how much text it covers.
 ///
 /// The range is what makes the tooltip liveable: while the pointer stays on

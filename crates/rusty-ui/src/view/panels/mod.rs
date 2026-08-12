@@ -11,6 +11,7 @@ mod flash;
 mod memory;
 mod monitor;
 mod overview;
+mod search;
 mod session;
 mod toolchain;
 mod wizard;
@@ -31,6 +32,14 @@ pub fn all() -> Vec<Panel> {
             icon: Icon::Files,
             needs_project: true,
             render: || files::FilesPanel().into_any(),
+        },
+        Panel {
+            id: "search",
+            title: "Search",
+            section: "Project",
+            icon: Icon::Search,
+            needs_project: true,
+            render: || search::SearchPanel().into_any(),
         },
         Panel {
             id: "overview",

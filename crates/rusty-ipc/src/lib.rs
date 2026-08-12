@@ -84,6 +84,8 @@ pub mod files {
     pub const SAVE: &str = "save_file";
     pub const HIGHLIGHT: &str = "highlight_text";
     pub const OPEN_EXTERNAL: &str = "open_external";
+    pub const FORMAT: &str = "format_text";
+    pub const SEARCH: &str = "search_project";
 }
 
 /// The language server behind the editor.
@@ -95,6 +97,7 @@ pub mod lsp {
     pub const COMPLETE: &str = "lsp_complete";
     pub const HOVER: &str = "lsp_hover";
     pub const DEFINITION: &str = "lsp_definition";
+    pub const SIGNATURE: &str = "lsp_signature";
 }
 
 pub mod features {

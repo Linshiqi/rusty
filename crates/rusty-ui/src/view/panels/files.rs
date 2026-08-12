@@ -6,9 +6,9 @@
 //! repository does not have. The two layers share a font, a size and a line
 //! height, so the caret sits where the glyph under it is.
 //!
-//! Completion, diagnostics and navigation come from rust-analyzer and are not
-//! here yet. What is here is enough to read a generated project and change a
-//! pin number without leaving the window.
+//! Completion, diagnostics, navigation and the signature card come from
+//! rust-analyzer over `rusty-lsp`; saving runs the buffer through rustfmt
+//! first. The editor half of the IDE lives in this file.
 
 use leptos::{ev, html, prelude::*};
 use wasm_bindgen::JsCast;
@@ -378,6 +378,15 @@ fn Surface(document: Document) -> impl IntoView {
                     }
                 }
             }
+
+            // The signature card follows the parentheses.
+            match last {
+                Some('(') | Some(',') => {
+                    controller::request_signature(state, path.clone(), line, col);
+                }
+                Some(')') => state.signature.set(None),
+                _ => {}
+            }
         }
     };
 
@@ -461,6 +470,7 @@ fn Surface(document: Document) -> impl IntoView {
                                 // gesture every editor has taught.
                                 if !(event.ctrl_key() || event.meta_key()) || !is_rust {
                                     state.completion.set(None);
+                                    state.signature.set(None);
                                     return;
                                 }
                                 event.prevent_default();
@@ -597,6 +607,14 @@ fn Surface(document: Document) -> impl IntoView {
                                     _ => {}
                                 }
                             }
+                            if event.key() == "Escape"
+                                && state.signature.with_untracked(Option::is_some)
+                            {
+                                event.prevent_default();
+                                event.stop_propagation();
+                                state.signature.set(None);
+                                return;
+                            }
                             // Ctrl+Space asks without a trigger character.
                             if event.ctrl_key() && event.key() == " " {
                                 event.prevent_default();
@@ -619,7 +637,32 @@ fn Surface(document: Document) -> impl IntoView {
                                 && event.key().eq_ignore_ascii_case("s")
                             {
                                 event.prevent_default();
-                                controller::save_file(state);
+                                let caret = area.get_untracked().and_then(|element| {
+                                    caret_line_col(&element, &state.draft.get_untracked())
+                                });
+                                controller::format_then_save(state, caret, move |text, caret| {
+                                    echo_edit(state, text);
+                                    let Some(element) = area.get_untracked() else {
+                                        return;
+                                    };
+                                    element.set_value(text);
+                                    // The old caret's line and column, clamped
+                                    // into the reformatted text. rustfmt moves
+                                    // lines, not the one being typed on, so
+                                    // this lands where the eye already is.
+                                    if let Some((line, col)) = caret {
+                                        let last = text.split('\n').count().saturating_sub(1);
+                                        let line = (line as usize).min(last) as u32;
+                                        let width = text
+                                            .split('\n')
+                                            .nth(line as usize)
+                                            .map(|l| l.chars().count() as u32)
+                                            .unwrap_or(0);
+                                        let unit = utf16_offset_of(text, line, col.min(width));
+                                        let _ = element.set_selection_start(Some(unit));
+                                        let _ = element.set_selection_end(Some(unit));
+                                    }
+                                });
                                 return;
                             }
                             if event.key() == "Enter" {
@@ -673,6 +716,74 @@ fn Surface(document: Document) -> impl IntoView {
                                     }
                                 >
                                     {prose_of(&text)}
+                                </div>
+                            }
+                            .into_any()
+                        }
+                    }
+
+                    // The signature card, floated above the line whose call
+                    // it describes, with the active parameter lit.
+                    {
+                        let path = path.clone();
+                        move || {
+                            let Some((for_path, line, info)) = state.signature.get() else {
+                                return ().into_any();
+                            };
+                            if for_path != path {
+                                return ().into_any();
+                            }
+                            let top = 8.0 + f64::from(line) * LINE_HEIGHT - 4.0;
+                            let label = info.label;
+                            let split = match (info.param_start, info.param_end) {
+                                (Some(start), Some(end)) => {
+                                    let start = start as usize;
+                                    let end = (end as usize).min(label.len());
+                                    if start <= end
+                                        && label.is_char_boundary(start)
+                                        && label.is_char_boundary(end)
+                                    {
+                                        Some((start, end))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+                            let (before, active, after) = match split {
+                                Some((start, end)) => (
+                                    label[..start].to_string(),
+                                    label[start..end].to_string(),
+                                    label[end..].to_string(),
+                                ),
+                                None => (label, String::new(), String::new()),
+                            };
+                            // One line of docs, not the essay — hover exists.
+                            let doc = info
+                                .doc
+                                .as_deref()
+                                .and_then(|d| d.lines().find(|l| !l.trim().is_empty()))
+                                .map(str::to_string);
+                            view! {
+                                <div
+                                    class="absolute z-10 max-w-[76ch] rounded-[8px] bg-raised px-3 py-1.5 font-mono text-footnote shadow-xl ring-1 ring-line-strong"
+                                    style=format!(
+                                        "left: 8px; top: {top}px; transform: translateY(-100%)",
+                                    )
+                                >
+                                    <div class="whitespace-pre-wrap select-text">
+                                        <span class="text-label-2">{before}</span>
+                                        <span class="font-semibold text-rust">{active}</span>
+                                        <span class="text-label-2">{after}</span>
+                                    </div>
+                                    {doc
+                                        .map(|text| {
+                                            view! {
+                                                <div class="mt-0.5 max-w-[70ch] truncate font-sans text-caption text-label-3">
+                                                    {text}
+                                                </div>
+                                            }
+                                        })}
                                 </div>
                             }
                             .into_any()

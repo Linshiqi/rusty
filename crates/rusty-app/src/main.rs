@@ -38,6 +38,8 @@ fn main() {
             files::save_file,
             files::highlight_text,
             files::open_external,
+            files::format_text,
+            files::search_project,
             lsp::lsp_start,
             lsp::lsp_open,
             lsp::lsp_change,
@@ -45,6 +47,7 @@ fn main() {
             lsp::lsp_complete,
             lsp::lsp_hover,
             lsp::lsp_definition,
+            lsp::lsp_signature,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -147,6 +150,8 @@ mod wire_names {
             cmd::files::SAVE => files::save_file,
             cmd::files::HIGHLIGHT => files::highlight_text,
             cmd::files::OPEN_EXTERNAL => files::open_external,
+            cmd::files::FORMAT => files::format_text,
+            cmd::files::SEARCH => files::search_project,
 
             cmd::lsp::START => lsp::lsp_start,
             cmd::lsp::OPEN => lsp::lsp_open,
@@ -155,6 +160,7 @@ mod wire_names {
             cmd::lsp::COMPLETE => lsp::lsp_complete,
             cmd::lsp::HOVER => lsp::lsp_hover,
             cmd::lsp::DEFINITION => lsp::lsp_definition,
+            cmd::lsp::SIGNATURE => lsp::lsp_signature,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

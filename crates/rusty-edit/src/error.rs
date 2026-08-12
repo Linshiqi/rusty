@@ -20,6 +20,13 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// rustfmt refused or could not run. The message is rustfmt's own reason,
+    /// or what to install when the binary is missing — either way something
+    /// the user can act on, because a save that silently skips formatting
+    /// teaches people the feature is broken.
+    #[error("{message}")]
+    Format { message: String },
+
     /// A path that climbs out of the project.
     ///
     /// The frontend sends relative paths back, and `../../..` in one of them

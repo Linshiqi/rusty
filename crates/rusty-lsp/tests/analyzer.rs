@@ -20,6 +20,9 @@ fn source() -> String {
         "    fn frobnicate(&self) -> u32 {",
         "        7",
         "    }",
+        "    fn mix(&self, gain: u32, bias: i32) -> u32 {",
+        "        gain.wrapping_add(bias as u32)",
+        "    }",
         "}",
         "",
         "fn build() -> Widget {",
@@ -29,6 +32,7 @@ fn source() -> String {
         "fn main() {",
         "    let w = build();",
         "    let _n = w.frobnicate();",
+        "    let _m = w.mix(1, 2);",
         "    let _mistake: u32 = \"seven\";",
         "}",
         "",
@@ -158,6 +162,34 @@ fn rust_analyzer_end_to_end() {
     assert!(
         (range.start_col..range.end_col).contains(&partial_col),
         "the token range must cover the queried column: {range:?}",
+    );
+
+    // ── signature help knows which parameter the caret is on ─────────────────
+    let mix_line = line_of(&text, "w.mix");
+    let mix_text = text.lines().nth(mix_line as usize).unwrap();
+    // Inside the second argument.
+    let second_arg_col = (mix_text.rfind('2').unwrap()) as u32;
+    let signature = eventually(Duration::from_secs(30), || {
+        client
+            .signature_help("src/main.rs", mix_line, second_arg_col)
+            .ok()
+            .flatten()
+    })
+    .expect("signature help never answered inside the call");
+    assert!(
+        signature.label.contains("fn mix"),
+        "the label is the whole signature: {}",
+        signature.label,
+    );
+    let (start, end) = (
+        signature.param_start.expect("active parameter start") as usize,
+        signature.param_end.expect("active parameter end") as usize,
+    );
+    assert_eq!(
+        &signature.label[start..end],
+        "bias: i32",
+        "after the comma the second parameter is the active one: {}",
+        signature.label,
     );
 
     // ── definition lands on the declaration ──────────────────────────────────

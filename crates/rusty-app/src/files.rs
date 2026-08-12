@@ -56,3 +56,31 @@ pub async fn save_file(
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     Ok(rusty_edit::save(&root, &path, &text)?)
 }
+
+/// Run the buffer through rustfmt without touching disk.
+#[tauri::command]
+pub async fn format_text(
+    path: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<rusty_edit::Formatted, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(
+        tokio::task::spawn_blocking(move || rusty_edit::format_rust(&root, &path, &text))
+            .await
+            .map_err(|e| CommandError::new(format!("formatting panicked: {e}")))??,
+    )
+}
+
+/// Every place the query appears in the project's files.
+#[tauri::command]
+pub async fn search_project(
+    query: String,
+    case_sensitive: bool,
+    state: State<'_, AppState>,
+) -> Result<rusty_edit::SearchResults, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    tokio::task::spawn_blocking(move || rusty_edit::search(&root, &query, case_sensitive))
+        .await
+        .map_err(|e| CommandError::new(format!("search panicked: {e}")))
+}

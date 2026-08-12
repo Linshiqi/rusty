@@ -149,6 +149,24 @@ pub async fn lsp_hover(
         .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
 }
 
+/// The signature of the call the caret is inside, for parameter hints.
+#[tauri::command]
+pub async fn lsp_signature(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Option<rusty_lsp::SignatureInfo>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(None);
+    };
+    Ok(
+        tokio::task::spawn_blocking(move || client.signature_help(&path, line, col))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
+}
+
 #[tauri::command]
 pub async fn lsp_definition(
     path: String,

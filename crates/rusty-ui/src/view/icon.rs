@@ -12,6 +12,7 @@ use leptos::prelude::*;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     Files,
+    Search,
     Overview,
     Toolchain,
     Memory,
@@ -27,6 +28,8 @@ impl Icon {
         match self {
             // A document with a folded corner.
             Icon::Files => "M5 2.5h6l4 4V17.5H5zM11 2.5V7h4",
+            // A magnifier.
+            Icon::Search => "M8.7 3.2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM12.8 12.8 17 17",
             // Four panes — a dashboard.
             Icon::Overview => "M3 3.5h5.5v5.5H3zM11.5 3.5H17v5.5h-5.5zM3 11.5h5.5V17H3zM11.5 11.5H17V17h-5.5z",
             // A wrench.

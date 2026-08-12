@@ -255,6 +255,16 @@ pub struct AppState {
     pub hover: RwSignal<Option<(String, EditRange, String)>>,
     /// The completion popup, when one is up.
     pub completion: RwSignal<Option<CompletionPopup>>,
+    /// The signature card: which file and line it hangs over, and what it says.
+    pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
+    /// Project search. Kept here rather than in the panel so the results
+    /// survive switching away and back.
+    pub search_query: RwSignal<String>,
+    pub search_case: RwSignal<bool>,
+    pub search_results: RwSignal<Option<rusty_edit::SearchResults>>,
+    /// Which search is current; a stale reply is dropped, and the debounce
+    /// timer checks it before firing.
+    pub search_gen: RwSignal<u64>,
     /// Somewhere the editor should go — the result of goto-definition. Kept in
     /// state because the target file may still be opening when it is decided.
     pub reveal: RwSignal<Option<rusty_lsp::Location>>,
@@ -368,6 +378,11 @@ impl AppState {
             diagnostics: RwSignal::new(HashMap::new()),
             hover: RwSignal::new(None),
             completion: RwSignal::new(None),
+            signature: RwSignal::new(None),
+            search_query: RwSignal::new(String::new()),
+            search_case: RwSignal::new(false),
+            search_results: RwSignal::new(None),
+            search_gen: RwSignal::new(0),
             reveal: RwSignal::new(None),
             lsp_status: RwSignal::new(LspStatus::Off),
             lsp_session: RwSignal::new(0),

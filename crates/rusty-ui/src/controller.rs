@@ -459,6 +459,116 @@ pub fn request_completion(state: AppState, path: String, line: u32, col: u32, wo
     });
 }
 
+/// Ask what call the caret sits inside, for the signature card.
+///
+/// Syncs the draft first, like completion does: an answer about stale text
+/// highlights the wrong parameter.
+pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
+    #[derive(serde::Serialize)]
+    struct Sync {
+        path: String,
+        text: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Ask {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    if state.lsp_status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    let sync = Sync {
+        path: path.clone(),
+        text: state.draft.get_untracked(),
+    };
+    let ask = Ask {
+        path: path.clone(),
+        line,
+        col,
+    };
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
+        let answer = ipc::call::<_, Option<rusty_lsp::SignatureInfo>>(cmd::lsp::SIGNATURE, &ask)
+            .await
+            .ok()
+            .flatten();
+        let current = state
+            .document
+            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        if current.as_deref() == Some(path.as_str()) {
+            // None clears: the server saying "no call here" is how the card
+            // learns the caret left the parentheses.
+            state.signature.set(answer.map(|info| (path, line, info)));
+        }
+    });
+}
+
+// ─── project search ─────────────────────────────────────────────────────────────
+
+/// Debounced: called on every keystroke in the search box, runs the search
+/// only when the typing pauses.
+pub fn schedule_search(state: AppState) {
+    let generation = state.search_gen.get_untracked() + 1;
+    state.search_gen.set(generation);
+    set_timeout(
+        move || {
+            if state.search_gen.get_untracked() == generation {
+                run_search(state, generation);
+            }
+        },
+        std::time::Duration::from_millis(250),
+    );
+}
+
+fn run_search(state: AppState, generation: u64) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        query: String,
+        #[serde(rename = "caseSensitive")]
+        case_sensitive: bool,
+    }
+
+    let query = state.search_query.get_untracked();
+    if query.trim().is_empty() {
+        state.search_results.set(None);
+        return;
+    }
+    let args = Args {
+        query,
+        case_sensitive: state.search_case.get_untracked(),
+    };
+    spawn_local(async move {
+        let result = ipc::call::<_, rusty_edit::SearchResults>(cmd::files::SEARCH, &args).await;
+        // Typed since? This answer is about a query nobody is asking anymore.
+        if state.search_gen.get_untracked() != generation {
+            return;
+        }
+        match result {
+            Ok(results) => state.search_results.set(Some(results)),
+            Err(_) => state.search_results.set(None),
+        }
+    });
+}
+
+/// Jump from a search hit into the editor, exactly as goto-definition lands.
+pub fn open_search_hit(state: AppState, path: String, line: u32, col: u32) {
+    state.active_panel.set("files".to_string());
+    let current = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    if current.as_deref() != Some(path.as_str()) {
+        open_file(state, path.clone());
+    }
+    state.reveal.set(Some(rusty_lsp::Location {
+        path,
+        line,
+        col,
+        external: false,
+    }));
+}
+
 // ─── storage ─────────────────────────────────────────────────────────────────
 
 /// Where the data directory is, for the settings screen.
@@ -1036,6 +1146,61 @@ pub fn save_file(state: AppState) {
             open_file(state, path.clone());
         },
     );
+}
+
+/// Format with rustfmt, then save.
+///
+/// A rustfmt failure — usually a parse error mid-edit — never blocks the
+/// save; the reason goes to the dock instead. `apply` is the editor's own
+/// hand: it re-echoes the text and puts the caret back, because the DOM
+/// element lives with the view, not here.
+pub fn format_then_save(
+    state: AppState,
+    caret: Option<(u32, u32)>,
+    apply: impl Fn(&str, Option<(u32, u32)>) + 'static,
+) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+
+    let Some(document) = state.document.with_untracked(Clone::clone) else {
+        return;
+    };
+    if document.read_only {
+        return;
+    }
+    let is_rust =
+        document.language.as_deref() == Some("rust") || document.path.ends_with(".rs");
+    if !is_rust {
+        save_file(state);
+        return;
+    }
+
+    let args = Args {
+        path: document.path,
+        text: state.draft.get_untracked(),
+    };
+    spawn_local(async move {
+        match ipc::call::<_, rusty_edit::Formatted>(cmd::files::FORMAT, &args).await {
+            Ok(formatted) if formatted.changed => {
+                state.draft.set(formatted.text.clone());
+                apply(&formatted.text, caret);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // The save below still happens — an unformatted save is a
+                // save; a blocked one is data loss waiting for a fix.
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: format!("rustfmt skipped this save: {}", error.message),
+                    level: Some(LogLevel::Warn),
+                });
+            }
+        }
+        save_file(state);
+    });
 }
 
 // ─── the language server ─────────────────────────────────────────────────────

@@ -47,7 +47,7 @@
 
   const ROOT = "E:\\mock\\firmware";
   const MAIN = ROOT + "\\src\\main.rs";
-  window.__mock = { completes: [], changes: [], calls: [] };
+  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {} };
 
   const handlers = {
     recent_projects: () => [ROOT],
@@ -69,9 +69,12 @@
       ]},
       { name: "Cargo.toml", path: ROOT + "\\Cargo.toml", isDir: false, children: [] },
     ],
-    open_file: (a) => docOf(a.path, RS),
+    // Stateful, as the disk is: what save wrote is what open reads back.
+    // Without this, format-on-save looks broken in the mock — the re-read
+    // "restores" pre-format text no real backend would still have.
+    open_file: (a) => docOf(a.path, window.__mock.saved[a.path] || RS),
     highlight_text: (a) => docOf(a.path || MAIN, a.text).lines,
-    save_file: () => null,
+    save_file: (a) => { window.__mock.saved[a.path] = a.text; return null; },
     // The real command is a long-lived stream; resolving would read as "the
     // server exited" and flip Ready back to Off.
     lsp_start: (a) => { a.onEvent.send({ event: "ready" }); return new Promise(() => {}); },
@@ -81,6 +84,20 @@
     lsp_complete: (a) => { window.__mock.completes.push(a); return ITEMS; },
     lsp_hover: () => null,
     lsp_definition: () => null,
+    lsp_signature: (a) => { window.__mock.signatures.push(a); return {
+      label: "fn mix(&self, gain: u32, bias: i32) -> u32",
+      paramStart: 25, paramEnd: 34, doc: "Blends the two inputs.",
+    }; },
+    format_text: (a) => ({ text: a.text + "// formatted\n", changed: true }),
+    search_project: (a) => ({
+      hits: [
+        { path: "src/main.rs", line: 1, col: 8, text: "    let radio = Radio::new();", spanStart: 8, spanEnd: 13 },
+        { path: "src/main.rs", line: 5, col: 7, text: "struct Radio;", spanStart: 7, spanEnd: 12 },
+        { path: "Cargo.toml", line: 0, col: 0, text: "radio = \"0.1\"", spanStart: 0, spanEnd: 5 },
+      ],
+      files: 2,
+      truncated: false,
+    }),
     toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
     firmware_list: () => [],
     chip_catalogue: () => [],

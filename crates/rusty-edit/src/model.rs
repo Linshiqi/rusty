@@ -89,3 +89,44 @@ pub struct Document {
     #[serde(default)]
     pub read_only: bool,
 }
+
+/// What rustfmt made of the text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Formatted {
+    pub text: String,
+    /// False when the input was already formatted — the caller skips the
+    /// caret-preserving rewrite entirely rather than diffing to find out.
+    pub changed: bool,
+}
+
+/// One place the query appears.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    /// Project-relative, `/`-separated — the file tree's identity for it.
+    pub path: String,
+    /// 0-based, like every line number on this wire.
+    pub line: u32,
+    /// Unicode-scalar column of the match, for the editor to reveal.
+    pub col: u32,
+    /// The matched line, windowed when it is enormous (minified JS, lock
+    /// files) so one line cannot flood the panel.
+    pub text: String,
+    /// Byte range of the match inside `text`, for highlighting. Bytes, not
+    /// scalars: the frontend slices, it does not count.
+    pub span_start: u32,
+    pub span_end: u32,
+}
+
+/// Everything a search found, and whether it stopped early.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub hits: Vec<SearchHit>,
+    /// Distinct files in `hits`.
+    pub files: u32,
+    /// True when the cap was reached — the panel says "first N", because a
+    /// silently partial answer reads as a complete one.
+    pub truncated: bool,
+}

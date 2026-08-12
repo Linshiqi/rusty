@@ -18,7 +18,11 @@ mod document;
 #[cfg(feature = "backend")]
 mod error;
 #[cfg(feature = "backend")]
+mod format;
+#[cfg(feature = "backend")]
 mod highlight;
+#[cfg(feature = "backend")]
+mod search;
 #[cfg(feature = "backend")]
 mod tree;
 
@@ -26,5 +30,9 @@ mod tree;
 pub use document::{Files, save};
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
+#[cfg(feature = "backend")]
+pub use format::format_rust;
+#[cfg(feature = "backend")]
+pub use search::search;
 #[cfg(feature = "backend")]
 pub use tree::read as read_tree;

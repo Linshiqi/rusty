@@ -41,7 +41,7 @@ use crate::{
     error::{Error, Result},
     model::{
         CompletionItem, DiagSeverity, EditRange, FileDiagnostic, HoverInfo, Location,
-        LspEvent,
+        LspEvent, SignatureInfo,
     },
     positions::{
         Encoding, character_to_scalar, content_change, scalar_to_character,
@@ -357,6 +357,71 @@ impl LspClient {
         });
 
         Ok(text.map(|text| HoverInfo { text, range }))
+    }
+
+    /// The signature of the call around this position, if the caret is inside
+    /// one.
+    ///
+    /// The active parameter comes back as a byte range into the label. The
+    /// protocol sends it either as a substring or as offsets — and the offsets
+    /// are UTF-16 code units *regardless of the negotiated position encoding*,
+    /// which only governs document positions. Both forms are resolved here.
+    pub fn signature_help(&self, path: &str, line: u32, col: u32) -> Result<Option<SignatureInfo>> {
+        let position = self.protocol_position(path, line, col);
+        let result = self.shared.request(
+            "textDocument/signatureHelp",
+            json!({
+                "textDocument": { "uri": self.uri(path) },
+                "position": position,
+            }),
+        )?;
+
+        let signatures = result["signatures"].as_array().cloned().unwrap_or_default();
+        let active = result["activeSignature"].as_u64().unwrap_or(0) as usize;
+        let Some(signature) = signatures.get(active).or_else(|| signatures.first()) else {
+            return Ok(None);
+        };
+        let label = signature["label"].as_str().unwrap_or_default().to_string();
+        if label.is_empty() {
+            return Ok(None);
+        }
+
+        // Per-signature wins over top-level, as the 3.16 spec added.
+        let active_param = signature
+            .get("activeParameter")
+            .and_then(Value::as_u64)
+            .or_else(|| result.get("activeParameter").and_then(Value::as_u64));
+
+        let span = active_param
+            .and_then(|index| signature["parameters"].as_array()?.get(index as usize).cloned())
+            .and_then(|parameter| match &parameter["label"] {
+                // A substring of the label. `find` is what the spec intends;
+                // a parameter text that appears twice in one signature would
+                // have been sent as offsets.
+                Value::String(text) => {
+                    let start = label.find(text.as_str())?;
+                    Some((start, start + text.len()))
+                }
+                Value::Array(pair) => {
+                    let start = pair.first()?.as_u64()? as usize;
+                    let end = pair.get(1)?.as_u64()? as usize;
+                    Some((utf16_to_byte(&label, start), utf16_to_byte(&label, end)))
+                }
+                _ => None,
+            });
+
+        let doc = signature.get("documentation").and_then(|doc| {
+            doc.as_str()
+                .map(str::to_string)
+                .or_else(|| doc["value"].as_str().map(str::to_string))
+        });
+
+        Ok(Some(SignatureInfo {
+            label,
+            param_start: span.map(|(start, _)| start as u32),
+            param_end: span.map(|(_, end)| end as u32),
+            doc,
+        }))
     }
 
     /// Where the thing under this position is defined.
@@ -897,6 +962,22 @@ fn no_console_window(command: &mut Command) {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+}
+
+/// A UTF-16 offset into `text`, as a byte offset.
+///
+/// For `ParameterInformation.label` offsets only: those are UTF-16 by spec no
+/// matter what position encoding was negotiated — the negotiation covers
+/// document positions, not offsets into strings the server sent.
+fn utf16_to_byte(text: &str, units: usize) -> usize {
+    let mut seen = 0;
+    for (byte, ch) in text.char_indices() {
+        if seen >= units {
+            return byte;
+        }
+        seen += ch.len_utf16();
+    }
+    text.len()
 }
 
 fn kind_name(kind: u64) -> &'static str {
