@@ -20,6 +20,21 @@ use std::collections::HashMap;
 
 use crate::ipc::IpcError;
 
+/// An open editor that is not on screen — everything needed to come back
+/// exactly as left.
+///
+/// The draft is the load-bearing field: parking is what makes switching tabs
+/// safe with unsaved edits in both. The highlight is carried so the return
+/// is instant rather than a white flash and a re-request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParkedEditor {
+    pub document: rusty_edit::Document,
+    pub draft: String,
+    pub highlighted: Vec<rusty_edit::Line>,
+    /// Where the caret was, as (line, scalar column), when it could be read.
+    pub caret: Option<(u32, u32)>,
+}
+
 /// A completion request's results, anchored where they were asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionPopup {
@@ -257,6 +272,11 @@ pub struct AppState {
     pub completion: RwSignal<Option<CompletionPopup>>,
     /// The signature card: which file and line it hangs over, and what it says.
     pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
+    /// Every open editor, in strip order. The active one is [`Self::document`];
+    /// the rest are parked in [`Self::parked`].
+    pub tabs: RwSignal<Vec<String>>,
+    /// Open editors that are not on screen, holding their unsaved drafts.
+    pub parked: RwSignal<Vec<ParkedEditor>>,
     /// Project search. Kept here rather than in the panel so the results
     /// survive switching away and back.
     pub search_query: RwSignal<String>,
@@ -379,6 +399,8 @@ impl AppState {
             hover: RwSignal::new(None),
             completion: RwSignal::new(None),
             signature: RwSignal::new(None),
+            tabs: RwSignal::new(Vec::new()),
+            parked: RwSignal::new(Vec::new()),
             search_query: RwSignal::new(String::new()),
             search_case: RwSignal::new(false),
             search_results: RwSignal::new(None),

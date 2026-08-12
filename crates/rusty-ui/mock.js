@@ -27,6 +27,7 @@
     "",
   ].join("\n");
 
+  const TOML = ['[package]', 'name = "firmware"', 'version = "0.1.0"', ''].join("\n");
   const plain = (text) => ({ spans: text.length ? [{ text, token: "plain" }] : [] });
   const docOf = (path, text) => ({
     path,
@@ -72,7 +73,10 @@
     // Stateful, as the disk is: what save wrote is what open reads back.
     // Without this, format-on-save looks broken in the mock — the re-read
     // "restores" pre-format text no real backend would still have.
-    open_file: (a) => docOf(a.path, window.__mock.saved[a.path] || RS),
+    open_file: (a) => {
+      const fallback = a.path.endsWith("Cargo.toml") ? TOML : RS;
+      return docOf(a.path, window.__mock.saved[a.path] || fallback);
+    },
     highlight_text: (a) => docOf(a.path || MAIN, a.text).lines,
     save_file: (a) => { window.__mock.saved[a.path] = a.text; return null; },
     // The real command is a long-lived stream; resolving would read as "the

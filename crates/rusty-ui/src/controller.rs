@@ -21,7 +21,7 @@ use rusty_term::Screen as TermScreen;
 
 use crate::{
     ipc::{self, Answer, cmd},
-    state::{AppState, LspStatus, ToolRun, remember_provider},
+    state::{AppState, LspStatus, ParkedEditor, ToolRun, remember_provider},
 };
 
 /// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
@@ -204,6 +204,12 @@ fn project_opened(state: AppState, result: OpenResult) {
             state.memory.set(None);
             state.document.set(None);
             state.draft.set(String::new());
+            state.tabs.set(Vec::new());
+            state.parked.set(Vec::new());
+            state.completion.set(None);
+            state.signature.set(None);
+            state.search_query.set(String::new());
+            state.search_results.set(None);
             state.file_tree.set(Vec::new());
             state.expanded.set(Vec::new());
             state.highlighted.set(Vec::new());
@@ -1062,7 +1068,42 @@ pub fn refresh_tree(state: AppState) {
 }
 
 /// Open a file for reading and editing.
+///
+/// Already on screen: nothing happens — a re-read here would replace an
+/// unsaved draft with the disk's older text, which is how editors eat work.
+/// Parked: the tab is fronted with its draft intact. New: fetched, and
+/// whatever was on screen is parked.
 pub fn open_file(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    let active = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    if active.as_deref() == Some(path.as_str()) {
+        return;
+    }
+    if state
+        .parked
+        .with_untracked(|parked| parked.iter().any(|e| e.document.path == path))
+    {
+        activate_tab(state, path);
+        return;
+    }
+
+    let args = Args { path };
+    track(
+        state,
+        async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
+        move |document| show_document(state, document, true),
+    );
+}
+
+/// Re-read the active document from disk and replace it in place — the tail
+/// of a save, where disk and draft have just been made equal.
+fn reload_active(state: AppState, path: String) {
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
@@ -1072,18 +1113,205 @@ pub fn open_file(state: AppState, path: String) {
     track(
         state,
         async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
-        move |document| {
-            // The draft is seeded from the document exactly once, here. Setting
-            // it anywhere else would overwrite whatever had been typed.
-            state.draft.set(document.text.clone());
-            state.echo_text.set(document.text.clone());
-            state.highlighted.set(document.lines.clone());
-            if state.lsp_status.get_untracked() == LspStatus::Ready {
-                lsp_open_doc(document.path.clone(), document.text.clone());
-            }
-            state.document.set(Some(document));
-        },
+        move |document| show_document(state, document, true),
     );
+}
+
+/// Put a freshly loaded document on screen.
+///
+/// A different path parks the current editor first; the same path replaces it
+/// in place, which is how a save's re-read lands without disturbing the strip.
+fn show_document(state: AppState, document: Document, announce: bool) {
+    let active = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    if active.is_some() && active.as_deref() != Some(document.path.as_str()) {
+        park_active(state);
+    }
+    state.tabs.update(|tabs| {
+        if !tabs.iter().any(|t| t == &document.path) {
+            tabs.push(document.path.clone());
+        }
+    });
+    // Any parked copy is staler than what was just fetched.
+    state
+        .parked
+        .update(|parked| parked.retain(|e| e.document.path != document.path));
+    clear_editor_transients(state);
+    // The draft is seeded from the document exactly once, here. Setting it
+    // anywhere else would overwrite whatever had been typed.
+    state.draft.set(document.text.clone());
+    state.echo_text.set(document.text.clone());
+    state.highlighted.set(document.lines.clone());
+    if announce && !document.read_only && state.lsp_status.get_untracked() == LspStatus::Ready {
+        lsp_open_doc(document.path.clone(), document.text.clone());
+    }
+    state.document.set(Some(document));
+}
+
+/// Stash the on-screen editor into the parked set, caret and all.
+fn park_active(state: AppState) {
+    let Some(document) = state.document.get_untracked() else {
+        return;
+    };
+    let entry = ParkedEditor {
+        draft: state.draft.get_untracked(),
+        highlighted: state.highlighted.get_untracked(),
+        caret: active_caret(state),
+        document,
+    };
+    state.parked.update(|parked| {
+        parked.retain(|e| e.document.path != entry.document.path);
+        parked.push(entry);
+    });
+}
+
+/// The active editor's caret as (line, scalar column), read off the DOM.
+///
+/// The controller reaching into the DOM is unusual, but the alternative is
+/// threading a caret through every caller of every function that might park —
+/// and the editor's textarea is as much a singleton as the signals are.
+fn active_caret(state: AppState) -> Option<(u32, u32)> {
+    use wasm_bindgen::JsCast;
+    let element = web_sys::window()?
+        .document()?
+        .get_element_by_id("editor-area")?
+        .dyn_into::<web_sys::HtmlTextAreaElement>()
+        .ok()?;
+    let units = element.selection_start().ok().flatten()? as usize;
+    let text = state.draft.get_untracked();
+    let mut seen = 0usize;
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for ch in text.chars() {
+        if seen >= units {
+            break;
+        }
+        seen += ch.len_utf16();
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    Some((line, col))
+}
+
+fn clear_editor_transients(state: AppState) {
+    state.completion.set(None);
+    state.signature.set(None);
+    state.hover.set(None);
+}
+
+/// Front an already open tab, parking the current one.
+pub fn activate_tab(state: AppState, path: String) {
+    let active = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    if active.as_deref() == Some(path.as_str()) {
+        return;
+    }
+    park_active(state);
+    if !front_parked(state, &path) {
+        // A strip entry with no parked body should not exist; refusing to
+        // guess beats showing a stale document as if it were current.
+        state.tabs.update(|tabs| tabs.retain(|t| t != &path));
+    }
+}
+
+/// Move a parked editor onto the screen. False when no such entry exists.
+fn front_parked(state: AppState, path: &str) -> bool {
+    let mut taken = None;
+    state.parked.update(|parked| {
+        if let Some(at) = parked.iter().position(|e| e.document.path == path) {
+            taken = Some(parked.remove(at));
+        }
+    });
+    let Some(entry) = taken else {
+        return false;
+    };
+    clear_editor_transients(state);
+    let dirty = entry.draft != entry.document.text;
+    let read_only = entry.document.read_only;
+    state.draft.set(entry.draft.clone());
+    state.echo_text.set(entry.draft);
+    state.highlighted.set(entry.highlighted);
+    state.document.set(Some(entry.document));
+    if let Some((line, col)) = entry.caret {
+        state.reveal.set(Some(rusty_lsp::Location {
+            path: path.to_string(),
+            line,
+            col,
+            external: false,
+        }));
+    }
+    // An edited draft's parked highlight may be a pulse behind; freshen it.
+    // Clean or read-only tabs have nothing to freshen.
+    if dirty && !read_only {
+        schedule_pulse(state);
+    }
+    true
+}
+
+/// Close a tab. Discarding unsaved work requires saying so first.
+pub fn close_tab(state: AppState, path: String) {
+    let active = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let is_active = active.as_deref() == Some(path.as_str());
+
+    let dirty = if is_active {
+        state
+            .document
+            .with_untracked(|d| d.as_ref().is_some_and(|d| !d.read_only && state.draft.with_untracked(|draft| draft != &d.text)))
+    } else {
+        state.parked.with_untracked(|parked| {
+            parked
+                .iter()
+                .find(|e| e.document.path == path)
+                .is_some_and(|e| !e.document.read_only && e.draft != e.document.text)
+        })
+    };
+    if dirty {
+        let confirmed = web_sys::window()
+            .map(|w| {
+                w.confirm_with_message(&format!(
+                    "{path} has unsaved changes.\nClose the tab and discard them?"
+                ))
+                .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !confirmed {
+            return;
+        }
+    }
+
+    let next = if is_active {
+        neighbour_after_close(&state.tabs.get_untracked(), &path)
+    } else {
+        None
+    };
+    state.tabs.update(|tabs| tabs.retain(|t| t != &path));
+    state.parked.update(|parked| parked.retain(|e| e.document.path != path));
+
+    if is_active {
+        clear_editor_transients(state);
+        let fronted = next.is_some_and(|n| front_parked(state, &n));
+        if !fronted {
+            state.document.set(None);
+            state.draft.set(String::new());
+            state.echo_text.set(String::new());
+            state.highlighted.set(Vec::new());
+        }
+    }
+}
+
+/// Which tab takes the screen when this one closes: the one after it, else
+/// the one before, else nothing.
+fn neighbour_after_close(tabs: &[String], closing: &str) -> Option<String> {
+    let at = tabs.iter().position(|t| t == closing)?;
+    tabs.get(at + 1).or_else(|| at.checked_sub(1).and_then(|i| tabs.get(i))).cloned()
 }
 
 /// Open a dependency's source read-only — where goto-definition lands when the
@@ -1094,20 +1322,29 @@ pub fn open_external(state: AppState, path: String) {
         path: String,
     }
 
+    let active = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    if active.as_deref() == Some(path.as_str()) {
+        return;
+    }
+    if state
+        .parked
+        .with_untracked(|parked| parked.iter().any(|e| e.document.path == path))
+    {
+        activate_tab(state, path);
+        return;
+    }
+
     let args = Args { path };
     track(
         state,
         async move { ipc::call::<_, Document>(cmd::files::OPEN_EXTERNAL, &args).await },
-        move |document| {
-            state.draft.set(document.text.clone());
-            state.echo_text.set(document.text.clone());
-            state.highlighted.set(document.lines.clone());
-            // Deliberately no lsp_open: the server already knows this file as
-            // part of the sysroot or a dependency, and announcing it as an
-            // editable document would be a lie the read-only flag exists to
-            // prevent.
-            state.document.set(Some(document));
-        },
+        // announce=false, deliberately: the server already knows this file as
+        // part of the sysroot or a dependency, and announcing it as an
+        // editable document would be a lie the read-only flag exists to
+        // prevent.
+        move |document| show_document(state, document, false),
     );
 }
 
@@ -1143,7 +1380,7 @@ pub fn save_file(state: AppState) {
             // Re-read so the highlighting matches what is now on disk, and so
             // the saved/unsaved marker clears against real content rather than
             // against an assumption that the write did what was asked.
-            open_file(state, path.clone());
+            reload_active(state, path.clone());
         },
     );
 }
@@ -1616,4 +1853,37 @@ pub fn window_action(command: &'static str) {
     spawn_local(async move {
         let _ = ipc::get::<serde_json::Value>(command).await;
     });
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::neighbour_after_close;
+
+    fn tabs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn the_next_tab_inherits_the_screen() {
+        let strip = tabs(&["a.rs", "b.rs", "c.rs"]);
+        assert_eq!(neighbour_after_close(&strip, "b.rs").as_deref(), Some("c.rs"));
+    }
+
+    #[test]
+    fn the_last_tab_falls_back_to_the_previous() {
+        let strip = tabs(&["a.rs", "b.rs"]);
+        assert_eq!(neighbour_after_close(&strip, "b.rs").as_deref(), Some("a.rs"));
+    }
+
+    #[test]
+    fn closing_the_only_tab_leaves_nothing() {
+        let strip = tabs(&["a.rs"]);
+        assert_eq!(neighbour_after_close(&strip, "a.rs"), None);
+    }
+
+    #[test]
+    fn closing_a_tab_not_in_the_strip_is_a_no_op() {
+        let strip = tabs(&["a.rs"]);
+        assert_eq!(neighbour_after_close(&strip, "zz.rs"), None);
+    }
 }

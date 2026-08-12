@@ -190,12 +190,15 @@ fn Editor() -> impl IntoView {
 
         if document.binary {
             return view! {
-                <div class="flex min-w-0 flex-1 items-center justify-center px-6 text-center">
-                    <p class="max-w-[44ch] text-callout leading-relaxed text-label-2">
-                        "This is not a text file. rusty will not render a firmware image as \
-                         characters — the result is noise, and for a large one it would take \
-                         the window down with it."
-                    </p>
+                <div class="flex min-w-0 flex-1 flex-col">
+                    <TabStrip />
+                    <div class="flex flex-1 items-center justify-center px-6 text-center">
+                        <p class="max-w-[44ch] text-callout leading-relaxed text-label-2">
+                            "This is not a text file. rusty will not render a firmware image as \
+                             characters — the result is noise, and for a large one it would take \
+                             the window down with it."
+                        </p>
+                    </div>
                 </div>
             }
             .into_any();
@@ -203,11 +206,135 @@ fn Editor() -> impl IntoView {
 
         view! {
             <div class="flex min-w-0 flex-1 flex-col">
+                <TabStrip />
                 <Header document=document.clone() />
                 <Surface document=document />
             </div>
         }
         .into_any()
+    }
+}
+
+/// The open editors, one tab each. Clicking fronts a tab with its draft and
+/// caret exactly as left; the cross closes it, asking first when unsaved
+/// work would go with it.
+#[component]
+fn TabStrip() -> impl IntoView {
+    let state = AppState::expect();
+
+    view! {
+        <div class="flex flex-none items-stretch overflow-x-auto border-b border-line bg-sidebar">
+            {move || {
+                let active = state
+                    .document
+                    .with(|d| d.as_ref().map(|d| d.path.clone()))
+                    .unwrap_or_default();
+                state
+                    .tabs
+                    .get()
+                    .into_iter()
+                    .map(|path| {
+                        let name = path
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .unwrap_or(path.as_str())
+                            .to_string();
+                        let is_active = path == active;
+                        // Dirty is per-tab: the active one compares live
+                        // draft to document, a parked one compares its
+                        // stashed pair.
+                        let dirty = {
+                            let path = path.clone();
+                            Signal::derive(move || {
+                                let on_screen = state
+                                    .document
+                                    .with(|d| d.as_ref().map(|d| d.path.clone()))
+                                    .as_deref()
+                                    == Some(path.as_str());
+                                if on_screen {
+                                    state.document.with(|d| {
+                                        d.as_ref().is_some_and(|d| {
+                                            !d.read_only
+                                                && state
+                                                    .draft
+                                                    .with(|draft| draft != &d.text)
+                                        })
+                                    })
+                                } else {
+                                    state.parked.with(|parked| {
+                                        parked
+                                            .iter()
+                                            .find(|e| e.document.path == path)
+                                            .is_some_and(|e| {
+                                                !e.document.read_only
+                                                    && e.draft != e.document.text
+                                            })
+                                    })
+                                }
+                            })
+                        };
+                        let activate = {
+                            let path = path.clone();
+                            move |_| controller::activate_tab(state, path.clone())
+                        };
+                        let close = {
+                            let path = path.clone();
+                            move |event: ev::MouseEvent| {
+                                event.stop_propagation();
+                                controller::close_tab(state, path.clone());
+                            }
+                        };
+                        let middle_close = {
+                            let path = path.clone();
+                            move |event: ev::MouseEvent| {
+                                if event.button() == 1 {
+                                    event.prevent_default();
+                                    controller::close_tab(state, path.clone());
+                                }
+                            }
+                        };
+                        let tab_class = if is_active {
+                            "group flex cursor-pointer items-center gap-1.5 border-r border-line \
+                             bg-canvas px-2.5 py-1.5 font-mono text-footnote text-label"
+                        } else {
+                            "group flex cursor-pointer items-center gap-1.5 border-r border-line \
+                             px-2.5 py-1.5 font-mono text-footnote text-label-3 hover:bg-sunken \
+                             hover:text-label-2"
+                        };
+                        view! {
+                            <div
+                                title=path.clone()
+                                on:click=activate
+                                on:auxclick=middle_close
+                                class=tab_class
+                            >
+                                <span class="max-w-[18ch] truncate">{name}</span>
+                                {move || {
+                                    dirty
+                                        .get()
+                                        .then(|| {
+                                            view! {
+                                                <span
+                                                    class="size-1.5 shrink-0 rounded-full bg-rust"
+                                                    title="Unsaved"
+                                                />
+                                            }
+                                        })
+                                }}
+                                <button
+                                    type="button"
+                                    title="Close"
+                                    on:click=close
+                                    class="rounded-[4px] px-0.5 leading-none text-label-3 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-selection hover:text-label"
+                                >
+                                    "×"
+                                </button>
+                            </div>
+                        }
+                    })
+                    .collect_view()
+            }}
+        </div>
     }
 }
 
@@ -455,6 +582,7 @@ fn Surface(document: Document) -> impl IntoView {
 
                     <textarea
                         node_ref=area
+                        id="editor-area"
                         spellcheck="false"
                         autocapitalize="off"
                         autocomplete="off"
