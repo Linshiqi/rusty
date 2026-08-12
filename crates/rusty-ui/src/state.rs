@@ -298,6 +298,8 @@ pub struct AppState {
     pub find_replace: RwSignal<String>,
     /// Which match is current, clamped to the match count at use.
     pub find_index: RwSignal<usize>,
+    /// Direct dependencies against crates.io, when the Crates panel asked.
+    pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
     /// The simulation plan for the open project, when the panel asked.
     pub sim_plan: RwSignal<Option<rusty_embed::SimPlan>>,
     /// Tools whose one-click install failed — those cards reveal the manual
@@ -447,6 +449,7 @@ impl AppState {
             signature: RwSignal::new(None),
             semantic: RwSignal::new(None),
             actions: RwSignal::new(None),
+            crate_rows: RwSignal::new(None),
             sim_plan: RwSignal::new(None),
             sim_install_failed: RwSignal::new(Vec::new()),
             find_open: RwSignal::new(false),

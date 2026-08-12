@@ -33,6 +33,8 @@ mod features;
 #[cfg(feature = "backend")]
 mod overview;
 #[cfg(feature = "backend")]
+pub mod registry;
+#[cfg(feature = "backend")]
 mod workspace;
 
 #[cfg(feature = "backend")]

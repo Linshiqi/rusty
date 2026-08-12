@@ -18,6 +18,20 @@ use serde::{Deserialize, Serialize};
 /// Everything the Overview page needs, in one payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CrateRow {
+    pub name: String,
+    /// The version the lockfile resolved.
+    pub current: String,
+    /// The newest stable version crates.io lists, when it answered.
+    pub latest: Option<String>,
+    /// Why `latest` is absent — an unreachable index is a normal state for
+    /// these machines, and it lands here rather than as fake data.
+    pub note: Option<String>,
+}
+
+/// One direct dependency, its resolved version, and what crates.io knows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceReport {
     pub workspace: WorkspaceInfo,
     pub vitals: Vitals,

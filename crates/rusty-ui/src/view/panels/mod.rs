@@ -5,6 +5,7 @@
 //! project, then talk to the device.
 
 mod assistant;
+mod crates;
 mod features;
 mod files;
 mod flash;
@@ -67,6 +68,14 @@ pub fn all() -> Vec<Panel> {
             icon: Icon::Memory,
             needs_project: true,
             render: || memory::Memory().into_any(),
+        },
+        Panel {
+            id: "crates",
+            title: "Crates",
+            section: "Project",
+            icon: Icon::Crates,
+            needs_project: true,
+            render: || crates::Crates().into_any(),
         },
         Panel {
             id: "features",

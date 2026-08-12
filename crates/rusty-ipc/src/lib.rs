@@ -102,6 +102,11 @@ pub mod lsp {
     pub const ACTIONS: &str = "lsp_code_actions";
 }
 
+/// The workspace's direct dependencies against crates.io.
+pub mod crates {
+    pub const REPORT: &str = "crate_report";
+}
+
 /// Running firmware without hardware: Espressif's QEMU.
 pub mod sim {
     pub const PLAN: &str = "plan_simulation";

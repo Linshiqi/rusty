@@ -76,6 +76,25 @@ pub async fn project_status(state: State<'_, AppState>) -> Answer<EmbeddedProjec
     Ok(project::detect(&root)?)
 }
 
+/// Direct dependencies with their latest stable versions from crates.io.
+/// Slow by nature (one index request per crate), so it only runs when the
+/// Crates panel asks.
+#[tauri::command]
+pub async fn crate_report(
+    state: State<'_, AppState>,
+) -> Answer<Vec<rusty_core::CrateRow>> {
+    let workspace = state
+        .workspace()
+        .await
+        .ok_or_else(|| CommandError::new("the Cargo analysis is not available for this project"))?;
+    tokio::task::spawn_blocking(move || {
+        let deps = rusty_core::registry::direct_dependencies(workspace.graph());
+        rusty_core::registry::annotate_latest(deps)
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("crate report panicked: {e}")))
+}
+
 #[tauri::command]
 pub async fn workspace_report(state: State<'_, AppState>) -> Answer<WorkspaceReport> {
     let workspace = state

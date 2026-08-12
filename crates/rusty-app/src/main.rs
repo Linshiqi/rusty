@@ -25,6 +25,7 @@ fn main() {
             commands::project_status,
             commands::project_path,
             commands::workspace_report,
+            commands::crate_report,
             commands::chip_catalogue,
             commands::board_catalogue,
             commands::catalog_problems,
@@ -140,6 +141,7 @@ mod wire_names {
             cmd::project::STATUS => commands::project_status,
             cmd::project::PATH => commands::project_path,
             cmd::project::WORKSPACE_REPORT => commands::workspace_report,
+            cmd::crates::REPORT => commands::crate_report,
 
             cmd::catalog::CHIPS => commands::chip_catalogue,
             cmd::catalog::BOARDS => commands::board_catalogue,

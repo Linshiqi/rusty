@@ -20,6 +20,7 @@ pub enum Icon {
     Simulate,
     Monitor,
     Features,
+    Crates,
     Wizard,
     Assistant,
 }
@@ -45,6 +46,8 @@ impl Icon {
             Icon::Monitor => "M2.5 4.5h15v11h-15zM5.5 8.5l2.5 2-2.5 2M10.5 12.5h4",
             // Sliders.
             Icon::Features => "M3 6h9M15 6h2M3 14h3M9 14h8M12.5 4v4M6.5 12v4",
+            // A parcel — a crate, literally.
+            Icon::Crates => "M10 2.5 17 6.5v7l-7 4-7-4v-7zM10 2.5v8M3 6.5l7 4 7-4",
             // A plus in a rounded square.
             Icon::Wizard => "M4 4.5h12v11H4zM10 7.5v5M7.5 10h5",
             // A speech outline.
