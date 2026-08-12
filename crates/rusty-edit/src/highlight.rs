@@ -37,7 +37,10 @@ pub fn lines(syntaxes: &SyntaxSet, path: &str, text: &str) -> (Vec<Line>, Option
     // project is configured with: Cargo.toml, .cargo/config.toml,
     // rust-toolchain.toml. Rust in colour beside those in flat grey reads as
     // broken, so the one gap that matters here is filled by hand.
-    if extension.eq_ignore_ascii_case("toml") {
+    // Cargo.lock is TOML that does not say so in its name — and it is a
+    // file people actually open, where all-grey next to coloured Rust reads
+    // as broken highlighting rather than as a plain file.
+    if extension.eq_ignore_ascii_case("toml") || extension.eq_ignore_ascii_case("lock") {
         return (source.map(toml_line).collect(), Some("TOML".into()), truncated);
     }
 
@@ -333,6 +336,19 @@ mod tests {
             spans.iter().any(|(t, k)| t.trim() == "true" && *k == Token::Keyword),
             "{spans:?}",
         );
+    }
+
+    /// Cargo.lock is TOML that does not say so in its name, and it is a file
+    /// people actually open.
+    #[test]
+    fn cargo_lock_is_highlighted_as_toml() {
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        let (lines, language, _) =
+            lines(&syntaxes, "Cargo.lock", "[[package]]
+name = \"serde\"
+");
+        assert_eq!(language.as_deref(), Some("TOML"));
+        assert_eq!(lines[0].spans[0].token, Token::Type);
     }
 
     /// A `#` inside a string is not a comment. Getting this wrong greys out the

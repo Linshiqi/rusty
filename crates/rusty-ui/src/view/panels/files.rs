@@ -292,11 +292,16 @@ fn Surface(document: Document) -> impl IntoView {
                     let metrics = metrics.clone();
                     move || {
                         let count = state.highlighted.with(Vec::len).max(1);
-                        let width = format!("{}ch", count.to_string().len().max(2) + 1);
+                        // Tailwind's border-box made a bare `width: 5ch` mean
+                        // "5ch including 20px of padding", which left 4-digit
+                        // numbers 14px of room — they clipped against the code
+                        // column. The width now names the digits and adds the
+                        // padding explicitly.
+                        let digits = count.to_string().len().max(3);
                         view! {
                             <div
                                 class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
-                                style=format!("{metrics}; width: {width}")
+                                style=format!("{metrics}; width: calc({digits}ch + 20px)")
                             >
                                 {(1..=count)
                                     .map(|n| view! { <div>{n.to_string()}</div> })
@@ -308,7 +313,7 @@ fn Surface(document: Document) -> impl IntoView {
 
                 <div class="relative min-w-0 flex-1">
                     <pre
-                        class="pointer-events-none m-0 overflow-visible py-2 pr-4 whitespace-pre"
+                        class="pointer-events-none m-0 overflow-visible py-2 pr-4 pl-2 whitespace-pre"
                         style=metrics.clone()
                         aria-hidden="true"
                     >
@@ -347,7 +352,7 @@ fn Surface(document: Document) -> impl IntoView {
                         autocapitalize="off"
                         autocomplete="off"
                         disabled=read_only
-                        class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 whitespace-pre text-transparent caret-rust outline-none"
+                        class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre text-transparent caret-rust outline-none"
                         style=metrics
                         prop:value=move || state.draft.get()
                         on:input=on_input
