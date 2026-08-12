@@ -137,16 +137,28 @@ fn rust_analyzer_end_to_end() {
         .unwrap();
     assert_eq!(item.kind.as_deref(), Some("method"));
 
-    // ── hover says what it is ────────────────────────────────────────────────
+    // ── hover says what it is, and what it covers ────────────────────────────
     let hover = eventually(Duration::from_secs(30), || {
         client
             .hover("src/main.rs", call_line, partial_col)
             .ok()
             .flatten()
-            .filter(|text| text.contains("frobnicate"))
+            .filter(|info| info.text.contains("frobnicate"))
     })
     .expect("hover never described frobnicate");
-    assert!(hover.contains("u32"), "the signature names the return type: {hover}");
+    assert!(
+        hover.text.contains("u32"),
+        "the signature names the return type: {}",
+        hover.text,
+    );
+    // The range is what keeps the tooltip up while the pointer moves within
+    // the token, so it has to actually contain the queried column.
+    let range = hover.range.expect("hover carries the token's range");
+    assert_eq!(range.start_line, call_line);
+    assert!(
+        (range.start_col..range.end_col).contains(&partial_col),
+        "the token range must cover the queried column: {range:?}",
+    );
 
     // ── definition lands on the declaration ──────────────────────────────────
     let use_line = line_of(&text, "let w = build");
