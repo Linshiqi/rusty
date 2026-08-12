@@ -21,8 +21,9 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 
 # The frontend links only the model layers, so these must stay green
-cargo check -p rusty-core -p rusty-embed -p rusty-ai \
-  --no-default-features --target wasm32-unknown-unknown
+cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
+  -p rusty-edit -p rusty-lsp --no-default-features \
+  --target wasm32-unknown-unknown
 
 # Frontend alone, on http://localhost:1425 — much faster to iterate on than a
 # full `tauri dev` rebuild. Anything needing the backend reports that it cannot
