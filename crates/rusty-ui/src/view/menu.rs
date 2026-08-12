@@ -139,15 +139,46 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
 
 #[component]
 fn Dropdown(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> impl IntoView {
-    let state = AppState::expect();
-
     view! {
         <div class="absolute top-full left-0 z-40 mt-0.5 min-w-[224px] rounded-[8px] bg-raised py-1 shadow-2xl ring-1 ring-line-strong">
-            {items
-                .into_iter()
-                .map(|item| match item {
+            <Rows items=items chrome=chrome close=close />
+        </div>
+    }
+}
+
+/// The rows of one dropdown level; submenus recurse into a flyout.
+#[component]
+fn Rows(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> AnyView {
+    let state = AppState::expect();
+
+    items
+        .into_iter()
+        .map(|item| match item {
                     Item::Separator => {
                         view! { <div class="my-1 h-px bg-line" /> }.into_any()
+                    }
+                    Item::Submenu { label, items } => {
+                        // Hover opens, like every menu bar; the flyout sits to
+                        // the right, aligned with its parent row.
+                        let hovering = RwSignal::new(false);
+                        view! {
+                            <div
+                                class="relative"
+                                on:mouseenter=move |_| hovering.set(true)
+                                on:mouseleave=move |_| hovering.set(false)
+                            >
+                                <div class="flex w-full cursor-default items-center gap-6 px-3 py-[3px] text-left text-callout text-label-2 transition-colors hover:bg-selection hover:text-rust">
+                                    <span class="flex-1 whitespace-nowrap">{label}</span>
+                                    <span class="shrink-0 text-footnote text-label-3">"▸"</span>
+                                </div>
+                                <Show when=move || hovering.get()>
+                                    <div class="absolute top-0 left-full z-50 min-w-[280px] max-w-[440px] rounded-[8px] bg-raised py-1 shadow-2xl ring-1 ring-line-strong">
+                                        <Rows items=items.clone() chrome=chrome close=close />
+                                    </div>
+                                </Show>
+                            </div>
+                        }
+                        .into_any()
                     }
                     Item::Entry { action, label, shortcut, needs_project } => {
                         let disabled = Signal::derive(move || {
@@ -176,10 +207,9 @@ fn Dropdown(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> impl IntoV
                         }
                         .into_any()
                     }
-                })
-                .collect_view()}
-        </div>
-    }
+        })
+        .collect_view()
+        .into_any()
 }
 
 #[component]

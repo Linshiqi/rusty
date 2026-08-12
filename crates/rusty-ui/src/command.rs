@@ -27,6 +27,13 @@ pub enum Action {
     /// Open the nth entry of the recents list. An index rather than the path
     /// so the action stays `Copy`; resolved against the list at run time.
     OpenRecent(usize),
+    /// Editor edits, routed to the focused editor as the keystroke would be —
+    /// the menu and Ctrl+Z must be the same muscle.
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
     ToggleDock,
     ShowDock(DockTab),
     OpenPalette,
@@ -146,6 +153,7 @@ const SHORTCUT_DIGITS: [&str; 9] = [
 ];
 
 /// One row in a menu.
+#[derive(Clone)]
 pub enum Item {
     Entry {
         action: Action,
@@ -156,6 +164,9 @@ pub enum Item {
         /// here is when"; hidden says nothing at all.
         needs_project: bool,
     },
+    /// A flyout, VSCode's Open Recent shape — the list stays out of the way
+    /// until asked for.
+    Submenu { label: &'static str, items: Vec<Item> },
     Separator,
 }
 
@@ -225,16 +236,20 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 ];
                 let recents = state.recents.get_untracked();
                 if !recents.is_empty() {
-                    items.push(Item::Separator);
-                    for (index, path) in recents.iter().take(6).enumerate() {
-                        items.push(entry(Action::OpenRecent(index), &recent_label(path), None));
-                    }
+                    let recent_items = recents
+                        .iter()
+                        .take(8)
+                        .enumerate()
+                        .map(|(index, path)| {
+                            entry(Action::OpenRecent(index), &recent_label(path), None)
+                        })
+                        .collect();
+                    items.push(Item::Submenu {
+                        label: "Open Recent",
+                        items: recent_items,
+                    });
                 }
-                items.push(Item::Separator);
                 items.extend([
-                    project_entry(Action::RefreshProject, "Re-check project", Some("Ctrl R")),
-                    entry(Action::RefreshToolchain, "Re-scan toolchain", None),
-                    entry(Action::ReloadCatalog, "Reload chips and boards", None),
                     Item::Separator,
                     entry(Action::OpenSettings, "Settings…", Some("Ctrl ,")),
                     Item::Separator,
@@ -242,6 +257,31 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 ]);
                 items
             },
+        },
+        Menu {
+            title: "Edit",
+            items: vec![
+                project_entry(Action::Undo, "Undo", Some("Ctrl Z")),
+                project_entry(Action::Redo, "Redo", Some("Ctrl Y")),
+                Item::Separator,
+                project_entry(Action::Cut, "Cut", Some("Ctrl X")),
+                project_entry(Action::Copy, "Copy", Some("Ctrl C")),
+                project_entry(Action::Paste, "Paste", Some("Ctrl V")),
+                Item::Separator,
+                project_entry(
+                    Action::ShowPanel("search"),
+                    "Search in project",
+                    Some("Ctrl Shift F"),
+                ),
+            ],
+        },
+        Menu {
+            title: "Project",
+            items: vec![
+                project_entry(Action::RefreshProject, "Re-check project", Some("Ctrl R")),
+                entry(Action::RefreshToolchain, "Re-scan toolchain", None),
+                entry(Action::ReloadCatalog, "Reload chips and boards", None),
+            ],
         },
         Menu {
             title: "View",
@@ -288,6 +328,28 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                 controller::open_recent(state, path, true);
             }
         }
+        Action::Undo => editor_key("z", false),
+        Action::Redo => editor_key("y", false),
+        Action::Cut => editor_exec("cut", None),
+        Action::Copy => editor_exec("copy", None),
+        Action::Paste => {
+            // Through the async clipboard, then execCommand('insertText') so
+            // the insertion fires a real input event — history, echo and the
+            // language server all hear about it exactly as if typed.
+            use wasm_bindgen_futures::JsFuture;
+            leptos::task::spawn_local(async move {
+                let Some(window) = web_sys::window() else {
+                    return;
+                };
+                let promise = window.navigator().clipboard().read_text();
+                if let Ok(value) = JsFuture::from(promise).await
+                    && let Some(text) = value.as_string()
+                    && !text.is_empty()
+                {
+                    editor_exec("insertText", Some(&text));
+                }
+            });
+        }
         Action::RefreshProject => controller::refresh_project(state),
         Action::RefreshToolchain => controller::refresh_toolchain(state),
         Action::ReloadCatalog => controller::load_catalog(state),
@@ -305,6 +367,55 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             remember_size(Divider::Dock, 196.0);
         }
     }
+}
+
+/// Send a Ctrl+key keydown to the editor's textarea, as the keyboard would.
+///
+/// The undo stack, its coalescing and its caret rules live in the editor's
+/// own keydown path; synthesising the event means the menu cannot drift from
+/// the shortcut.
+fn editor_key(key: &str, shift: bool) {
+    use wasm_bindgen::JsCast;
+    let Some(element) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("editor-area"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    else {
+        return;
+    };
+    let _ = element.focus();
+    let options = web_sys::KeyboardEventInit::new();
+    options.set_key(key);
+    options.set_ctrl_key(true);
+    options.set_shift_key(shift);
+    options.set_bubbles(true);
+    options.set_cancelable(true);
+    if let Ok(event) =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &options)
+    {
+        let _ = element.dispatch_event(&event);
+    }
+}
+
+/// Run a document editing command against the focused editor.
+fn editor_exec(command: &str, argument: Option<&str>) {
+    use wasm_bindgen::JsCast;
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Some(element) = document
+        .get_element_by_id("editor-area")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = element.focus();
+    }
+    let Ok(html) = document.dyn_into::<web_sys::HtmlDocument>() else {
+        return;
+    };
+    let _ = match argument {
+        Some(value) => html.exec_command_with_show_ui_and_value(command, false, value),
+        None => html.exec_command(command),
+    };
 }
 
 /// Whether `needle` appears in `haystack` in order, ignoring case.

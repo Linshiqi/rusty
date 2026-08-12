@@ -9,6 +9,7 @@
 //! is a long-running process with a protocol, and bolting it onto the code that
 //! reads a file would put a socket behind `open`.
 
+pub mod lexical;
 pub mod model;
 
 pub use model::*;

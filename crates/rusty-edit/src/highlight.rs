@@ -86,7 +86,12 @@ pub fn lines(syntaxes: &SyntaxSet, path: &str, text: &str) -> (Vec<Line>, Option
             }
         }
 
-        out.push(Line { spans });
+        // syntect styles declarations and leaves most expressions plain —
+        // `TimerGroup::new(x)` came back one white run. The lexical pass
+        // splits those by the conventions the language enforces anyway.
+        out.push(Line {
+            spans: crate::lexical::refine(spans),
+        });
     }
 
     (out, Some(syntax.name.clone()), truncated)

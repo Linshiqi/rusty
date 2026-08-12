@@ -47,6 +47,7 @@ pub fn install(state: AppState, chrome: Chrome) {
                 return;
             }
             "," => Some(Action::OpenSettings),
+            "f" | "F" if event.shift_key() => Some(Action::ShowPanel("search")),
             "o" | "O" => Some(Action::OpenProject),
             "r" | "R" => Some(Action::RefreshProject),
             "`" => Some(Action::ToggleDock),

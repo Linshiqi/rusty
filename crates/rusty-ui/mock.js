@@ -139,7 +139,10 @@
     lsp_saved: () => null,
     lsp_change: (a) => { window.__mock.changes.push(a); return null; },
     lsp_complete: (a) => { window.__mock.completes.push(a); return ITEMS; },
-    lsp_hover: () => null,
+    lsp_hover: (a) => ({
+      text: "```rust\npub struct Radio {\n    gain: u32,\n}\n```\n---\nA struct providing radio control. See `Radio::new()`.",
+      range: { startLine: a.line, startCol: 4, endLine: a.line, endCol: 9 },
+    }),
     lsp_definition: () => null,
     lsp_signature: (a) => { window.__mock.signatures.push(a); return {
       label: "fn mix(&self, gain: u32, bias: i32) -> u32",

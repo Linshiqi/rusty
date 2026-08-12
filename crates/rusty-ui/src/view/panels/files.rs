@@ -208,7 +208,7 @@ pub(super) fn Editor() -> impl IntoView {
 
         if document.binary {
             return view! {
-                <div class="flex min-w-0 flex-1 flex-col">
+                <div class="flex min-h-0 min-w-0 flex-1 flex-col">
                     <TabStrip />
                     <div class="flex flex-1 items-center justify-center px-6 text-center">
                         <p class="max-w-[44ch] text-callout leading-relaxed text-label-2">
@@ -223,7 +223,7 @@ pub(super) fn Editor() -> impl IntoView {
         }
 
         view! {
-            <div class="flex min-w-0 flex-1 flex-col">
+            <div class="flex min-h-0 min-w-0 flex-1 flex-col">
                 <TabStrip />
                 <Header document=document.clone() />
                 <Surface document=document />
@@ -921,7 +921,7 @@ fn Surface(document: Document) -> impl IntoView {
                                         state.hover.set(None);
                                     }
                                 >
-                                    {prose_of(&text)}
+                                    {hover_parts(&text)}
                                 </div>
                             }
                             .into_any()
@@ -1603,13 +1603,86 @@ fn advance_of(ch: char) -> f64 {
 }
 
 /// Hover text arrives as markdown with code fences; the tooltip is plain.
-fn prose_of(text: &str) -> String {
-    text.lines()
-        .filter(|line| !line.trim_start().starts_with("```"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
+/// Hover markdown, minimally: fenced blocks become highlighted code, `---`
+/// becomes a divider, everything else is prose. The code gets the same
+/// lexical colours the editor uses, so the tooltip does not describe Rust
+/// in monochrome an inch above a highlighted buffer.
+fn hover_parts(text: &str) -> AnyView {
+    enum Part {
+        Code(Vec<String>),
+        Prose(String),
+        Rule,
+    }
+
+    let mut parts: Vec<Part> = Vec::new();
+    let mut in_code = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            if in_code {
+                parts.push(Part::Code(Vec::new()));
+            }
+            continue;
+        }
+        if in_code {
+            if let Some(Part::Code(lines)) = parts.last_mut() {
+                lines.push(line.to_string());
+            }
+            continue;
+        }
+        if line.trim() == "---" {
+            parts.push(Part::Rule);
+            continue;
+        }
+        match parts.last_mut() {
+            Some(Part::Prose(prose)) => {
+                prose.push('\n');
+                prose.push_str(line);
+            }
+            _ => parts.push(Part::Prose(line.to_string())),
+        }
+    }
+
+    parts
+        .into_iter()
+        .filter(|part| !matches!(part, Part::Prose(text) if text.trim().is_empty()))
+        .map(|part| match part {
+            Part::Rule => view! { <div class="my-1.5 h-px bg-line" /> }.into_any(),
+            Part::Prose(prose) => view! {
+                <div class="font-sans whitespace-pre-wrap">{prose.trim().to_string()}</div>
+            }
+            .into_any(),
+            Part::Code(lines) => view! {
+                <pre class="my-1 overflow-x-auto whitespace-pre">
+                    {lines
+                        .into_iter()
+                        .map(|line| {
+                            let spans = rusty_edit::lexical::refine(vec![Span {
+                                text: line,
+                                token: Token::Plain,
+                            }]);
+                            view! {
+                                <div>
+                                    {spans
+                                        .into_iter()
+                                        .map(|span| {
+                                            view! {
+                                                <span class=class_of(
+                                                    span.token,
+                                                )>{span.text}</span>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                </pre>
+            }
+            .into_any(),
+        })
+        .collect_view()
+        .into_any()
 }
 
 /// Token to a class the stylesheet owns.
