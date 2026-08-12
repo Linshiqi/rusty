@@ -114,7 +114,7 @@ pub fn App() -> impl IntoView {
                     <div class="flex min-h-0 flex-1 flex-col">
                         {move || {
                             if settings_open.get() {
-                                view! { <settings::Settings open=settings_open /> }.into_any()
+                                view! { <settings::Settings /> }.into_any()
                             } else {
                                 view! { <Stage /> }.into_any()
                             }

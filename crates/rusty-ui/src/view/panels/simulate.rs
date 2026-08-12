@@ -1,5 +1,11 @@
 //! Running firmware with no hardware on the desk — and wiring the desk up.
 //!
+//! This page is a project of its own, aimed at Wokwi-grade simulation:
+//! code on one side, the living board on the other, a growing part
+//! catalogue, and user-defined parts via `.rusty/parts/*.toml` so a device
+//! rusty never heard of can still be drawn and driven. The serial protocol
+//! (`[rusty:gpio]`, and friends to come) is the contract every part speaks.
+//!
 //! The page is a small board editor in the Wokwi shape: a component library
 //! on the left, a canvas with the devkit on the right, a toolbar above.
 //! LEDs are added from the library, dragged into place, given a pin and a
@@ -13,12 +19,6 @@ use leptos::{ev, prelude::*};
 use rusty_embed::{SimBoard, SimLed};
 
 use crate::{controller, state::AppState, view::components::Empty};
-
-/// Canvas geometry, shared by layout and the wire drawing.
-const CANVAS_W: f64 = 560.0;
-const CANVAS_H: f64 = 340.0;
-const KIT_X: f64 = 360.0;
-const KIT_Y: f64 = 30.0;
 
 #[component]
 pub fn Simulate() -> impl IntoView {
@@ -64,11 +64,11 @@ pub fn Simulate() -> impl IntoView {
         let running = state.session_running;
 
         view! {
-            <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-3">
+            <div class="flex min-h-0 flex-1 flex-col">
                 {(!missing.is_empty())
                     .then(|| {
                         view! {
-                            <div class="flex max-w-[70ch] flex-col gap-2.5 rounded-[8px] bg-amber-fill px-4 py-3">
+                            <div class="flex flex-col gap-2.5 border-b border-line bg-amber-fill px-4 py-3">
                                 <p class="text-callout font-medium">
                                     "The simulator needs tools that are not installed."
                                 </p>
@@ -139,35 +139,7 @@ pub fn Simulate() -> impl IntoView {
                     blocked=blocked
                 />
 
-                <details class="max-w-[76ch]">
-                    <summary class="cursor-pointer text-footnote text-label-3 select-none hover:text-label-2">
-                        "What Run does"
-                    </summary>
-                    <div class="mt-2 flex flex-col gap-2">
-                        {plan
-                            .steps
-                            .iter()
-                            .enumerate()
-                            .map(|(index, step)| {
-                                view! {
-                                    <div class="rounded-[8px] bg-raised px-4 py-2.5 ring-1 ring-line">
-                                        <div class="flex items-baseline gap-2">
-                                            <span class="shrink-0 font-mono text-footnote text-label-3">
-                                                {format!("{}.", index + 1)}
-                                            </span>
-                                            <code class="min-w-0 flex-1 font-mono text-footnote break-all select-text">
-                                                {step.display.clone()}
-                                            </code>
-                                        </div>
-                                        <p class="mt-1 pl-5 text-footnote leading-relaxed text-label-3">
-                                            {step.rationale.clone()}
-                                        </p>
-                                    </div>
-                                }
-                            })
-                            .collect_view()}
-                    </div>
-                </details>
+
             </div>
         }
         .into_any()
@@ -201,6 +173,7 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
     // (index, grab offset x, grab offset y) while a drag is live.
     let dragging = RwSignal::new(None::<(usize, f64, f64)>);
     let canvas: NodeRef<leptos::html::Div> = NodeRef::new();
+    let kit: NodeRef<leptos::html::Div> = NodeRef::new();
 
     let add_led = move |color: &'static str| {
         leds.update(|list| {
@@ -233,8 +206,8 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
     ];
 
     view! {
-        <div class="flex w-fit flex-col gap-2">
-            <div class="flex items-center gap-2">
+        <div class="flex min-h-0 flex-1 flex-col">
+            <div class="flex flex-none items-center gap-2 border-b border-line px-4 py-2">
                 {move || {
                     if running.get() {
                         view! {
@@ -281,10 +254,14 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                             }
                         })
                 }}
+                <span class="flex-1" />
+                <span class="text-caption text-label-4">
+                    "pin levels as reported by the firmware over serial"
+                </span>
             </div>
 
-            <div class="flex gap-2">
-                <div class="flex w-[120px] flex-none flex-col gap-1 rounded-[10px] bg-sidebar p-2 ring-1 ring-line">
+            <div class="flex min-h-0 flex-1">
+                <div class="flex w-[160px] flex-none flex-col gap-1 overflow-y-auto border-r border-line bg-sidebar p-2">
                     <span class="px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                         "Parts"
                     </span>
@@ -320,9 +297,9 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                         };
                         let rect = element.get_bounding_client_rect();
                         let x = (f64::from(event.client_x()) - rect.left() - grab_x)
-                            .clamp(4.0, CANVAS_W - 60.0);
+                            .clamp(4.0, (rect.width() - 70.0).max(4.0));
                         let y = (f64::from(event.client_y()) - rect.top() - grab_y)
-                            .clamp(4.0, CANVAS_H - 30.0);
+                            .clamp(4.0, (rect.height() - 30.0).max(4.0));
                         leds.update(|list| {
                             if let Some(led) = list.get_mut(index) {
                                 led.x = Some(x);
@@ -333,23 +310,21 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                     }
                     on:pointerup=move |_| dragging.set(None)
                     on:pointerleave=move |_| dragging.set(None)
-                    class="relative flex-none overflow-hidden rounded-[12px] bg-sunken ring-1 ring-line"
-                    style=format!("width: {CANVAS_W}px; height: {CANVAS_H}px")
+                    class="relative min-w-0 flex-1 overflow-hidden bg-sunken"
                 >
-                    <svg
-                        class="pointer-events-none absolute inset-0"
-                        width=CANVAS_W
-                        height=CANVAS_H
-                    >
+                    <svg class="pointer-events-none absolute inset-0 h-full w-full">
                         {move || {
+                            // The devkit is CSS-docked to the right edge, so
+                            // its pin anchors are measured, not assumed.
+                            let (kit_left, kit_top) = kit_origin(canvas, kit);
                             leds.get()
                                 .iter()
                                 .enumerate()
                                 .map(|(index, led)| {
                                     let x = led.x.unwrap_or(60.0) + 10.0;
                                     let y = led.y.unwrap_or(40.0) + 10.0;
-                                    let pin_y = KIT_Y + 18.0 + (index as f64 % 14.0) * 14.0;
-                                    let pin_x = KIT_X + 10.0;
+                                    let pin_y = kit_top + 22.0 + (index as f64 % 14.0) * 14.0;
+                                    let pin_x = kit_left + 20.0;
                                     let mid = (x + pin_x) / 2.0;
                                     view! {
                                         <polyline
@@ -366,13 +341,8 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                         }}
                     </svg>
 
-                    <svg
-                        class="pointer-events-none absolute"
-                        style=format!("left: {KIT_X}px; top: {KIT_Y}px")
-                        width="150"
-                        height="230"
-                        viewBox="0 0 150 230"
-                    >
+                    <div node_ref=kit class="pointer-events-none absolute top-8 right-10">
+                    <svg width="150" height="230" viewBox="0 0 150 230">
                         <rect x="10" y="6" width="130" height="218" rx="10" fill="#16181c" stroke="#2c2f36" />
                         {(0..14)
                             .map(|i| {
@@ -389,6 +359,7 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                         </text>
                         <rect x="60" y="206" width="30" height="16" rx="2" fill="#3a3e46" />
                     </svg>
+                    </div>
 
                     {move || {
                         leds.get()
@@ -460,12 +431,21 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                     }}
                 </div>
 
+                <div class="flex w-[180px] flex-none flex-col border-l border-line bg-sidebar">
                 {move || {
-                    let index = selected.get()?;
-                    let led = leds.with(|list| list.get(index).cloned())?;
-                    Some(
-                        view! {
-                            <div class="flex w-[150px] flex-none flex-col gap-2 rounded-[10px] bg-sidebar p-2.5 ring-1 ring-line">
+                    let Some(index) = selected.get() else {
+                        return view! {
+                            <p class="p-3 text-footnote text-label-4">
+                                "Select a part to edit its pin and colour."
+                            </p>
+                        }
+                            .into_any();
+                    };
+                    let Some(led) = leds.with(|list| list.get(index).cloned()) else {
+                        return ().into_any();
+                    };
+                    view! {
+                            <div class="flex flex-col gap-2 p-3">
                                 <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                                     "LED"
                                 </span>
@@ -536,13 +516,27 @@ fn BoardEditor(board: SimBoard, blocked: bool) -> impl IntoView {
                                     "Remove"
                                 </button>
                             </div>
-                        },
-                    )
+                    }
+                        .into_any()
                 }}
+                </div>
             </div>
-            <p class="text-caption text-label-4">
-                "pin levels as reported by the firmware over serial"
-            </p>
         </div>
     }
+}
+
+/// The devkit's top-left, in canvas coordinates. Measured because the kit is
+/// CSS-docked to the right edge and the canvas is whatever size the window
+/// grants it. Recomputed whenever the wires redraw; a window resize catches
+/// up on the next interaction, which is when anyone is looking.
+fn kit_origin(
+    canvas: NodeRef<leptos::html::Div>,
+    kit: NodeRef<leptos::html::Div>,
+) -> (f64, f64) {
+    let (Some(canvas), Some(kit)) = (canvas.get_untracked(), kit.get_untracked()) else {
+        return (360.0, 30.0);
+    };
+    let c = canvas.get_bounding_client_rect();
+    let k = kit.get_bounding_client_rect();
+    (k.left() - c.left(), k.top() - c.top())
 }

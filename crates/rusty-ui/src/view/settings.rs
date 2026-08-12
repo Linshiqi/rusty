@@ -70,19 +70,17 @@ impl Category {
 }
 
 #[component]
-pub fn Settings(open: RwSignal<bool>) -> impl IntoView {
+pub fn Settings() -> impl IntoView {
     let selected = RwSignal::new(Category::Appearance);
 
     view! {
         <div class="flex min-h-0 flex-1 flex-col bg-content">
+                // No Done and no Save: every control here applies the
+                // moment it is touched, and leaving is any click in the
+                // sidebar. A button that only closes teaches people to
+                // wonder what it commits.
                 <header class="flex h-10 flex-none items-center gap-3 border-b border-line px-4">
                     <span class="text-strong font-semibold tracking-tight">"Settings"</span>
-                    <span class="flex-1" />
-                    <Button
-                        label="Done"
-                        kind=ButtonKind::Primary
-                        on_click=Callback::new(move |_| open.set(false))
-                    />
                 </header>
 
                 <div class="flex min-h-0 flex-1">
