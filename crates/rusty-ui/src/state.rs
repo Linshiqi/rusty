@@ -289,6 +289,10 @@ pub struct AppState {
     pub completion: RwSignal<Option<CompletionPopup>>,
     /// The signature card: which file and line it hangs over, and what it says.
     pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
+    /// Semantic colouring for the active document, as rust-analyzer sees it.
+    /// Overlaid on the lexical highlight at render; empty while the index
+    /// warms up, and the base colours simply show through.
+    pub semantic: RwSignal<Option<(String, Vec<rusty_lsp::SemanticSpan>)>>,
     /// Every open editor, in strip order. The active one is [`Self::document`];
     /// the rest are parked in [`Self::parked`].
     pub tabs: RwSignal<Vec<String>>,
@@ -425,6 +429,7 @@ impl AppState {
             hover: RwSignal::new(None),
             completion: RwSignal::new(None),
             signature: RwSignal::new(None),
+            semantic: RwSignal::new(None),
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),

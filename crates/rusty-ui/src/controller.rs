@@ -516,6 +516,35 @@ pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
     });
 }
 
+/// Ask for the document's semantic colouring, and keep it only if the answer
+/// still describes what is on screen.
+pub fn request_semantic(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    if !path.ends_with(".rs") || state.lsp_status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    let args = Args { path: path.clone() };
+    spawn_local(async move {
+        // Errors and empties are the warm-up talking; the lexical base colour
+        // stays up either way, so there is nothing to report.
+        let Ok(spans) =
+            ipc::call::<_, Vec<rusty_lsp::SemanticSpan>>(cmd::lsp::SEMANTIC, &args).await
+        else {
+            return;
+        };
+        let current = state
+            .document
+            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        if current.as_deref() == Some(path.as_str()) && !spans.is_empty() {
+            state.semantic.set(Some((path, spans)));
+        }
+    });
+}
+
 // ─── project search ─────────────────────────────────────────────────────────────
 
 /// Debounced: called on every keystroke in the search box, runs the search
@@ -1176,6 +1205,7 @@ fn show_document(state: AppState, document: Document, announce: bool) {
     state.highlighted.set(document.lines.clone());
     if announce && !document.read_only && state.lsp_status.get_untracked() == LspStatus::Ready {
         lsp_open_doc(document.path.clone(), document.text.clone());
+        request_semantic(state, document.path.clone());
     }
     state.document.set(Some(document));
 }
@@ -1234,6 +1264,7 @@ fn clear_editor_transients(state: AppState) {
     state.completion.set(None);
     state.signature.set(None);
     state.hover.set(None);
+    state.semantic.set(None);
 }
 
 /// Front an already open tab, parking the current one.
@@ -1283,6 +1314,9 @@ fn front_parked(state: AppState, path: &str) -> bool {
     // Clean or read-only tabs have nothing to freshen.
     if dirty && !read_only {
         schedule_pulse(state);
+    }
+    if !read_only {
+        request_semantic(state, path.to_string());
     }
     true
 }
@@ -1524,7 +1558,8 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
             if let Some(path) =
                 state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
             {
-                lsp_open_doc(path, state.draft.get_untracked());
+                lsp_open_doc(path.clone(), state.draft.get_untracked());
+                request_semantic(state, path);
             }
         }
         LspEvent::Unavailable { message, install } => {
@@ -1698,6 +1733,7 @@ fn edit_pulse(state: AppState, generation: u64) {
     }
 
     if path.ends_with(".rs") && state.lsp_status.get_untracked() == LspStatus::Ready {
+        request_semantic(state, path.clone());
         lsp_sync(
             cmd::lsp::CHANGE,
             Args {

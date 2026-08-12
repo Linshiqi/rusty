@@ -41,7 +41,7 @@ use crate::{
     error::{Error, Result},
     model::{
         CompletionItem, DiagSeverity, EditRange, FileDiagnostic, HoverInfo, Location,
-        LspEvent, SignatureInfo,
+        LspEvent, SemanticSpan, SignatureInfo,
     },
     positions::{
         Encoding, character_to_scalar, content_change, scalar_to_character,
@@ -92,6 +92,7 @@ struct Shared {
     /// Set once the handshake has read what the server picked. Diagnostics
     /// only arrive after `initialized`, so the default is never actually used.
     encoding: OnceLock<Encoding>,
+    semantic_legend: OnceLock<Vec<String>>,
     root: PathBuf,
     events: Sender<LspEvent>,
 }
@@ -133,6 +134,7 @@ impl LspClient {
             docs: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             encoding: OnceLock::new(),
+        semantic_legend: OnceLock::new(),
             root: root.to_path_buf(),
             events: events_tx,
         });
@@ -424,6 +426,70 @@ impl LspClient {
         }))
     }
 
+    /// The whole document's semantic colouring, as the server sees it.
+    ///
+    /// The reply is quintuples of u32 — deltaLine, deltaStart, length, type
+    /// index, modifier bits — relative-encoded, in the negotiated position
+    /// encoding. Decoded here to absolute lines and Unicode-scalar columns,
+    /// with the type index resolved against the server's legend, so the
+    /// frontend sees names and scalars and nothing of the format.
+    pub fn semantic_tokens(&self, path: &str) -> Result<Vec<SemanticSpan>> {
+        let result = self.shared.request(
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": self.uri(path) } }),
+        )?;
+        let data: Vec<u32> = result["data"]
+            .as_array()
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(|v| v as u32)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let legend = self.shared.legend();
+        let encoding = self.shared.encoding();
+        let docs = self.shared.docs.lock().expect("lsp docs");
+        let Some(doc) = docs.get(path) else {
+            return Ok(Vec::new());
+        };
+        let lines: Vec<&str> = doc.text.split('\n').collect();
+
+        let mut spans = Vec::with_capacity(data.len() / 5);
+        let mut line = 0u32;
+        let mut unit_col = 0u32;
+        for token in data.chunks_exact(5) {
+            let (delta_line, delta_start, unit_len, type_index) =
+                (token[0], token[1], token[2], token[3]);
+            if delta_line > 0 {
+                line += delta_line;
+                unit_col = delta_start;
+            } else {
+                unit_col += delta_start;
+            }
+            let Some(kind) = legend.get(type_index as usize) else {
+                continue;
+            };
+            let Some(line_text) = lines.get(line as usize) else {
+                continue;
+            };
+            let start = character_to_scalar(line_text, unit_col, encoding);
+            let end = character_to_scalar(line_text, unit_col + unit_len, encoding);
+            if end <= start {
+                continue;
+            }
+            spans.push(SemanticSpan {
+                line,
+                start_col: start,
+                length: end - start,
+                kind: kind.clone(),
+            });
+        }
+        Ok(spans)
+    }
+
     /// Where the thing under this position is defined.
     ///
     /// A definition in a dependency or the sysroot comes back with `external`
@@ -546,6 +612,12 @@ impl Shared {
         *self.encoding.get().unwrap_or(&Encoding::Utf16)
     }
 
+    /// The token-type legend the server declared at initialize; indexes in
+    /// every semantic-tokens response point into this.
+    fn legend(&self) -> Vec<String> {
+        self.semantic_legend.get().cloned().unwrap_or_default()
+    }
+
     fn write(&self, message: &Value) -> Result<()> {
         let mut writer = self.writer.lock().expect("lsp writer");
         rpc::write_message(&mut **writer, message).map_err(Error::Io)
@@ -619,6 +691,22 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "completion": { "completionItem": { "snippetSupport": false } },
                 "hover": { "contentFormat": ["plaintext", "markdown"] },
                 "definition": {},
+                // Semantic tokens — the colours only the compiler's view can
+                // produce. `formats: ["relative"]` is mandatory; the token
+                // types listed are the standard set, and the server's own
+                // legend (captured below) is what decodes the reply.
+                "semanticTokens": {
+                    "requests": { "full": true },
+                    "tokenTypes": [
+                        "namespace", "type", "class", "enum", "interface", "struct",
+                        "typeParameter", "parameter", "variable", "property",
+                        "enumMember", "event", "function", "method", "macro",
+                        "keyword", "modifier", "comment", "string", "number",
+                        "regexp", "operator", "decorator",
+                    ],
+                    "tokenModifiers": [],
+                    "formats": ["relative"],
+                },
             },
             "window": { "workDoneProgress": false },
             "workspace": {
@@ -647,6 +735,19 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
         _ => Encoding::Utf16,
     };
     let _ = shared.encoding.set(encoding);
+
+    let legend: Vec<String> = reply["capabilities"]["semanticTokensProvider"]["legend"]
+        ["tokenTypes"]
+        .as_array()
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = shared.semantic_legend.set(legend);
 
     shared.notify("initialized", json!({}))
 }

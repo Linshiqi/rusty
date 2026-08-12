@@ -98,6 +98,7 @@ pub mod lsp {
     pub const HOVER: &str = "lsp_hover";
     pub const DEFINITION: &str = "lsp_definition";
     pub const SIGNATURE: &str = "lsp_signature";
+    pub const SEMANTIC: &str = "lsp_semantic";
 }
 
 pub mod features {

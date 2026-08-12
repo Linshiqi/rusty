@@ -149,6 +149,21 @@ pub async fn lsp_hover(
         .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
 }
 
+/// The document's semantic colouring — the colours only the compiler's view
+/// can produce.
+#[tauri::command]
+pub async fn lsp_semantic(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::SemanticSpan>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(Vec::new());
+    };
+    Ok(tokio::task::spawn_blocking(move || client.semantic_tokens(&path))
+        .await
+        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
+}
+
 /// The signature of the call the caret is inside, for parameter hints.
 #[tauri::command]
 pub async fn lsp_signature(

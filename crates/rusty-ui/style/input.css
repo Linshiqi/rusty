@@ -319,6 +319,9 @@ body {
 .tok-function { color: var(--term-4); }
 .tok-macro { color: var(--term-1); }
 .tok-punctuation { color: var(--label-2); }
+/* Semantic tokens only — the lexical pass never produces Variable. The hue
+   matches what VSCode dark+ taught everyone a local means. */
+.tok-variable { color: var(--term-12); }
 
 /* Diagnostic underlines. In the text flow rather than overlaid, so they stay
    glued to their glyphs whatever width those glyphs are. */

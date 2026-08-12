@@ -14,7 +14,7 @@ use leptos::{ev, html, prelude::*};
 use wasm_bindgen::JsCast;
 
 use rusty_edit::{Document, Entry, Line, Span, Token};
-use rusty_lsp::{CompletionItem, DiagSeverity, FileDiagnostic};
+use rusty_lsp::{CompletionItem, DiagSeverity, FileDiagnostic, SemanticSpan};
 
 use crate::{controller, state::AppState, view::components::Empty};
 
@@ -600,12 +600,27 @@ fn Surface(document: Document) -> impl IntoView {
                                     .diagnostics
                                     .with(|by_file| by_file.get(&path).cloned())
                                     .unwrap_or_default();
+                                // The compiler's colours, when they have
+                                // arrived for this document.
+                                let semantic = state
+                                    .semantic
+                                    .with(|s| {
+                                        s.as_ref()
+                                            .filter(|(for_path, _)| for_path == &path)
+                                            .map(|(_, spans)| spans.clone())
+                                    })
+                                    .unwrap_or_default();
                                 state
                                     .highlighted
                                     .get()
                                     .into_iter()
                                     .enumerate()
                                     .map(|(index, line)| {
+                                        let line = overlay_semantic(
+                                            line,
+                                            index as u32,
+                                            &semantic,
+                                        );
                                         view! {
                                             <div>
                                                 {decorate(line, index as u32, &diags)}
@@ -1685,6 +1700,74 @@ fn hover_parts(text: &str) -> AnyView {
         .into_any()
 }
 
+/// rust-analyzer's legend names, mapped into the palette.
+///
+/// Unmapped kinds — operators, namespaces, punctuation — return `None` and
+/// keep the lexical base colour: overlaying everything would repaint half
+/// the buffer in one hue and lose more than it adds.
+fn semantic_token(kind: &str) -> Option<Token> {
+    Some(match kind {
+        "keyword" | "lifetime" | "boolean" | "selfKeyword" | "selfTypeKeyword" => Token::Keyword,
+        "comment" => Token::Comment,
+        "string" | "character" => Token::Str,
+        "number" => Token::Number,
+        "macro" | "macroBang" | "derive" | "deriveHelper" | "attribute" | "attributeBracket" => {
+            Token::Macro
+        }
+        "function" | "method" | "procMacro" => Token::Function,
+        "struct" | "enum" | "union" | "trait" | "typeAlias" | "type" | "builtinType"
+        | "class" | "interface" | "enumMember" | "typeParameter" => Token::Type,
+        "variable" | "parameter" | "property" | "field" | "const" | "static" => Token::Variable,
+        _ => return None,
+    })
+}
+
+/// Re-cut a line's spans so the compiler's colours win where they exist and
+/// the lexical base shows everywhere else.
+fn overlay_semantic(line: Line, index: u32, semantic: &[SemanticSpan]) -> Line {
+    let marks: Vec<(u32, u32, Token)> = semantic
+        .iter()
+        .filter(|span| span.line == index)
+        .filter_map(|span| {
+            semantic_token(&span.kind)
+                .map(|token| (span.start_col, span.start_col + span.length, token))
+        })
+        .collect();
+    if marks.is_empty() {
+        return line;
+    }
+
+    let mut out: Vec<Span> = Vec::with_capacity(line.spans.len());
+    let mut col = 0u32;
+    for span in line.spans {
+        let mut text = String::new();
+        let mut current = span.token;
+        for ch in span.text.chars() {
+            let token = marks
+                .iter()
+                .find(|(from, to, _)| (*from..*to).contains(&col))
+                .map(|(_, _, token)| *token)
+                .unwrap_or(span.token);
+            if token != current && !text.is_empty() {
+                out.push(Span {
+                    text: std::mem::take(&mut text),
+                    token: current,
+                });
+            }
+            current = token;
+            text.push(ch);
+            col += 1;
+        }
+        if !text.is_empty() {
+            out.push(Span {
+                text,
+                token: current,
+            });
+        }
+    }
+    Line { spans: out }
+}
+
 /// Token to a class the stylesheet owns.
 ///
 /// Classes rather than inline colours, so the palette lives with the theme and
@@ -1700,7 +1783,75 @@ fn class_of(token: Token) -> &'static str {
         Token::Function => "tok-function",
         Token::Macro => "tok-macro",
         Token::Punctuation => "tok-punctuation",
-        Token::Variable => "text-label",
+        Token::Variable => "tok-variable",
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+
+    fn line_of(text: &str) -> Line {
+        Line {
+            spans: vec![Span {
+                text: text.to_string(),
+                token: Token::Plain,
+            }],
+        }
+    }
+
+    fn span(line: u32, start_col: u32, length: u32, kind: &str) -> SemanticSpan {
+        SemanticSpan {
+            line,
+            start_col,
+            length,
+            kind: kind.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_compilers_colour_wins_inside_its_range_only() {
+        let out = overlay_semantic(
+            line_of("let radio = 1;"),
+            0,
+            &[span(0, 4, 5, "variable")],
+        );
+        let texts: Vec<(String, Token)> =
+            out.spans.into_iter().map(|s| (s.text, s.token)).collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("let ".to_string(), Token::Plain),
+                ("radio".to_string(), Token::Variable),
+                (" = 1;".to_string(), Token::Plain),
+            ],
+        );
+    }
+
+    #[test]
+    fn other_lines_and_unknown_kinds_change_nothing() {
+        let untouched = overlay_semantic(
+            line_of("let radio = 1;"),
+            0,
+            &[span(3, 0, 5, "variable"), span(0, 0, 3, "operator")],
+        );
+        assert_eq!(untouched.spans.len(), 1);
+        assert_eq!(untouched.spans[0].token, Token::Plain);
+    }
+
+    #[test]
+    fn cjk_columns_are_scalar_not_bytes() {
+        // "中文 radio" — the variable starts at scalar column 3.
+        let out = overlay_semantic(line_of("中文 radio"), 0, &[span(0, 3, 5, "field")]);
+        let texts: Vec<(String, Token)> =
+            out.spans.into_iter().map(|s| (s.text, s.token)).collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("中文 ".to_string(), Token::Plain),
+                ("radio".to_string(), Token::Variable),
+            ],
+        );
     }
 }
 

@@ -144,6 +144,10 @@
       range: { startLine: a.line, startCol: 4, endLine: a.line, endCol: 9 },
     }),
     lsp_definition: () => null,
+    lsp_semantic: () => [
+      { line: 47, startCol: 8, length: 5, kind: "variable" },
+      { line: 51, startCol: 7, length: 5, kind: "struct" },
+    ],
     lsp_signature: (a) => { window.__mock.signatures.push(a); return {
       label: "fn mix(&self, gain: u32, bias: i32) -> u32",
       paramStart: 25, paramEnd: 34, doc: "Blends the two inputs.",

@@ -48,6 +48,7 @@ fn main() {
             lsp::lsp_hover,
             lsp::lsp_definition,
             lsp::lsp_signature,
+            lsp::lsp_semantic,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -161,6 +162,7 @@ mod wire_names {
             cmd::lsp::HOVER => lsp::lsp_hover,
             cmd::lsp::DEFINITION => lsp::lsp_definition,
             cmd::lsp::SIGNATURE => lsp::lsp_signature,
+            cmd::lsp::SEMANTIC => lsp::lsp_semantic,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

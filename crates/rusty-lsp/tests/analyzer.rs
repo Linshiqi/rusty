@@ -192,6 +192,36 @@ fn rust_analyzer_end_to_end() {
         signature.label,
     );
 
+    // ── semantic tokens name the struct at the right scalar column ──────────
+    let widget_line = line_of(&text, "struct Widget");
+    let widget_col = text
+        .lines()
+        .nth(widget_line as usize)
+        .unwrap()
+        .find("Widget")
+        .unwrap() as u32;
+    let spans = eventually(Duration::from_secs(30), || {
+        client
+            .semantic_tokens("src/main.rs")
+            .ok()
+            .filter(|spans| !spans.is_empty())
+    })
+    .expect("semantic tokens never arrived");
+    let widget = spans
+        .iter()
+        .find(|s| {
+            s.line == widget_line
+                && s.start_col <= widget_col
+                && widget_col < s.start_col + s.length
+        })
+        .unwrap_or_else(|| panic!("no token covers Widget: {spans:?}"));
+    assert_eq!(widget.kind, "struct", "{widget:?}");
+    assert_eq!(
+        widget.start_col, widget_col,
+        "scalar columns, exactly — the CJK comment above would shift a byte count",
+    );
+    assert_eq!(widget.length, "Widget".chars().count() as u32);
+
     // ── definition lands on the declaration ──────────────────────────────────
     let use_line = line_of(&text, "let w = build");
     let use_text = text.lines().nth(use_line as usize).unwrap();

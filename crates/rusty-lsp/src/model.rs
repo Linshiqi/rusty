@@ -102,6 +102,22 @@ pub struct Location {
     pub external: bool,
 }
 
+/// One run of semantic colour, as rust-analyzer sees the code.
+///
+/// The kind is the server's own legend name (`function`, `struct`,
+/// `parameter`…) — named rather than numbered, because a number on the wire
+/// invites the frontend to keep its own copy of the legend. Columns and
+/// length are Unicode scalars, converted at the boundary like every other
+/// position here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSpan {
+    pub line: u32,
+    pub start_col: u32,
+    pub length: u32,
+    pub kind: String,
+}
+
 /// The signature of the call the caret is inside, with the parameter it is on.
 ///
 /// One signature, not a list: Rust has no overloading, so the "active
