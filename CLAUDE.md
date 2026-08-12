@@ -103,6 +103,25 @@ See `docs/extensibility.md`. Chips and boards are TOML in three layers
 (built-in < user config < `<project>/.rusty/`). Code extensions go through MCP.
 UI contributions are declarative — extensions never ship markup or styles.
 
+## Where state lives
+
+One rule decides: **if the backend, the CLI, or another window could ever care,
+it is a file; if only this WebView cares and losing it costs a shrug, it may be
+localStorage; high-volume queryable data picks its own format when the feature
+that needs it lands.**
+
+- The data directory (`config::data_dir()`) holds `boards/` and
+  `workbench.toml` — plain TOML, user-readable, checked by tests. Its location
+  is configurable: a fixed anchor (`%APPDATA%usty`) holds `location.toml`
+  pointing at the real directory. Relocation copies and switches the pointer;
+  the originals stay until the user deletes them. Pointing it at a synced
+  folder is the cloud-sync story.
+- Secrets stay in the OS credential store, never in the data directory — a
+  synced directory must never sync a key.
+- Per-project, team-shared things (board overlays, future simulation configs)
+  live in the project's `.rusty/`, where they are diffed and reviewed.
+- Theme and divider positions are localStorage, and that is all that is.
+
 ## Testing conventions
 
 - **Assert on *which* problem, not that something failed.** These panels exist

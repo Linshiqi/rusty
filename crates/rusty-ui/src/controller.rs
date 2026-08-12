@@ -10,8 +10,8 @@ use leptos::task::spawn_local;
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
 use rusty_embed::{
     Board, Chip, CommandPlan, EmbeddedProject, Explanation, Firmware, FlashAction, LogLevel,
-    LogLine, LogStream, MemoryReport, Probe, SerialPort, ToolchainReport, Transport, WizardChoice,
-    WizardOption,
+    LogLine, LogStream, MemoryReport, Probe, RelocateReport, SerialPort, StorageLocation,
+    ToolchainReport, Transport, WizardChoice, WizardOption,
 };
 
 use rusty_ai::{AgentEvent, ChatEvent, Message, Preset, ProviderConfig, ToolDef};
@@ -99,6 +99,57 @@ pub fn load_catalog(state: AppState) {
     );
 }
 
+pub fn load_recents(state: AppState) {
+    spawn_local(async move {
+        if let Ok(list) = ipc::get::<Vec<String>>(cmd::workbench::RECENTS).await {
+            state.recents.set(list);
+        }
+    });
+}
+
+/// Open a project from the recents list.
+///
+/// `announce` decides what failure looks like. Clicked by a human: a banner.
+/// Tried automatically at launch: a log line — a red banner as the first thing
+/// every morning because a folder moved would train people to ignore banners —
+/// and either way the stale entry is forgotten so it stops being offered.
+pub fn open_recent(state: AppState, path: String, announce: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Forget {
+        path: String,
+    }
+
+    let args = Args { path: path.clone() };
+    spawn_local(async move {
+        match ipc::call::<_, OpenResult>(cmd::project::OPEN, &args).await {
+            Ok(result) => {
+                project_opened(state, result);
+                load_recents(state);
+            }
+            Err(error) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: format!("{path} could not be reopened: {}", error.message),
+                    level: Some(LogLevel::Warn),
+                });
+                let _ = ipc::call::<_, ()>(
+                    cmd::workbench::FORGET_RECENT,
+                    &Forget { path: path.clone() },
+                )
+                .await;
+                load_recents(state);
+                if announce {
+                    state.error.set(Some(error));
+                }
+            }
+        }
+    });
+}
+
 /// Ask the OS for a folder, then open it.
 ///
 /// Cancelling is not a failure and must not surface as one — which is why this
@@ -127,6 +178,17 @@ pub fn open_project(state: AppState, path: String) {
         state,
         async move { ipc::call::<_, OpenResult>(cmd::project::OPEN, &args).await },
         move |result| {
+            project_opened(state, result);
+            load_recents(state);
+        },
+    );
+}
+
+/// Everything that follows a successful open, shared by the picker path and
+/// the recents path so the two cannot drift apart.
+fn project_opened(state: AppState, result: OpenResult) {
+    {
+        {
             state.project.set(Some(result.project));
             state.workspace.set(result.workspace);
             if let Some(detail) = result.workspace_error {
@@ -161,8 +223,8 @@ pub fn open_project(state: AppState, path: String) {
             refresh_firmware(state);
             refresh_tree(state);
             start_lsp(state);
-        },
-    );
+        }
+    }
 }
 
 /// Re-read the project's files without reopening it.
@@ -326,12 +388,97 @@ pub fn restore(state: AppState) {
     load_catalog(state);
     refresh_toolchain(state);
 
+    load_recents(state);
+
     spawn_local(async move {
         // Nothing open is the normal cold-start state, not a failure worth
         // showing, so this one deliberately does not go through `track`.
         if let Ok(Some(_path)) = ipc::get::<Option<String>>(cmd::project::PATH).await {
             reload_project(state);
+            return;
         }
+        // A fresh launch: pick up where the last session left off. Quietly —
+        // a moved folder degrades to the normal empty state plus a log line,
+        // and stops being offered.
+        if let Ok(list) = ipc::get::<Vec<String>>(cmd::workbench::RECENTS).await
+            && let Some(last) = list.first()
+        {
+            open_recent(state, last.clone(), false);
+        }
+    });
+}
+
+// ─── storage ─────────────────────────────────────────────────────────────────
+
+/// Where the data directory is, for the settings screen.
+pub fn load_storage_location(into: RwSignal<Option<StorageLocation>>) {
+    spawn_local(async move {
+        if let Ok(found) =
+            ipc::get::<Option<StorageLocation>>(cmd::workbench::STORAGE_LOCATION).await
+        {
+            into.set(found);
+        }
+    });
+}
+
+/// Ask for a folder, then move the data directory into it.
+///
+/// The refused-because-occupied case is separated from other failures so the
+/// screen can offer "adopt what is there" as a deliberate second step rather
+/// than a checkbox nobody reads the first time.
+pub fn relocate_storage(
+    state: AppState,
+    target: String,
+    take_existing: bool,
+    note: RwSignal<Option<String>>,
+    blocked: RwSignal<Option<String>>,
+    location: RwSignal<Option<StorageLocation>>,
+) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        take_existing: bool,
+    }
+
+    let args = Args {
+        path: target.clone(),
+        take_existing,
+    };
+    spawn_local(async move {
+        match ipc::call::<_, RelocateReport>(cmd::workbench::RELOCATE, &args).await {
+            Ok(report) => {
+                blocked.set(None);
+                note.set(Some(if report.adopted {
+                    format!("Now using the data already in {}.", report.to)
+                } else {
+                    format!(
+                        "Moved: {} files copied to {}. The originals are still in {} —                          delete them yourself once you are satisfied.",
+                        report.copied_files, report.to, report.from,
+                    )
+                }));
+                load_storage_location(location);
+                // The recents list travelled with the directory.
+                load_recents(state);
+                load_catalog(state);
+            }
+            Err(error) => {
+                if error.message.contains("already contains rusty data") {
+                    blocked.set(Some(target.clone()));
+                }
+                note.set(Some(error.message));
+            }
+        }
+    });
+}
+
+/// The folder picker, for the storage screen.
+pub fn pick_storage_folder(on: Callback<Option<String>>) {
+    spawn_local(async move {
+        let picked = ipc::pick_folder("Where should rusty keep its data?")
+            .await
+            .ok()
+            .flatten();
+        on.run(picked);
     });
 }
 

@@ -231,24 +231,9 @@ pub fn normalize(id: &str) -> String {
 /// list short: this is two lookups, and a wrong answer degrades to "no user
 /// files" rather than breaking anything.
 fn user_catalog_dir() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("RUSTY_CONFIG_DIR") {
-        return Some(PathBuf::from(explicit));
-    }
-    #[cfg(windows)]
-    {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|base| PathBuf::from(base).join("rusty"))
-    }
-    #[cfg(not(windows))]
-    {
-        if let Ok(base) = std::env::var("XDG_CONFIG_HOME") {
-            return Some(PathBuf::from(base).join("rusty"));
-        }
-        std::env::var("HOME")
-            .ok()
-            .map(|home| PathBuf::from(home).join(".config").join("rusty"))
-    }
+    // Through the configurable data directory, so pointing storage at a synced
+    // folder carries the board definitions along with everything else.
+    crate::config::data_dir()
 }
 
 // ─── file format ─────────────────────────────────────────────────────────────

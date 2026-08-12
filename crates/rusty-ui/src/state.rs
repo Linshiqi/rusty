@@ -267,6 +267,10 @@ pub struct AppState {
     pub session_running: RwSignal<bool>,
 
     pub active_panel: RwSignal<String>,
+    /// Projects opened before, newest first — from the backend's
+    /// workbench.toml, so the list survives restarts and belongs to the data
+    /// directory rather than to this window.
+    pub recents: RwSignal<Vec<String>>,
 
     /// Sidebar width and dock height, in pixels, remembered across sessions.
     ///
@@ -356,6 +360,7 @@ impl AppState {
             terminal: RwSignal::new(None),
             session_running: RwSignal::new(false),
             active_panel: RwSignal::new("overview".to_string()),
+            recents: RwSignal::new(Vec::new()),
             sidebar_width: RwSignal::new(stored_size(Divider::Sidebar, 188.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
             dragging: RwSignal::new(None),

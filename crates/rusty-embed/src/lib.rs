@@ -20,6 +20,8 @@ pub use model::*;
 #[cfg(feature = "backend")]
 pub mod catalog;
 #[cfg(feature = "backend")]
+pub mod config;
+#[cfg(feature = "backend")]
 pub mod device;
 #[cfg(feature = "backend")]
 mod error;

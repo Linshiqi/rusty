@@ -21,6 +21,14 @@ pub mod project {
     pub const WORKSPACE_REPORT: &str = "workspace_report";
 }
 
+/// What the workbench remembers, and where it keeps it.
+pub mod workbench {
+    pub const RECENTS: &str = "recent_projects";
+    pub const FORGET_RECENT: &str = "forget_recent";
+    pub const STORAGE_LOCATION: &str = "storage_location";
+    pub const RELOCATE: &str = "relocate_storage";
+}
+
 /// Hardware the workbench knows about.
 pub mod catalog {
     pub const CHIPS: &str = "chip_catalogue";

@@ -140,6 +140,44 @@ fn Stage() -> impl IntoView {
                                 it can open — and diagnose — a project that does not build."
                     >
                         <OpenProjectButton kind=ButtonKind::Primary />
+                        // The way back to yesterday's work, one click deep.
+                        {move || {
+                            let recents = state.recents.get();
+                            (!recents.is_empty())
+                                .then(|| {
+                                    view! {
+                                        <div class="mt-4 flex w-full max-w-[52ch] flex-col gap-0.5 text-left">
+                                            <div class="mb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                                                "Recent"
+                                            </div>
+                                            {recents
+                                                .into_iter()
+                                                .take(6)
+                                                .map(|path| {
+                                                    let open = path.clone();
+                                                    let name = crate::command::recent_label(&path);
+                                                    view! {
+                                                        <button
+                                                            type="button"
+                                                            title=path
+                                                            on:click=move |_| {
+                                                                controller::open_recent(
+                                                                    state,
+                                                                    open.clone(),
+                                                                    true,
+                                                                )
+                                                            }
+                                                            class="truncate rounded-[6px] px-2 py-1 text-left text-callout text-label-2 transition-colors hover:bg-sunken hover:text-label"
+                                                        >
+                                                            {name}
+                                                        </button>
+                                                    }
+                                                })
+                                                .collect_view()}
+                                        </div>
+                                    }
+                                })
+                        }}
                     </components::Empty>
                 }
                 .into_any()

@@ -17,6 +17,9 @@ use rusty_embed::{
     Probe, SerialPort, ToolchainReport, Transport, WizardChoice, WizardOption, device, firmware,
     flash, memory, project, toolchain, wizard,
 };
+// `config` unqualified is rusty_ai's (provider probing); the storage layer goes
+// by its own name so the two cannot be confused at a call site.
+use rusty_embed::config as storage;
 use tauri::State;
 
 use crate::{error::CommandError, state::AppState};
@@ -53,7 +56,11 @@ pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<Op
         Err(e) => (None, None, Some(e.to_string())),
     };
 
-    state.open(root, workspace).await;
+    state.open(root.clone(), workspace).await;
+    // Recorded backend-side, at the single point every open goes through, so
+    // the list exists for the CLI and the next launch without the frontend
+    // having to remember to say so.
+    storage::record_recent(&root.display().to_string());
 
     Ok(OpenResult {
         project: detected,
@@ -81,6 +88,44 @@ pub async fn workspace_report(state: State<'_, AppState>) -> Answer<WorkspaceRep
 #[tauri::command]
 pub async fn project_path(state: State<'_, AppState>) -> Answer<Option<String>> {
     Ok(state.root().await.map(|p| p.display().to_string()))
+}
+
+/// Projects opened before, newest first — what launch reopens and File lists.
+#[tauri::command]
+pub fn recent_projects() -> Vec<String> {
+    storage::workbench().recent_projects
+}
+
+/// Drop a recent that no longer exists. Called when reopening one fails, so a
+/// moved project stops being offered every launch.
+#[tauri::command]
+pub fn forget_recent(path: String) {
+    storage::forget_recent(&path);
+}
+
+/// Where rusty keeps its data, for the settings screen to show — the answer
+/// to "what is this folder and may I delete it".
+#[tauri::command]
+pub fn storage_location() -> Option<rusty_embed::StorageLocation> {
+    storage::location()
+}
+
+/// Move the data directory. Copies, switches the pointer, leaves the original
+/// in place; with `take_existing` it adopts what the target already holds.
+#[tauri::command]
+pub async fn relocate_storage(
+    path: String,
+    take_existing: bool,
+    state: State<'_, AppState>,
+) -> Answer<rusty_embed::RelocateReport> {
+    let report = tokio::task::spawn_blocking(move || {
+        storage::relocate(std::path::Path::new(&path), take_existing)
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("relocation panicked: {e}")))??;
+    // The cached catalogue was layered from the old directory.
+    state.drop_catalog().await;
+    Ok(report)
 }
 
 // ─── chips and toolchain ─────────────────────────────────────────────────────

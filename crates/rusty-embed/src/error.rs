@@ -17,6 +17,19 @@ pub enum Error {
     #[error("no Cargo.toml at `{0}` — open the folder that contains one")]
     NotACargoProject(String),
 
+    #[error("`{path}` could not be written")]
+    Write {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The configuration store itself misbehaving — a relocation refused, an
+    /// anchor that cannot exist. Stated in the user's terms because the fix is
+    /// always theirs to make.
+    #[error("{detail}")]
+    Config { detail: String },
+
     #[error("`{path}` is not a readable ELF ({detail}) — build the project first")]
     Elf { path: String, detail: String },
 

@@ -26,7 +26,7 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
     let open = RwSignal::new(None::<usize>);
     close_on_escape(open);
 
-    let menus = command::menus();
+    let menus = command::menus(state);
 
     view! {
         <header
@@ -72,7 +72,7 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
 
                                 <Show when=move || is_open.get()>
                                     <Dropdown
-                                        items=command::menus()
+                                        items=command::menus(state)
                                             .into_iter()
                                             .nth(index)
                                             .map(|m| m.items)

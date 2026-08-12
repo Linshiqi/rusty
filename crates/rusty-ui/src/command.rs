@@ -24,6 +24,9 @@ pub enum Action {
     RefreshToolchain,
     ReloadCatalog,
     ScanDevices,
+    /// Open the nth entry of the recents list. An index rather than the path
+    /// so the action stays `Copy`; resolved against the list at run time.
+    OpenRecent(usize),
     ToggleDock,
     ShowDock(DockTab),
     OpenPalette,
@@ -126,6 +129,17 @@ pub fn all(state: AppState) -> Vec<Command> {
     out
 }
 
+/// A recents entry as a menu label: the folder, then where it is — two
+/// projects both named `firmware` are told apart by the rest of the path.
+pub fn recent_label(path: &str) -> String {
+    let name = path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path);
+    format!("{name} — {path}")
+}
+
 /// Labels for the first nine panels' number shortcuts.
 const SHORTCUT_DIGITS: [&str; 9] = [
     "Ctrl 1", "Ctrl 2", "Ctrl 3", "Ctrl 4", "Ctrl 5", "Ctrl 6", "Ctrl 7", "Ctrl 8", "Ctrl 9",
@@ -135,7 +149,7 @@ const SHORTCUT_DIGITS: [&str; 9] = [
 pub enum Item {
     Entry {
         action: Action,
-        label: &'static str,
+        label: String,
         shortcut: Option<&'static str>,
         /// Greyed out until a project is open, the way File > Save is greyed
         /// out with no document. Present but unavailable says "this exists and
@@ -150,19 +164,19 @@ pub struct Menu {
     pub items: Vec<Item>,
 }
 
-fn entry(action: Action, label: &'static str, shortcut: Option<&'static str>) -> Item {
+fn entry(action: Action, label: &str, shortcut: Option<&'static str>) -> Item {
     Item::Entry {
         action,
-        label,
+        label: label.to_string(),
         shortcut,
         needs_project: false,
     }
 }
 
-fn project_entry(action: Action, label: &'static str, shortcut: Option<&'static str>) -> Item {
+fn project_entry(action: Action, label: &str, shortcut: Option<&'static str>) -> Item {
     Item::Entry {
         action,
-        label,
+        label: label.to_string(),
         shortcut,
         needs_project: true,
     }
@@ -174,7 +188,7 @@ fn project_entry(action: Action, label: &'static str, shortcut: Option<&'static 
 /// to mean something its shortcut does not. The panel entries are read from the
 /// registry for the same reason they are in the sidebar — a contributed panel
 /// appears in View without anyone remembering to add it.
-pub fn menus() -> Vec<Menu> {
+pub fn menus(state: AppState) -> Vec<Menu> {
     let mut view_items = vec![
         entry(Action::OpenPalette, "Command palette…", Some("Ctrl K")),
         Item::Separator,
@@ -182,7 +196,7 @@ pub fn menus() -> Vec<Menu> {
     for (index, panel) in panels::all().into_iter().enumerate() {
         view_items.push(Item::Entry {
             action: Action::ShowPanel(panel.id),
-            label: panel.title,
+            label: panel.title.to_string(),
             shortcut: SHORTCUT_DIGITS.get(index).copied(),
             needs_project: panel.needs_project,
         });
@@ -204,18 +218,30 @@ pub fn menus() -> Vec<Menu> {
     vec![
         Menu {
             title: "File",
-            items: vec![
-                entry(Action::ShowPanel("wizard"), "New project…", None),
-                entry(Action::OpenProject, "Open project…", Some("Ctrl O")),
-                Item::Separator,
-                project_entry(Action::RefreshProject, "Re-check project", Some("Ctrl R")),
-                entry(Action::RefreshToolchain, "Re-scan toolchain", None),
-                entry(Action::ReloadCatalog, "Reload chips and boards", None),
-                Item::Separator,
-                entry(Action::OpenSettings, "Settings…", Some("Ctrl ,")),
-                Item::Separator,
-                entry(Action::CloseWindow, "Exit", None),
-            ],
+            items: {
+                let mut items = vec![
+                    entry(Action::ShowPanel("wizard"), "New project…", None),
+                    entry(Action::OpenProject, "Open project…", Some("Ctrl O")),
+                ];
+                let recents = state.recents.get_untracked();
+                if !recents.is_empty() {
+                    items.push(Item::Separator);
+                    for (index, path) in recents.iter().take(6).enumerate() {
+                        items.push(entry(Action::OpenRecent(index), &recent_label(path), None));
+                    }
+                }
+                items.push(Item::Separator);
+                items.extend([
+                    project_entry(Action::RefreshProject, "Re-check project", Some("Ctrl R")),
+                    entry(Action::RefreshToolchain, "Re-scan toolchain", None),
+                    entry(Action::ReloadCatalog, "Reload chips and boards", None),
+                    Item::Separator,
+                    entry(Action::OpenSettings, "Settings…", Some("Ctrl ,")),
+                    Item::Separator,
+                    entry(Action::CloseWindow, "Exit", None),
+                ]);
+                items
+            },
         },
         Menu {
             title: "View",
@@ -257,6 +283,11 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             }
         }
         Action::OpenProject => controller::choose_project(state),
+        Action::OpenRecent(index) => {
+            if let Some(path) = state.recents.with_untracked(|list| list.get(index).cloned()) {
+                controller::open_recent(state, path, true);
+            }
+        }
         Action::RefreshProject => controller::refresh_project(state),
         Action::RefreshToolchain => controller::refresh_toolchain(state),
         Action::ReloadCatalog => controller::load_catalog(state),

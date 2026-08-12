@@ -490,6 +490,32 @@ pub enum LogLevel {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Where rusty keeps its data, for the settings screen to show.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageLocation {
+    pub path: String,
+    /// True when no pointer and no env override is in play.
+    pub is_default: bool,
+    /// True when `RUSTY_CONFIG_DIR` decided — relocating from the UI would be
+    /// silently outvoted, so the UI disables it and says why.
+    pub env_override: bool,
+}
+
+/// What a relocation did, so the user can verify before deleting the old copy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelocateReport {
+    pub from: String,
+    pub to: String,
+    pub copied_files: usize,
+    pub adopted: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Built firmware
 // ─────────────────────────────────────────────────────────────────────────────
 

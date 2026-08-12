@@ -85,6 +85,12 @@ impl AppState {
             .clone()
     }
 
+    /// Forget the layered catalogue so the next reader rebuilds it — the
+    /// user's board files just moved house.
+    pub async fn drop_catalog(&self) {
+        *self.catalog.lock().await = None;
+    }
+
     pub async fn workspace(&self) -> Option<Arc<Workspace>> {
         self.inner.lock().await.workspace.clone()
     }
