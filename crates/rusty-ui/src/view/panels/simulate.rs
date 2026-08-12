@@ -135,31 +135,6 @@ pub fn Simulate() -> impl IntoView {
                         }
                     })}
 
-                <div class="flex max-w-[76ch] flex-col gap-2">
-                    {plan
-                        .steps
-                        .iter()
-                        .enumerate()
-                        .map(|(index, step)| {
-                            view! {
-                                <div class="rounded-[8px] bg-raised px-4 py-2.5 ring-1 ring-line">
-                                    <div class="flex items-baseline gap-2">
-                                        <span class="shrink-0 font-mono text-footnote text-label-3">
-                                            {format!("{}.", index + 1)}
-                                        </span>
-                                        <code class="min-w-0 flex-1 font-mono text-footnote break-all select-text">
-                                            {step.display.clone()}
-                                        </code>
-                                    </div>
-                                    <p class="mt-1 pl-5 text-footnote leading-relaxed text-label-3">
-                                        {step.rationale.clone()}
-                                    </p>
-                                </div>
-                            }
-                        })
-                        .collect_view()}
-                </div>
-
                 {plan
                     .board
                     .clone()
@@ -199,6 +174,39 @@ pub fn Simulate() -> impl IntoView {
                         }
                     }}
                 </div>
+
+                // The three commands still exist for whoever wants to see
+                // them — behind a fold, because the person pressing Run is
+                // rarely the person auditing flags.
+                <details class="max-w-[76ch]">
+                    <summary class="cursor-pointer text-footnote text-label-3 select-none hover:text-label-2">
+                        "What Run does"
+                    </summary>
+                    <div class="mt-2 flex flex-col gap-2">
+                        {plan
+                            .steps
+                            .iter()
+                            .enumerate()
+                            .map(|(index, step)| {
+                                view! {
+                                    <div class="rounded-[8px] bg-raised px-4 py-2.5 ring-1 ring-line">
+                                        <div class="flex items-baseline gap-2">
+                                            <span class="shrink-0 font-mono text-footnote text-label-3">
+                                                {format!("{}.", index + 1)}
+                                            </span>
+                                            <code class="min-w-0 flex-1 font-mono text-footnote break-all select-text">
+                                                {step.display.clone()}
+                                            </code>
+                                        </div>
+                                        <p class="mt-1 pl-5 text-footnote leading-relaxed text-label-3">
+                                            {step.rationale.clone()}
+                                        </p>
+                                    </div>
+                                }
+                            })
+                            .collect_view()}
+                    </div>
+                </details>
             </div>
         }
         .into_any()

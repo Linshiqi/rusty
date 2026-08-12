@@ -50,6 +50,10 @@ pub struct Panel {
     /// Disabled until a project is open. The wizard and the assistant are not.
     pub needs_project: bool,
     pub render: fn() -> AnyView,
+    /// Reachable but not listed: the wizard lives in File > New project,
+    /// the assistant in the title-bar toggle. A sidebar of destinations
+    /// stays a sidebar of destinations.
+    pub hidden: bool,
 }
 
 #[component]
@@ -112,6 +116,27 @@ pub fn App() -> impl IntoView {
                     </div>
                     <dock::Dock />
                 </main>
+                // The assistant, VSCode-chat style: a right-hand drawer the
+                // title-bar icon toggles, beside whatever panel is active.
+                <Show when=move || state.assistant_open.get()>
+                    <aside class="flex w-[400px] flex-none flex-col border-l border-line bg-sidebar">
+                        <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
+                            <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                                "Assistant"
+                            </span>
+                            <span class="flex-1" />
+                            <button
+                                type="button"
+                                title="Close"
+                                on:click=move |_| state.assistant_open.set(false)
+                                class="rounded-[5px] px-1.5 text-footnote text-label-3 hover:text-label"
+                            >
+                                "×"
+                            </button>
+                        </div>
+                        {panels::assistant_view()}
+                    </aside>
+                </Show>
             </div>
             <StatusBar />
         </div>
@@ -199,7 +224,7 @@ fn OpenProjectButton(#[prop(default = ButtonKind::Normal)] kind: ButtonKind) -> 
 #[component]
 fn Sidebar() -> impl IntoView {
     let state = AppState::expect();
-    let all = panels::all();
+    let all: Vec<Panel> = panels::all().into_iter().filter(|p| !p.hidden).collect();
 
     // Group in declaration order so the sidebar reads top to bottom the way the
     // work does: understand the project, then talk to the device.

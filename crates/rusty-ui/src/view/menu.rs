@@ -122,6 +122,31 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
 
             <span data-tauri-drag-region class="flex-1 self-stretch" />
 
+            {
+                let state = AppState::expect();
+                view! {
+                    <button
+                        type="button"
+                        aria-label="Assistant"
+                        title="Assistant"
+                        on:click=move |_| {
+                            state.assistant_open.update(|open| *open = !*open)
+                        }
+                        class=move || {
+                            let base = "grid h-9 w-[42px] place-items-center transition-colors \
+                                        hover:bg-sunken";
+                            if state.assistant_open.get() {
+                                format!("{base} text-rust")
+                            } else {
+                                format!("{base} text-label-2 hover:text-label")
+                            }
+                        }
+                    >
+                        <crate::view::icon::IconView icon=crate::view::icon::Icon::Assistant size=15 />
+                    </button>
+                }
+            }
+
             <WindowControls />
 
             // Clicking anywhere else closes the menu. A transparent sheet behind

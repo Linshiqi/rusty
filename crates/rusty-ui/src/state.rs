@@ -300,6 +300,8 @@ pub struct AppState {
     pub find_index: RwSignal<usize>,
     /// Direct dependencies against crates.io, when the Crates panel asked.
     pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
+    /// The assistant drawer on the right, toggled from the title bar.
+    pub assistant_open: RwSignal<bool>,
     /// Pin levels the running firmware has reported, for the board view.
     pub sim_gpio: RwSignal<std::collections::HashMap<u8, bool>>,
     /// The simulation plan for the open project, when the panel asked.
@@ -452,6 +454,7 @@ impl AppState {
             semantic: RwSignal::new(None),
             actions: RwSignal::new(None),
             crate_rows: RwSignal::new(None),
+            assistant_open: RwSignal::new(false),
             sim_gpio: RwSignal::new(std::collections::HashMap::new()),
             sim_plan: RwSignal::new(None),
             sim_install_failed: RwSignal::new(Vec::new()),

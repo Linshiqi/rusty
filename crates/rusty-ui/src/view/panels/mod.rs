@@ -25,6 +25,12 @@ use crate::view::{Panel, icon::Icon};
 /// The device picker, so the dock can offer the same one the panels do.
 pub use session::Devices;
 
+/// The assistant's content, for the right-hand drawer.
+pub fn assistant_view() -> leptos::prelude::AnyView {
+    use leptos::prelude::IntoAny;
+    assistant::Assistant().into_any()
+}
+
 pub fn all() -> Vec<Panel> {
     vec![
         Panel {
@@ -33,6 +39,7 @@ pub fn all() -> Vec<Panel> {
             section: "Project",
             icon: Icon::Files,
             needs_project: true,
+            hidden: false,
             render: || files::FilesPanel().into_any(),
         },
         Panel {
@@ -41,6 +48,7 @@ pub fn all() -> Vec<Panel> {
             section: "Project",
             icon: Icon::Search,
             needs_project: true,
+            hidden: false,
             render: || search::SearchPanel().into_any(),
         },
         Panel {
@@ -49,6 +57,7 @@ pub fn all() -> Vec<Panel> {
             section: "Project",
             icon: Icon::Overview,
             needs_project: false,
+            hidden: false,
             render: || overview::Overview().into_any(),
         },
         Panel {
@@ -59,6 +68,7 @@ pub fn all() -> Vec<Panel> {
             // Answers "is my machine set up?", which is a fair question to ask
             // before there is a project to set it up for.
             needs_project: false,
+            hidden: false,
             render: || toolchain::Toolchain().into_any(),
         },
         Panel {
@@ -67,6 +77,7 @@ pub fn all() -> Vec<Panel> {
             section: "Project",
             icon: Icon::Memory,
             needs_project: true,
+            hidden: false,
             render: || memory::Memory().into_any(),
         },
         Panel {
@@ -75,6 +86,7 @@ pub fn all() -> Vec<Panel> {
             section: "Project",
             icon: Icon::Crates,
             needs_project: true,
+            hidden: false,
             render: || crates::Crates().into_any(),
         },
         Panel {
@@ -83,6 +95,7 @@ pub fn all() -> Vec<Panel> {
             section: "Project",
             icon: Icon::Features,
             needs_project: true,
+            hidden: false,
             render: || features::Features().into_any(),
         },
         Panel {
@@ -91,6 +104,7 @@ pub fn all() -> Vec<Panel> {
             section: "Device",
             icon: Icon::Flash,
             needs_project: true,
+            hidden: false,
             render: || flash::Flash().into_any(),
         },
         Panel {
@@ -99,6 +113,7 @@ pub fn all() -> Vec<Panel> {
             section: "Device",
             icon: Icon::Simulate,
             needs_project: true,
+            hidden: false,
             render: || simulate::Simulate().into_any(),
         },
         Panel {
@@ -107,6 +122,7 @@ pub fn all() -> Vec<Panel> {
             section: "Device",
             icon: Icon::Monitor,
             needs_project: true,
+            hidden: false,
             render: || monitor::Monitor().into_any(),
         },
         Panel {
@@ -115,6 +131,7 @@ pub fn all() -> Vec<Panel> {
             section: "",
             icon: Icon::Wizard,
             needs_project: false,
+            hidden: true,
             render: || wizard::Wizard().into_any(),
         },
         Panel {
@@ -125,6 +142,7 @@ pub fn all() -> Vec<Panel> {
             // Useful with nothing open: "which ESP32 has 802.15.4?" needs no
             // project, and the chip catalogue can answer it.
             needs_project: false,
+            hidden: true,
             render: || assistant::Assistant().into_any(),
         },
     ]

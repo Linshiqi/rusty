@@ -311,6 +311,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
 /// Carry out an action.
 pub fn run(action: Action, state: AppState, chrome: Chrome) {
     match action {
+        Action::ShowPanel("assistant") => state.assistant_open.set(true),
         Action::ShowPanel(id) => {
             // Silently ignoring a blocked panel would leave the palette looking
             // broken; the sidebar already explains the requirement.
