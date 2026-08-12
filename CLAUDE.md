@@ -31,10 +31,12 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # crates/rusty-ui/mock.js stubs the IPC surface: add
 #   <link data-trunk rel="copy-file" href="mock.js" /><script src="/mock.js"></script>
 # to index.html while debugging and REMOVE IT BEFORE COMMITTING. It is inert in
-# the real app. Two contracts it enforces: responses must carry every
-# non-defaulted field (serde rejects, and the error names only the field), and
+# the real app. Three contracts it enforces: responses must carry every
+# non-defaulted field (serde rejects, and the error names only the field);
 # streaming commands like lsp_start must return a never-resolving promise —
-# a resolved stream reads as "server exited" and flips LSP Ready back off.
+# a resolved stream reads as "server exited" and flips LSP Ready back off;
+# and save/open must be stateful like the disk is, or every save-then-reread
+# flow (format-on-save) looks broken in the mock while correct in the app.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -193,6 +195,10 @@ that needs it lands.**
   takes it), converts to Unicode-scalar columns at the boundary, and the
   integration test keeps a 中文 comment above the assertions so ASCII-only
   arithmetic cannot pass.
+- **`ParameterInformation.label` offsets stay UTF-16 even after negotiating
+  utf-8.** The negotiated encoding covers *document* positions; offsets into
+  strings the server sent (signature labels) are UTF-16 by spec, always. Two
+  conversion paths, one request.
 - **ConPTY will not start the shell until the terminal answers `ESC [ 6 n`.**
   Its first act is to ask where the cursor is, and it blocks on the reply. The
   symptom is total: the pty yields exactly four bytes and then silence for
