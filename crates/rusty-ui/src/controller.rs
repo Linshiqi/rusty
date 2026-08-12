@@ -610,6 +610,41 @@ pub fn request_semantic(state: AppState, path: String) {
     });
 }
 
+// ─── network ─────────────────────────────────────────────────────────────────
+
+/// What proxy is stored, and what detection currently sees.
+pub fn load_proxy_setting(
+    stored: RwSignal<Option<String>>,
+    detected: RwSignal<Option<String>>,
+) {
+    spawn_local(async move {
+        if let Ok(value) = ipc::get::<serde_json::Value>(cmd::workbench::PROXY).await {
+            stored.set(value["stored"].as_str().map(str::to_string));
+            detected.set(value["detected"].as_str().map(str::to_string));
+        }
+    });
+}
+
+/// Store the proxy choice and re-read, so the preview line tells the truth.
+pub fn save_proxy_setting(
+    value: Option<String>,
+    stored: RwSignal<Option<String>>,
+    detected: RwSignal<Option<String>>,
+    saved: RwSignal<bool>,
+) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        value: Option<String>,
+    }
+    let args = Args { value };
+    spawn_local(async move {
+        if ipc::call::<_, ()>(cmd::workbench::SET_PROXY, &args).await.is_ok() {
+            saved.set(true);
+            load_proxy_setting(stored, detected);
+        }
+    });
+}
+
 // ─── crates ──────────────────────────────────────────────────────────────────
 
 /// Ask crates.io about every direct dependency. Slow by design — one index

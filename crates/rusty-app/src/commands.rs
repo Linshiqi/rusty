@@ -89,10 +89,31 @@ pub async fn crate_report(
         .ok_or_else(|| CommandError::new("the Cargo analysis is not available for this project"))?;
     tokio::task::spawn_blocking(move || {
         let deps = rusty_core::registry::direct_dependencies(workspace.graph());
-        rusty_core::registry::annotate_latest(deps)
+        let proxy = rusty_embed::simulate::effective_proxy();
+        rusty_core::registry::annotate_latest(deps, proxy)
     })
     .await
     .map_err(|e| CommandError::new(format!("crate report panicked: {e}")))
+}
+
+/// The proxy setting and what detection currently sees, for the settings page.
+#[tauri::command]
+pub async fn proxy_setting() -> Answer<serde_json::Value> {
+    let stored = storage::workbench().proxy;
+    let detected = rusty_embed::simulate::system_proxy();
+    Ok(serde_json::json!({ "stored": stored, "detected": detected }))
+}
+
+/// Store the proxy choice: null/"auto" = detect, "none" = direct, else a URL.
+#[tauri::command]
+pub async fn set_proxy_setting(value: Option<String>) -> Answer<()> {
+    let mut state = storage::workbench();
+    state.proxy = match value.as_deref().map(str::trim) {
+        None | Some("") | Some("auto") => None,
+        Some(other) => Some(other.to_string()),
+    };
+    storage::save_workbench(&state).map_err(CommandError::from)?;
+    Ok(())
 }
 
 #[tauri::command]

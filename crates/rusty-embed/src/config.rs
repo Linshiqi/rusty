@@ -132,6 +132,10 @@ pub struct WorkbenchState {
     /// Newest first. The first entry is what launch reopens.
     #[serde(default)]
     pub recent_projects: Vec<String>,
+    /// Network proxy: absent = detect (env, then the OS setting); "none" =
+    /// force direct; anything else = an explicit proxy URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 fn workbench_path() -> Option<PathBuf> {
@@ -148,7 +152,7 @@ pub fn workbench() -> WorkbenchState {
         .unwrap_or_default()
 }
 
-fn save_workbench(state: &WorkbenchState) -> Result<()> {
+pub fn save_workbench(state: &WorkbenchState) -> Result<()> {
     let Some(path) = workbench_path() else {
         return Ok(());
     };

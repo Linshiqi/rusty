@@ -45,17 +45,25 @@ pub fn direct_dependencies(graph: &PackageGraph) -> Vec<(String, String)> {
 /// Ask the sparse index for each crate's newest stable version, a few
 /// threads at a time. One row per input, always — a crate the index will
 /// not answer for gets its reason, not a hole.
-pub fn annotate_latest(deps: Vec<(String, String)>) -> Vec<CrateRow> {
+pub fn annotate_latest(deps: Vec<(String, String)>, proxy: Option<String>) -> Vec<CrateRow> {
     let results: Mutex<Vec<CrateRow>> = Mutex::new(Vec::with_capacity(deps.len()));
     let work: Mutex<std::vec::IntoIter<(String, String)>> = Mutex::new(deps.into_iter());
 
     std::thread::scope(|scope| {
         for _ in 0..6 {
-            scope.spawn(|| {
-                let agent: ureq::Agent = ureq::Agent::config_builder()
+            let proxy = proxy.clone();
+            let work = &work;
+            let results = &results;
+            scope.spawn(move || {
+                let mut builder = ureq::Agent::config_builder()
                     .timeout_connect(Some(std::time::Duration::from_secs(8)))
-                    .build()
-                    .into();
+                    .timeout_global(Some(std::time::Duration::from_secs(30)));
+                if let Some(url) = proxy.as_deref()
+                    && let Ok(proxy) = ureq::Proxy::new(url)
+                {
+                    builder = builder.proxy(Some(proxy));
+                }
+                let agent: ureq::Agent = builder.build().into();
                 loop {
                     let Some((name, current)) = work.lock().expect("work queue").next() else {
                         break;

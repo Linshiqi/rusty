@@ -27,6 +27,8 @@ pub mod workbench {
     pub const FORGET_RECENT: &str = "forget_recent";
     pub const STORAGE_LOCATION: &str = "storage_location";
     pub const RELOCATE: &str = "relocate_storage";
+    pub const PROXY: &str = "proxy_setting";
+    pub const SET_PROXY: &str = "set_proxy_setting";
 }
 
 /// Hardware the workbench knows about.

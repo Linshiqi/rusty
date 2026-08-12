@@ -254,10 +254,24 @@ pub fn download(
 ) -> std::result::Result<(), String> {
     use std::io::{Read, Write};
 
-    let config = ureq::Agent::config_builder()
+    let mut builder = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(15)))
-        .build();
-    let agent: ureq::Agent = config.into();
+        // Headers must arrive promptly or the URL is declared dead and the
+        // next mirror gets its turn — a blackholed route must not hang the
+        // panel at "downloading" forever, which is exactly what it did.
+        .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
+        // And nothing runs unbounded: a stalled body eventually dies too.
+        .timeout_global(Some(std::time::Duration::from_secs(15 * 60)));
+    if let Some(proxy_url) = effective_proxy() {
+        match ureq::Proxy::new(&proxy_url) {
+            Ok(proxy) => {
+                progress(format!("using system proxy {proxy_url}"));
+                builder = builder.proxy(Some(proxy));
+            }
+            Err(error) => progress(format!("system proxy {proxy_url} ignored: {error}")),
+        }
+    }
+    let agent: ureq::Agent = builder.build().into();
 
     let mut last_error = String::new();
     for url in urls {
@@ -275,6 +289,10 @@ pub fn download(
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
+        match total {
+            Some(total) => progress(format!("  connected — {:.1} MB", total as f64 / 1e6)),
+            None => progress("  connected".to_string()),
+        }
 
         let mut reader = response.into_body().into_reader();
         let mut file = match std::fs::File::create(dest) {
@@ -355,6 +373,95 @@ fn find_qemu(emulator: &str) -> Option<PathBuf> {
     tools.is_file().then_some(tools)
 }
 
+/// The proxy the rest of this machine uses, if any.
+///
+/// Environment variables first (the cross-platform convention), then the
+/// Windows system proxy from the registry — which is what the browser and
+/// every GUI proxy tool (Clash and friends) configure. A tool that ignores
+/// it downloads into a wall on exactly the machines that need a proxy.
+/// What downloads and index queries should actually use: the stored setting
+/// first (an explicit URL, or "none" for forced direct), then detection.
+pub fn effective_proxy() -> Option<String> {
+    if let Some(configured) = crate::config::workbench().proxy {
+        let configured = configured.trim().to_string();
+        if configured.eq_ignore_ascii_case("none") || configured.is_empty() {
+            return None;
+        }
+        if !configured.eq_ignore_ascii_case("auto") {
+            return Some(configured);
+        }
+    }
+    system_proxy()
+}
+
+pub fn system_proxy() -> Option<String> {
+    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY"] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return Some(value.trim().to_string());
+        }
+    }
+    if cfg!(windows) {
+        return windows_system_proxy();
+    }
+    None
+}
+
+fn windows_system_proxy() -> Option<String> {
+    let query = |value: &str| -> Option<String> {
+        let mut command = std::process::Command::new("reg");
+        command.args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            "/v",
+            value,
+        ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let out = command.output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.lines()
+            .find(|line| line.trim_start().starts_with(value))
+            .and_then(|line| line.split_whitespace().last())
+            .map(str::to_string)
+    };
+
+    let enabled = query("ProxyEnable")?;
+    if !enabled.ends_with('1') {
+        return None;
+    }
+    parse_proxy_server(&query("ProxyServer")?)
+}
+
+/// The registry's `ProxyServer` shapes: a bare `host:port` for everything,
+/// or `http=h:p;https=h:p;ftp=…` per protocol. Https wins, then http; socks
+/// entries are skipped — this client does not speak socks.
+fn parse_proxy_server(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if !value.contains('=') {
+        return Some(format!("http://{value}"));
+    }
+    let mut http = None;
+    for part in value.split(';') {
+        let Some((scheme, address)) = part.split_once('=') else {
+            continue;
+        };
+        match scheme.trim() {
+            "https" => return Some(format!("http://{}", address.trim())),
+            "http" => http = Some(format!("http://{}", address.trim())),
+            _ => {}
+        }
+    }
+    http
+}
+
 fn exe(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
@@ -432,6 +539,25 @@ mod tests {
             "qemu goes through its own download path",
         );
         assert!(install_steps("probe-rs").is_err(), "unknown tools are named, not guessed");
+    }
+
+    #[test]
+    fn proxy_server_shapes_parse_like_the_browser_reads_them() {
+        assert_eq!(
+            parse_proxy_server("127.0.0.1:7890").as_deref(),
+            Some("http://127.0.0.1:7890"),
+        );
+        assert_eq!(
+            parse_proxy_server("http=a:1;https=b:2;ftp=c:3").as_deref(),
+            Some("http://b:2"),
+            "https wins",
+        );
+        assert_eq!(
+            parse_proxy_server("http=a:1;socks=s:9").as_deref(),
+            Some("http://a:1"),
+        );
+        assert_eq!(parse_proxy_server("socks=s:9"), None, "socks is not spoken");
+        assert_eq!(parse_proxy_server(""), None);
     }
 
     #[test]
