@@ -237,6 +237,11 @@ usty`) holds `location.toml`
 - `serde_json` sends `i64` as a plain JSON number, so model deltas are `i32` —
   a 64-bit integer would have generated a TypeScript `bigint` that never matched
   the wire.
+- **`RUSTUP_TOOLCHAIN` leaks from `cargo tauri dev` into every spawned
+  cargo.** The rustup shim sets it for *rusty's own* build; rustup lets it
+  outrank the project's rust-toolchain.toml, so a spawned `cargo build`
+  compiles an esp-pinned Xtensa project with stable and dies with "can't
+  find crate for `core`". `process::spawn` strips the variable.
 - **espflash `save-image` does not create parent directories** — a missing
   `target/rusty-sim/` fails as `os error 3`, which reads like a broken tool
   rather than a missing mkdir. `simulate::prepare` runs first.

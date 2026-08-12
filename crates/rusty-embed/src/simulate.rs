@@ -254,33 +254,49 @@ pub fn download(
 ) -> std::result::Result<(), String> {
     use std::io::{Read, Write};
 
-    let mut builder = ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(15)))
-        // Headers must arrive promptly or the URL is declared dead and the
-        // next mirror gets its turn — a blackholed route must not hang the
-        // panel at "downloading" forever, which is exactly what it did.
-        .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
-        // And nothing runs unbounded: a stalled body eventually dies too.
-        .timeout_global(Some(std::time::Duration::from_secs(15 * 60)));
-    if let Some(proxy_url) = effective_proxy() {
-        match ureq::Proxy::new(&proxy_url) {
-            Ok(proxy) => {
-                progress(format!("using system proxy {proxy_url}"));
-                builder = builder.proxy(Some(proxy));
-            }
-            Err(error) => progress(format!("system proxy {proxy_url} ignored: {error}")),
+    // One proxy URL is not one route. A local proxy's HTTP CONNECT can be
+    // incompatible with this client while its SOCKS listener on the same
+    // port works (mixed-port proxies answer both), and a mirror may be
+    // reachable with no proxy at all. Every route is tried, and named.
+    let routes = proxy_candidates(effective_proxy());
+
+    let agent_for = |route: &Option<String>| -> ureq::Agent {
+        let mut builder = ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(15)))
+            // Headers must arrive promptly or this route is declared dead
+            // and the next one gets its turn — a blackholed route must not
+            // hang the panel at "downloading" forever.
+            .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
+            // And nothing runs unbounded: a stalled body eventually dies.
+            .timeout_global(Some(std::time::Duration::from_secs(15 * 60)));
+        if let Some(url) = route
+            && let Ok(proxy) = ureq::Proxy::new(url)
+        {
+            builder = builder.proxy(Some(proxy));
         }
-    }
-    let agent: ureq::Agent = builder.build().into();
+        builder.build().into()
+    };
 
     let mut last_error = String::new();
+    let mut attempts: Vec<(String, Option<String>)> = Vec::new();
     for url in urls {
-        progress(format!("downloading {url}"));
-        let response = match agent.get(url).call() {
+        for route in &routes {
+            attempts.push((url.clone(), route.clone()));
+        }
+    }
+
+    for (url, route) in attempts {
+        match &route {
+            Some(proxy) => progress(format!("downloading {url}\n  via {proxy}")),
+            None => progress(format!("downloading {url}\n  direct")),
+        }
+        let agent = agent_for(&route);
+        let response = match agent.get(&url).call() {
             Ok(response) => response,
             Err(error) => {
-                last_error = format!("{url}: {error}");
-                progress(format!("  failed: {error} — trying the next mirror"));
+                let chain = error_chain(&error);
+                last_error = format!("{url}: {chain}");
+                progress(format!("  failed: {chain} — trying the next route"));
                 continue;
             }
         };
@@ -325,7 +341,7 @@ pub fn download(
                 }
                 Err(error) => {
                     last_error = format!("{url}: interrupted mid-body: {error}");
-                    progress(format!("  {last_error} — trying the next mirror"));
+                    progress(format!("  {last_error} — trying the next route"));
                     interrupted = true;
                     break;
                 }
@@ -339,7 +355,39 @@ pub fn download(
             return Ok(());
         }
     }
-    Err(format!("every mirror failed; last error: {last_error}"))
+    Err(format!("every route failed; last error: {last_error}"))
+}
+
+/// The transport ladder for one configured proxy: as given, then the SOCKS5
+/// spelling of the same address (mixed-port proxies answer both), then no
+/// proxy at all. Deduplicated, order kept.
+fn proxy_candidates(configured: Option<String>) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = Vec::new();
+    if let Some(url) = configured {
+        out.push(Some(url.clone()));
+        if let Some(rest) = url.strip_prefix("http://") {
+            let socks = format!("socks5://{rest}");
+            if !out.contains(&Some(socks.clone())) {
+                out.push(Some(socks));
+            }
+        }
+    }
+    out.push(None);
+    out
+}
+
+/// Every layer of an error, because "unexpected end of file" alone points
+/// nowhere — whether the proxy or the TLS or the socket said it is the
+/// entire diagnosis.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(inner) = source {
+        parts.push(inner.to_string());
+        source = inner.source();
+    }
+    parts.dedup();
+    parts.join(" ← ")
 }
 
 /// Create the directory the image step writes into. espflash does not make
@@ -539,6 +587,26 @@ mod tests {
             "qemu goes through its own download path",
         );
         assert!(install_steps("probe-rs").is_err(), "unknown tools are named, not guessed");
+    }
+
+    #[test]
+    fn the_transport_ladder_tries_http_then_socks_then_direct() {
+        let routes = proxy_candidates(Some("http://127.0.0.1:7890".to_string()));
+        assert_eq!(
+            routes,
+            vec![
+                Some("http://127.0.0.1:7890".to_string()),
+                Some("socks5://127.0.0.1:7890".to_string()),
+                None,
+            ],
+        );
+        assert_eq!(proxy_candidates(None), vec![None]);
+        // An explicit socks proxy is not doubled.
+        let socks = proxy_candidates(Some("socks5://1.2.3.4:1080".to_string()));
+        assert_eq!(
+            socks,
+            vec![Some("socks5://1.2.3.4:1080".to_string()), None],
+        );
     }
 
     #[test]

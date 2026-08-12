@@ -89,7 +89,14 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
         .args(&plan.args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        // Launched from `cargo tauri dev`, this process inherits the
+        // RUSTUP_TOOLCHAIN the rustup shim set for *rusty's own* build —
+        // and rustup lets that variable outrank the project's
+        // rust-toolchain.toml. A spawned `cargo build` then compiles an
+        // esp-pinned Xtensa project with stable, which dies with "can't
+        // find crate for core". The project's own pin must decide.
+        .env_remove("RUSTUP_TOOLCHAIN");
     if let Some(dir) = working_dir {
         command.current_dir(dir);
     }
