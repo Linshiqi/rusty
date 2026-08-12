@@ -9,6 +9,7 @@ use leptos::{ev, prelude::*};
 
 use rusty_edit::SearchHit;
 
+use super::files::Editor;
 use crate::{controller, state::AppState, view::components::Empty};
 
 #[component]
@@ -29,8 +30,11 @@ pub fn SearchPanel() -> impl IntoView {
             .into_any();
         }
 
+        // VSCode's split: the search lives in a sidebar, the editor keeps the
+        // rest of the window. A hit opens on the right without leaving here.
         view! {
-            <div class="flex min-h-0 flex-1 flex-col">
+            <div class="flex min-h-0 flex-1">
+                <div class="flex w-[300px] flex-none flex-col border-r border-line bg-sidebar">
                 <div class="flex flex-col gap-1.5 border-b border-line px-3 py-2">
                     <div class="flex items-center gap-1.5">
                         <input
@@ -124,6 +128,11 @@ pub fn SearchPanel() -> impl IntoView {
                         }
                         .into_any()
                     }}
+                </div>
+                </div>
+
+                <div class="flex min-w-0 flex-1 flex-col">
+                    <Editor />
                 </div>
             </div>
         }

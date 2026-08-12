@@ -193,7 +193,7 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
 }
 
 #[component]
-fn Editor() -> impl IntoView {
+pub(super) fn Editor() -> impl IntoView {
     let state = AppState::expect();
 
     move || {

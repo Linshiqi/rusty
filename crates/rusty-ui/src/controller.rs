@@ -571,7 +571,12 @@ fn run_search(state: AppState, generation: u64) {
 /// Open a file at an exact position — how a search hit or a problem row
 /// lands in the editor, through the same reveal goto-definition uses.
 pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
-    state.active_panel.set("files".to_string());
+    // Files and Search both keep an editor on the right, VSCode-style; a
+    // jump from either stays put. From anywhere else, land in Files.
+    let panel = state.active_panel.get_untracked();
+    if panel != "files" && panel != "search" {
+        state.active_panel.set("files".to_string());
+    }
     let current = state
         .document
         .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
