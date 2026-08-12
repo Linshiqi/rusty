@@ -515,6 +515,10 @@ pub struct SimLed {
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// User-drawn waypoints per wire, world coordinates. Empty means "route
+    /// automatically". routes[0] belongs to pins[0] (or the only pin).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Vec<(f64, f64)>>,
 }
 
 /// A push button on the board. Pressing it sends `B<pin>=1` (and release
@@ -528,6 +532,10 @@ pub struct SimButton {
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// User-drawn waypoints per wire, world coordinates. Empty means "route
+    /// automatically". routes[0] belongs to pins[0] (or the only pin).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Vec<(f64, f64)>>,
 }
 
 /// An RGB LED: three pins, one lens. The lit colour is the additive mix of
@@ -543,6 +551,10 @@ pub struct SimRgb {
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// User-drawn waypoints per wire, world coordinates. Empty means "route
+    /// automatically". routes[0] belongs to pins[0] (or the only pin).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Vec<(f64, f64)>>,
 }
 
 /// A seven-segment digit: seven GPIO pins, one per segment a..g. Lit
@@ -559,6 +571,10 @@ pub struct SimSeven {
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// User-drawn waypoints per wire, world coordinates. Empty means "route
+    /// automatically". routes[0] belongs to pins[0] (or the only pin).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Vec<(f64, f64)>>,
 }
 
 /// A small text screen fed by the `[rusty:disp]` serial channel — the
@@ -585,6 +601,10 @@ pub struct SimPot {
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// User-drawn waypoints per wire, world coordinates. Empty means "route
+    /// automatically". routes[0] belongs to pins[0] (or the only pin).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Vec<(f64, f64)>>,
 }
 
 /// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never

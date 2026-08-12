@@ -199,10 +199,32 @@ struct EditPart {
     label: String,
     x: f64,
     y: f64,
+    /// User-drawn bends per wire slot; empty routes automatically.
+    waypoints: [Vec<(f64, f64)>; 7],
 }
 
 fn pins3(a: u8, b: u8, c: u8) -> [u8; 7] {
     [a, b, c, 0, 0, 0, 0]
+}
+
+/// The file's flat route list, spread into per-slot waypoint arrays.
+fn waypoints_of(routes: &[Vec<(f64, f64)>]) -> [Vec<(f64, f64)>; 7] {
+    let mut out: [Vec<(f64, f64)>; 7] = Default::default();
+    for (slot, route) in routes.iter().take(7).enumerate() {
+        out[slot] = route.clone();
+    }
+    out
+}
+
+/// Back to the file shape: one route per wire slot, trailing empties kept so
+/// slot indexes stay aligned, fully-empty lists collapsed to nothing.
+fn routes_of(waypoints: &[Vec<(f64, f64)>; 7], wires: usize) -> Vec<Vec<(f64, f64)>> {
+    let slice = &waypoints[..wires];
+    if slice.iter().all(Vec::is_empty) {
+        Vec::new()
+    } else {
+        slice.to_vec()
+    }
 }
 
 fn parts_of(board: &SimBoard) -> Vec<EditPart> {
@@ -216,6 +238,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             label: led.label.clone(),
             x: led.x.unwrap_or(60.0),
             y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
+            waypoints: waypoints_of(&led.routes),
         });
     }
     for button in &board.buttons {
@@ -225,6 +248,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             label: button.label.clone(),
             x: button.x.unwrap_or(60.0),
             y: button.y.unwrap_or(180.0),
+            waypoints: waypoints_of(&button.routes),
         });
     }
     for rgb in &board.rgbs {
@@ -234,6 +258,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             label: rgb.label.clone(),
             x: rgb.x.unwrap_or(60.0),
             y: rgb.y.unwrap_or(240.0),
+            waypoints: waypoints_of(&rgb.routes),
         });
     }
     for seven in &board.sevens {
@@ -243,6 +268,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             label: seven.label.clone(),
             x: seven.x.unwrap_or(160.0),
             y: seven.y.unwrap_or(60.0),
+            waypoints: waypoints_of(&seven.routes),
         });
     }
     for display in &board.displays {
@@ -252,6 +278,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             label: display.label.clone(),
             x: display.x.unwrap_or(160.0),
             y: display.y.unwrap_or(160.0),
+            waypoints: Default::default(),
         });
     }
     for pot in &board.pots {
@@ -261,6 +288,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             label: pot.label.clone(),
             x: pot.x.unwrap_or(60.0),
             y: pot.y.unwrap_or(280.0),
+            waypoints: waypoints_of(&pot.routes),
         });
     }
     out
@@ -286,12 +314,14 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
+                routes: routes_of(&part.waypoints, 1),
             }),
             PartKind::Button => board.buttons.push(rusty_embed::SimButton {
                 pin: part.pins[0],
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
+                routes: routes_of(&part.waypoints, 1),
             }),
             PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
                 r: part.pins[0],
@@ -300,12 +330,14 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
+                routes: routes_of(&part.waypoints, 3),
             }),
             PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
                 pins: part.pins,
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
+                routes: routes_of(&part.waypoints, 7),
             }),
             PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
                 label: part.label.clone(),
@@ -317,6 +349,7 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
+                routes: routes_of(&part.waypoints, 1),
             }),
         }
     }
@@ -363,6 +396,10 @@ enum Drag {
     Kit { dx: f64, dy: f64 },
     /// Panning the sheet: screen-space start of view translation.
     Pan { start_tx: f64, start_ty: f64, px: f64, py: f64 },
+    /// Pulling a new connection out of a part's pin stub.
+    Wire { part: usize, slot: usize },
+    /// Moving one waypoint of an existing wire.
+    Waypoint { part: usize, slot: usize, index: usize },
 }
 
 const SNAP: f64 = 8.0;
@@ -370,9 +407,128 @@ const KIT_W: f64 = 150.0;
 const KIT_H: f64 = 230.0;
 /// Pin rows per side of the schematic devkit.
 const KIT_ROWS: usize = 15;
+/// "This pin is not wired to anything" — new parts start here, and
+/// disconnecting returns here. 255 is no GPIO on any supported chip.
+const UNWIRED: u8 = 255;
 
 fn snap(value: f64) -> f64 {
     (value / SNAP).round() * SNAP
+}
+
+/// The classic 30-pin ESP32 devkit pinout, top to bottom, left then right.
+/// `None` rows (power, ground, EN) refuse wires — an LED soldered to GND on
+/// both ends is a diagram nobody meant.
+fn kit_rows() -> [(&'static str, Option<u8>); 30] {
+    [
+        ("EN", None),
+        ("36", Some(36)),
+        ("39", Some(39)),
+        ("34", Some(34)),
+        ("35", Some(35)),
+        ("32", Some(32)),
+        ("33", Some(33)),
+        ("25", Some(25)),
+        ("26", Some(26)),
+        ("27", Some(27)),
+        ("14", Some(14)),
+        ("12", Some(12)),
+        ("13", Some(13)),
+        ("GND", None),
+        ("VIN", None),
+        ("3V3", None),
+        ("GND", None),
+        ("15", Some(15)),
+        ("2", Some(2)),
+        ("4", Some(4)),
+        ("16", Some(16)),
+        ("17", Some(17)),
+        ("5", Some(5)),
+        ("18", Some(18)),
+        ("19", Some(19)),
+        ("21", Some(21)),
+        ("RX", Some(3)),
+        ("TX", Some(1)),
+        ("22", Some(22)),
+        ("23", Some(23)),
+    ]
+}
+
+fn row_of_gpio(pin: u8) -> Option<usize> {
+    kit_rows().iter().position(|(_, gpio)| *gpio == Some(pin))
+}
+
+/// World coordinates of a kit row's pin circle.
+fn row_point(kit: (f64, f64), row: usize) -> (f64, f64) {
+    if row < KIT_ROWS {
+        (kit.0 + 10.0, kit.1 + 16.0 + row as f64 * 14.0)
+    } else {
+        (
+            kit.0 + KIT_W - 10.0,
+            kit.1 + 16.0 + (row - KIT_ROWS) as f64 * 14.0,
+        )
+    }
+}
+
+/// Which kit row a world point lands on, if any.
+fn row_under(kit: (f64, f64), point: (f64, f64)) -> Option<usize> {
+    let (kx, ky) = kit;
+    let (x, y) = point;
+    if y < ky + 9.0 || y > ky + 16.0 + KIT_ROWS as f64 * 14.0 {
+        return None;
+    }
+    let row = (((y - ky - 16.0) / 14.0).round().max(0.0)) as usize;
+    if row >= KIT_ROWS {
+        return None;
+    }
+    if x >= kx - 8.0 && x <= kx + 30.0 {
+        Some(row)
+    } else if x >= kx + KIT_W - 30.0 && x <= kx + KIT_W + 8.0 {
+        Some(row + KIT_ROWS)
+    } else {
+        None
+    }
+}
+
+/// Where a part's `slot`-th wire leaves its body.
+fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
+    (
+        part.x + part.kind.width(),
+        part.y + 14.0 + slot as f64 * 6.0,
+    )
+}
+
+/// Index at which a clicked point should insert into a polyline's waypoint
+/// list: after the nearest segment start.
+fn insert_index(points: &[(f64, f64)], click: (f64, f64)) -> usize {
+    let mut best = 0usize;
+    let mut best_d = f64::MAX;
+    for (i, pair) in points.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+        let (px, py) = (b.0 - a.0, b.1 - a.1);
+        let len2 = (px * px + py * py).max(1e-6);
+        let t = (((click.0 - a.0) * px + (click.1 - a.1) * py) / len2).clamp(0.0, 1.0);
+        let (cx, cy) = (a.0 + t * px, a.1 + t * py);
+        let d = (click.0 - cx).powi(2) + (click.1 - cy).powi(2);
+        if d < best_d {
+            best_d = d;
+            best = i;
+        }
+    }
+    best
+}
+
+/// The label a single-pin part wears for its wiring state.
+fn single_pin_label(kind: &PartKind, pin: u8) -> String {
+    let base = match kind {
+        PartKind::Button => "BTN",
+        PartKind::Pot => "POT",
+        _ => "GPIO",
+    };
+    if pin == UNWIRED {
+        format!("{base} —")
+    } else {
+        format!("{base}{pin}")
+    }
 }
 
 /// The editor: library, canvas, toolbar. Local state until Save writes it
@@ -392,12 +548,15 @@ fn BoardEditor(
     let kit_pos = RwSignal::new((board.kit_x.unwrap_or(460.0), board.kit_y.unwrap_or(40.0)));
     let dirty = RwSignal::new(false);
     let selected = RwSignal::new(None::<usize>);
+    let selected_wire = RwSignal::new(None::<(usize, usize)>);
     let drag = RwSignal::new(None::<Drag>);
-    // View transform: world → screen is (x * k + tx, y * k + ty).
+    // While pulling a wire: current cursor in world coords, and the row the
+    // cursor hovers, when it is one that accepts wires.
+    let ghost = RwSignal::new(None::<(f64, f64)>);
+    let hover_row = RwSignal::new(None::<usize>);
     let view = RwSignal::new((0.0f64, 0.0f64, 1.0f64));
     let canvas: NodeRef<leptos::html::Div> = NodeRef::new();
 
-    // ── undo/redo: snapshots of (parts, kit) ────────────────────────────
     let history = RwSignal::new(Vec::<Snapshot>::new());
     let future = RwSignal::new(Vec::<Snapshot>::new());
     let checkpoint = move || {
@@ -428,32 +587,32 @@ fn BoardEditor(
         dirty.set(true);
     };
 
+    // A new part arrives unwired: connecting it is the user's move, made by
+    // pulling its stub to a chip pin. Auto-wiring guessed; this asks.
     let add_part = move |kind: PartKind, label_stub: String| {
         checkpoint();
         parts.update(|list| {
-            let pin = 2 + list.len() as u8;
             let label = match &kind {
-                PartKind::Led { .. } => format!("GPIO{pin}"),
-                PartKind::Button => format!("BTN{pin}"),
-                PartKind::Rgb => label_stub.clone(),
+                PartKind::Led { .. } => "GPIO —".to_string(),
+                PartKind::Button => "BTN —".to_string(),
+                PartKind::Rgb => {
+                    if label_stub.is_empty() {
+                        "RGB".to_string()
+                    } else {
+                        label_stub.clone()
+                    }
+                }
                 PartKind::Seven => "7SEG".to_string(),
                 PartKind::Display => "DISPLAY".to_string(),
-                PartKind::Pot => format!("POT{pin}"),
+                PartKind::Pot => "POT —".to_string(),
             };
             list.push(EditPart {
                 kind,
-                pins: [
-                    pin,
-                    pin.saturating_add(1),
-                    pin.saturating_add(2),
-                    pin.saturating_add(3),
-                    pin.saturating_add(4),
-                    pin.saturating_add(5),
-                    pin.saturating_add(6),
-                ],
+                pins: [UNWIRED; 7],
                 label,
                 x: snap(60.0 + (list.len() as f64 * 16.0) % 90.0),
                 y: snap(40.0 + (list.len() as f64 * 52.0) % 240.0),
+                waypoints: Default::default(),
             });
             selected.set(Some(list.len() - 1));
         });
@@ -465,7 +624,6 @@ fn BoardEditor(
         controller::save_sim_board(state, board, dirty);
     };
 
-    // screen → world through the current view transform.
     let to_world = move |client_x: f64, client_y: f64| -> (f64, f64) {
         let Some(element) = canvas.get_untracked() else {
             return (client_x, client_y);
@@ -476,6 +634,33 @@ fn BoardEditor(
             (client_x - rect.left() - tx) / k,
             (client_y - rect.top() - ty) / k,
         )
+    };
+
+    // Disconnect the selected wire, or remove the selected part.
+    let delete_selection = move || {
+        if let Some((part, slot)) = selected_wire.get_untracked() {
+            checkpoint();
+            parts.update(|list| {
+                if let Some(p) = list.get_mut(part) {
+                    p.pins[slot] = UNWIRED;
+                    p.waypoints[slot].clear();
+                    if p.kind.wires() == 1 {
+                        p.label = single_pin_label(&p.kind, UNWIRED);
+                    }
+                }
+            });
+            selected_wire.set(None);
+            dirty.set(true);
+        } else if let Some(index) = selected.get_untracked() {
+            checkpoint();
+            parts.update(|list| {
+                if index < list.len() {
+                    list.remove(index);
+                }
+            });
+            selected.set(None);
+            dirty.set(true);
+        }
     };
 
     view! {
@@ -580,7 +765,7 @@ fn BoardEditor(
                 }}
                 <span class="flex-1" />
                 <span class="text-caption text-label-4">
-                    "pin levels as reported by the firmware over serial"
+                    "wire a part by dragging its gold stub to a chip pin"
                 </span>
             </div>
 
@@ -600,7 +785,7 @@ fn BoardEditor(
                             view! {
                                 <button
                                     type="button"
-                                    title=format!("Add a {color} LED")
+                                    title=format!("Add a {color} LED (unwired)")
                                     on:click=move |_| add_part(
                                         PartKind::Led {
                                             color: color.to_string(),
@@ -714,17 +899,30 @@ fn BoardEditor(
                     </p>
                 </div>
 
-                // ── the sheet ────────────────────────────────────────────
                 <div
                     node_ref=canvas
                     tabindex="0"
                     on:keydown=move |event: ev::KeyboardEvent| {
-                        if event.ctrl_key() && event.key().eq_ignore_ascii_case("z") {
-                            event.prevent_default();
-                            if event.shift_key() { redo() } else { undo() }
-                        } else if event.ctrl_key() && event.key().eq_ignore_ascii_case("y") {
-                            event.prevent_default();
-                            redo();
+                        match event.key().as_str() {
+                            "Delete" | "Backspace" => {
+                                event.prevent_default();
+                                delete_selection();
+                            }
+                            "Escape" => {
+                                selected_wire.set(None);
+                                selected.set(None);
+                            }
+                            _ if event.ctrl_key()
+                                && event.key().eq_ignore_ascii_case("z") => {
+                                event.prevent_default();
+                                if event.shift_key() { redo() } else { undo() }
+                            }
+                            _ if event.ctrl_key()
+                                && event.key().eq_ignore_ascii_case("y") => {
+                                event.prevent_default();
+                                redo();
+                            }
+                            _ => {}
                         }
                     }
                     on:wheel=move |event: ev::WheelEvent| {
@@ -739,15 +937,12 @@ fn BoardEditor(
                             let factor = if event.delta_y() < 0.0 { 1.12 } else { 1.0 / 1.12 };
                             let next = (*k * factor).clamp(0.35, 2.5);
                             let real = next / *k;
-                            // Anchor the zoom at the cursor: the world point
-                            // under it stays under it.
                             *tx = cx - (cx - *tx) * real;
                             *ty = cy - (cy - *ty) * real;
                             *k = next;
                         });
                     }
                     on:pointerdown=move |event: ev::PointerEvent| {
-                        // Background press pans the sheet.
                         if let Some(element) = canvas.get_untracked()
                             && let Some(target) = event.target()
                             && let Ok(node) = wasm_bindgen::JsCast::dyn_into::<web_sys::Node>(target)
@@ -764,12 +959,17 @@ fn BoardEditor(
                                 py: f64::from(event.client_y()),
                             }));
                             selected.set(None);
+                            selected_wire.set(None);
                         }
                     }
                     on:pointermove=move |event: ev::PointerEvent| {
                         let Some(current) = drag.get_untracked() else {
                             return;
                         };
+                        let world = to_world(
+                            f64::from(event.client_x()),
+                            f64::from(event.client_y()),
+                        );
                         match current {
                             Drag::Pan { start_tx, start_ty, px, py } => {
                                 view.update(|(tx, ty, _)| {
@@ -778,34 +978,68 @@ fn BoardEditor(
                                 });
                             }
                             Drag::Part { index, dx, dy } => {
-                                let (wx, wy) = to_world(
-                                    f64::from(event.client_x()),
-                                    f64::from(event.client_y()),
-                                );
                                 parts.update(|list| {
                                     if let Some(part) = list.get_mut(index) {
-                                        part.x = snap(wx - dx);
-                                        part.y = snap(wy - dy);
+                                        part.x = snap(world.0 - dx);
+                                        part.y = snap(world.1 - dy);
                                     }
                                 });
                                 dirty.set(true);
                             }
                             Drag::Kit { dx, dy } => {
-                                let (wx, wy) = to_world(
-                                    f64::from(event.client_x()),
-                                    f64::from(event.client_y()),
-                                );
-                                kit_pos.set((snap(wx - dx), snap(wy - dy)));
+                                kit_pos.set((snap(world.0 - dx), snap(world.1 - dy)));
+                                dirty.set(true);
+                            }
+                            Drag::Wire { .. } => {
+                                ghost.set(Some(world));
+                                let row = row_under(kit_pos.get_untracked(), world)
+                                    .filter(|r| kit_rows()[*r].1.is_some());
+                                hover_row.set(row);
+                            }
+                            Drag::Waypoint { part, slot, index } => {
+                                parts.update(|list| {
+                                    if let Some(p) = list.get_mut(part)
+                                        && let Some(wp) = p.waypoints[slot].get_mut(index)
+                                    {
+                                        *wp = (snap(world.0), snap(world.1));
+                                    }
+                                });
                                 dirty.set(true);
                             }
                         }
                     }
-                    on:pointerup=move |_| drag.set(None)
-                    on:pointerleave=move |_| drag.set(None)
+                    on:pointerup=move |_| {
+                        if let Some(Drag::Wire { part, slot }) = drag.get_untracked() {
+                            // Landing on a GPIO row wires the pin; anywhere
+                            // else cancels. Wiring IS pin assignment.
+                            if let Some(row) = hover_row.get_untracked()
+                                && let Some(gpio) = kit_rows()[row].1
+                            {
+                                checkpoint();
+                                parts.update(|list| {
+                                    if let Some(p) = list.get_mut(part) {
+                                        p.pins[slot] = gpio;
+                                        p.waypoints[slot].clear();
+                                        if p.kind.wires() == 1 {
+                                            p.label = single_pin_label(&p.kind, gpio);
+                                        }
+                                    }
+                                });
+                                selected_wire.set(Some((part, slot)));
+                                dirty.set(true);
+                            }
+                        }
+                        ghost.set(None);
+                        hover_row.set(None);
+                        drag.set(None);
+                    }
+                    on:pointerleave=move |_| {
+                        ghost.set(None);
+                        hover_row.set(None);
+                        drag.set(None);
+                    }
                     class="relative min-w-0 flex-1 overflow-hidden bg-[#101216] outline-none"
                 >
-                    // Everything on the sheet lives in world coordinates in
-                    // this one transformed layer — parts, kit, wires, grid.
                     <div
                         class="absolute"
                         style=move || {
@@ -833,96 +1067,214 @@ fn BoardEditor(
                             </defs>
                             <rect width="6000" height="6000" fill="url(#sheet-grid)" />
                             <g transform="translate(2000, 2000)">
+                                // ── wires: one per connected pin ────────────
                                 {move || {
-                                    let (kx, ky) = kit_pos.get();
-                                    let mut slot = 0usize;
+                                    let kit = kit_pos.get();
+                                    let picked = selected_wire.get();
                                     parts
                                         .get()
                                         .iter()
-                                        .flat_map(|part| {
-                                            let wires = part.kind.wires();
-                                            let sx = part.x + part.kind.width();
-                                            let sy = part.y + 14.0;
-                                            let out: Vec<_> = (0..wires)
-                                                .map(|w| {
-                                                    let this = slot + w;
-                                                    // Left column first, right
-                                                    // column after it fills.
-                                                    let (px, py, from_right) =
-                                                        if this < KIT_ROWS {
-                                                            (
-                                                                kx + 10.0,
-                                                                ky + 16.0 + this as f64 * 14.0,
-                                                                false,
-                                                            )
-                                                        } else {
-                                                            (
-                                                                kx + KIT_W - 10.0,
-                                                                ky + 16.0
-                                                                    + (this - KIT_ROWS) as f64
-                                                                        * 14.0,
-                                                                true,
-                                                            )
-                                                        };
-                                                    let wy = sy + w as f64 * 6.0;
-                                                    // Stagger the vertical runs
-                                                    // so parallel wires stay
-                                                    // parallel, not stacked.
-                                                    let mid = if from_right {
-                                                        px + 24.0 + this as f64 * 8.0
-                                                    } else {
-                                                        px - 24.0 - this as f64 * 8.0
-                                                    };
-                                                    let pin = part.pins[w];
-                                                    view! {
-                                                        <polyline
-                                                            points=format!(
-                                                                "{sx},{wy} {mid},{wy} {mid},{py} {px},{py}",
-                                                            )
-                                                            fill="none"
-                                                            stroke="#7d8694"
-                                                            stroke-width="1.6"
-                                                        />
-                                                        <circle cx=sx cy=wy r="2.6" fill="#c9a227" />
-                                                        <circle cx=px cy=py r="2.6" fill="#c9a227" />
-                                                        <text
-                                                            x=if from_right { px + 8.0 } else { px - 8.0 }
-                                                            y=py + 3.0
-                                                            text-anchor=if from_right { "start" } else { "end" }
-                                                            font-family="ui-monospace"
-                                                            font-size="9"
-                                                            fill="#98a1ae"
-                                                        >
-                                                            {pin.to_string()}
-                                                        </text>
+                                        .enumerate()
+                                        .flat_map(|(part_index, part)| {
+                                            (0..part.kind.wires())
+                                                .filter_map(|slot| {
+                                                    let pin = part.pins[slot];
+                                                    if pin == UNWIRED {
+                                                        return None;
                                                     }
+                                                    let row = row_of_gpio(pin)?;
+                                                    let from = stub_point(part, slot);
+                                                    let to = row_point(kit, row);
+                                                    let mut points = vec![from];
+                                                    points
+                                                        .extend(part.waypoints[slot].iter().copied());
+                                                    // Without user waypoints,
+                                                    // an L keeps it tidy.
+                                                    if part.waypoints[slot].is_empty() {
+                                                        let mid = if row < KIT_ROWS {
+                                                            to.0 - 24.0 - (row as f64 * 4.0)
+                                                        } else {
+                                                            to.0 + 24.0
+                                                                + ((row - KIT_ROWS) as f64 * 4.0)
+                                                        };
+                                                        points.push((mid, from.1));
+                                                        points.push((mid, to.1));
+                                                    }
+                                                    points.push(to);
+                                                    let path = points
+                                                        .iter()
+                                                        .map(|(x, y)| format!("{x},{y}"))
+                                                        .collect::<Vec<_>>()
+                                                        .join(" ");
+                                                    let is_picked =
+                                                        picked == Some((part_index, slot));
+                                                    let stroke = if is_picked {
+                                                        "#e05d38"
+                                                    } else {
+                                                        "#7d8694"
+                                                    };
+                                                    let width = if is_picked { "2.4" } else { "1.6" };
+                                                    let handles = is_picked
+                                                        .then(|| {
+                                                            parts
+                                                                .with_untracked(|l| {
+                                                                    l[part_index].waypoints[slot]
+                                                                        .clone()
+                                                                })
+                                                                .into_iter()
+                                                                .enumerate()
+                                                                .map(|(wp_index, (wx, wy))| {
+                                                                    view! {
+                                                                        <rect
+                                                                            x=wx - 3.5
+                                                                            y=wy - 3.5
+                                                                            width="7"
+                                                                            height="7"
+                                                                            fill="#c9a227"
+                                                                            stroke="#101216"
+                                                                            style="pointer-events: auto; cursor: move"
+                                                                            on:pointerdown=move |event: ev::PointerEvent| {
+                                                                                event.stop_propagation();
+                                                                                checkpoint();
+                                                                                drag.set(Some(Drag::Waypoint {
+                                                                                    part: part_index,
+                                                                                    slot,
+                                                                                    index: wp_index,
+                                                                                }));
+                                                                            }
+                                                                        />
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                        });
+                                                    Some(view! {
+                                                        // Fat invisible twin
+                                                        // makes the wire
+                                                        // clickable.
+                                                        <polyline
+                                                            points=path.clone()
+                                                            fill="none"
+                                                            stroke="transparent"
+                                                            stroke-width="10"
+                                                            style="pointer-events: stroke; cursor: pointer"
+                                                            on:pointerdown=move |event: ev::PointerEvent| {
+                                                                event.stop_propagation();
+                                                            }
+                                                            on:click=move |event: ev::MouseEvent| {
+                                                                event.stop_propagation();
+                                                                selected.set(None);
+                                                                selected_wire
+                                                                    .set(Some((part_index, slot)));
+                                                                if let Some(element) =
+                                                                    canvas.get_untracked()
+                                                                {
+                                                                    let _ = element.focus();
+                                                                }
+                                                            }
+                                                            on:dblclick=move |event: ev::MouseEvent| {
+                                                                event.stop_propagation();
+                                                                let world = to_world(
+                                                                    f64::from(event.client_x()),
+                                                                    f64::from(event.client_y()),
+                                                                );
+                                                                checkpoint();
+                                                                parts.update(|list| {
+                                                                    let Some(p) =
+                                                                        list.get_mut(part_index)
+                                                                    else {
+                                                                        return;
+                                                                    };
+                                                                    // Rebuild the drawn point list
+                                                                    // to find where this belongs.
+                                                                    let from =
+                                                                        stub_point(p, slot);
+                                                                    let row = row_of_gpio(p.pins[slot]);
+                                                                    let mut pts = vec![from];
+                                                                    pts.extend(
+                                                                        p.waypoints[slot]
+                                                                            .iter()
+                                                                            .copied(),
+                                                                    );
+                                                                    if let Some(row) = row {
+                                                                        pts.push(row_point(
+                                                                            kit_pos.get_untracked(),
+                                                                            row,
+                                                                        ));
+                                                                    }
+                                                                    let at =
+                                                                        insert_index(&pts, world);
+                                                                    p.waypoints[slot].insert(
+                                                                        at.min(
+                                                                            p.waypoints[slot].len(),
+                                                                        ),
+                                                                        (
+                                                                            snap(world.0),
+                                                                            snap(world.1),
+                                                                        ),
+                                                                    );
+                                                                });
+                                                                selected_wire
+                                                                    .set(Some((part_index, slot)));
+                                                                dirty.set(true);
+                                                            }
+                                                        />
+                                                        <polyline
+                                                            points=path
+                                                            fill="none"
+                                                            stroke=stroke
+                                                            stroke-width=width
+                                                        />
+                                                        <circle cx=from.0 cy=from.1 r="2.6" fill="#c9a227" />
+                                                        <circle cx=to.0 cy=to.1 r="2.6" fill="#c9a227" />
+                                                        {handles}
+                                                    })
                                                 })
-                                                .collect();
-                                            slot += wires;
-                                            out
+                                                .collect::<Vec<_>>()
                                         })
                                         .collect_view()
+                                }}
+
+                                // ── the ghost while pulling a new wire ──────
+                                {move || {
+                                    let target = ghost.get()?;
+                                    let Some(Drag::Wire { part, slot }) = drag.get() else {
+                                        return None;
+                                    };
+                                    let from = parts
+                                        .with(|list| list.get(part).map(|p| stub_point(p, slot)))?;
+                                    Some(view! {
+                                        <line
+                                            x1=from.0
+                                            y1=from.1
+                                            x2=target.0
+                                            y2=target.1
+                                            stroke="#e0a838"
+                                            stroke-width="1.8"
+                                            stroke-dasharray="5 4"
+                                        />
+                                    })
                                 }}
                             </g>
                         </svg>
 
-                        // the devkit — a part like any other, so it drags
+                        // the devkit — labelled pins, drop targets, draggable
                         {move || {
                             let (kx, ky) = kit_pos.get();
+                            let hovered = hover_row.get();
                             view! {
                                 <div
                                     on:pointerdown=move |event: ev::PointerEvent| {
                                         event.prevent_default();
                                         event.stop_propagation();
                                         checkpoint();
-                                        let (wx, wy) = to_world(
+                                        let world = to_world(
                                             f64::from(event.client_x()),
                                             f64::from(event.client_y()),
                                         );
                                         let (kx, ky) = kit_pos.get_untracked();
                                         drag.set(Some(Drag::Kit {
-                                            dx: wx - kx,
-                                            dy: wy - ky,
+                                            dx: world.0 - kx,
+                                            dy: world.1 - ky,
                                         }));
                                     }
                                     class="absolute cursor-grab"
@@ -934,17 +1286,39 @@ fn BoardEditor(
                                         viewBox=format!("0 0 {KIT_W} {KIT_H}")
                                     >
                                         <rect x="4" y="2" width=KIT_W - 8.0 height=KIT_H - 4.0 rx="10" fill="#1a1d23" stroke="#454b56" stroke-width="1.5" />
-                                        {(0..KIT_ROWS)
-                                            .map(|i| {
-                                                let y = 16 + i as i32 * 14;
+                                        {kit_rows()
+                                            .into_iter()
+                                            .enumerate()
+                                            .map(|(row, (name, gpio))| {
+                                                let left = row < KIT_ROWS;
+                                                let y = 16 + (row % KIT_ROWS) as i32 * 14;
+                                                let cx = if left { 10.0 } else { KIT_W - 10.0 };
+                                                let hot = hovered == Some(row);
+                                                let fill = if hot {
+                                                    "#e0a838"
+                                                } else if gpio.is_some() {
+                                                    "#c9a227"
+                                                } else {
+                                                    "#5a5142"
+                                                };
+                                                let r = if hot { 5.0 } else { 3.2 };
                                                 view! {
-                                                    <circle cx="10" cy=y r="3.2" fill="#c9a227" />
-                                                    <circle cx=KIT_W - 10.0 cy=y r="3.2" fill="#c9a227" />
+                                                    <circle cx=cx cy=y r=r fill=fill />
+                                                    <text
+                                                        x=if left { 18.0 } else { KIT_W - 18.0 }
+                                                        y=y + 3
+                                                        text-anchor=if left { "start" } else { "end" }
+                                                        font-family="ui-monospace"
+                                                        font-size="7.5"
+                                                        fill="#98a1ae"
+                                                    >
+                                                        {name}
+                                                    </text>
                                                 }
                                             })
                                             .collect_view()}
-                                        <rect x="34" y="12" width=KIT_W - 68.0 height="84" rx="4" fill="#2e333b" stroke="#4a515d" />
-                                        <text x=KIT_W / 2.0 y="58" text-anchor="middle" font-family="ui-monospace" font-size="14" fill="#aab3c0">
+                                        <rect x="42" y="12" width=KIT_W - 84.0 height="84" rx="4" fill="#2e333b" stroke="#4a515d" />
+                                        <text x=KIT_W / 2.0 y="58" text-anchor="middle" font-family="ui-monospace" font-size="12" fill="#aab3c0">
                                             {chip_label.clone()}
                                         </text>
                                         <rect x=KIT_W / 2.0 - 15.0 y=KIT_H - 22.0 width="30" height="14" rx="2" fill="#3a3e46" />
@@ -966,6 +1340,7 @@ fn BoardEditor(
                                     let kind = part.kind.clone();
                                     let grab_kind = part.kind.clone();
                                     let pins = part.pins;
+                                    let wires = part.kind.wires();
                                     let is_selected =
                                         Signal::derive(move || selected.get() == Some(index));
                                     let level = move |pin: u8| {
@@ -1097,20 +1472,21 @@ fn BoardEditor(
                                                 event.prevent_default();
                                                 event.stop_propagation();
                                                 selected.set(Some(index));
+                                                selected_wire.set(None);
                                                 if matches!(grab_kind, PartKind::Button)
                                                     && running.get_untracked()
                                                 {
                                                     return;
                                                 }
                                                 checkpoint();
-                                                let (wx, wy) = to_world(
+                                                let world = to_world(
                                                     f64::from(event.client_x()),
                                                     f64::from(event.client_y()),
                                                 );
                                                 drag.set(Some(Drag::Part {
                                                     index,
-                                                    dx: wx - x,
-                                                    dy: wy - y,
+                                                    dx: world.0 - x,
+                                                    dy: world.1 - y,
                                                 }));
                                             }
                                             class=move || {
@@ -1131,6 +1507,48 @@ fn BoardEditor(
                                             <span class="min-w-0 flex-1 truncate font-mono text-caption text-[#d7dce3]">
                                                 {label}
                                             </span>
+                                            // pin stubs: the gold dots wires
+                                            // pull out of
+                                            {(!matches!(kind, PartKind::Display))
+                                                .then(|| {
+                                                    (0..wires)
+                                                        .map(|slot| {
+                                                            let unwired =
+                                                                pins[slot] == UNWIRED;
+                                                            let top = 8.0 + slot as f64 * 6.0;
+                                                            view! {
+                                                                <span
+                                                                    title=if unwired {
+                                                                        "Drag to a chip pin to wire this"
+                                                                    } else {
+                                                                        "Drag to rewire"
+                                                                    }
+                                                                    on:pointerdown=move |event: ev::PointerEvent| {
+                                                                        event.prevent_default();
+                                                                        event.stop_propagation();
+                                                                        selected.set(Some(index));
+                                                                        selected_wire.set(None);
+                                                                        drag.set(Some(Drag::Wire {
+                                                                            part: index,
+                                                                            slot,
+                                                                        }));
+                                                                    }
+                                                                    class=format!(
+                                                                        "absolute size-[9px] cursor-crosshair rounded-full ring-1 ring-[#101216] {}",
+                                                                        if unwired {
+                                                                            "bg-[#e0a838] animate-pulse"
+                                                                        } else {
+                                                                            "bg-[#c9a227]"
+                                                                        },
+                                                                    )
+                                                                    style=format!(
+                                                                        "right: -5px; top: {top}px",
+                                                                    )
+                                                                />
+                                                            }
+                                                        })
+                                                        .collect_view()
+                                                })}
                                         </div>
                                     }
                                 })
@@ -1141,13 +1559,59 @@ fn BoardEditor(
 
                 <div class="flex w-[190px] flex-none flex-col border-l border-line bg-sidebar">
                     {move || {
+                        // A selected wire outranks a selected part.
+                        if let Some((part_index, slot)) = selected_wire.get() {
+                            let part = parts.with(|l| l.get(part_index).cloned());
+                            let Some(part) = part else {
+                                return ().into_any();
+                            };
+                            let pin = part.pins[slot];
+                            let bends = part.waypoints[slot].len();
+                            return view! {
+                                <div class="flex flex-col gap-2 p-3">
+                                    <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                                        "Wire"
+                                    </span>
+                                    <p class="text-footnote text-label-2">
+                                        {format!("{} → GPIO{pin}", part.label)}
+                                    </p>
+                                    <p class="text-footnote text-label-4">
+                                        {format!(
+                                            "{bends} bend(s) — double-click the wire to add one, drag the squares to move them",
+                                        )}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        on:click=move |_| {
+                                            checkpoint();
+                                            parts.update(|list| {
+                                                if let Some(p) = list.get_mut(part_index) {
+                                                    p.waypoints[slot].clear();
+                                                }
+                                            });
+                                            dirty.set(true);
+                                        }
+                                        class="rounded-[6px] px-2 py-1 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                                    >
+                                        "Straighten"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        on:click=move |_| delete_selection()
+                                        class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
+                                    >
+                                        "Disconnect (Del)"
+                                    </button>
+                                </div>
+                            }
+                                .into_any();
+                        }
                         let Some(index) = selected.get() else {
                             return view! {
                                 <p class="p-3 text-footnote text-label-4">
-                                    "Select a part to edit its pins and colour. Drag the \
-                                     background to pan, wheel to zoom, drag the chip to \
-                                     move it. While the simulation runs, buttons press \
-                                     instead of dragging."
+                                    "Select a part or a wire. Drag a part's gold stub to a \
+                                     chip pin to wire it — wiring is what sets the pin. \
+                                     Wheel zooms, background drags, Del removes."
                                 </p>
                             }
                                 .into_any();
@@ -1156,52 +1620,15 @@ fn BoardEditor(
                             return ().into_any();
                         };
 
-                        let pin_field = move |slot: usize, name: &'static str| {
-                            let value = parts
+                        let pin_text = move |slot: usize| {
+                            let pin = parts
                                 .with_untracked(|list| {
-                                    list.get(index).map(|p| p.pins[slot]).unwrap_or(0)
+                                    list.get(index).map(|p| p.pins[slot]).unwrap_or(UNWIRED)
                                 });
-                            view! {
-                                <label class="flex items-center gap-2 text-footnote text-label-2">
-                                    {name}
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="48"
-                                        prop:value=value.to_string()
-                                        on:change=move |event: ev::Event| {
-                                            let text = event_target_value(&event);
-                                            if let Ok(pin) = text.trim().parse::<u8>() {
-                                                checkpoint();
-                                                parts.update(|list| {
-                                                    if let Some(part) = list.get_mut(index) {
-                                                        part.pins[slot] = pin;
-                                                        if slot == 0
-                                                            && matches!(
-                                                                part.kind,
-                                                                PartKind::Led { .. }
-                                                            )
-                                                        {
-                                                            part.label = format!("GPIO{pin}");
-                                                        }
-                                                        if slot == 0
-                                                            && matches!(part.kind, PartKind::Button)
-                                                        {
-                                                            part.label = format!("BTN{pin}");
-                                                        }
-                                                        if slot == 0
-                                                            && matches!(part.kind, PartKind::Pot)
-                                                        {
-                                                            part.label = format!("POT{pin}");
-                                                        }
-                                                    }
-                                                });
-                                                dirty.set(true);
-                                            }
-                                        }
-                                        class="w-[7ch] rounded-[5px] bg-sunken px-1.5 py-0.5 font-mono text-footnote text-label"
-                                    />
-                                </label>
+                            if pin == UNWIRED {
+                                "—".to_string()
+                            } else {
+                                pin.to_string()
                             }
                         };
 
@@ -1217,32 +1644,47 @@ fn BoardEditor(
                                         PartKind::Pot => "Potentiometer",
                                     }}
                                 </span>
-                                {match part.kind.clone() {
-                                    PartKind::Rgb => view! {
-                                        {pin_field(0, "r")}
-                                        {pin_field(1, "g")}
-                                        {pin_field(2, "b")}
-                                    }
-                                        .into_any(),
-                                    PartKind::Seven => view! {
-                                        {pin_field(0, "a")}
-                                        {pin_field(1, "b")}
-                                        {pin_field(2, "c")}
-                                        {pin_field(3, "d")}
-                                        {pin_field(4, "e")}
-                                        {pin_field(5, "f")}
-                                        {pin_field(6, "g")}
-                                    }
-                                        .into_any(),
-                                    PartKind::Display => view! {
-                                        <p class="text-footnote leading-snug text-label-4">
-                                            "Shows whatever the firmware prints as \
-                                             [rusty:disp] <text> — no pins to wire."
-                                        </p>
-                                    }
-                                        .into_any(),
-                                    _ => pin_field(0, "pin").into_any(),
-                                }}
+                                {(!matches!(part.kind, PartKind::Display))
+                                    .then(|| {
+                                        let names: &[&str] = match part.kind {
+                                            PartKind::Rgb => &["r", "g", "b"],
+                                            PartKind::Seven => {
+                                                &["a", "b", "c", "d", "e", "f", "g"]
+                                            }
+                                            _ => &["pin"],
+                                        };
+                                        view! {
+                                            <div class="flex flex-col gap-1">
+                                                {names
+                                                    .iter()
+                                                    .enumerate()
+                                                    .map(|(slot, name)| {
+                                                        view! {
+                                                            <p class="flex items-center gap-2 font-mono text-footnote text-label-2">
+                                                                <span class="w-[3ch] text-label-3">
+                                                                    {*name}
+                                                                </span>
+                                                                <span>{pin_text(slot)}</span>
+                                                            </p>
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                                <p class="text-caption leading-snug text-label-4">
+                                                    "wire pins by dragging the gold stubs to \
+                                                     the chip"
+                                                </p>
+                                            </div>
+                                        }
+                                    })}
+                                {matches!(part.kind, PartKind::Display)
+                                    .then(|| {
+                                        view! {
+                                            <p class="text-footnote leading-snug text-label-4">
+                                                "Shows whatever the firmware prints as \
+                                                 [rusty:disp] <text> — no pins to wire."
+                                            </p>
+                                        }
+                                    })}
                                 {matches!(part.kind, PartKind::Led { .. })
                                     .then(|| {
                                         view! {
@@ -1296,7 +1738,7 @@ fn BoardEditor(
                                     }
                                     class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
                                 >
-                                    "Remove"
+                                    "Remove (Del)"
                                 </button>
                             </div>
                         }
