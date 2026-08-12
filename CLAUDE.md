@@ -27,7 +27,14 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 
 # Frontend alone, on http://localhost:1425 — much faster to iterate on than a
 # full `tauri dev` rebuild. Anything needing the backend reports that it cannot
-# run; the layout and styling are real.
+# run; the layout and styling are real. To exercise backend flows here anyway,
+# crates/rusty-ui/mock.js stubs the IPC surface: add
+#   <link data-trunk rel="copy-file" href="mock.js" /><script src="/mock.js"></script>
+# to index.html while debugging and REMOVE IT BEFORE COMMITTING. It is inert in
+# the real app. Two contracts it enforces: responses must carry every
+# non-defaulted field (serde rejects, and the error names only the field), and
+# streaming commands like lsp_start must return a never-resolving promise —
+# a resolved stream reads as "server exited" and flips LSP Ready back off.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
