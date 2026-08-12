@@ -160,6 +160,13 @@ pub fn Simulate() -> impl IntoView {
                         .collect_view()}
                 </div>
 
+                {plan
+                    .board
+                    .clone()
+                    .map(|board| {
+                        view! { <BoardView board=board /> }
+                    })}
+
                 <div class="flex items-center gap-2">
                     {move || {
                         if running.get() {
@@ -195,5 +202,81 @@ pub fn Simulate() -> impl IntoView {
             </div>
         }
         .into_any()
+    }
+}
+
+/// A stylised devkit with the project's LEDs on it, lit from the pin levels
+/// the firmware reports over serial. Not a photograph of a board — a truth
+/// display: the caption says exactly whose word the light is.
+#[component]
+fn BoardView(board: rusty_embed::SimBoard) -> impl IntoView {
+    let state = AppState::expect();
+    let chip = board.chip.to_uppercase();
+
+    view! {
+        <div class="flex flex-col gap-1.5">
+            <div class="flex items-center gap-6 rounded-[12px] bg-sunken px-6 py-5 ring-1 ring-line w-fit">
+                // The LEDs, off-board like the classic wiring diagram.
+                <div class="flex flex-col gap-4">
+                    {board
+                        .leds
+                        .iter()
+                        .map(|led| {
+                            let pin = led.pin;
+                            let color = led.color.clone();
+                            let label = led.label.clone();
+                            let lit = Signal::derive(move || {
+                                state.sim_gpio.with(|gpio| gpio.get(&pin).copied().unwrap_or(false))
+                            });
+                            view! {
+                                <div class="flex items-center gap-2.5">
+                                    <div class=move || {
+                                        let base = "size-5 rounded-full transition-all duration-150";
+                                        let hue = match (color.as_str(), lit.get()) {
+                                            ("green", true) => "bg-[#3ddc84] shadow-[0_0_14px_4px_rgba(61,220,132,0.55)]",
+                                            ("green", false) => "bg-[#1d4a2f]",
+                                            ("blue", true) => "bg-[#4aa8ff] shadow-[0_0_14px_4px_rgba(74,168,255,0.55)]",
+                                            ("blue", false) => "bg-[#1d3350]",
+                                            ("red", true) => "bg-[#ff5c5c] shadow-[0_0_14px_4px_rgba(255,92,92,0.55)]",
+                                            ("red", false) => "bg-[#4a1d1d]",
+                                            ("yellow", true) => "bg-[#ffd75c] shadow-[0_0_14px_4px_rgba(255,215,92,0.5)]",
+                                            ("yellow", false) => "bg-[#4a3f1d]",
+                                            (_, true) => "bg-label shadow-[0_0_14px_4px_rgba(255,255,255,0.4)]",
+                                            (_, false) => "bg-line-strong",
+                                        };
+                                        format!("{base} {hue}")
+                                    } />
+                                    <span class="font-mono text-caption text-label-3">{label}</span>
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+
+                // The devkit, schematic rather than photographic.
+                <svg width="150" height="230" viewBox="0 0 150 230" aria-hidden="true">
+                    <rect x="10" y="6" width="130" height="218" rx="10" fill="#16181c" stroke="#2c2f36" />
+                    // pin headers
+                    {(0..14)
+                        .map(|i| {
+                            let y = 22 + i * 14;
+                            view! {
+                                <circle cx="20" cy=y r="3.2" fill="#c9a227" />
+                                <circle cx="130" cy=y r="3.2" fill="#c9a227" />
+                            }
+                        })
+                        .collect_view()}
+                    // the module shield + antenna
+                    <rect x="38" y="14" width="74" height="86" rx="4" fill="#2a2d33" stroke="#3a3e46" />
+                    <path d="M44 22h62M44 30h62M44 38h62" stroke="#3a3e46" stroke-width="2" fill="none" />
+                    <text x="75" y="66" text-anchor="middle" font-family="ui-monospace" font-size="14" fill="#8b909a">{chip}</text>
+                    // usb notch
+                    <rect x="60" y="206" width="30" height="16" rx="2" fill="#3a3e46" />
+                </svg>
+            </div>
+            <p class="text-caption text-label-4">
+                "pin levels as reported by the firmware over serial"
+            </p>
+        </div>
     }
 }

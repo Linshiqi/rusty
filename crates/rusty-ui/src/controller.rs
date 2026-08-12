@@ -720,13 +720,43 @@ pub fn load_sim_plan(state: AppState) {
 /// Build, image and boot in QEMU, streaming into the dock. One at a time —
 /// the shared session slot enforces it the same way flashing does.
 pub fn run_simulation(state: AppState) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
     #[derive(serde::Serialize)]
     struct Args {}
 
     if state.session_running.get_untracked() {
         return;
     }
-    let channel = stream_to_terminal(state);
+    state.sim_gpio.set(std::collections::HashMap::new());
+
+    // Like stream_to_terminal, with one interception: the firmware's pin
+    // reports drive the board view instead of scrolling the dock at 2Hz.
+    let channel = ipc::Channel::new();
+    let on_line = Closure::wrap(Box::new(move |value: JsValue| {
+        match serde_wasm_bindgen::from_value::<LogLine>(value) {
+            Ok(line) => {
+                if let Some(pins) = rusty_embed::parse_gpio_report(&line.text) {
+                    state.sim_gpio.update(|gpio| {
+                        for (pin, level) in pins {
+                            gpio.insert(pin, level);
+                        }
+                    });
+                } else {
+                    state.push_log(line);
+                }
+            }
+            Err(e) => state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: format!("[rusty could not decode a line from the tool: {e}]"),
+                level: Some(LogLevel::Warn),
+            }),
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    channel.set_onmessage(&on_line);
+    on_line.forget();
+    state.session_running.set(true);
+    state.show_dock(crate::state::DockTab::Output);
     spawn_local(async move {
         match ipc::call_streaming::<_, Option<i32>>(cmd::sim::RUN, &Args {}, "onLine", &channel)
             .await

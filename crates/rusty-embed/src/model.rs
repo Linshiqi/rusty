@@ -501,6 +501,24 @@ pub struct SimTool {
     pub install: String,
 }
 
+/// One LED on the simulated board view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimLed {
+    pub pin: u8,
+    /// `green`, `blue`, `red`, `yellow` — the stylesheet's palette names.
+    pub color: String,
+    pub label: String,
+}
+
+/// The board view beside the serial output, when the project describes one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimBoard {
+    pub chip: String,
+    pub leds: Vec<SimLed>,
+}
+
 /// How this project would be simulated, or exactly why it cannot be.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -512,6 +530,9 @@ pub struct SimPlan {
     pub missing: Vec<SimTool>,
     /// build → image → boot, each inspectable before anything runs.
     pub steps: Vec<CommandPlan>,
+    /// Drawn beside the serial output when `.rusty/sim.toml` describes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<SimBoard>,
 }
 
 /// Where rusty keeps its data, for the settings screen to show.
@@ -739,4 +760,37 @@ pub struct ToolchainReport {
     /// Whether this project needs the Xtensa toolchain.
     pub needs_esp_toolchain: bool,
     pub problems: Vec<Problem>,
+}
+
+/// Parse one serial line of the firmware's pin reports.
+///
+/// The convention is `[rusty:gpio] 26=1,27=0` — the firmware announcing what
+/// it just set. The board view mirrors the firmware's word, and says so; the
+/// QEMU peripheral models here do not expose register readback to do better.
+pub fn parse_gpio_report(line: &str) -> Option<Vec<(u8, bool)>> {
+    let rest = line.trim().strip_prefix("[rusty:gpio]")?;
+    let mut out = Vec::new();
+    for pair in rest.trim().split(',') {
+        let (pin, level) = pair.trim().split_once('=')?;
+        let pin: u8 = pin.trim().parse().ok()?;
+        let level = matches!(level.trim(), "1" | "true" | "high");
+        out.push((pin, level));
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+#[cfg(test)]
+mod gpio_report_tests {
+    use super::parse_gpio_report;
+
+    #[test]
+    fn gpio_reports_parse_and_reject_noise() {
+        assert_eq!(
+            parse_gpio_report("[rusty:gpio] 26=1,27=0"),
+            Some(vec![(26, true), (27, false)]),
+        );
+        assert_eq!(parse_gpio_report("  [rusty:gpio] 4=high "), Some(vec![(4, true)]));
+        assert_eq!(parse_gpio_report("I (44) boot: Loaded app"), None);
+        assert_eq!(parse_gpio_report("[rusty:gpio] nonsense"), None);
+    }
 }

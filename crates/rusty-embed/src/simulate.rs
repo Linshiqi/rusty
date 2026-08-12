@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::config;
-use crate::model::{CommandPlan, EmbeddedProject, SimPlan, SimTool};
+use crate::model::{CommandPlan, EmbeddedProject, SimBoard, SimLed, SimPlan, SimTool};
 
 /// Chips Espressif's QEMU actually models, with the system emulator each
 /// needs. Kept small and honest — c6/h2/p4 have no machine model yet.
@@ -42,6 +42,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             ),
             missing: Vec::new(),
             steps: Vec::new(),
+            board: None,
         };
     };
 
@@ -55,6 +56,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             )),
             missing: Vec::new(),
             steps: Vec::new(),
+            board: None,
         };
     };
 
@@ -94,6 +96,7 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             ),
             missing,
             steps: Vec::new(),
+            board: None,
         };
     };
     let binary = package_name(Path::new(&project.root)).unwrap_or_else(|| "app".to_string());
@@ -146,8 +149,56 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         reason: None,
         missing,
         steps: vec![build, image_step, run],
+        board: board_view(Path::new(&project.root)),
     }
 }
+
+/// The board `.rusty/sim.toml` describes, if the project carries one.
+///
+/// The file format is its own struct, converted to the wire model — the
+/// same file/wire split every other user-authored TOML here gets, so a
+/// panel refactor cannot silently break the files people wrote.
+fn board_view(root: &Path) -> Option<SimBoard> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        board: Option<FileBoard>,
+        #[serde(default)]
+        led: Vec<FileLed>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FileBoard {
+        chip: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FileLed {
+        pin: u8,
+        color: Option<String>,
+        label: Option<String>,
+    }
+
+    let text = std::fs::read_to_string(root.join(".rusty/sim.toml")).ok()?;
+    let parsed: File = toml::from_str(&text).ok()?;
+    if parsed.led.is_empty() {
+        return None;
+    }
+    Some(SimBoard {
+        chip: parsed
+            .board
+            .and_then(|b| b.chip)
+            .unwrap_or_else(|| "esp32".to_string()),
+        leds: parsed
+            .led
+            .into_iter()
+            .map(|led| SimLed {
+                label: led.label.unwrap_or_else(|| format!("GPIO{}", led.pin)),
+                color: led.color.unwrap_or_else(|| "green".to_string()),
+                pin: led.pin,
+            })
+            .collect(),
+    })
+}
+
+
 
 /// The QEMU release every install pulls — the version this pipeline is
 /// proven against. Bumped deliberately, not discovered at run time: an
@@ -574,6 +625,27 @@ mod tests {
             evidence: Vec::new(),
             problems: Vec::new(),
         }
+    }
+
+
+    #[test]
+    fn the_board_file_converts_to_the_wire_model() {
+        let dir = tempfile::Builder::new()
+            .prefix("rusty-sim-board")
+            .tempdir()
+            .expect("tempdir");
+        std::fs::create_dir_all(dir.path().join(".rusty")).expect("dirs");
+        std::fs::write(
+            dir.path().join(".rusty/sim.toml"),
+            "[board]\nchip = \"esp32\"\n[[led]]\npin = 26\ncolor = \"green\"\n[[led]]\npin = 27\ncolor = \"blue\"\nlabel = \"BLUE\"\n",
+        )
+        .expect("write");
+        let board = board_view(dir.path()).expect("board");
+        assert_eq!(board.chip, "esp32");
+        assert_eq!(board.leds.len(), 2);
+        assert_eq!(board.leds[0].label, "GPIO26");
+        assert_eq!(board.leds[1].label, "BLUE");
+        assert!(board_view(Path::new("nowhere-at-all")).is_none());
     }
 
     #[test]
