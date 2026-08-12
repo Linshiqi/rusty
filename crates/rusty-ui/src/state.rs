@@ -33,6 +33,23 @@ pub struct ParkedEditor {
     pub highlighted: Vec<rusty_edit::Line>,
     /// Where the caret was, as (line, scalar column), when it could be read.
     pub caret: Option<(u32, u32)>,
+    /// The tab's undo/redo stacks, so history survives switching away.
+    pub history: EditHistory,
+}
+
+/// The editor's own undo history.
+///
+/// It has to be ours: the editor writes the textarea's value programmatically
+/// on every echo and format, and each such write wipes the browser's native
+/// undo stack — Ctrl+Z was dead air until this existed. Whole-text snapshots,
+/// coalesced per typing burst; the caret after a restore is recomputed from
+/// where the two texts diverge, so nothing else needs remembering.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EditHistory {
+    pub undo: Vec<String>,
+    pub redo: Vec<String>,
+    /// When the last snapshot was pushed (ms), for burst coalescing.
+    pub last_push: f64,
 }
 
 /// A completion request's results, anchored where they were asked for.
@@ -277,10 +294,18 @@ pub struct AppState {
     pub tabs: RwSignal<Vec<String>>,
     /// Open editors that are not on screen, holding their unsaved drafts.
     pub parked: RwSignal<Vec<ParkedEditor>>,
+    /// The active editor's undo/redo stacks.
+    pub history: RwSignal<EditHistory>,
     /// Project search. Kept here rather than in the panel so the results
     /// survive switching away and back.
     pub search_query: RwSignal<String>,
     pub search_case: RwSignal<bool>,
+    pub search_word: RwSignal<bool>,
+    /// `*.rs, src/**` — gitignore-style globs, as the boxes in the panel.
+    pub search_include: RwSignal<String>,
+    pub search_exclude: RwSignal<String>,
+    /// Show dot-entries in the file tree. Off by default; `.git` never shows.
+    pub show_hidden: RwSignal<bool>,
     pub search_results: RwSignal<Option<rusty_edit::SearchResults>>,
     /// Which search is current; a stale reply is dropped, and the debounce
     /// timer checks it before firing.
@@ -401,8 +426,13 @@ impl AppState {
             signature: RwSignal::new(None),
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
+            history: RwSignal::new(EditHistory::default()),
             search_query: RwSignal::new(String::new()),
             search_case: RwSignal::new(false),
+            search_word: RwSignal::new(false),
+            search_include: RwSignal::new(String::new()),
+            search_exclude: RwSignal::new(String::new()),
+            show_hidden: RwSignal::new(false),
             search_results: RwSignal::new(None),
             search_gen: RwSignal::new(0),
             reveal: RwSignal::new(None),

@@ -33,6 +33,6 @@ pub use error::{Error, Result};
 #[cfg(feature = "backend")]
 pub use format::format_rust;
 #[cfg(feature = "backend")]
-pub use search::search;
+pub use search::{Query as SearchQuery, search};
 #[cfg(feature = "backend")]
 pub use tree::read as read_tree;

@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use ignore::WalkBuilder;
+use ignore::overrides::OverrideBuilder;
 
 use crate::model::{SearchHit, SearchResults};
 
@@ -20,8 +21,21 @@ const MAX_FILE: u64 = 1_000_000;
 /// A line longer than this is windowed around the match.
 const MAX_LINE: usize = 240;
 
-pub fn search(root: &Path, query: &str, case_sensitive: bool) -> SearchResults {
-    if query.is_empty() {
+/// What to look for, and where not to.
+#[derive(Debug, Clone, Default)]
+pub struct Query {
+    pub text: String,
+    pub case_sensitive: bool,
+    /// Match only where the neighbours are not identifier characters.
+    pub whole_word: bool,
+    /// Gitignore-style globs, comma-separated, as search boxes write them:
+    /// `*.rs, src/**`. Empty means everything.
+    pub include: String,
+    pub exclude: String,
+}
+
+pub fn search(root: &Path, query: &Query) -> SearchResults {
+    if query.text.is_empty() {
         return SearchResults::default();
     }
 
@@ -29,12 +43,42 @@ pub fn search(root: &Path, query: &str, case_sensitive: bool) -> SearchResults {
     let mut files = 0u32;
     let mut truncated = false;
 
+    // Include/exclude are compiled into override globs — the same matcher
+    // gitignore uses, so `*.rs` and `src/**` mean what they mean there.
+    let mut overrides = OverrideBuilder::new(root);
+    for pattern in split_globs(&query.include) {
+        if overrides.add(&pattern).is_err() {
+            return SearchResults {
+                error: Some(format!("cannot parse include pattern `{pattern}`")),
+                ..SearchResults::default()
+            };
+        }
+    }
+    for pattern in split_globs(&query.exclude) {
+        if overrides.add(&format!("!{pattern}")).is_err() {
+            return SearchResults {
+                error: Some(format!("cannot parse exclude pattern `{pattern}`")),
+                ..SearchResults::default()
+            };
+        }
+    }
+    let Ok(overrides) = overrides.build() else {
+        return SearchResults {
+            error: Some("the include/exclude patterns do not combine".to_string()),
+            ..SearchResults::default()
+        };
+    };
+
     let walk = WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
         .git_global(false)
         .parents(false)
         .require_git(false)
+        .overrides(overrides)
+        // `.git` holds thousands of files nobody is text-searching; without
+        // this it drowned every query the moment a project had history.
+        .filter_entry(|entry| entry.file_name().to_string_lossy() != ".git")
         .build();
 
     'files: for found in walk.flatten() {
@@ -61,10 +105,13 @@ pub fn search(root: &Path, query: &str, case_sensitive: bool) -> SearchResults {
         let mut any = false;
         for (index, line) in text.lines().enumerate() {
             let mut from = 0;
-            while let Some(at) = find_from(line, query, from, case_sensitive) {
+            while let Some(at) = find_from(line, &query.text, from, query.case_sensitive) {
+                from = at + query.text.len().max(1);
+                if query.whole_word && !word_bounded(line, at, query.text.len()) {
+                    continue;
+                }
                 any = true;
-                hits.push(windowed(&relative, index as u32, line, at, query.len()));
-                from = at + query.len().max(1);
+                hits.push(windowed(&relative, index as u32, line, at, query.text.len()));
                 if hits.len() >= MAX_HITS {
                     truncated = true;
                     files += 1;
@@ -81,7 +128,26 @@ pub fn search(root: &Path, query: &str, case_sensitive: bool) -> SearchResults {
         hits,
         files,
         truncated,
+        error: None,
     }
+}
+
+/// `*.rs, src/**` → the patterns, trimmed, empties dropped.
+fn split_globs(text: &str) -> Vec<String> {
+    text.split([',', ' '])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether the match at `at` has non-identifier characters (or edges) on both
+/// sides.
+fn word_bounded(line: &str, at: usize, len: usize) -> bool {
+    let ident = |ch: char| ch.is_alphanumeric() || ch == '_';
+    let before_ok = line[..at].chars().next_back().is_none_or(|ch| !ident(ch));
+    let after_ok = line[at + len..].chars().next().is_none_or(|ch| !ident(ch));
+    before_ok && after_ok
 }
 
 /// The next match at or after byte `from`, ASCII-case-insensitively unless
@@ -173,10 +239,18 @@ mod tests {
         dir
     }
 
+    fn plain(text: &str, case: bool) -> Query {
+        Query {
+            text: text.to_string(),
+            case_sensitive: case,
+            ..Query::default()
+        }
+    }
+
     #[test]
     fn finds_case_insensitively_and_reports_scalar_columns() {
         let dir = project();
-        let results = search(dir.path(), "gain", false);
+        let results = search(dir.path(), &plain("gain", false));
         // Two on the same line — the identifier and the comment — and none
         // from target/, which the ignore rules hide without a git repo.
         assert_eq!(results.hits.len(), 2);
@@ -195,7 +269,7 @@ mod tests {
     #[test]
     fn case_sensitive_narrows_to_the_exact_spelling() {
         let dir = project();
-        let results = search(dir.path(), "GAIN", true);
+        let results = search(dir.path(), &plain("GAIN", true));
         assert_eq!(results.hits.len(), 1);
         assert_eq!(results.hits[0].line, 1);
     }
@@ -209,7 +283,7 @@ mod tests {
         let line = format!("{}needle{}", "x".repeat(400), "y".repeat(400));
         std::fs::write(dir.path().join("big.txt"), &line).expect("write");
 
-        let results = search(dir.path(), "needle", false);
+        let results = search(dir.path(), &plain("needle", false));
         assert_eq!(results.hits.len(), 1);
         let hit = &results.hits[0];
         assert!(hit.text.len() < 300, "windowed, not the whole line");
@@ -222,6 +296,86 @@ mod tests {
     }
 
     #[test]
+    fn whole_word_rejects_substrings() {
+        let dir = project();
+        // "gain" appears as the whole identifier and inside nothing else in
+        // the fixture; "gai" only as a fragment.
+        let fragment = search(
+            dir.path(),
+            &Query {
+                text: "gai".to_string(),
+                whole_word: true,
+                ..Query::default()
+            },
+        );
+        assert_eq!(fragment.hits.len(), 0, "a fragment is not a word");
+        let word = search(
+            dir.path(),
+            &Query {
+                text: "gain".to_string(),
+                whole_word: true,
+                ..Query::default()
+            },
+        );
+        assert_eq!(word.hits.len(), 2);
+    }
+
+    #[test]
+    fn include_and_exclude_globs_scope_the_walk() {
+        let dir = project();
+        std::fs::write(dir.path().join("notes.md"), "gain notes\n").expect("write");
+
+        let all = search(dir.path(), &plain("gain", false));
+        assert_eq!(all.files, 2);
+
+        let only_rs = search(
+            dir.path(),
+            &Query {
+                text: "gain".to_string(),
+                include: "*.rs".to_string(),
+                ..Query::default()
+            },
+        );
+        assert_eq!(only_rs.files, 1);
+        assert!(only_rs.hits.iter().all(|h| h.path.ends_with(".rs")));
+
+        let no_rs = search(
+            dir.path(),
+            &Query {
+                text: "gain".to_string(),
+                exclude: "*.rs".to_string(),
+                ..Query::default()
+            },
+        );
+        assert_eq!(no_rs.files, 1);
+        assert!(no_rs.hits.iter().all(|h| h.path.ends_with(".md")));
+
+        let bad = search(
+            dir.path(),
+            &Query {
+                text: "gain".to_string(),
+                include: "[".to_string(),
+                ..Query::default()
+            },
+        );
+        assert!(bad.error.is_some(), "a bad glob is named, not ignored");
+    }
+
+    #[test]
+    fn the_git_directory_is_never_searched() {
+        let dir = project();
+        std::fs::create_dir_all(dir.path().join(".git/info")).expect("dirs");
+        std::fs::write(dir.path().join(".git/info/exclude"), "gain gain\n").expect("write");
+
+        let results = search(dir.path(), &plain("gain", false));
+        assert!(
+            results.hits.iter().all(|h| !h.path.starts_with(".git")),
+            "{:?}",
+            results.hits,
+        );
+    }
+
+    #[test]
     fn cjk_before_the_match_does_not_break_the_span() {
         let dir = tempfile::Builder::new()
             .prefix("rusty-search")
@@ -229,7 +383,7 @@ mod tests {
             .expect("tempdir");
         std::fs::write(dir.path().join("a.rs"), "// 中文注释 needle\n").expect("write");
 
-        let results = search(dir.path(), "NEEDLE", false);
+        let results = search(dir.path(), &plain("NEEDLE", false));
         assert_eq!(results.hits.len(), 1);
         let hit = &results.hits[0];
         assert_eq!(

@@ -21,7 +21,7 @@ use rusty_term::Screen as TermScreen;
 
 use crate::{
     ipc::{self, Answer, cmd},
-    state::{AppState, LspStatus, ParkedEditor, ToolRun, remember_provider},
+    state::{AppState, EditHistory, LspStatus, ParkedEditor, ToolRun, remember_provider},
 };
 
 /// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
@@ -206,10 +206,14 @@ fn project_opened(state: AppState, result: OpenResult) {
             state.draft.set(String::new());
             state.tabs.set(Vec::new());
             state.parked.set(Vec::new());
+            state.history.set(EditHistory::default());
             state.completion.set(None);
             state.signature.set(None);
             state.search_query.set(String::new());
             state.search_results.set(None);
+            state.search_word.set(false);
+            state.search_include.set(String::new());
+            state.search_exclude.set(String::new());
             state.file_tree.set(Vec::new());
             state.expanded.set(Vec::new());
             state.highlighted.set(Vec::new());
@@ -530,10 +534,13 @@ pub fn schedule_search(state: AppState) {
 
 fn run_search(state: AppState, generation: u64) {
     #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         query: String,
-        #[serde(rename = "caseSensitive")]
         case_sensitive: bool,
+        whole_word: bool,
+        include: String,
+        exclude: String,
     }
 
     let query = state.search_query.get_untracked();
@@ -544,6 +551,9 @@ fn run_search(state: AppState, generation: u64) {
     let args = Args {
         query,
         case_sensitive: state.search_case.get_untracked(),
+        whole_word: state.search_word.get_untracked(),
+        include: state.search_include.get_untracked(),
+        exclude: state.search_exclude.get_untracked(),
     };
     spawn_local(async move {
         let result = ipc::call::<_, rusty_edit::SearchResults>(cmd::files::SEARCH, &args).await;
@@ -558,8 +568,9 @@ fn run_search(state: AppState, generation: u64) {
     });
 }
 
-/// Jump from a search hit into the editor, exactly as goto-definition lands.
-pub fn open_search_hit(state: AppState, path: String, line: u32, col: u32) {
+/// Open a file at an exact position — how a search hit or a problem row
+/// lands in the editor, through the same reveal goto-definition uses.
+pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
     state.active_panel.set("files".to_string());
     let current = state
         .document
@@ -1057,12 +1068,21 @@ pub fn run_session(state: AppState, plan: CommandPlan) {
 
 /// Re-read the project tree.
 pub fn refresh_tree(state: AppState) {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        show_hidden: bool,
+    }
+
     if !state.has_project() {
         return;
     }
+    let args = Args {
+        show_hidden: state.show_hidden.get_untracked(),
+    };
     track(
         state,
-        ipc::get::<Vec<Entry>>(cmd::files::TREE),
+        async move { ipc::call::<_, Vec<Entry>>(cmd::files::TREE, &args).await },
         move |entries| state.file_tree.set(entries),
     );
 }
@@ -1128,6 +1148,9 @@ fn show_document(state: AppState, document: Document, announce: bool) {
     if active.is_some() && active.as_deref() != Some(document.path.as_str()) {
         park_active(state);
     }
+    if active.as_deref() != Some(document.path.as_str()) {
+        state.history.set(EditHistory::default());
+    }
     state.tabs.update(|tabs| {
         if !tabs.iter().any(|t| t == &document.path) {
             tabs.push(document.path.clone());
@@ -1158,6 +1181,7 @@ fn park_active(state: AppState) {
         draft: state.draft.get_untracked(),
         highlighted: state.highlighted.get_untracked(),
         caret: active_caret(state),
+        history: state.history.get_untracked(),
         document,
     };
     state.parked.update(|parked| {
@@ -1234,6 +1258,7 @@ fn front_parked(state: AppState, path: &str) -> bool {
     clear_editor_transients(state);
     let dirty = entry.draft != entry.document.text;
     let read_only = entry.document.read_only;
+    state.history.set(entry.history);
     state.draft.set(entry.draft.clone());
     state.echo_text.set(entry.draft);
     state.highlighted.set(entry.highlighted);
@@ -1303,6 +1328,7 @@ pub fn close_tab(state: AppState, path: String) {
             state.draft.set(String::new());
             state.echo_text.set(String::new());
             state.highlighted.set(Vec::new());
+            state.history.set(EditHistory::default());
         }
     }
 }
@@ -1535,6 +1561,12 @@ fn lsp_sync(command: &'static str, args: impl serde::Serialize + 'static) {
 }
 
 pub fn lsp_open_doc(path: String, text: String) {
+    // rust-analyzer is only ever told about Rust. Announcing `.git/info/
+    // exclude` as a document got every line a "Syntax Error: expected an
+    // item" — sixty-eight problems from a file that was never code.
+    if !path.ends_with(".rs") {
+        return;
+    }
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
@@ -1544,6 +1576,9 @@ pub fn lsp_open_doc(path: String, text: String) {
 }
 
 fn lsp_saved_doc(path: String) {
+    if !path.ends_with(".rs") {
+        return;
+    }
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
@@ -1654,7 +1689,7 @@ fn edit_pulse(state: AppState, generation: u64) {
         text: String,
     }
 
-    if state.lsp_status.get_untracked() == LspStatus::Ready {
+    if path.ends_with(".rs") && state.lsp_status.get_untracked() == LspStatus::Ready {
         lsp_sync(
             cmd::lsp::CHANGE,
             Args {

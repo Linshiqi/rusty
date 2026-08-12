@@ -66,6 +66,24 @@ fn Tree() -> impl IntoView {
                 </span>
                 <button
                     type="button"
+                    title="Show files and folders whose names start with a dot"
+                    class=move || {
+                        let base = "rounded-[5px] px-1.5 py-0.5 text-footnote";
+                        if state.show_hidden.get() {
+                            format!("{base} bg-selection text-rust")
+                        } else {
+                            format!("{base} text-label-3 hover:text-label")
+                        }
+                    }
+                    on:click=move |_| {
+                        state.show_hidden.update(|show| *show = !*show);
+                        controller::refresh_tree(state);
+                    }
+                >
+                    "Hidden"
+                </button>
+                <button
+                    type="button"
                     title="Re-read the project"
                     class="rounded-[5px] px-1.5 py-0.5 text-footnote text-label-3 hover:text-label"
                     on:click=move |_| controller::refresh_tree(state)
@@ -439,21 +457,36 @@ fn Surface(document: Document) -> impl IntoView {
                 return;
             }
             state.reveal.set(None);
-            let Some(element) = area.get_untracked() else {
-                return;
-            };
-            let offset = utf16_offset_of(&state.draft.get_untracked(), target.line, target.col);
-            let _ = element.focus();
-            let _ = element.set_selection_start(Some(offset));
-            let _ = element.set_selection_end(Some(offset));
-            // The manual scroll goes last, so whatever focus did to the
-            // viewport is overruled by the position that shows the target.
-            if let Some(scroller) = scroller.get_untracked() {
-                // A third of the viewport above the target line, so the jump
-                // lands in context rather than at the very top edge.
-                let top = f64::from(target.line) * LINE_HEIGHT - 120.0;
-                scroller.set_scroll_top(top.max(0.0) as i32);
-            }
+            // Deferred one tick: on a freshly mounted editor the textarea's
+            // value lands after this effect runs, and a selection set before
+            // the value is snapped to the end when the text arrives — the
+            // caret ended at EOF instead of the target line, every time a
+            // goto opened a file that was not already on screen.
+            set_timeout(
+                move || {
+                    let Some(element) = area.get_untracked() else {
+                        return;
+                    };
+                    let offset =
+                        utf16_offset_of(&state.draft.get_untracked(), target.line, target.col);
+                    // preventScroll, because the browser's own focus scroll
+                    // lands asynchronously and overwrote the deliberate one
+                    // below — the jump ended wherever Chrome felt like.
+                    let options = web_sys::FocusOptions::new();
+                    options.set_prevent_scroll(true);
+                    let _ = element.focus_with_options(&options);
+                    let _ = element.set_selection_start(Some(offset));
+                    let _ = element.set_selection_end(Some(offset));
+                    if let Some(scroller) = scroller.get_untracked() {
+                        // A third of the viewport above the target line, so
+                        // the jump lands in context rather than at the top
+                        // edge.
+                        let top = f64::from(target.line) * LINE_HEIGHT - 120.0;
+                        scroller.set_scroll_top(top.max(0.0) as i32);
+                    }
+                },
+                std::time::Duration::ZERO,
+            );
         });
     }
 
@@ -469,9 +502,13 @@ fn Surface(document: Document) -> impl IntoView {
         let path = path.clone();
         move |event: ev::Event| {
             let new = event_target_value(&event);
+            record_edit(state);
             echo_edit(state, &new);
             state.draft.set(new.clone());
             controller::schedule_pulse(state);
+            if let Some(element) = area.get_untracked() {
+                keep_caret_in_view(&element, state, scroller);
+            }
 
             // Completion triggers, judged by the character behind the caret.
             if !is_rust {
@@ -519,7 +556,12 @@ fn Surface(document: Document) -> impl IntoView {
 
     view! {
         <div node_ref=scroller class="relative min-h-0 flex-1 overflow-auto">
-            <div class="flex min-h-full">
+            // w-max: the row is as wide as the longest line, so the textarea
+            // overlay (inset-0 in the column beside the gutter) covers every
+            // glyph. At viewport width, a long line overflowed the column and
+            // the caret inside it lived in the textarea's own hidden scroll —
+            // drifting away from the echoed text.
+            <div class="flex min-h-full w-max min-w-full">
                 // Line numbers scroll with the text rather than floating, so a
                 // long file's numbers stay beside their lines.
                 {
@@ -590,6 +632,20 @@ fn Surface(document: Document) -> impl IntoView {
                         class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre text-transparent caret-rust outline-none"
                         style=metrics
                         prop:value=move || state.draft.get()
+                        on:scroll=move |_| {
+                            let Some(element) = area.get_untracked() else {
+                                return;
+                            };
+                            let (top, left) = (element.scroll_top(), element.scroll_left());
+                            if top != 0 || left != 0 {
+                                if let Some(outer) = scroller.get_untracked() {
+                                    outer.set_scroll_top(outer.scroll_top() + top);
+                                    outer.set_scroll_left(outer.scroll_left() + left);
+                                }
+                                element.set_scroll_top(0);
+                                element.set_scroll_left(0);
+                            }
+                        }
                         on:input=on_input
                         on:mousedown={
                             let path = path.clone();
@@ -743,6 +799,27 @@ fn Surface(document: Document) -> impl IntoView {
                                 state.signature.set(None);
                                 return;
                             }
+                            if (event.ctrl_key() || event.meta_key())
+                                && event.key().eq_ignore_ascii_case("z")
+                                && !event.shift_key()
+                            {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    apply_history(&element, state, scroller, true);
+                                }
+                                return;
+                            }
+                            if (event.ctrl_key() || event.meta_key())
+                                && (event.key().eq_ignore_ascii_case("y")
+                                    || (event.key().eq_ignore_ascii_case("z")
+                                        && event.shift_key()))
+                            {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    apply_history(&element, state, scroller, false);
+                                }
+                                return;
+                            }
                             // Ctrl+Space asks without a trigger character.
                             if event.ctrl_key() && event.key() == " " {
                                 event.prevent_default();
@@ -769,6 +846,7 @@ fn Surface(document: Document) -> impl IntoView {
                                     caret_line_col(&element, &state.draft.get_untracked())
                                 });
                                 controller::format_then_save(state, caret, move |text, caret| {
+                                    record_edit(state);
                                     echo_edit(state, text);
                                     let Some(element) = area.get_untracked() else {
                                         return;
@@ -1138,6 +1216,126 @@ fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyView {
         .into_any()
 }
 
+/// Snapshot the draft before an edit replaces it.
+///
+/// Bursts coalesce: pushes within 600ms collapse into one undo step, so
+/// Ctrl+Z after typing a word removes the word, not one letter.
+fn record_edit(state: AppState) {
+    const CAP: usize = 200;
+    const BURST_MS: f64 = 600.0;
+
+    let now = js_sys::Date::now();
+    let text = state.draft.get_untracked();
+    state.history.update(|history| {
+        history.redo.clear();
+        let burst = now - history.last_push < BURST_MS && !history.undo.is_empty();
+        if !burst && history.undo.last() != Some(&text) {
+            history.undo.push(text);
+            if history.undo.len() > CAP {
+                history.undo.remove(0);
+            }
+        }
+        history.last_push = now;
+    });
+}
+
+/// Undo or redo one step.
+fn apply_history(
+    area: &web_sys::HtmlTextAreaElement,
+    state: AppState,
+    scroller: NodeRef<html::Div>,
+    undo: bool,
+) {
+    let current = state.draft.get_untracked();
+    let mut target = None;
+    state.history.update(|history| {
+        let (from, to) = if undo {
+            (&mut history.undo, &mut history.redo)
+        } else {
+            (&mut history.redo, &mut history.undo)
+        };
+        while let Some(text) = from.pop() {
+            if text != current {
+                to.push(current.clone());
+                target = Some(text);
+                break;
+            }
+        }
+        // The restore itself must not merge into a typing burst.
+        history.last_push = 0.0;
+    });
+    let Some(text) = target else {
+        return;
+    };
+
+    let caret = caret_after_restore(&text, &current);
+    echo_edit(state, &text);
+    state.draft.set(text.clone());
+    area.set_value(&text);
+    let _ = area.set_selection_start(Some(caret));
+    let _ = area.set_selection_end(Some(caret));
+    state.completion.set(None);
+    state.signature.set(None);
+    keep_caret_in_view(area, state, scroller);
+    controller::schedule_pulse(state);
+}
+
+/// Where the caret lands after `target` replaces `other` on screen: the end
+/// of the region where the two texts differ, in UTF-16 units — which is where
+/// the eye is already looking.
+fn caret_after_restore(target: &str, other: &str) -> u32 {
+    let target_bytes = target.as_bytes();
+    let other_bytes = other.as_bytes();
+
+    let mut prefix = 0;
+    while prefix < target_bytes.len().min(other_bytes.len())
+        && target_bytes[prefix] == other_bytes[prefix]
+    {
+        prefix += 1;
+    }
+    while prefix > 0 && !target.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+
+    let mut suffix = 0;
+    while suffix < (target_bytes.len() - prefix).min(other_bytes.len() - prefix)
+        && target_bytes[target_bytes.len() - 1 - suffix] == other_bytes[other_bytes.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let mut end = target_bytes.len() - suffix;
+    while end < target_bytes.len() && !target.is_char_boundary(end) {
+        end += 1;
+    }
+    let end = end.max(prefix);
+
+    target[..end].encode_utf16().count() as u32
+}
+
+/// Scroll the shared scroller so the caret's line is on screen. The textarea
+/// cannot do this itself any more — its own scrolling is pinned to zero.
+fn keep_caret_in_view(
+    area: &web_sys::HtmlTextAreaElement,
+    state: AppState,
+    scroller: NodeRef<html::Div>,
+) {
+    let Some(outer) = scroller.get_untracked() else {
+        return;
+    };
+    let text = state.draft.get_untracked();
+    let Some((line, _)) = caret_line_col(area, &text) else {
+        return;
+    };
+    let y = 8.0 + f64::from(line) * LINE_HEIGHT;
+    let view_top = f64::from(outer.scroll_top());
+    let view_height = f64::from(outer.client_height());
+    if y < view_top + LINE_HEIGHT {
+        outer.set_scroll_top((y - LINE_HEIGHT * 3.0).max(0.0) as i32);
+    } else if y + LINE_HEIGHT * 2.0 > view_top + view_height {
+        outer.set_scroll_top((y + LINE_HEIGHT * 4.0 - view_height) as i32);
+    }
+}
+
 /// The caret as (line, scalar column) in `text`.
 fn caret_line_col(area: &web_sys::HtmlTextAreaElement, text: &str) -> Option<(u32, u32)> {
     let units = area.selection_start().ok().flatten()? as usize;
@@ -1206,6 +1404,7 @@ fn accept_completion(state: AppState, area: &web_sys::HtmlTextAreaElement, index
         ),
     };
 
+    record_edit(state);
     let start = byte_of_utf16(&draft, utf16_offset_of(&draft, start_line, start_col) as usize);
     let end = byte_of_utf16(&draft, utf16_offset_of(&draft, end_line, end_col) as usize);
     let mut text = draft;
@@ -1274,6 +1473,7 @@ fn utf16_offset_of(text: &str, line: u32, col: u32) -> u32 {
 
 /// Put `insert` at the caret and leave the caret after it.
 fn insert_at_caret(area: &web_sys::HtmlTextAreaElement, state: AppState, insert: &str) {
+    record_edit(state);
     let start_units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
     let end_units = area.selection_end().ok().flatten().unwrap_or(0) as usize;
     let mut text = state.draft.get_untracked();
@@ -1428,6 +1628,36 @@ fn class_of(token: Token) -> &'static str {
         Token::Macro => "tok-macro",
         Token::Punctuation => "tok-punctuation",
         Token::Variable => "text-label",
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::caret_after_restore;
+
+    #[test]
+    fn undoing_an_insertion_lands_at_the_insertion_point() {
+        // other = after typing "abXc", target = restore "abc"
+        assert_eq!(caret_after_restore("abc", "abXc"), 2);
+    }
+
+    #[test]
+    fn undoing_a_deletion_lands_after_the_restored_text() {
+        // other = after deleting X, target restores it
+        assert_eq!(caret_after_restore("abXc", "abc"), 3);
+    }
+
+    #[test]
+    fn cjk_before_the_change_counts_utf16_units() {
+        // "中" is one scalar, one UTF-16 unit; the change is after it.
+        assert_eq!(caret_after_restore("中aZb", "中ab"), 3);
+        // Beyond the BMP: "𝄞" is two UTF-16 units.
+        assert_eq!(caret_after_restore("𝄞aZ", "𝄞a"), 4);
+    }
+
+    #[test]
+    fn identical_texts_land_at_the_end() {
+        assert_eq!(caret_after_restore("same", "same"), 4);
     }
 }
 

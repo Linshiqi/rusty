@@ -129,4 +129,8 @@ pub struct SearchResults {
     /// True when the cap was reached — the panel says "first N", because a
     /// silently partial answer reads as a complete one.
     pub truncated: bool,
+    /// A query that could not run as written — a malformed glob, named so the
+    /// user can fix the pattern instead of trusting an empty result.
+    #[serde(default)]
+    pub error: Option<String>,
 }

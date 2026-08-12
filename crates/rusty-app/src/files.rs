@@ -7,9 +7,12 @@ use crate::{error::CommandError, state::AppState};
 
 /// The project tree, with build output already excluded.
 #[tauri::command]
-pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, CommandError> {
+pub async fn file_tree(
+    show_hidden: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<Entry>, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(rusty_edit::read_tree(&root)?)
+    Ok(rusty_edit::read_tree(&root, show_hidden)?)
 }
 
 /// One file, highlighted.
@@ -77,10 +80,20 @@ pub async fn format_text(
 pub async fn search_project(
     query: String,
     case_sensitive: bool,
+    whole_word: bool,
+    include: String,
+    exclude: String,
     state: State<'_, AppState>,
 ) -> Result<rusty_edit::SearchResults, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    tokio::task::spawn_blocking(move || rusty_edit::search(&root, &query, case_sensitive))
+    let spec = rusty_edit::SearchQuery {
+        text: query,
+        case_sensitive,
+        whole_word,
+        include,
+        exclude,
+    };
+    tokio::task::spawn_blocking(move || rusty_edit::search(&root, &spec))
         .await
         .map_err(|e| CommandError::new(format!("search panicked: {e}")))
 }

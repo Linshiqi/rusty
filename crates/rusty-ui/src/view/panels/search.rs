@@ -1,9 +1,9 @@
-//! Project-wide text search.
+//! Project-wide text search, laid out the way every editor since VSCode has
+//! taught: query with case/word toggles, include/exclude globs, results
+//! grouped per file with counts, collapsible.
 //!
-//! A debounced box over `rusty-edit`'s walker: results grouped by file, a
-//! click lands in the editor on the exact line and column, the same way
-//! goto-definition lands. State lives in [`AppState`] so switching panels
-//! does not throw the results away.
+//! State lives in [`AppState`] so switching panels does not throw the query
+//! or results away.
 
 use leptos::{ev, prelude::*};
 
@@ -14,6 +14,9 @@ use crate::{controller, state::AppState, view::components::Empty};
 #[component]
 pub fn SearchPanel() -> impl IntoView {
     let state = AppState::expect();
+    // Paths whose match lists are folded away. Local: a fold is a viewing
+    // gesture, not project state.
+    let collapsed = RwSignal::new(Vec::<String>::new());
 
     move || {
         if !state.has_project() {
@@ -28,37 +31,39 @@ pub fn SearchPanel() -> impl IntoView {
 
         view! {
             <div class="flex min-h-0 flex-1 flex-col">
-                <div class="flex items-center gap-2 border-b border-line px-3 py-2">
-                    <input
-                        type="text"
-                        placeholder="Search the project…"
-                        autocomplete="off"
-                        spellcheck="false"
-                        prop:value=move || state.search_query.get()
-                        on:input=move |event: ev::Event| {
-                            state.search_query.set(event_target_value(&event));
-                            controller::schedule_search(state);
-                        }
-                        class="min-w-0 flex-1 rounded-[6px] bg-sunken px-2.5 py-1.5 font-mono text-footnote text-label placeholder:text-label-3"
-                    />
-                    <button
-                        type="button"
-                        title="Match case"
-                        on:click=move |_| {
-                            state.search_case.update(|case| *case = !*case);
-                            controller::schedule_search(state);
-                        }
-                        class=move || {
-                            let base = "rounded-[6px] px-2 py-1 font-mono text-footnote transition-colors";
-                            if state.search_case.get() {
-                                format!("{base} bg-selection text-rust")
-                            } else {
-                                format!("{base} text-label-3 hover:text-label")
+                <div class="flex flex-col gap-1.5 border-b border-line px-3 py-2">
+                    <div class="flex items-center gap-1.5">
+                        <input
+                            type="text"
+                            placeholder="Search the project…"
+                            autocomplete="off"
+                            spellcheck="false"
+                            prop:value=move || state.search_query.get()
+                            on:input=move |event: ev::Event| {
+                                state.search_query.set(event_target_value(&event));
+                                controller::schedule_search(state);
                             }
-                        }
-                    >
-                        "Aa"
-                    </button>
+                            class="min-w-0 flex-1 rounded-[6px] bg-sunken px-2.5 py-1.5 font-mono text-footnote text-label placeholder:text-label-3"
+                        />
+                        <Toggle
+                            label="Aa"
+                            help="Match case"
+                            on=state.search_case
+                        />
+                        <Toggle
+                            label="ab"
+                            help="Whole word only"
+                            on=state.search_word
+                        />
+                    </div>
+                    <GlobBox
+                        placeholder="files to include, e.g. *.rs, src/**"
+                        value=state.search_include
+                    />
+                    <GlobBox
+                        placeholder="files to exclude"
+                        value=state.search_exclude
+                    />
                 </div>
 
                 <div class="min-h-0 flex-1 overflow-auto px-1 py-1">
@@ -71,6 +76,14 @@ pub fn SearchPanel() -> impl IntoView {
                             }
                             .into_any();
                         };
+                        if let Some(error) = results.error {
+                            return view! {
+                                <p class="px-3 py-2 text-footnote text-amber select-text">
+                                    {error}
+                                </p>
+                            }
+                            .into_any();
+                        }
                         if results.hits.is_empty() {
                             return view! {
                                 <p class="px-3 py-2 text-footnote text-label-3">
@@ -82,16 +95,12 @@ pub fn SearchPanel() -> impl IntoView {
 
                         let summary = if results.truncated {
                             format!(
-                                "first {} matches in {} files — narrow the query for the rest",
+                                "first {} results in {} files — narrow the query for the rest",
                                 results.hits.len(),
                                 results.files,
                             )
                         } else {
-                            format!(
-                                "{} matches in {} files",
-                                results.hits.len(),
-                                results.files,
-                            )
+                            format!("{} results in {} files", results.hits.len(), results.files)
                         };
 
                         // Walk order is the tree's; group consecutive runs of
@@ -109,14 +118,7 @@ pub fn SearchPanel() -> impl IntoView {
                             {groups
                                 .into_iter()
                                 .map(|(path, hits)| {
-                                    view! {
-                                        <div class="mb-1.5">
-                                            <div class="truncate px-3 py-0.5 font-mono text-caption font-semibold text-label-2">
-                                                {path}
-                                            </div>
-                                            {hits.into_iter().map(row).collect_view()}
-                                        </div>
-                                    }
+                                    view! { <FileGroup path=path hits=hits collapsed=collapsed /> }
                                 })
                                 .collect_view()}
                         }
@@ -126,6 +128,109 @@ pub fn SearchPanel() -> impl IntoView {
             </div>
         }
         .into_any()
+    }
+}
+
+/// A small on/off square, `Aa` style.
+#[component]
+fn Toggle(label: &'static str, help: &'static str, on: RwSignal<bool>) -> impl IntoView {
+    let state = AppState::expect();
+    view! {
+        <button
+            type="button"
+            title=help
+            on:click=move |_| {
+                on.update(|value| *value = !*value);
+                controller::schedule_search(state);
+            }
+            class=move || {
+                let base = "rounded-[6px] px-2 py-1 font-mono text-footnote transition-colors";
+                if on.get() {
+                    format!("{base} bg-selection text-rust")
+                } else {
+                    format!("{base} text-label-3 hover:text-label")
+                }
+            }
+        >
+            {label}
+        </button>
+    }
+}
+
+/// An include/exclude pattern box.
+#[component]
+fn GlobBox(placeholder: &'static str, value: RwSignal<String>) -> impl IntoView {
+    let state = AppState::expect();
+    view! {
+        <input
+            type="text"
+            placeholder=placeholder
+            autocomplete="off"
+            spellcheck="false"
+            prop:value=move || value.get()
+            on:input=move |event: ev::Event| {
+                value.set(event_target_value(&event));
+                controller::schedule_search(state);
+            }
+            class="min-w-0 rounded-[6px] bg-sunken px-2.5 py-1 font-mono text-caption text-label placeholder:text-label-4"
+        />
+    }
+}
+
+/// One file's matches: a header row with the count, folding its hits.
+#[component]
+fn FileGroup(path: String, hits: Vec<SearchHit>, collapsed: RwSignal<Vec<String>>) -> impl IntoView {
+    let (name, dir) = match path.rsplit_once('/') {
+        Some((dir, name)) => (name.to_string(), dir.to_string()),
+        None => (path.clone(), String::new()),
+    };
+    let count = hits.len();
+    let folded = {
+        let path = path.clone();
+        Signal::derive(move || collapsed.with(|c| c.iter().any(|p| p == &path)))
+    };
+    let toggle = {
+        let path = path.clone();
+        move |_| {
+            collapsed.update(|c| match c.iter().position(|p| p == &path) {
+                Some(at) => {
+                    c.remove(at);
+                }
+                None => c.push(path.clone()),
+            })
+        }
+    };
+
+    view! {
+        <div class="mb-0.5">
+            <button
+                type="button"
+                on:click=toggle
+                class="flex w-full items-center gap-1.5 rounded-[5px] px-2 py-[3px] text-left hover:bg-sunken"
+            >
+                <span class="w-3 shrink-0 text-center text-footnote text-label-3">
+                    {move || if folded.get() { "▸" } else { "▾" }}
+                </span>
+                <span class="shrink-0 font-mono text-footnote font-semibold text-label">
+                    {name}
+                </span>
+                {(!dir.is_empty())
+                    .then(|| {
+                        view! {
+                            <span class="min-w-0 truncate font-mono text-caption text-label-4">
+                                {dir}
+                            </span>
+                        }
+                    })}
+                <span class="flex-1" />
+                <span class="shrink-0 rounded-full bg-sunken px-1.5 text-caption text-label-3">
+                    {count}
+                </span>
+            </button>
+            <Show when=move || !folded.get()>
+                {hits.iter().cloned().map(row).collect_view()}
+            </Show>
+        </div>
     }
 }
 
@@ -151,11 +256,11 @@ fn row(hit: SearchHit) -> impl IntoView {
         <button
             type="button"
             on:click=move |_| {
-                controller::open_search_hit(state, path.clone(), hit.line, hit.col)
+                controller::open_at(state, path.clone(), hit.line, hit.col)
             }
-            class="flex w-full items-baseline gap-2 rounded-[5px] px-3 py-[2px] text-left font-mono text-footnote text-label-2 hover:bg-sunken"
+            class="flex w-full items-baseline gap-2 rounded-[5px] py-[2px] pr-2 pl-6 text-left font-mono text-footnote text-label-2 hover:bg-sunken"
         >
-            <span class="w-[4ch] shrink-0 text-right text-label-3">{hit.line + 1}</span>
+            <span class="w-[4ch] shrink-0 text-right text-label-4">{hit.line + 1}</span>
             <span class="min-w-0 flex-1 truncate whitespace-pre">
                 <span>{before}</span>
                 <span class="rounded-[3px] bg-amber-fill text-label">{matched}</span>

@@ -259,6 +259,7 @@ fn DiagnosticRow(path: String, diagnostic: rusty_lsp::FileDiagnostic) -> impl In
         _ => Tone::Slate,
     };
     let open_path = path.clone();
+    let (line, col) = (diagnostic.start_line, diagnostic.start_col);
     let place = format!("{path}:{}", diagnostic.start_line + 1);
     let origin = match (&diagnostic.source, &diagnostic.code) {
         (Some(source), Some(code)) => format!("{source} · {code}"),
@@ -271,8 +272,10 @@ fn DiagnosticRow(path: String, diagnostic: rusty_lsp::FileDiagnostic) -> impl In
         <button
             type="button"
             on:click=move |_| {
-                state.active_panel.set("files".to_string());
-                controller::open_file(state, open_path.clone());
+                // open_at, not open_file: the row names a line, and landing at
+                // the top of the file makes the click look broken — which is
+                // exactly what it did before the editor had tabs.
+                controller::open_at(state, open_path.clone(), line, col);
             }
             class="flex w-full items-start gap-2.5 border-b border-line px-4 py-2 text-left transition-colors last:border-b-0 hover:bg-sunken"
         >
