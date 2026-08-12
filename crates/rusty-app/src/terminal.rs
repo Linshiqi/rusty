@@ -1,0 +1,113 @@
+//! The terminal's commands.
+//!
+//! One session at a time, held in [`AppState`], because the panel shows one.
+//! Opening a second replaces the first rather than leaking a shell nobody can
+//! see or stop.
+//!
+//! Frames are pushed rather than polled: a shell produces output in bursts, and
+//! a frontend asking "anything new?" sixty times a second would burn CPU doing
+//! nothing for most of them.
+
+use std::{sync::Arc, time::Duration};
+
+use rusty_term::{Screen, Terminal};
+use tauri::{State, ipc::Channel};
+
+use crate::{error::CommandError, state::AppState};
+
+/// Longest a frame may be held back to batch what follows it.
+///
+/// A `cargo build` writes thousands of lines a second; rendering each one would
+/// spend the whole budget serialising screens that are replaced before anyone
+/// sees them. Eight milliseconds is under a frame at 120 Hz, so batching is
+/// invisible while cutting the work by orders of magnitude.
+const COALESCE: Duration = Duration::from_millis(8);
+
+/// Open a shell and stream its screen until it exits.
+#[tauri::command]
+pub async fn terminal_open(
+    cols: u16,
+    rows: u16,
+    on_frame: Channel<Screen>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let cwd = state.root().await;
+    let (terminal, updates) = Terminal::spawn(cwd.as_deref(), cols.max(2), rows.max(1))?;
+    let terminal = Arc::new(terminal);
+    state.set_terminal(Some(Arc::clone(&terminal))).await;
+
+    // The first frame is sent before anything arrives, so the view has a shape
+    // to draw immediately instead of a blank rectangle until the shell prints
+    // its prompt.
+    let _ = on_frame.send(terminal.screen());
+
+    // Blocking by nature — it sits on a channel — so it belongs on a blocking
+    // thread rather than starving an async worker for the life of a shell.
+    tokio::task::spawn_blocking(move || {
+        while updates.wait() {
+            std::thread::sleep(COALESCE);
+            let screen = terminal.screen();
+            let done = screen.exited.is_some();
+            if on_frame.send(screen).is_err() {
+                // The panel is gone. Leaving the shell running would leak a
+                // process with no way to reach it.
+                terminal.kill();
+                break;
+            }
+            if done {
+                break;
+            }
+        }
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("the terminal reader panicked: {e}")))?;
+
+    state.set_terminal(None).await;
+    Ok(())
+}
+
+/// Send keystrokes.
+#[tauri::command]
+pub async fn terminal_write(bytes: Vec<u8>, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let terminal = state.terminal().await.ok_or_else(|| {
+        CommandError::new("No terminal is open, so there is nothing to type into.")
+    })?;
+    Ok(terminal.write(&bytes)?)
+}
+
+/// Tell the shell the window changed size.
+#[tauri::command]
+pub async fn terminal_resize(
+    cols: u16,
+    rows: u16,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    // Silently fine when nothing is open: resizes fire from a layout observer,
+    // which does not know or care whether a shell is running.
+    if let Some(terminal) = state.terminal().await {
+        terminal.resize(cols.max(2), rows.max(1))?;
+    }
+    Ok(())
+}
+
+/// Move the view through scrollback. Positive scrolls back.
+#[tauri::command]
+pub async fn terminal_scroll(delta: i32, state: State<'_, AppState>) -> Result<Screen, CommandError> {
+    let terminal = state
+        .terminal()
+        .await
+        .ok_or_else(|| CommandError::new("No terminal is open."))?;
+    terminal.scroll(delta);
+    // Returned directly rather than waiting for a frame: scrolling changes what
+    // is shown without the shell writing anything, so no update would ever come.
+    Ok(terminal.screen())
+}
+
+/// End the session.
+#[tauri::command]
+pub async fn terminal_close(state: State<'_, AppState>) -> Result<(), CommandError> {
+    if let Some(terminal) = state.terminal().await {
+        terminal.kill();
+    }
+    Ok(())
+}

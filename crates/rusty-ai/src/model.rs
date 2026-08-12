@@ -23,7 +23,7 @@ impl Message {
     pub fn user(text: impl Into<String>) -> Self {
         Message {
             role: Role::User,
-            content: vec![Content::Text(text.into())],
+            content: vec![Content::Text { text: text.into() }],
         }
     }
 
@@ -47,7 +47,7 @@ impl Message {
         self.content
             .iter()
             .filter_map(|c| match c {
-                Content::Text(text) => Some(text.as_str()),
+                Content::Text { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -69,7 +69,12 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Content {
-    Text(String),
+    /// A named field, not a newtype. With `tag = "type"` serde has nowhere to
+    /// put the discriminant inside a bare string and refuses at *runtime* —
+    /// which for this type means every assistant answer failing to cross the
+    /// IPC boundary, long after the code that looked wrong. It also matches
+    /// what both providers already put on the wire: `{"type":"text","text":…}`.
+    Text { text: String },
     #[serde(rename_all = "camelCase")]
     ToolUse {
         id: String,
@@ -292,4 +297,73 @@ pub fn presets() -> Vec<Preset> {
         p("LM Studio (local)", OpenAiCompatible, "http://localhost:1234/v1", "", true),
         p("vLLM / custom", OpenAiCompatible, "http://localhost:8000/v1", "", true),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Everything the assistant sends the frontend crosses the IPC boundary as
+    /// JSON, and the transcript comes straight back on the next turn. A variant
+    /// that cannot round-trip breaks the conversation on the second question,
+    /// which is a long way from where the mistake was made.
+    #[test]
+    fn conversation_content_survives_the_wire() {
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Text {
+                    text: "checking the project".into(),
+                },
+                Content::ToolUse {
+                    id: "call_1".into(),
+                    name: "project_status".into(),
+                    input: serde_json::json!({ "path": "." }),
+                },
+                Content::ToolResult {
+                    id: "call_1".into(),
+                    content: "{}".into(),
+                    is_error: false,
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&message).expect("serialize");
+        let back: Message = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.content.len(), 3);
+        assert_eq!(back.text(), "checking the project");
+        assert!(
+            matches!(&back.content[1], Content::ToolUse { name, .. } if name == "project_status"),
+            "tool calls must survive: the next turn replays them to the model",
+        );
+    }
+
+    #[test]
+    fn stream_events_survive_the_wire() {
+        for event in [
+            AgentEvent::Chat(ChatEvent::TextDelta { text: "hi".into() }),
+            AgentEvent::Chat(ChatEvent::Usage {
+                input_tokens: 12,
+                output_tokens: 34,
+            }),
+            AgentEvent::Chat(ChatEvent::Done {
+                stop: StopReason::EndTurn,
+            }),
+            AgentEvent::ToolStarted {
+                id: "1".into(),
+                name: "memory_report".into(),
+                input: serde_json::Value::Null,
+            },
+            AgentEvent::ToolFinished {
+                id: "1".into(),
+                name: "memory_report".into(),
+                ok: true,
+            },
+        ] {
+            let json = serde_json::to_string(&event).expect("serialize");
+            serde_json::from_str::<AgentEvent>(&json)
+                .unwrap_or_else(|e| panic!("{json} did not round-trip: {e}"));
+        }
+    }
 }

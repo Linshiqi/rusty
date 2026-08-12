@@ -20,7 +20,7 @@ pub struct AppState {
     ///
     /// Only the stopper is kept, not the session: the reader loop blocks on
     /// `recv`, so whoever ends a monitor cannot be the thread sitting inside it.
-    session: Mutex<Option<rusty_embed::flash::Stopper>>,
+    session: Mutex<Option<rusty_embed::process::Stopper>>,
     /// Chips and boards, after layering in the user's and the project's files.
     ///
     /// Held here rather than rebuilt per call so every surface — the port list,
@@ -28,6 +28,11 @@ pub struct AppState {
     /// board that appears in one panel and not another is a bug report nobody
     /// can reproduce.
     catalog: Mutex<Option<Arc<Catalog>>>,
+    /// The open shell, if any.
+    ///
+    /// One at a time, because the panel shows one. Opening a second replaces
+    /// the first — a shell nobody can see is a shell nobody can stop.
+    terminal: Mutex<Option<Arc<rusty_term::Terminal>>>,
 }
 
 #[derive(Default, Clone)]
@@ -74,6 +79,18 @@ impl AppState {
         self.inner.lock().await.root.clone()
     }
 
+    pub async fn terminal(&self) -> Option<Arc<rusty_term::Terminal>> {
+        self.terminal.lock().await.clone()
+    }
+
+    /// Register the open shell, killing whatever it replaces.
+    pub async fn set_terminal(&self, terminal: Option<Arc<rusty_term::Terminal>>) {
+        let previous = std::mem::replace(&mut *self.terminal.lock().await, terminal);
+        if let Some(previous) = previous {
+            previous.kill();
+        }
+    }
+
     pub async fn set_firmware(&self, path: Option<PathBuf>) {
         self.inner.lock().await.firmware = path;
     }
@@ -83,7 +100,7 @@ impl AppState {
     /// Two monitors on the same serial port cannot both work — the second gets
     /// an access-denied that reads like a driver problem — so starting one
     /// always stops the last.
-    pub async fn start_session(&self, stopper: rusty_embed::flash::Stopper) {
+    pub async fn start_session(&self, stopper: rusty_embed::process::Stopper) {
         let previous = self.session.lock().await.replace(stopper);
         if let Some(previous) = previous {
             previous.stop();
@@ -97,12 +114,30 @@ impl AppState {
     }
 
     /// Everything a tool call might need, taken in one lock acquisition.
+    ///
+    /// The lock is released before the filesystem is touched: discovery walks a
+    /// target directory, and holding the lock across that would stall every
+    /// panel in the window for the duration.
     pub async fn snapshot(&self) -> Snapshot {
-        let guard = self.inner.lock().await;
+        let open = self.inner.lock().await.clone();
+
+        // Fall back to whatever the project has built. Without this the
+        // assistant's `memory_report` can only run *after* a human has visited
+        // the memory panel — so the first time anyone asks "why is my binary so
+        // big", the tool that answers it reports missing context instead.
+        let firmware = open.firmware.or_else(|| {
+            let root = open.root.as_deref()?;
+            let configured = rusty_embed::project::detect(root)
+                .ok()
+                .and_then(|p| p.configured_target);
+            rusty_embed::firmware::newest(root, configured.as_deref())
+                .map(|f| PathBuf::from(f.path))
+        });
+
         Snapshot {
-            workspace: guard.workspace.clone(),
-            root: guard.root.clone(),
-            firmware: guard.firmware.clone(),
+            workspace: open.workspace,
+            root: open.root,
+            firmware,
         }
     }
 }

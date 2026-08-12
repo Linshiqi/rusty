@@ -1,0 +1,17 @@
+[build]
+target = "./index.html"
+# Release builds optimise the wasm for size: 20 languages of strings and a full
+# UI otherwise produce a blob that is slow to load on a cold start.
+wasm_opt = "z"
+
+[watch]
+# The backend has its own watcher under `cargo tauri dev`; watching it here too
+# means every backend edit triggers two rebuilds that race for `dist/`.
+ignore = ["../rusty-app"]
+
+[serve]
+# Not 1420. That is Tauri's conventional default, so every Tauri app on the
+# machine wants it — including velo, which is developed alongside this one.
+# `tauri.conf.json`'s `devUrl` must match.
+port = 1425
+open = false

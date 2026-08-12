@@ -16,7 +16,9 @@ cargo clippy --workspace --all-targets
 cargo check -p rusty-core -p rusty-embed -p rusty-ai \
   --no-default-features --target wasm32-unknown-unknown
 
-# Frontend (Trunk drives the wasm build; there is no Node in this repo)
+# Frontend alone, on http://localhost:1425 — much faster to iterate on than a
+# full `tauri dev` rebuild. Anything needing the backend reports that it cannot
+# run; the layout and styling are real.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -116,11 +118,82 @@ UI contributions are declarative — extensions never ship markup or styles.
   off `SectionFlags::Elf` rather than trusting `SectionKind`, because these
   linker scripts invent section names (`.rwtext`, `.rodata_wifi`) that no
   heuristic classifies correctly.
+- **ConPTY will not start the shell until the terminal answers `ESC [ 6 n`.**
+  Its first act is to ask where the cursor is, and it blocks on the reply. The
+  symptom is total: the pty yields exactly four bytes and then silence for
+  ever, so the terminal is a blank rectangle with no error anywhere. `vt100`
+  parses but never replies — it has no callback for it — so `pty.rs` scans the
+  stream itself and answers DSR and Device Attributes.
+- **On Windows a pty read never reports end-of-file.** The master keeps the
+  pseudoconsole open however dead the child is, so exit has to be detected by
+  polling `Child::try_wait` on its own thread. Inferring it from the reader
+  works on Unix and hangs here.
+- **An internally-tagged enum cannot have a newtype variant wrapping a string.**
+  `#[serde(tag = "type")] enum Content { Text(String) }` compiles, and then
+  fails at *runtime* with "cannot serialize tagged newtype variant" — there is
+  nowhere inside a bare string to put the discriminant. For `Content` that
+  meant every assistant answer failing at the IPC boundary, nowhere near the
+  declaration. Use a struct variant (`Text { text: String }`). Any type that
+  crosses the wire deserves a round-trip test; `rusty-ai/src/model.rs` has one.
 - `serde_json` sends `i64` as a plain JSON number, so model deltas are `i32` —
   a 64-bit integer would have generated a TypeScript `bigint` that never matched
   the wire.
 - Child processes get `CREATE_NO_WINDOW` on Windows; the toolchain panel probes
   six tools on open and would otherwise flash six console windows.
+- **`NO_COLOR=1` breaks Trunk.** It maps the variable onto its `--no-color`
+  flag, which takes `true`/`false`, and dies with `invalid value '1'`. Set
+  `NO_COLOR=true` or unset it before `trunk serve` / `cargo tauri dev`.
+- **Any cargo command run while `trunk serve` is live can break its build.**
+  Both want the package-cache lock; Trunk's `cargo build` loses and reports
+  `bad status returned from cargo artifacts request`, exit 101. It looks like a
+  compile error in the frontend and is not — the next rebuild after the lock
+  frees succeeds on identical source. Check the serve log's timestamps before
+  believing a build failure the browser console reports.
+- **Trunk only ships assets it was told about.** A bare `<script src="x.js">`
+  leaves `x.js` out of `dist/`, and the dev server answers the request with
+  `index.html`, so the failure is `Unexpected token '<'` rather than a 404.
+  Anything extra needs `<link data-trunk rel="copy-file" href="x.js" />`.
+- **`withGlobalTauri: true` is required.** Tauri v2 defaults it to *false*, so
+  `window.__TAURI__` does not exist and every IPC call dies — inside the real
+  app, not just in a browser. The frontend binds to that global directly rather
+  than through `@tauri-apps/api`, which would mean npm.
+- **`data-tauri-drag-region` needs `core:window:allow-start-dragging`** in
+  `capabilities/`. It is *not* in `core:default`, and without it the attribute
+  is present, the injected handler runs, and the window simply does not move —
+  no error anywhere in the frontend, because the denial happens on the Rust
+  side of the IPC. `allow-internal-toggle-maximize` is the matching permission
+  for double-clicking the title bar.
+- **`tauri.conf.json` rejects unknown fields**, so a `"//comment"` key fails the
+  build with "unknown configuration field" and a misleading suggestion to update
+  your Tauri crates. Explain the config here instead.
+- **One `cargo tauri dev` at a time, and stop the old one first.** A second
+  instance fails with `os error 10048` on port 1425 — and stopping the task
+  kills `trunk serve` but *not* the app window, which is a detached child. Kill
+  `rusty-app.exe` too, or the next run inherits a stale window.
+- **Never run `trunk build` while `trunk serve` is running.** They share `dist/`
+  and its staging directory, and the collision surfaces as two unrelated-looking
+  failures: the browser blocks the stylesheet for an `integrity` mismatch
+  (index.html from one build, CSS from the other), and `tauri dev` dies with
+  `error writing JS loader file to stage dir / os error 3`. `cargo tauri dev`
+  already runs `trunk serve` for you — to rebuild, touch a source file and let
+  it do it.
+- **Leptos flushes to the DOM in a microtask.** Clicking an element and reading
+  the DOM back in the *same* synchronous block always shows the pre-update
+  state. When driving the UI from a browser tool, put the click and the
+  assertion in separate calls — otherwise every interaction looks broken, which
+  cost an hour of chasing a reactivity bug that did not exist.
+- **A bare `>` in a `view!` attribute value ends the tag.** `disabled=move || a
+  > b.get()` compiles the attribute as `move || a` and reports a type mismatch
+  on a line that looks fine. Any comparison in an attribute has to be bound
+  above the macro — same fix as the `match` case below, same class of error
+  message pointing nowhere near the cause.
+- Leptos's `view!` cannot parse a bare `match` or `if` as an attribute value.
+  Compute it into a binding above the macro rather than wrapping it in braces —
+  it reads better and the error when you forget is about close tags, which
+  points nowhere near the cause.
+- A future built from `&SomeStruct { .. }` inline borrows a temporary that dies
+  at the end of the statement. Bind the struct, then move it into an `async`
+  block.
 
 ## After every feature: review before moving on
 

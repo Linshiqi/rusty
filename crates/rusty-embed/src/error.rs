@@ -36,6 +36,14 @@ pub enum Error {
     #[error("{chip} has no {runtime} target — that combination cannot be built")]
     UnsupportedRuntime { chip: String, runtime: String },
 
+    /// A generator option that cannot work without another one.
+    ///
+    /// Caught before running rather than after: `esp-generate` rejects the whole
+    /// invocation with "Invalid options provided", which arrives once the user
+    /// has already chosen where the project should go.
+    #[error("`{option}` cannot be used without `{required}` — turn that on as well.")]
+    MissingOption { option: String, required: String },
+
     #[error(
         "probe-rs needs an exact target name for `{chip}`, which depends on package and \
          flash size. Run `probe-rs chip list` and pick the one matching your board."

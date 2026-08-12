@@ -5,18 +5,20 @@
   "identifier": "dev.rusty.workbench",
   "build": {
     "frontendDist": "../rusty-ui/dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1425",
     "beforeDevCommand": { "script": "trunk serve", "cwd": "../rusty-ui" },
     "beforeBuildCommand": { "script": "trunk build --release", "cwd": "../rusty-ui" }
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "rusty",
         "width": 1440,
         "height": 900,
         "minWidth": 960,
-        "minHeight": 640
+        "minHeight": 640,
+        "decorations": false
       }
     ],
     "security": {

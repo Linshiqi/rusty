@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/rusty-app", "crates/rusty-embed"]
+members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/rusty-app", "crates/rusty-embed", "crates/rusty-ui", "crates/rusty-ipc", "crates/rusty-term"]
 # Test fixtures are real, standalone workspaces that rusty-core analyzes at test
 # time. They must not join this workspace or their deps would unify with ours
 # and the numbers under test would drift with our own dependency changes.

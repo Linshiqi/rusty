@@ -202,7 +202,7 @@ fn to_messages(request: &ChatRequest) -> Vec<Value> {
                 .content
                 .iter()
                 .map(|content| match content {
-                    Content::Text(text) => json!({ "type": "text", "text": text }),
+                    Content::Text { text } => json!({ "type": "text", "text": text }),
                     Content::ToolUse { id, name, input } => json!({
                         "type": "tool_use", "id": id, "name": name, "input": input
                     }),

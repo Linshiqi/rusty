@@ -58,6 +58,18 @@ const TOOLS: &[(&str, &str, &str, bool)] = &[
     ),
 ];
 
+/// How to install one of the tools rusty drives.
+///
+/// The table already knew this and only the toolchain panel was reading it, so
+/// every other caller reported "not found" and stopped there — which is exactly
+/// the half-answer this workbench exists to avoid.
+pub fn install_command(tool: &str) -> Option<&'static str> {
+    TOOLS
+        .iter()
+        .find(|(name, ..)| *name == tool)
+        .map(|(_, _, install, _)| *install)
+}
+
 /// Inspect the machine.
 pub fn status() -> ToolchainStatus {
     let toolchains = list_toolchains();

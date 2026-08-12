@@ -345,6 +345,29 @@ pub struct WizardChoice {
     pub options: Vec<String>,
 }
 
+/// A generator option, with what turning it on costs.
+///
+/// A model type rather than a DTO in the Tauri layer: the frontend renders
+/// these, and rule 1 is that it `use`s model types directly. A struct declared
+/// beside the command would have to be mirrored by hand in the frontend, which
+/// is the drift the shared types exist to make impossible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WizardOption {
+    /// What `esp-generate -o` expects.
+    pub id: String,
+    pub label: String,
+    /// What it commits the project to, in the user's terms.
+    pub detail: String,
+    /// Options this one cannot work without.
+    ///
+    /// `esp-generate` enforces these and rejects the entire run when they are
+    /// missing, so the wizard needs them to avoid offering a combination that
+    /// cannot succeed.
+    #[serde(default)]
+    pub requires: Vec<String>,
+}
+
 /// What one choice in the wizard commits the user to.
 ///
 /// The reason the wizard exists. A list of chip names tells a beginner nothing
@@ -464,6 +487,42 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Built firmware
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An ELF found in the project's target directory.
+///
+/// Every screen that does anything with a device needs a path to a binary, and
+/// until this existed each one had to be handed one. That made the memory panel
+/// a file picker and left the assistant's `memory_report` tool unreachable —
+/// it could only run *after* a human had already browsed to the file.
+///
+/// Discovered rather than constructed. `target/<triple>/release/<crate>` is
+/// predictable enough to be tempting, and wrong often enough — renamed binaries,
+/// a `[[bin]]` section, a custom `CARGO_TARGET_DIR` — that guessing it would
+/// produce a file-not-found where the honest answer is "you have not built yet".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Firmware {
+    pub path: String,
+    /// File stem, which for a normal project is the crate name.
+    pub name: String,
+    /// `debug` or `release`.
+    pub profile: String,
+    /// Target triple, taken from the directory rather than from the ELF header:
+    /// it is what cargo actually built for, which is the thing that has to match.
+    pub target: String,
+    pub bytes: u64,
+    /// Seconds since the Unix epoch, when the filesystem reports it.
+    pub modified: Option<u64>,
+    /// Whether this was built for the triple the project is configured to use.
+    ///
+    /// A stale binary from a previous chip is the classic embedded trap: it
+    /// flashes, it runs, and it behaves like a hardware fault.
+    pub matches_configured_target: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

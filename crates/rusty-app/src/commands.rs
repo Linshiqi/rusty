@@ -13,9 +13,9 @@ use std::path::PathBuf;
 use rusty_ai::{Preset, ProviderConfig, ToolDef, ToolRegistry, config, secrets};
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, Workspace, WorkspaceReport};
 use rusty_embed::{
-    Board, Chip, CommandPlan, EmbeddedProject, Explanation, FlashAction, MemoryReport, Probe,
-    SerialPort, ToolchainReport, Transport, WizardChoice, device, flash, memory, project,
-    toolchain, wizard,
+    Board, Chip, CommandPlan, EmbeddedProject, Explanation, Firmware, FlashAction, MemoryReport,
+    Probe, SerialPort, ToolchainReport, Transport, WizardChoice, WizardOption, device, firmware,
+    flash, memory, project, toolchain, wizard,
 };
 use tauri::State;
 
@@ -133,6 +133,22 @@ pub async fn toolchain_report(state: State<'_, AppState>) -> Answer<ToolchainRep
     Ok(toolchain::report(detected.as_ref()))
 }
 
+// ─── built firmware ──────────────────────────────────────────────────────────
+
+/// Binaries this project has produced, newest first.
+///
+/// Every device screen needs a path to an ELF, and the alternative to this is a
+/// file picker in each of them — which is a file browser wearing a workbench's
+/// clothes.
+#[tauri::command]
+pub async fn firmware_list(state: State<'_, AppState>) -> Answer<Vec<Firmware>> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let configured = project::detect(&root)
+        .ok()
+        .and_then(|p| p.configured_target);
+    Ok(firmware::list(&root, configured.as_deref()))
+}
+
 // ─── memory ──────────────────────────────────────────────────────────────────
 
 /// Analyse a built firmware image.
@@ -157,20 +173,9 @@ pub async fn memory_report(
 // ─── new project ─────────────────────────────────────────────────────────────
 
 /// Generator options, with what each one costs.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WizardOption {
-    pub id: String,
-    pub label: String,
-    pub detail: String,
-}
-
 #[tauri::command]
 pub fn wizard_options() -> Vec<WizardOption> {
     wizard::options()
-        .into_iter()
-        .map(|(id, label, detail)| WizardOption { id, label, detail })
-        .collect()
 }
 
 /// What the current selection commits the user to.

@@ -71,6 +71,12 @@ impl From<rusty_embed::Error> for CommandError {
     }
 }
 
+impl From<rusty_term::Error> for CommandError {
+    fn from(error: rusty_term::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
 impl From<serde_json::Error> for CommandError {
     fn from(error: serde_json::Error) -> Self {
         Self::from_source(&error)

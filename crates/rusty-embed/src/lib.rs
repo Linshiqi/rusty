@@ -24,9 +24,13 @@ pub mod device;
 #[cfg(feature = "backend")]
 mod error;
 #[cfg(feature = "backend")]
+pub mod firmware;
+#[cfg(feature = "backend")]
 pub mod flash;
 #[cfg(feature = "backend")]
 pub mod memory;
+#[cfg(feature = "backend")]
+pub mod process;
 #[cfg(feature = "backend")]
 pub mod project;
 #[cfg(feature = "backend")]

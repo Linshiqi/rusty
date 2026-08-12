@@ -256,7 +256,7 @@ fn join_text(content: &[Content]) -> String {
     content
         .iter()
         .filter_map(|c| match c {
-            Content::Text(text) => Some(text.as_str()),
+            Content::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()

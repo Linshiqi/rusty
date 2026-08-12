@@ -1,0 +1,394 @@
+//! Shared signals.
+//!
+//! Holds state and pure operations on it — no IPC, no side effects. Anything
+//! that has to talk to the backend belongs in `controller`, so that a panel
+//! reading state cannot accidentally trigger a fetch.
+
+use leptos::prelude::*;
+
+use rusty_ai::{Message, Preset, ProviderConfig, ToolDef};
+use rusty_term::Screen as TermScreen;
+use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
+use rusty_embed::{
+    Board, Chip, CommandPlan, EmbeddedProject, Explanation, Firmware, LogLine, MemoryReport, Probe,
+    Problem, SerialPort, Severity, ToolchainReport, Transport, WizardChoice, WizardOption,
+};
+
+use crate::ipc::IpcError;
+
+/// One tool call the assistant made while answering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolRun {
+    pub id: String,
+    pub name: String,
+    /// `None` while it is still running.
+    pub ok: Option<bool>,
+}
+
+/// What the bottom dock is showing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DockTab {
+    /// Everything wrong with the project and the machine, from every source.
+    Problems,
+    /// What flashing and monitoring printed, with defmt levels coloured. The
+    /// device talking to you.
+    Output,
+    /// A real shell behind a pseudo-terminal. You talking to the machine.
+    Terminal,
+    /// Serial ports and probes currently attached.
+    Devices,
+}
+
+impl DockTab {
+    pub const ALL: [DockTab; 4] =
+        [DockTab::Problems, DockTab::Output, DockTab::Terminal, DockTab::Devices];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DockTab::Problems => "Problems",
+            DockTab::Output => "Output",
+            DockTab::Terminal => "Terminal",
+            DockTab::Devices => "Devices",
+        }
+    }
+}
+
+/// A draggable boundary between two regions.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Divider {
+    /// Between the sidebar and the panel. Horizontal drag.
+    Sidebar,
+    /// Between the panel and the dock. Vertical drag.
+    Dock,
+}
+
+impl Divider {
+    /// Bounds, in pixels. The lower one keeps a region usable rather than
+    /// letting it be dragged to nothing — collapsing is what the toggle is for,
+    /// and a two-pixel sidebar is not a smaller sidebar, it is a mistake.
+    pub fn bounds(self) -> (f64, f64) {
+        match self {
+            Divider::Sidebar => (150.0, 380.0),
+            Divider::Dock => (80.0, 600.0),
+        }
+    }
+
+    fn storage_key(self) -> &'static str {
+        match self {
+            Divider::Sidebar => "rusty.layout.sidebar",
+            Divider::Dock => "rusty.layout.dock",
+        }
+    }
+}
+
+fn stored_size(divider: Divider, fallback: f64) -> f64 {
+    let (min, max) = divider.bounds();
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(divider.storage_key()).ok().flatten())
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v.clamp(min, max))
+        .unwrap_or(fallback)
+}
+
+pub fn remember_size(divider: Divider, value: f64) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(divider.storage_key(), &value.to_string());
+    }
+}
+
+const PROVIDER_KEY: &str = "rusty.assistant.provider";
+
+/// The provider profile from last time.
+///
+/// Safe to keep in the browser's storage because it holds no secret — the key
+/// itself lives in the OS credential store and is fetched by the backend at the
+/// moment of the request, so it never enters this window at all.
+fn stored_provider() -> Option<ProviderConfig> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(PROVIDER_KEY).ok().flatten())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+pub fn remember_provider(config: &ProviderConfig) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+        && let Ok(raw) = serde_json::to_string(config)
+    {
+        let _ = storage.set_item(PROVIDER_KEY, &raw);
+    }
+}
+
+/// How many lines of device output to keep.
+///
+/// A monitor left running overnight would otherwise grow without bound and take
+/// the window down with it. Ten thousand is far more than anyone scrolls back
+/// through, and the oldest are the least interesting.
+const LOG_CAPACITY: usize = 10_000;
+
+/// Everything the panels read. `Copy`, because Leptos signals are handles.
+#[derive(Clone, Copy)]
+pub struct AppState {
+    /// The open project, once a folder has been chosen.
+    pub project: RwSignal<Option<EmbeddedProject>>,
+    /// Cargo analysis. Absent when `cargo metadata` failed — which is normal
+    /// for a misconfigured embedded project, and exactly when its diagnosis
+    /// matters most, so the app opens anyway.
+    pub workspace: RwSignal<Option<WorkspaceReport>>,
+    pub toolchain: RwSignal<Option<ToolchainReport>>,
+    pub chips: RwSignal<Vec<Chip>>,
+    pub boards: RwSignal<Vec<Board>>,
+
+    /// Binaries this project has built, newest first.
+    ///
+    /// Shared rather than owned by the memory panel: flashing and monitoring
+    /// need the same list, and two panels each holding their own copy is how
+    /// they end up disagreeing about which build is current.
+    pub firmware: RwSignal<Vec<Firmware>>,
+    /// Path of the build being worked with, if one has been chosen.
+    pub selected_firmware: RwSignal<Option<String>>,
+    pub memory: RwSignal<Option<MemoryReport>>,
+
+    /// The feature selection being simulated, once a member has been picked.
+    ///
+    /// Held rather than derived from the switches because it is exactly what
+    /// goes over the wire — a second representation would need converting on
+    /// every toggle, and the two would disagree the first time a flag was added.
+    pub feature_selection: RwSignal<Option<FeatureSelection>>,
+    pub feature_rows: RwSignal<Vec<FeatureRow>>,
+    pub feature_impact: RwSignal<Option<FeatureImpact>>,
+
+    /// Devices currently attached. Shared by the Flash panel, the Monitor panel
+    /// and the dock's Devices tab — three places that must never disagree about
+    /// what is plugged in.
+    pub ports: RwSignal<Vec<SerialPort>>,
+    pub probes: RwSignal<Vec<Probe>>,
+    /// How to reach the board, once a device has been chosen.
+    pub transport: RwSignal<Option<Transport>>,
+    /// The command that would run, shown before it does.
+    pub plan: RwSignal<Option<CommandPlan>>,
+    /// The new-project wizard: what the generator offers, what has been chosen,
+    /// what that choice commits the user to, and the command it produces.
+    ///
+    /// The explanation is the reason this panel exists, so it is state rather
+    /// than something computed at the end — it updates while the choice is
+    /// still being made, which is the only time it can change a decision.
+    pub wizard_options: RwSignal<Vec<WizardOption>>,
+    pub wizard_choice: RwSignal<Option<WizardChoice>>,
+    pub wizard_explanations: RwSignal<Vec<Explanation>>,
+    pub wizard_plan: RwSignal<Option<CommandPlan>>,
+
+    /// The assistant.
+    ///
+    /// The transcript lives here, not in the backend: the backend takes a
+    /// history and returns the updated one, so closing the panel cannot strand a
+    /// conversation and nothing has to be cleaned up when it is reopened.
+    pub ai_config: RwSignal<Option<ProviderConfig>>,
+    pub ai_presets: RwSignal<Vec<Preset>>,
+    pub ai_tools: RwSignal<Vec<ToolDef>>,
+    pub conversation: RwSignal<Vec<Message>>,
+    /// Prose from the answer in flight, before it becomes a `Message`.
+    pub ai_pending: RwSignal<String>,
+    /// Tools the current answer has called, in order, with whether each
+    /// finished cleanly. Shown live: a model that goes quiet for ten seconds
+    /// while resolving a dependency graph looks broken unless it says so.
+    pub ai_activity: RwSignal<Vec<ToolRun>>,
+    pub ai_streaming: RwSignal<bool>,
+    /// Tokens the last answer cost, when the provider reported them. Surfaced
+    /// because with bring-your-own keys every token is the user's money.
+    pub ai_usage: RwSignal<Option<(u32, u32)>>,
+
+    /// The terminal's latest frame, when a shell is open.
+    ///
+    /// Whole screens rather than an append-only log: a pty is a screen, and
+    /// programs that redraw — every progress bar, every prompt redraw after a
+    /// backspace — overwrite what is there rather than adding to it.
+    pub terminal: RwSignal<Option<TermScreen>>,
+
+    /// Whether a flash or monitor session is attached right now.
+    ///
+    /// One at a time by construction: the backend stops the previous session
+    /// when a new one starts, because two readers on one serial port produce an
+    /// access-denied that reads like a driver fault.
+    pub session_running: RwSignal<bool>,
+
+    pub active_panel: RwSignal<String>,
+
+    /// Sidebar width and dock height, in pixels, remembered across sessions.
+    ///
+    /// A fixed-size panel is the first thing anyone tries to drag, and finding
+    /// that they cannot is the moment a tool starts feeling rigid.
+    pub sidebar_width: RwSignal<f64>,
+    pub dock_height: RwSignal<f64>,
+    /// Which divider is being dragged, if any. Held centrally so the window
+    /// listeners are set up once rather than per handle.
+    pub dragging: RwSignal<Option<Divider>>,
+
+    /// The bottom dock. Open by default: a build or flash that writes into a
+    /// hidden drawer is a build whose failure the user finds out about later.
+    pub dock_open: RwSignal<bool>,
+    pub dock_tab: RwSignal<DockTab>,
+    /// Everything spawned tools have printed, oldest first.
+    ///
+    /// Lives here rather than in the Flash panel so it survives switching
+    /// panels — watching a device is something you do *while* reading the
+    /// memory report, not instead of it.
+    pub log: RwSignal<Vec<LogLine>>,
+    /// Whether the log view sticks to the bottom as lines arrive. Turned off
+    /// automatically when the user scrolls up, which is the only way to read
+    /// something in a stream that is still moving.
+    pub log_follow: RwSignal<bool>,
+    /// Non-zero while any controller action is in flight. A counter rather than
+    /// a flag so two overlapping loads cannot have the first to finish clear
+    /// the indicator while the second is still running.
+    pub in_flight: RwSignal<usize>,
+    /// The last failure, shown until something succeeds or the user dismisses.
+    pub error: RwSignal<Option<IpcError>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            project: RwSignal::new(None),
+            workspace: RwSignal::new(None),
+            toolchain: RwSignal::new(None),
+            chips: RwSignal::new(Vec::new()),
+            boards: RwSignal::new(Vec::new()),
+            firmware: RwSignal::new(Vec::new()),
+            selected_firmware: RwSignal::new(None),
+            memory: RwSignal::new(None),
+            feature_selection: RwSignal::new(None),
+            feature_rows: RwSignal::new(Vec::new()),
+            feature_impact: RwSignal::new(None),
+            ports: RwSignal::new(Vec::new()),
+            probes: RwSignal::new(Vec::new()),
+            transport: RwSignal::new(None),
+            plan: RwSignal::new(None),
+            wizard_options: RwSignal::new(Vec::new()),
+            wizard_choice: RwSignal::new(None),
+            wizard_explanations: RwSignal::new(Vec::new()),
+            wizard_plan: RwSignal::new(None),
+            ai_config: RwSignal::new(stored_provider()),
+            ai_presets: RwSignal::new(Vec::new()),
+            ai_tools: RwSignal::new(Vec::new()),
+            conversation: RwSignal::new(Vec::new()),
+            ai_pending: RwSignal::new(String::new()),
+            ai_activity: RwSignal::new(Vec::new()),
+            ai_streaming: RwSignal::new(false),
+            ai_usage: RwSignal::new(None),
+            terminal: RwSignal::new(None),
+            session_running: RwSignal::new(false),
+            active_panel: RwSignal::new("overview".to_string()),
+            sidebar_width: RwSignal::new(stored_size(Divider::Sidebar, 188.0)),
+            dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
+            dragging: RwSignal::new(None),
+            dock_open: RwSignal::new(true),
+            dock_tab: RwSignal::new(DockTab::Problems),
+            log: RwSignal::new(Vec::new()),
+            log_follow: RwSignal::new(true),
+            in_flight: RwSignal::new(0),
+            error: RwSignal::new(None),
+        }
+    }
+
+    /// Append device output, trimming the oldest once past capacity.
+    pub fn push_log(&self, line: LogLine) {
+        self.log.update(|lines| {
+            if lines.len() >= LOG_CAPACITY {
+                // Drain a batch rather than one at a time: removing from the
+                // front of a Vec is O(n), and doing that per line on a chatty
+                // device would spend more time shuffling than rendering.
+                lines.drain(..LOG_CAPACITY / 10);
+            }
+            lines.push(line);
+        });
+    }
+
+    pub fn clear_log(&self) {
+        self.log.update(Vec::clear);
+        self.log_follow.set(true);
+    }
+
+    /// Put it in context once, at the root, so panels registered elsewhere can
+    /// reach it without being passed down a tree they are not part of.
+    pub fn provide(self) {
+        provide_context(self);
+    }
+
+    pub fn expect() -> Self {
+        expect_context::<Self>()
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.in_flight.get() > 0
+    }
+
+    pub fn has_project(&self) -> bool {
+        self.project.with(Option::is_some)
+    }
+
+    /// Every problem, from both sources, worst first.
+    ///
+    /// Derived in one place because the Overview panel, the dock, and the
+    /// status bar all show it — and three separate derivations would be three
+    /// chances for them to disagree about how many problems there are.
+    pub fn problems(&self) -> Vec<Problem> {
+        let mut all = Vec::new();
+        self.project.with(|p| {
+            if let Some(p) = p {
+                all.extend(p.problems.iter().cloned());
+            }
+        });
+        self.toolchain.with(|t| {
+            if let Some(t) = t {
+                all.extend(t.problems.iter().cloned());
+            }
+        });
+        all.sort_by_key(|p| match p.severity {
+            Severity::Blocking => 0,
+            Severity::Warning => 1,
+            Severity::Info => 2,
+        });
+        all
+    }
+
+    pub fn blocking_count(&self) -> usize {
+        self.problems()
+            .iter()
+            .filter(|p| p.severity == Severity::Blocking)
+            .count()
+    }
+
+    /// The build being worked with.
+    ///
+    /// The user's choice when they have made one, otherwise the same default
+    /// `rusty_embed::firmware::newest` applies on the backend: a binary built
+    /// for the configured target beats a newer one built for something else,
+    /// because flashing the wrong chip's image succeeds and then looks like
+    /// broken hardware.
+    ///
+    /// A selection that no longer exists — the usual outcome of a `cargo clean`
+    /// — falls back to the default rather than leaving the panel empty.
+    pub fn current_firmware(&self) -> Option<Firmware> {
+        let selected = self.selected_firmware.get();
+        self.firmware.with(|all| {
+            selected
+                .and_then(|path| all.iter().find(|f| f.path == path))
+                .or_else(|| all.iter().find(|f| f.matches_configured_target))
+                .or_else(|| all.first())
+                .cloned()
+        })
+    }
+
+    /// Bring a dock tab forward, opening the dock if it was collapsed.
+    pub fn show_dock(&self, tab: DockTab) {
+        self.dock_tab.set(tab);
+        self.dock_open.set(true);
+    }
+}

@@ -197,7 +197,7 @@ impl Assistant {
             let tool_uses = calls.finish();
             let mut content = Vec::new();
             if !text.is_empty() {
-                content.push(Content::Text(text));
+                content.push(Content::Text { text });
             }
             content.extend(tool_uses.iter().cloned());
             if !content.is_empty() {

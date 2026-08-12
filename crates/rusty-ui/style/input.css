@@ -1,0 +1,301 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Design tokens.
+
+   Structure borrowed from macOS: a sidebar on its own material, a unified
+   toolbar, hairline separators rather than drawn borders, and a type scale with
+   a small number of steps. Body text is 13px because that is the macOS UI size
+   — denser than the web default, which suits a tool read at a glance.
+
+   Colour is rusty's own: iron oxide for the accent, copper patina for
+   "healthy". Both are what the name already implies, and neutrals are biased
+   warm (hue ~30) so grey reads as chosen rather than inherited. Apple's
+   discipline applies to how much of it gets used: greys carry the interface and
+   the accent marks one thing at a time.
+
+   Deliberately absent: backdrop-filter, window transparency, large animated
+   shadows. Those are unreliable on WebKitGTK, which is the Linux WebView, so
+   depth here comes from surface steps and hairlines instead. Linear and Raycast
+   read as modern without any of them.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces, back to front. */
+  --window: #ecebe8;
+  --sidebar: #f2f0ed;
+  --content: #ffffff;
+  --raised: #f7f6f4;
+  --sunken: #e8e6e2;
+
+  /* Hairlines. Alpha rather than a solid grey so they sit correctly on any
+     surface above. */
+  --line: rgb(0 0 0 / 0.11);
+  --line-strong: rgb(0 0 0 / 0.18);
+
+  --label: #1c1a17;
+  --label-2: rgb(28 26 23 / 0.62);
+  --label-3: rgb(28 26 23 / 0.42);
+  --label-4: rgb(28 26 23 / 0.26);
+
+  --rust: #bd4a1f;
+  --rust-fill: rgb(189 74 31 / 0.12);
+  --patina: #2b7466;
+  --patina-fill: rgb(43 116 102 / 0.12);
+  --amber: #96660a;
+  --amber-fill: rgb(150 102 10 / 0.13);
+  --crimson: #bf2f47;
+  --crimson-fill: rgb(191 47 71 / 0.11);
+  --slate: #3d6a93;
+  --slate-fill: rgb(61 106 147 / 0.11);
+
+  /* Selection in a sidebar is a filled rounded rect on macOS, not a rule. */
+  --selection: rgb(189 74 31 / 0.13);
+  --focus: rgb(189 74 31 / 0.45);
+
+  /* The 16 ANSI colours the terminal paints with. Themed rather than fixed:
+     a program that asks for "red" means the theme's red, and a palette baked
+     for a dark background is unreadable on a light one. Muted against the
+     canonical values, which were chosen for CRTs. */
+  --term-0: #3b3733;
+  --term-1: #b3341f;
+  --term-2: #3f7a34;
+  --term-3: #8a6510;
+  --term-4: #2f5f96;
+  --term-5: #8a4a8f;
+  --term-6: #217a70;
+  --term-7: #5a544d;
+  --term-8: #7d766d;
+  --term-9: #d3512f;
+  --term-10: #4f9a41;
+  --term-11: #b0821a;
+  --term-12: #3f7ac0;
+  --term-13: #a95fae;
+  --term-14: #2c9a8d;
+  --term-15: #1c1a17;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window: #191715;
+    --sidebar: #1f1d1a;
+    --content: #232020;
+    --raised: #2a2724;
+    --sunken: #151312;
+
+    --line: rgb(255 255 255 / 0.10);
+    --line-strong: rgb(255 255 255 / 0.17);
+
+    --label: #f0ebe5;
+    --label-2: rgb(240 235 229 / 0.64);
+    --label-3: rgb(240 235 229 / 0.44);
+    --label-4: rgb(240 235 229 / 0.26);
+
+    --rust: #e4703f;
+    --rust-fill: rgb(228 112 63 / 0.16);
+    --patina: #4faa9a;
+    --patina-fill: rgb(79 170 154 / 0.15);
+    --amber: #dda33c;
+    --amber-fill: rgb(221 163 60 / 0.15);
+    --crimson: #ef5570;
+    --crimson-fill: rgb(239 85 112 / 0.15);
+    --slate: #6ba3d6;
+    --slate-fill: rgb(107 163 214 / 0.15);
+
+    --selection: rgb(228 112 63 / 0.18);
+    --focus: rgb(228 112 63 / 0.5);
+  }
+}
+
+/* An explicit choice overrides the system one. The attribute is set on <html>
+   by `theme.rs`; absent it, the media query above decides. Both directions have
+   to be spelled out — a user on a dark desktop who picks light needs the light
+   values to win, not merely to be defaults. */
+:root[data-theme="light"] {
+  --window: #ecebe8;
+  --sidebar: #f2f0ed;
+  --content: #ffffff;
+  --raised: #f7f6f4;
+  --sunken: #e8e6e2;
+  --line: rgb(0 0 0 / 0.11);
+  --line-strong: rgb(0 0 0 / 0.18);
+  --label: #1c1a17;
+  --label-2: rgb(28 26 23 / 0.62);
+  --label-3: rgb(28 26 23 / 0.42);
+  --label-4: rgb(28 26 23 / 0.26);
+  --rust: #bd4a1f;
+  --rust-fill: rgb(189 74 31 / 0.12);
+  --patina: #2b7466;
+  --patina-fill: rgb(43 116 102 / 0.12);
+  --amber: #96660a;
+  --amber-fill: rgb(150 102 10 / 0.13);
+  --crimson: #bf2f47;
+  --crimson-fill: rgb(191 47 71 / 0.11);
+  --slate: #3d6a93;
+  --slate-fill: rgb(61 106 147 / 0.11);
+  --selection: rgb(189 74 31 / 0.13);
+  --focus: rgb(189 74 31 / 0.45);
+}
+
+:root[data-theme="dark"] {
+  --window: #191715;
+  --sidebar: #1f1d1a;
+  --content: #232020;
+  --raised: #2a2724;
+  --sunken: #151312;
+  --line: rgb(255 255 255 / 0.10);
+  --line-strong: rgb(255 255 255 / 0.17);
+  --label: #f0ebe5;
+  --label-2: rgb(240 235 229 / 0.64);
+  --label-3: rgb(240 235 229 / 0.44);
+  --label-4: rgb(240 235 229 / 0.26);
+  --rust: #e4703f;
+  --rust-fill: rgb(228 112 63 / 0.16);
+  --patina: #4faa9a;
+  --patina-fill: rgb(79 170 154 / 0.15);
+  --amber: #dda33c;
+  --amber-fill: rgb(221 163 60 / 0.15);
+  --crimson: #ef5570;
+  --crimson-fill: rgb(239 85 112 / 0.15);
+  --slate: #6ba3d6;
+  --slate-fill: rgb(107 163 214 / 0.15);
+  --selection: rgb(228 112 63 / 0.18);
+  --focus: rgb(228 112 63 / 0.5);
+
+  --term-0: #2a2724;
+  --term-1: #ef6b56;
+  --term-2: #86c46f;
+  --term-3: #ddb03c;
+  --term-4: #6ba3d6;
+  --term-5: #c98ad0;
+  --term-6: #4fc0b2;
+  --term-7: #b8b0a6;
+  --term-8: #6d665e;
+  --term-9: #ff8b74;
+  --term-10: #a2dd89;
+  --term-11: #f2c65c;
+  --term-12: #8dbdea;
+  --term-13: #dda6e2;
+  --term-14: #74d8cb;
+  --term-15: #f5f1eb;
+}
+
+@theme inline {
+  --color-window: var(--window);
+  --color-sidebar: var(--sidebar);
+  --color-content: var(--content);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-label: var(--label);
+  --color-label-2: var(--label-2);
+  --color-label-3: var(--label-3);
+  --color-label-4: var(--label-4);
+
+  --color-rust: var(--rust);
+  --color-rust-fill: var(--rust-fill);
+  --color-patina: var(--patina);
+  --color-patina-fill: var(--patina-fill);
+  --color-amber: var(--amber);
+  --color-amber-fill: var(--amber-fill);
+  --color-crimson: var(--crimson);
+  --color-crimson-fill: var(--crimson-fill);
+  --color-slate: var(--slate);
+  --color-slate-fill: var(--slate-fill);
+  --color-selection: var(--selection);
+
+  /* System faces: SF Pro on macOS, Segoe UI Variable on Windows, whatever the
+     desktop uses on Linux — each platform looks native without shipping a font.
+     CJK fallbacks are listed because the UI is bilingual. */
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+
+  /* Apple's scale, trimmed to the steps this app actually needs. */
+  --text-title: 1.625rem; /* 26px — panel headline */
+  --text-title-line-height: 1.2;
+  --text-heading: 1.0625rem; /* 17px — section */
+  --text-heading-line-height: 1.35;
+  --text-strong: 0.9375rem; /* 15px — emphasised body */
+  --text-strong-line-height: 1.4;
+  --text-body: 0.8125rem; /* 13px — the macOS UI size */
+  --text-body-line-height: 1.45;
+  --text-callout: 0.75rem; /* 12px */
+  --text-callout-line-height: 1.4;
+  --text-footnote: 0.6875rem; /* 11px */
+  --text-footnote-line-height: 1.35;
+  --text-caption: 0.625rem; /* 10px — uppercase labels */
+  --text-caption-line-height: 1.3;
+
+  /* Apple's radii are larger than the web norm; controls stay tighter than
+     panels so a button never reads as a card. */
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-window: 12px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--window);
+  color: var(--label);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* A workbench is a fixed frame with scrolling panes, not a scrolling page. */
+  overflow: hidden;
+  /* Chrome is not text; selecting it is always accidental. Panels opt back in. */
+  user-select: none;
+}
+
+/* Digits in columns must not jitter as they update — the memory panel and the
+   feature matrix both rewrite these live. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Apple's focus ring: a soft halo, not a hard outline. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--radius-control);
+}
+
+/* Overlay scrollbars, sized like the platform's. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--label-4);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--label-3);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
