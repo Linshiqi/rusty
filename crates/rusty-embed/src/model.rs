@@ -603,6 +603,12 @@ pub struct PartDef {
 #[serde(rename_all = "camelCase")]
 pub struct SimBoard {
     pub chip: String,
+    /// Where the devkit itself sits on the canvas — it is a part like any
+    /// other, and a schematic whose chip cannot move is a poster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit_y: Option<f64>,
     pub leds: Vec<SimLed>,
     #[serde(default)]
     pub buttons: Vec<SimButton>,

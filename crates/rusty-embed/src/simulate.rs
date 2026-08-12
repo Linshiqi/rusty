@@ -221,6 +221,8 @@ fn board_view(root: &Path) -> Option<SimBoard> {
     #[derive(serde::Deserialize)]
     struct FileBoard {
         chip: Option<String>,
+        x: Option<f64>,
+        y: Option<f64>,
     }
     #[derive(serde::Deserialize)]
     struct FileLed {
@@ -242,11 +244,18 @@ fn board_view(root: &Path) -> Option<SimBoard> {
     {
         return None;
     }
+    let (kit_x, kit_y) = parsed
+        .board
+        .as_ref()
+        .map(|b| (b.x, b.y))
+        .unwrap_or((None, None));
     Some(SimBoard {
         chip: parsed
             .board
             .and_then(|b| b.chip)
             .unwrap_or_else(|| "esp32".to_string()),
+        kit_x,
+        kit_y,
         leds: parsed
             .led
             .into_iter()
@@ -781,6 +790,10 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
     #[derive(serde::Serialize)]
     struct FileBoard<'a> {
         chip: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     }
     #[derive(serde::Serialize)]
     struct FileLed<'a> {
@@ -794,7 +807,11 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
     }
 
     let file = File {
-        board: FileBoard { chip: &board.chip },
+        board: FileBoard {
+            chip: &board.chip,
+            x: board.kit_x.map(|v| v.round()),
+            y: board.kit_y.map(|v| v.round()),
+        },
         led: board
             .leds
             .iter()
@@ -939,6 +956,8 @@ mod tests {
             .expect("tempdir");
         let board = SimBoard {
             chip: "esp32".to_string(),
+            kit_x: Some(420.0),
+            kit_y: Some(30.0),
             leds: vec![SimLed {
                 pin: 26,
                 color: "green".to_string(),
