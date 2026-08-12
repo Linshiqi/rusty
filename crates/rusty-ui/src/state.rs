@@ -289,6 +289,17 @@ pub struct AppState {
     pub completion: RwSignal<Option<CompletionPopup>>,
     /// The signature card: which file and line it hangs over, and what it says.
     pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
+    /// The in-file find bar. Survives tab switches, as every editor's does;
+    /// resets with the project.
+    pub find_open: RwSignal<bool>,
+    pub find_replace_open: RwSignal<bool>,
+    pub find_query: RwSignal<String>,
+    pub find_case: RwSignal<bool>,
+    pub find_replace: RwSignal<String>,
+    /// Which match is current, clamped to the match count at use.
+    pub find_index: RwSignal<usize>,
+    /// Quick fixes offered at the caret, when the user asked (Ctrl+.).
+    pub actions: RwSignal<Option<(String, u32, Vec<rusty_lsp::CodeActionFix>)>>,
     /// Semantic colouring for the active document, as rust-analyzer sees it.
     /// Overlaid on the lexical highlight at render; empty while the index
     /// warms up, and the base colours simply show through.
@@ -430,6 +441,13 @@ impl AppState {
             completion: RwSignal::new(None),
             signature: RwSignal::new(None),
             semantic: RwSignal::new(None),
+            actions: RwSignal::new(None),
+            find_open: RwSignal::new(false),
+            find_replace_open: RwSignal::new(false),
+            find_query: RwSignal::new(String::new()),
+            find_case: RwSignal::new(false),
+            find_replace: RwSignal::new(String::new()),
+            find_index: RwSignal::new(0),
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),

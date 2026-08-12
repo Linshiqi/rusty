@@ -49,6 +49,7 @@ fn main() {
             lsp::lsp_definition,
             lsp::lsp_signature,
             lsp::lsp_semantic,
+            lsp::lsp_code_actions,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -163,6 +164,7 @@ mod wire_names {
             cmd::lsp::DEFINITION => lsp::lsp_definition,
             cmd::lsp::SIGNATURE => lsp::lsp_signature,
             cmd::lsp::SEMANTIC => lsp::lsp_semantic,
+            cmd::lsp::ACTIONS => lsp::lsp_code_actions,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

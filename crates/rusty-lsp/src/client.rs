@@ -40,8 +40,8 @@ use serde_json::{Value, json};
 use crate::{
     error::{Error, Result},
     model::{
-        CompletionItem, DiagSeverity, EditRange, FileDiagnostic, HoverInfo, Location,
-        LspEvent, SemanticSpan, SignatureInfo,
+        ActionEdit, CodeActionFix, CompletionItem, DiagSeverity, EditRange, FileDiagnostic,
+        HoverInfo, Location, LspEvent, SemanticSpan, SignatureInfo,
     },
     positions::{
         Encoding, character_to_scalar, content_change, scalar_to_character,
@@ -426,6 +426,126 @@ impl LspClient {
         }))
     }
 
+    /// The quick fixes and refactorings available at a position, with their
+    /// edits resolved and converted — ready to splice.
+    ///
+    /// Lazily-resolved actions get a `codeAction/resolve` round trip each.
+    /// Actions that edit other files, or only carry a server-side command,
+    /// are dropped: half of a multi-file fix is worse than none.
+    pub fn code_actions(&self, path: &str, line: u32, col: u32) -> Result<Vec<CodeActionFix>> {
+        let position = self.protocol_position(path, line, col);
+        let result = self.shared.request(
+            "textDocument/codeAction",
+            json!({
+                "textDocument": { "uri": self.uri(path) },
+                "range": { "start": position, "end": position },
+                // Empty is fine: rust-analyzer matches its own diagnostics by
+                // range rather than trusting the client's copy.
+                "context": { "diagnostics": [] },
+            }),
+        )?;
+
+        let offers = result.as_array().cloned().unwrap_or_default();
+        let mut fixes = Vec::new();
+        for offer in offers.iter().take(24) {
+            let Some(title) = offer["title"].as_str() else {
+                continue;
+            };
+            let kind = offer["kind"].as_str().map(str::to_string);
+
+            let resolved;
+            let action = if offer.get("edit").is_some() {
+                offer
+            } else {
+                // The edit is lazy; ask for it. A resolve failure just drops
+                // this one offer.
+                match self.shared.request("codeAction/resolve", offer.clone()) {
+                    Ok(full) => {
+                        resolved = full;
+                        &resolved
+                    }
+                    Err(_) => continue,
+                }
+            };
+
+            if let Some(edits) = self.workspace_edit_for(path, &action["edit"])
+                && !edits.is_empty()
+            {
+                fixes.push(CodeActionFix {
+                    title: title.to_string(),
+                    kind,
+                    edits,
+                });
+            }
+        }
+        Ok(fixes)
+    }
+
+    /// A WorkspaceEdit's changes for `path` only — `None` when the edit also
+    /// touches other files and applying just part of it would lie.
+    fn workspace_edit_for(&self, path: &str, edit: &Value) -> Option<Vec<ActionEdit>> {
+        let ours = self.uri(path);
+        let mut collected = Vec::new();
+
+        let mut take = |uri: &str, edits: &Value| -> bool {
+            if !same_file_uri(uri, &ours) {
+                return false;
+            }
+            if let Some(list) = edits.as_array() {
+                for text_edit in list {
+                    collected.push(text_edit.clone());
+                }
+            }
+            true
+        };
+
+        if let Some(changes) = edit["changes"].as_object() {
+            for (uri, edits) in changes {
+                if !take(uri, edits) {
+                    return None;
+                }
+            }
+        }
+        if let Some(documents) = edit["documentChanges"].as_array() {
+            for change in documents {
+                let Some(uri) = change["textDocument"]["uri"].as_str() else {
+                    // A create/rename/delete file operation — beyond this
+                    // client's apply path.
+                    return None;
+                };
+                if !take(uri, &change["edits"]) {
+                    return None;
+                }
+            }
+        }
+
+        let encoding = self.shared.encoding();
+        let docs = self.shared.docs.lock().expect("lsp docs");
+        let text = docs.get(path).map(|d| d.text.as_str()).unwrap_or("");
+        let scalar = |position: &Value| -> Option<(u32, u32)> {
+            let line = position["line"].as_u64()? as u32;
+            let character = position["character"].as_u64()? as u32;
+            let line_text = text.split('\n').nth(line as usize).unwrap_or("");
+            Some((line, character_to_scalar(line_text, character, encoding)))
+        };
+
+        let mut out = Vec::new();
+        for text_edit in collected {
+            let start = scalar(&text_edit["range"]["start"])?;
+            let end = scalar(&text_edit["range"]["end"])?;
+            out.push(ActionEdit {
+                range: EditRange {
+                    start_line: start.0,
+                    start_col: start.1,
+                    end_line: end.0,
+                    end_col: end.1,
+                },
+                new_text: text_edit["newText"].as_str().unwrap_or("").to_string(),
+            });
+        }
+        Some(out)
+    }
+
     /// The whole document's semantic colouring, as the server sees it.
     ///
     /// The reply is quintuples of u32 — deltaLine, deltaStart, length, type
@@ -691,6 +811,17 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "completion": { "completionItem": { "snippetSupport": false } },
                 "hover": { "contentFormat": ["plaintext", "markdown"] },
                 "definition": {},
+                // Actions come back as literals with lazily-resolved edits;
+                // both halves are declared or rust-analyzer sends commands
+                // this client cannot execute.
+                "codeAction": {
+                    "codeActionLiteralSupport": {
+                        "codeActionKind": {
+                            "valueSet": ["", "quickfix", "refactor", "refactor.rewrite"],
+                        },
+                    },
+                    "resolveSupport": { "properties": ["edit"] },
+                },
                 // Semantic tokens — the colours only the compiler's view can
                 // produce. `formats: ["relative"]` is mandatory; the token
                 // types listed are the standard set, and the server's own
@@ -1065,6 +1196,31 @@ fn no_console_window(command: &mut Command) {
     }
 }
 
+/// Whether two file URIs name the same file, tolerating the one difference
+/// Windows manufactures: rust-analyzer answers with a lowercase drive letter
+/// (`file:///e:/…`) where this client builds an uppercase one. Everything
+/// after the drive is compared exactly — only the drive letter is
+/// case-insensitive on disk. Without this, every code action's edit looked
+/// like it belonged to a different file and was dropped as multi-file.
+fn same_file_uri(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (Some(a_rest), Some(b_rest)) = (a.strip_prefix("file:///"), b.strip_prefix("file:///"))
+    else {
+        return false;
+    };
+    let (Some(a_drive), Some(b_drive)) = (a_rest.as_bytes().first(), b_rest.as_bytes().first())
+    else {
+        return false;
+    };
+    a_drive.is_ascii_alphabetic()
+        && a_drive.eq_ignore_ascii_case(b_drive)
+        && a_rest.as_bytes().get(1) == Some(&b':')
+        && b_rest.as_bytes().get(1) == Some(&b':')
+        && a_rest[2..] == b_rest[2..]
+}
+
 /// A UTF-16 offset into `text`, as a byte offset.
 ///
 /// For `ParameterInformation.label` offsets only: those are UTF-16 by spec no
@@ -1117,6 +1273,21 @@ fn kind_name(kind: u64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_letter_case_does_not_split_a_file_in_two() {
+        assert!(same_file_uri(
+            "file:///E:/proj/src/main.rs",
+            "file:///e:/proj/src/main.rs",
+        ));
+        assert!(!same_file_uri(
+            "file:///E:/proj/src/main.rs",
+            "file:///e:/proj/src/lib.rs",
+        ));
+        // The path half stays case-sensitive — only the drive folds.
+        assert!(!same_file_uri("file:///E:/Proj/a.rs", "file:///e:/proj/a.rs"));
+        assert!(same_file_uri("file:///home/x/a.rs", "file:///home/x/a.rs"));
+    }
 
     #[test]
     fn windows_uris_round_trip_through_rust_analyzers_spelling() {

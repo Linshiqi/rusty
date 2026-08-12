@@ -212,6 +212,10 @@ fn project_opened(state: AppState, result: OpenResult) {
             state.search_query.set(String::new());
             state.search_results.set(None);
             state.search_word.set(false);
+            state.find_open.set(false);
+            state.find_replace_open.set(false);
+            state.find_query.set(String::new());
+            state.find_index.set(0);
             state.search_regex.set(false);
             state.search_include.set(String::new());
             state.search_exclude.set(String::new());
@@ -234,6 +238,11 @@ fn project_opened(state: AppState, result: OpenResult) {
             refresh_firmware(state);
             refresh_tree(state);
             start_lsp(state);
+            if let Some(root) =
+                state.project.with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
+            {
+                restore_tabs(state, &root);
+            }
         }
     }
 }
@@ -261,12 +270,17 @@ fn reload_project(state: AppState) {
         state,
         ipc::get::<EmbeddedProject>(cmd::project::STATUS),
         move |project| {
+            let root = project.root.clone();
             state.project.set(Some(project));
             refresh_toolchain(state);
             refresh_firmware(state);
             refresh_workspace(state);
             refresh_tree(state);
             start_lsp(state);
+            // A WebView reload reaches a project the backend never closed —
+            // this path skips project_opened, so the strip is replayed here
+            // too or a refresh would silently drop every open tab.
+            restore_tabs(state, &root);
         },
     );
 }
@@ -516,6 +530,57 @@ pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
     });
 }
 
+/// Ask what quick fixes exist at the caret, after syncing the draft — an
+/// answer about stale text splices into the wrong place.
+pub fn request_actions(state: AppState, path: String, line: u32, col: u32) {
+    #[derive(serde::Serialize)]
+    struct Sync {
+        path: String,
+        text: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Ask {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    if state.lsp_status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    let sync = Sync {
+        path: path.clone(),
+        text: state.draft.get_untracked(),
+    };
+    let ask = Ask {
+        path: path.clone(),
+        line,
+        col,
+    };
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
+        let Ok(fixes) =
+            ipc::call::<_, Vec<rusty_lsp::CodeActionFix>>(cmd::lsp::ACTIONS, &ask).await
+        else {
+            return;
+        };
+        let current = state
+            .document
+            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        if current.as_deref() == Some(path.as_str()) {
+            if fixes.is_empty() {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: "no quick fixes at the cursor".to_string(),
+                    level: None,
+                });
+            } else {
+                state.actions.set(Some((path, line, fixes)));
+            }
+        }
+    });
+}
+
 /// Ask for the document's semantic colouring, and keep it only if the answer
 /// still describes what is on screen.
 pub fn request_semantic(state: AppState, path: String) {
@@ -543,6 +608,65 @@ pub fn request_semantic(state: AppState, path: String) {
             state.semantic.set(Some((path, spans)));
         }
     });
+}
+
+// ─── session restore ─────────────────────────────────────────────────────────
+
+/// localStorage key for a project's open tabs. Per the storage doctrine this
+/// is WebView-only state whose loss costs a shrug — exactly localStorage's
+/// province.
+fn tabs_key(root: &str) -> String {
+    format!("rusty.tabs.{root}")
+}
+
+/// Write the strip to localStorage: open paths, active one first.
+pub fn remember_tabs(state: AppState) {
+    let Some(root) = state
+        .project
+        .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
+    else {
+        return;
+    };
+    let active = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let tabs = state.tabs.get_untracked();
+    let record = serde_json::json!({ "tabs": tabs, "active": active });
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(&tabs_key(&root), &record.to_string());
+    }
+}
+
+/// Reopen the tabs the project had last time. Missing files fail their open
+/// quietly through the normal error path; the strip simply ends up shorter.
+pub fn restore_tabs(state: AppState, root: &str) {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
+        return;
+    };
+    let Ok(Some(raw)) = storage.get_item(&tabs_key(root)) else {
+        return;
+    };
+    let Ok(record) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let tabs: Vec<String> = record["tabs"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let active = record["active"].as_str().map(str::to_string);
+
+    // Open in strip order; the active one last, so it ends up on screen.
+    for path in tabs.iter().filter(|p| Some(p.as_str()) != active.as_deref()) {
+        open_file(state, path.clone());
+    }
+    if let Some(active) = active {
+        open_file(state, active);
+    }
 }
 
 // ─── project search ─────────────────────────────────────────────────────────────
@@ -1265,6 +1389,7 @@ fn clear_editor_transients(state: AppState) {
     state.signature.set(None);
     state.hover.set(None);
     state.semantic.set(None);
+    state.actions.set(None);
 }
 
 /// Front an already open tab, parking the current one.

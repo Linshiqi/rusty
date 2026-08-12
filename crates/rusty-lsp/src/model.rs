@@ -102,6 +102,29 @@ pub struct Location {
     pub external: bool,
 }
 
+/// One text replacement inside a code action, scalar-addressed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionEdit {
+    pub range: EditRange,
+    pub new_text: String,
+}
+
+/// A quick fix or refactoring the server offers at a position, with its
+/// edits already resolved — the frontend applies text, it never negotiates.
+///
+/// Only single-file actions travel: an action that would touch other files
+/// is dropped by the client rather than half-applied, until a multi-file
+/// apply path exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeActionFix {
+    pub title: String,
+    /// `quickfix`, `refactor.rewrite`… when the server said.
+    pub kind: Option<String>,
+    pub edits: Vec<ActionEdit>,
+}
+
 /// One run of semantic colour, as rust-analyzer sees the code.
 ///
 /// The kind is the server's own legend name (`function`, `struct`,

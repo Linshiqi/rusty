@@ -99,6 +99,7 @@ pub mod lsp {
     pub const DEFINITION: &str = "lsp_definition";
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
+    pub const ACTIONS: &str = "lsp_code_actions";
 }
 
 pub mod features {

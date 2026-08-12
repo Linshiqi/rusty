@@ -144,6 +144,11 @@
       range: { startLine: a.line, startCol: 4, endLine: a.line, endCol: 9 },
     }),
     lsp_definition: () => null,
+    lsp_code_actions: (a) => [{
+      title: "Import `std::collections::HashMap`",
+      kind: "quickfix",
+      edits: [{ range: { startLine: 0, startCol: 0, endLine: 0, endCol: 0 }, newText: ["use std::collections::HashMap;", "", ""].join("\n") }],
+    }],
     lsp_semantic: () => [
       { line: 47, startCol: 8, length: 5, kind: "variable" },
       { line: 51, startCol: 7, length: 5, kind: "struct" },

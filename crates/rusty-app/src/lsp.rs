@@ -149,6 +149,24 @@ pub async fn lsp_hover(
         .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
 }
 
+/// Quick fixes and refactorings at the caret, edits pre-resolved.
+#[tauri::command]
+pub async fn lsp_code_actions(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::CodeActionFix>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(Vec::new());
+    };
+    Ok(
+        tokio::task::spawn_blocking(move || client.code_actions(&path, line, col))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
+}
+
 /// The document's semantic colouring — the colours only the compiler's view
 /// can produce.
 #[tauri::command]

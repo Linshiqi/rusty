@@ -201,6 +201,11 @@ that needs it lands.**
   takes it), converts to Unicode-scalar columns at the boundary, and the
   integration test keeps a 中文 comment above the assertions so ASCII-only
   arithmetic cannot pass.
+- **rust-analyzer's WorkspaceEdit URIs come back with a lowercase drive
+  letter** (`file:///e:/…`) where this client builds `file:///E:/…`. A strict
+  string compare judged every code action "multi-file" and dropped it — no
+  quick fix ever appeared, silently. Compare through `same_file_uri`, which
+  folds only the drive letter.
 - **`ParameterInformation.label` offsets stay UTF-16 even after negotiating
   utf-8.** The negotiated encoding covers *document* positions; offsets into
   strings the server sent (signature labels) are UTF-16 by spec, always. Two

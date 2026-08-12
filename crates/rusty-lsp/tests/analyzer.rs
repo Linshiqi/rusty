@@ -34,6 +34,7 @@ fn source() -> String {
         "    let _n = w.frobnicate();",
         "    let _m = w.mix(1, 2);",
         "    let _mistake: u32 = \"seven\";",
+        "    let _table = HashMap::new();",
         "}",
         "",
     ]
@@ -235,6 +236,55 @@ fn rust_analyzer_end_to_end() {
     .expect("definition never resolved");
     assert_eq!(location.path, "src/main.rs");
     assert_eq!(location.line, line_of(&text, "fn build"));
+
+    // ── code actions: auto-import resolves and applies ───────────────────────
+    let table_line = line_of(&text, "HashMap::new");
+    let table_col = text
+        .lines()
+        .nth(table_line as usize)
+        .unwrap()
+        .find("HashMap")
+        .unwrap() as u32
+        + 1;
+    let fixes = eventually(Duration::from_secs(30), || {
+        client
+            .code_actions("src/main.rs", table_line, table_col)
+            .ok()
+            .filter(|fixes| fixes.iter().any(|f| f.title.contains("Import")))
+    })
+    .expect("no import action was ever offered for HashMap");
+    let import = fixes
+        .iter()
+        .find(|f| f.title.contains("Import"))
+        .expect("filtered above");
+    assert!(!import.edits.is_empty(), "{import:?}");
+
+    // Apply to a copy the way the frontend does: bottom-up splices.
+    let mut patched = text.clone();
+    let mut edits = import.edits.clone();
+    edits.sort_by_key(|edit| {
+        std::cmp::Reverse((edit.range.start_line, edit.range.start_col))
+    });
+    for edit in edits {
+        let offset = |line: u32, col: u32| -> usize {
+            let mut at = 0;
+            for (index, l) in patched.split('\n').enumerate() {
+                if index as u32 == line {
+                    return at + l.chars().take(col as usize).map(char::len_utf8).sum::<usize>();
+                }
+                at += l.len() + 1;
+            }
+            patched.len()
+        };
+        let from = offset(edit.range.start_line, edit.range.start_col);
+        let to = offset(edit.range.end_line, edit.range.end_col).max(from);
+        patched.replace_range(from..to, &edit.new_text);
+    }
+    assert!(
+        patched.contains("use std::collections::HashMap;"),
+        "the import landed:
+{patched}",
+    );
 
     drop(client); // kills the server; the events channel closes behind it
 }

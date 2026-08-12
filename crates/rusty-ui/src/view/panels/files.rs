@@ -445,6 +445,17 @@ fn Surface(document: Document) -> impl IntoView {
         let _ = state.completion.get();
         picked.set(0);
     });
+    let picked_action = RwSignal::new(0usize);
+    Effect::new(move |_| {
+        let _ = state.actions.get();
+        picked_action.set(0);
+    });
+    // The strip is remembered whenever it changes, so a crash loses nothing.
+    Effect::new(move |_| {
+        let _ = state.tabs.get();
+        let _ = state.document.get();
+        controller::remember_tabs(state);
+    });
 
     // Apply a pending goto once this document is the one on screen.
     {
@@ -555,6 +566,8 @@ fn Surface(document: Document) -> impl IntoView {
     };
 
     view! {
+        <div class="relative flex min-h-0 flex-1 flex-col">
+            <FindBar area=area scroller=scroller />
         <div node_ref=scroller class="relative min-h-0 flex-1 overflow-auto">
             // w-max: the row is as wide as the longest line, so the textarea
             // overlay (inset-0 in the column beside the gutter) covers every
@@ -588,6 +601,50 @@ fn Surface(document: Document) -> impl IntoView {
                 }
 
                 <div class="relative min-w-0 flex-1">
+                    // Find matches, washed under the text. Rectangles rather
+                    // than woven spans: the wash must not disturb the span
+                    // structure the caret math and diagnostics rely on.
+                    {move || {
+                        if !state.find_open.get() {
+                            return ().into_any();
+                        }
+                        let text = state.draft.get();
+                        let query = state.find_query.get();
+                        let case = state.find_case.get();
+                        let matches = find_matches(&text, &query, case);
+                        if matches.is_empty() {
+                            return ().into_any();
+                        }
+                        let current = state.find_index.get().min(matches.len() - 1);
+                        matches
+                            .iter()
+                            .take(500)
+                            .enumerate()
+                            .map(|(index, (from, to))| {
+                                let (line, col) = line_col_of_byte(&text, *from);
+                                let (_, end_col) = line_col_of_byte(&text, *to);
+                                let x = 8.0 + column_px(&text, line, col);
+                                let width =
+                                    (column_px(&text, line, end_col) - column_px(&text, line, col))
+                                        .max(2.0);
+                                let y = 8.0 + f64::from(line) * LINE_HEIGHT;
+                                let wash = if index == current {
+                                    "pointer-events-none absolute rounded-[3px] bg-amber-fill"
+                                } else {
+                                    "pointer-events-none absolute rounded-[3px] bg-selection"
+                                };
+                                view! {
+                                    <div
+                                        class=wash
+                                        style=format!(
+                                            "left: {x}px; top: {y}px; width: {width}px; height: {LINE_HEIGHT}px",
+                                        )
+                                    />
+                                }
+                            })
+                            .collect_view()
+                            .into_any()
+                    }}
                     <pre
                         class="pointer-events-none m-0 overflow-visible py-2 pr-4 pl-2 whitespace-pre"
                         style=metrics.clone()
@@ -670,6 +727,7 @@ fn Surface(document: Document) -> impl IntoView {
                                 if !(event.ctrl_key() || event.meta_key()) || !is_rust {
                                     state.completion.set(None);
                                     state.signature.set(None);
+                                    state.actions.set(None);
                                     return;
                                 }
                                 event.prevent_default();
@@ -770,6 +828,59 @@ fn Surface(document: Document) -> impl IntoView {
                             if event.is_composing() {
                                 return;
                             }
+                            // The actions popup owns its keys while it is up.
+                            if state.actions.with_untracked(Option::is_some) {
+                                match event.key().as_str() {
+                                    "ArrowDown" => {
+                                        event.prevent_default();
+                                        picked_action.update(|i| *i += 1);
+                                        return;
+                                    }
+                                    "ArrowUp" => {
+                                        event.prevent_default();
+                                        picked_action.update(|i| *i = i.saturating_sub(1));
+                                        return;
+                                    }
+                                    "Enter" => {
+                                        event.prevent_default();
+                                        if let Some(element) = area.get_untracked() {
+                                            apply_action(
+                                                state,
+                                                &element,
+                                                picked_action.get_untracked(),
+                                            );
+                                        }
+                                        return;
+                                    }
+                                    "Escape" => {
+                                        event.prevent_default();
+                                        event.stop_propagation();
+                                        state.actions.set(None);
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Ctrl+. asks what the server can fix here.
+                            if (event.ctrl_key() || event.meta_key())
+                                && event.key() == "."
+                                && is_rust
+                            {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    let text = state.draft.get_untracked();
+                                    if let Some((line, col)) = caret_line_col(&element, &text) {
+                                        state.completion.set(None);
+                                        controller::request_actions(
+                                            state,
+                                            path.clone(),
+                                            line,
+                                            col,
+                                        );
+                                    }
+                                }
+                                return;
+                            }
                             // The popup owns its keys while it is up.
                             if state.completion.with_untracked(Option::is_some) {
                                 match event.key().as_str() {
@@ -812,6 +923,59 @@ fn Surface(document: Document) -> impl IntoView {
                                 event.prevent_default();
                                 event.stop_propagation();
                                 state.signature.set(None);
+                                return;
+                            }
+                            if (event.ctrl_key() || event.meta_key())
+                                && (event.key().eq_ignore_ascii_case("f")
+                                    || event.key().eq_ignore_ascii_case("h"))
+                            {
+                                event.prevent_default();
+                                // Prefill from the selection, as every editor
+                                // does — finding the thing under the cursor is
+                                // the whole gesture.
+                                if let Some(element) = area.get_untracked() {
+                                    let text = state.draft.get_untracked();
+                                    let from = element
+                                        .selection_start()
+                                        .ok()
+                                        .flatten()
+                                        .unwrap_or(0) as usize;
+                                    let to = element
+                                        .selection_end()
+                                        .ok()
+                                        .flatten()
+                                        .unwrap_or(0) as usize;
+                                    if to > from {
+                                        let picked = text
+                                            [byte_of_utf16(&text, from)..byte_of_utf16(&text, to)]
+                                            .to_string();
+                                        if !picked.contains('\n') && !picked.is_empty() {
+                                            state.find_query.set(picked);
+                                            state.find_index.set(0);
+                                        }
+                                    }
+                                }
+                                state.find_open.set(true);
+                                if event.key().eq_ignore_ascii_case("h") {
+                                    state.find_replace_open.set(true);
+                                }
+                                return;
+                            }
+                            if event.key() == "F3" && state.find_open.get_untracked() {
+                                event.prevent_default();
+                                find_jump(state, scroller, if event.shift_key() { -1 } else { 1 });
+                                return;
+                            }
+                            if event.key() == "Escape"
+                                && state.find_open.get_untracked()
+                                && state
+                                    .completion
+                                    .with_untracked(Option::is_none)
+                                && state.signature.with_untracked(Option::is_none)
+                            {
+                                event.prevent_default();
+                                state.find_open.set(false);
+                                state.find_replace_open.set(false);
                                 return;
                             }
                             if (event.ctrl_key() || event.meta_key())
@@ -937,6 +1101,63 @@ fn Surface(document: Document) -> impl IntoView {
                                     }
                                 >
                                     {hover_parts(&text)}
+                                </div>
+                            }
+                            .into_any()
+                        }
+                    }
+
+                    // The quick-fix popup, anchored under its line.
+                    {
+                        let path = path.clone();
+                        move || {
+                            let Some((for_path, line, fixes)) = state.actions.get() else {
+                                return ().into_any();
+                            };
+                            if for_path != path {
+                                return ().into_any();
+                            }
+                            let chosen = picked_action.get().min(fixes.len().saturating_sub(1));
+                            let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT + 2.0;
+                            view! {
+                                <div
+                                    class="absolute z-20 min-w-[280px] rounded-[8px] bg-raised py-1 font-mono text-footnote shadow-2xl ring-1 ring-line-strong"
+                                    style=format!("left: 48px; top: {y}px")
+                                >
+                                    {fixes
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(index, fix)| {
+                                            let selected = index == chosen;
+                                            let kind = fix.kind.clone().unwrap_or_default();
+                                            view! {
+                                                <button
+                                                    type="button"
+                                                    on:mousedown=move |event: ev::MouseEvent| {
+                                                        event.prevent_default();
+                                                        event.stop_propagation();
+                                                        if let Some(element) =
+                                                            area.get_untracked()
+                                                        {
+                                                            apply_action(
+                                                                state, &element, index,
+                                                            );
+                                                        }
+                                                    }
+                                                    class=if selected {
+                                                        "flex w-full items-baseline gap-2 bg-selection px-2.5 py-0.5 text-left text-rust"
+                                                    } else {
+                                                        "flex w-full items-baseline gap-2 px-2.5 py-0.5 text-left text-label-2"
+                                                    }
+                                                >
+                                                    <span class="shrink-0">{fix.title.clone()}</span>
+                                                    <span class="min-w-0 flex-1 truncate text-right text-label-3">
+                                                        {kind}
+                                                    </span>
+                                                </button>
+                                            }
+                                        })
+                                        .collect_view()}
                                 </div>
                             }
                             .into_any()
@@ -1102,6 +1323,7 @@ fn Surface(document: Document) -> impl IntoView {
                     }
                 </div>
             </div>
+        </div>
         </div>
     }
 }
@@ -1349,6 +1571,305 @@ fn keep_caret_in_view(
     } else if y + LINE_HEIGHT * 2.0 > view_top + view_height {
         outer.set_scroll_top((y + LINE_HEIGHT * 4.0 - view_height) as i32);
     }
+}
+
+/// Every occurrence of `query` in `text`, as byte ranges.
+///
+/// ASCII-case-folded like project search's literal mode, capped so a
+/// one-letter query in a big file cannot melt the renderer.
+fn find_matches(text: &str, query: &str, case: bool) -> Vec<(usize, usize)> {
+    const CAP: usize = 2000;
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let hay = text.as_bytes();
+    let needle = query.as_bytes();
+    let mut at = 0;
+    while at + needle.len() <= hay.len() && out.len() < CAP {
+        let here = &hay[at..at + needle.len()];
+        let matched = if case {
+            here == needle
+        } else {
+            here.eq_ignore_ascii_case(needle)
+        };
+        if matched && text.is_char_boundary(at) {
+            out.push((at, at + needle.len()));
+            at += needle.len().max(1);
+        } else {
+            at += 1;
+        }
+    }
+    out
+}
+
+/// (line, scalar column) of a byte offset.
+fn line_col_of_byte(text: &str, at: usize) -> (u32, u32) {
+    let before = &text[..at.min(text.len())];
+    let line = before.matches('\n').count() as u32;
+    let start = before.rfind('\n').map(|found| found + 1).unwrap_or(0);
+    (line, before[start..].chars().count() as u32)
+}
+
+/// Step the current find match by `direction`, wrapping, and show it.
+fn find_jump(state: AppState, scroller: NodeRef<html::Div>, direction: i32) {
+    let text = state.draft.get_untracked();
+    let query = state.find_query.get_untracked();
+    let matches = find_matches(&text, &query, state.find_case.get_untracked());
+    if matches.is_empty() {
+        return;
+    }
+    let current = state.find_index.get_untracked().min(matches.len() - 1);
+    let next = if direction >= 0 {
+        (current + 1) % matches.len()
+    } else {
+        (current + matches.len() - 1) % matches.len()
+    };
+    state.find_index.set(next);
+    let (line, _) = line_col_of_byte(&text, matches[next].0);
+    if let Some(outer) = scroller.get_untracked() {
+        let y = 8.0 + f64::from(line) * LINE_HEIGHT;
+        let top = f64::from(outer.scroll_top());
+        let height = f64::from(outer.client_height());
+        if y < top + LINE_HEIGHT || y + LINE_HEIGHT * 2.0 > top + height {
+            outer.set_scroll_top((y - height / 3.0).max(0.0) as i32);
+        }
+    }
+}
+
+/// Replace the current match, or every match, through the undo pipeline.
+fn find_replace(state: AppState, area: NodeRef<html::Textarea>, all: bool) {
+    let text = state.draft.get_untracked();
+    let query = state.find_query.get_untracked();
+    let matches = find_matches(&text, &query, state.find_case.get_untracked());
+    if matches.is_empty() {
+        return;
+    }
+    let replacement = state.find_replace.get_untracked();
+
+    record_edit(state);
+    let mut new = text.clone();
+    if all {
+        for (from, to) in matches.iter().rev() {
+            new.replace_range(*from..*to, &replacement);
+        }
+    } else {
+        let current = state.find_index.get_untracked().min(matches.len() - 1);
+        let (from, to) = matches[current];
+        new.replace_range(from..to, &replacement);
+    }
+
+    echo_edit(state, &new);
+    state.draft.set(new.clone());
+    if let Some(element) = area.get_untracked() {
+        element.set_value(&new);
+    }
+    controller::schedule_pulse(state);
+}
+
+/// The floating find/replace bar, top right of the editor.
+#[component]
+fn FindBar(area: NodeRef<html::Textarea>, scroller: NodeRef<html::Div>) -> impl IntoView {
+    let state = AppState::expect();
+    let input: NodeRef<html::Input> = NodeRef::new();
+
+    // Opening focuses the query box with its text selected, ready to retype.
+    Effect::new(move |_| {
+        if state.find_open.get()
+            && let Some(element) = input.get_untracked()
+        {
+            let _ = element.focus();
+            element.select();
+        }
+    });
+
+    let counter = Signal::derive(move || {
+        let text = state.draft.get();
+        let query = state.find_query.get();
+        let matches = find_matches(&text, &query, state.find_case.get());
+        if query.is_empty() {
+            String::new()
+        } else if matches.is_empty() {
+            "no results".to_string()
+        } else {
+            let current = state.find_index.get().min(matches.len() - 1);
+            format!("{}/{}", current + 1, matches.len())
+        }
+    });
+
+    let small = "grid size-6 place-items-center rounded-[5px] text-footnote                  text-label-3 hover:bg-sunken hover:text-label";
+
+    view! {
+        <Show when=move || state.find_open.get()>
+            <div class="absolute top-2 right-6 z-30 flex flex-col gap-1 rounded-[8px] bg-raised p-1.5 shadow-2xl ring-1 ring-line-strong">
+                <div class="flex items-center gap-1">
+                    <input
+                        node_ref=input
+                        type="text"
+                        placeholder="Find"
+                        autocomplete="off"
+                        spellcheck="false"
+                        prop:value=move || state.find_query.get()
+                        on:input=move |event: ev::Event| {
+                            state.find_query.set(event_target_value(&event));
+                            state.find_index.set(0);
+                        }
+                        on:keydown=move |event: ev::KeyboardEvent| {
+                            match event.key().as_str() {
+                                "Enter" => {
+                                    event.prevent_default();
+                                    find_jump(
+                                        state,
+                                        scroller,
+                                        if event.shift_key() { -1 } else { 1 },
+                                    );
+                                }
+                                "Escape" => {
+                                    event.prevent_default();
+                                    event.stop_propagation();
+                                    state.find_open.set(false);
+                                    state.find_replace_open.set(false);
+                                    if let Some(element) = area.get_untracked() {
+                                        let _ = element.focus();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        class="w-[200px] rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote text-label placeholder:text-label-3"
+                    />
+                    <button
+                        type="button"
+                        title="Match case"
+                        on:click=move |_| {
+                            state.find_case.update(|case| *case = !*case);
+                            state.find_index.set(0);
+                        }
+                        class=move || {
+                            let base = "rounded-[5px] px-1.5 py-0.5 font-mono text-footnote";
+                            if state.find_case.get() {
+                                format!("{base} bg-selection text-rust")
+                            } else {
+                                format!("{base} text-label-3 hover:text-label")
+                            }
+                        }
+                    >
+                        "Aa"
+                    </button>
+                    <span class="min-w-[6ch] px-1 text-center font-mono text-caption text-label-3">
+                        {counter}
+                    </span>
+                    <button
+                        type="button"
+                        title="Previous (Shift+Enter)"
+                        on:click=move |_| find_jump(state, scroller, -1)
+                        class=small
+                    >
+                        "↑"
+                    </button>
+                    <button
+                        type="button"
+                        title="Next (Enter)"
+                        on:click=move |_| find_jump(state, scroller, 1)
+                        class=small
+                    >
+                        "↓"
+                    </button>
+                    <button
+                        type="button"
+                        title="Replace…"
+                        on:click=move |_| {
+                            state.find_replace_open.update(|open| *open = !*open)
+                        }
+                        class=small
+                    >
+                        "⇄"
+                    </button>
+                    <button
+                        type="button"
+                        title="Close (Esc)"
+                        on:click=move |_| {
+                            state.find_open.set(false);
+                            state.find_replace_open.set(false);
+                        }
+                        class=small
+                    >
+                        "×"
+                    </button>
+                </div>
+                <Show when=move || state.find_replace_open.get()>
+                    <div class="flex items-center gap-1">
+                        <input
+                            type="text"
+                            placeholder="Replace with"
+                            autocomplete="off"
+                            spellcheck="false"
+                            prop:value=move || state.find_replace.get()
+                            on:input=move |event: ev::Event| {
+                                state.find_replace.set(event_target_value(&event))
+                            }
+                            class="w-[200px] rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote text-label placeholder:text-label-3"
+                        />
+                        <button
+                            type="button"
+                            on:click=move |_| find_replace(state, area, false)
+                            class="rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                        >
+                            "Replace"
+                        </button>
+                        <button
+                            type="button"
+                            on:click=move |_| find_replace(state, area, true)
+                            class="rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                        >
+                            "All"
+                        </button>
+                    </div>
+                </Show>
+            </div>
+        </Show>
+    }
+}
+
+/// Apply the chosen quick fix: splice its edits bottom-up so earlier ranges
+/// stay valid, through the undo pipeline.
+fn apply_action(state: AppState, area: &web_sys::HtmlTextAreaElement, index: usize) {
+    let Some((_, _, fixes)) = state.actions.get_untracked() else {
+        return;
+    };
+    let Some(fix) = fixes.get(index.min(fixes.len().saturating_sub(1))) else {
+        return;
+    };
+
+    let text = state.draft.get_untracked();
+    let mut edits: Vec<(usize, usize, &str)> = fix
+        .edits
+        .iter()
+        .map(|edit| {
+            let from = byte_of_utf16(
+                &text,
+                utf16_offset_of(&text, edit.range.start_line, edit.range.start_col) as usize,
+            );
+            let to = byte_of_utf16(
+                &text,
+                utf16_offset_of(&text, edit.range.end_line, edit.range.end_col) as usize,
+            );
+            (from, to.max(from), edit.new_text.as_str())
+        })
+        .collect();
+    edits.sort_by_key(|(from, ..)| std::cmp::Reverse(*from));
+
+    record_edit(state);
+    let mut new = text.clone();
+    for (from, to, replacement) in edits {
+        new.replace_range(from..to, replacement);
+    }
+
+    echo_edit(state, &new);
+    state.draft.set(new.clone());
+    area.set_value(&new);
+    state.actions.set(None);
+    controller::schedule_pulse(state);
 }
 
 /// The caret as (line, scalar column) in `text`.
@@ -1786,6 +2307,37 @@ fn class_of(token: Token) -> &'static str {
         Token::Punctuation => "tok-punctuation",
         Token::Variable => "tok-variable",
         Token::Namespace => "tok-namespace",
+    }
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::*;
+
+    #[test]
+    fn matches_fold_ascii_case_and_respect_the_toggle() {
+        let text = "Gain gain GAIN";
+        assert_eq!(
+            find_matches(text, "gain", false),
+            vec![(0, 4), (5, 9), (10, 14)],
+        );
+        assert_eq!(find_matches(text, "gain", true), vec![(5, 9)]);
+        assert!(find_matches(text, "", false).is_empty());
+    }
+
+    #[test]
+    fn byte_offsets_convert_to_scalar_columns_past_cjk() {
+        let text = "// 中文
+let gain = 1;";
+        let matches = find_matches(text, "gain", false);
+        assert_eq!(matches.len(), 1);
+        let (line, col) = line_col_of_byte(text, matches[0].0);
+        assert_eq!((line, col), (1, 4));
+    }
+
+    #[test]
+    fn overlapping_repeats_advance_past_each_match() {
+        assert_eq!(find_matches("aaaa", "aa", false), vec![(0, 2), (2, 4)]);
     }
 }
 
