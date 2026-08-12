@@ -265,11 +265,19 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Apple's focus ring: a soft halo, not a hard outline. */
-:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-  border-radius: var(--radius-control);
+/* Apple's focus ring: a soft halo, not a hard outline.
+
+   Inside @layer base so an explicit `outline-none` utility can win. Unlayered,
+   this beat every utility regardless of order — the editor's textarea declared
+   outline-none and still wore the ring, which at full document height renders
+   as a mysterious rust line down the gutter with rounded ends. The caret is
+   the editor's focus indicator; buttons and rows keep the halo. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+    border-radius: var(--radius-control);
+  }
 }
 
 /* Overlay scrollbars, sized like the platform's. */
