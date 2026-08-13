@@ -716,7 +716,7 @@ fn BoardEditor(
                                     *ty = start_ty + f64::from(event.client_y()) - py;
                                 });
                             }
-                            Drag::Part { index, dx, dy } => {
+                            Drag::Part { index, dx, dy, axes } => {
                                 let step = grid.get_untracked();
                                 let mut x = snap_to(world.0 - dx, step);
                                 let mut y = snap_to(world.1 - dy, step);
@@ -755,12 +755,26 @@ fn BoardEditor(
                                         // Bends belong to the sheet, exactly as
                                         // in KiCad: moving a part stretches only
                                         // the segment from its stub to the first
-                                        // bend, and every bend the user placed
-                                        // stays where they put it. The
-                                        // orthogonal pass grows the one elbow
-                                        // the stretched segment needs.
+                                        // bend, and every later bend stays put.
+                                        // "Stretches" is literal — the first
+                                        // bend slides along the segment's own
+                                        // axis, so the segment changes length,
+                                        // not direction. Left planted on both
+                                        // axes, a bend at the old height grows
+                                        // a wall of wire back up to where the
+                                        // part used to be.
                                         part.x = x;
                                         part.y = y;
+                                        let stubs: Vec<(f64, f64)> = (0..part.kind.wires())
+                                            .map(|slot| stub_point(part, slot))
+                                            .collect();
+                                        for (slot, stub) in stubs.into_iter().enumerate() {
+                                            if let Some(first) =
+                                                part.waypoints[slot].first_mut()
+                                            {
+                                                follow_first_bend(stub, axes[slot], first);
+                                            }
+                                        }
                                     }
                                 });
                                 dirty.set(true);
@@ -844,6 +858,31 @@ fn BoardEditor(
                                 if let Some(p) = list.get_mut(part) {
                                     let pin = p.pins[slot];
                                     if let Some(row) = row_of_gpio(pin) {
+                                        let mut full = vec![stub_point(p, slot)];
+                                        full.extend(p.waypoints[slot].iter().copied());
+                                        full.push(row_point(kit, row));
+                                        let tidy = simplify_route(full);
+                                        p.waypoints[slot] =
+                                            tidy[1..tidy.len() - 1].to_vec();
+                                    }
+                                }
+                            });
+                        }
+                        // A finished part drag tidies every route it stretched:
+                        // a first bend that slid into line with the next one
+                        // merges away instead of surviving as a zero-length
+                        // grab target.
+                        if let Some(Drag::Part { index, .. }) = drag.get_untracked() {
+                            let kit = kit_pos.get_untracked();
+                            parts.update(|list| {
+                                if let Some(p) = list.get_mut(index) {
+                                    for slot in 0..p.kind.wires() {
+                                        if p.waypoints[slot].is_empty() {
+                                            continue;
+                                        }
+                                        let Some(row) = row_of_gpio(p.pins[slot]) else {
+                                            continue;
+                                        };
                                         let mut full = vec![stub_point(p, slot)];
                                         full.extend(p.waypoints[slot].iter().copied());
                                         full.push(row_point(kit, row));
@@ -1168,10 +1207,33 @@ fn BoardEditor(
                                                     f64::from(event.client_x()),
                                                     f64::from(event.client_y()),
                                                 );
+                                                // Judge each route's first-leg
+                                                // axis now, once: judged live it
+                                                // would flip as the part crosses
+                                                // its own bend.
+                                                let mut axes = [None; 7];
+                                                if let Some(part) =
+                                                    parts.get_untracked().get(index)
+                                                {
+                                                    let wired = part.kind.wires();
+                                                    for (slot, axis) in
+                                                        axes.iter_mut().enumerate().take(wired)
+                                                    {
+                                                        if let Some(first) =
+                                                            part.waypoints[slot].first()
+                                                        {
+                                                            *axis = first_leg_axis(
+                                                                stub_point(part, slot),
+                                                                *first,
+                                                            );
+                                                        }
+                                                    }
+                                                }
                                                 drag.set(Some(Drag::Part {
                                                     index,
                                                     dx: world.0 - x,
                                                     dy: world.1 - y,
+                                                    axes,
                                                 }));
                                             }
                                             class=move || {

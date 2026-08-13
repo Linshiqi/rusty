@@ -279,7 +279,15 @@ pub(super) type Snapshot = (Vec<EditPart>, (f64, f64));
 /// What the pointer is currently moving.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Drag {
-    Part { index: usize, dx: f64, dy: f64 },
+    Part {
+        index: usize,
+        dx: f64,
+        dy: f64,
+        /// Each route's first-segment axis, judged once when the drag began
+        /// — the first bend slides along it so the segment stays parallel
+        /// to itself (see [`follow_first_bend`]).
+        axes: [Option<bool>; 7],
+    },
     Kit { dx: f64, dy: f64 },
     /// Panning the sheet: screen-space start of view translation.
     Pan { start_tx: f64, start_ty: f64, px: f64, py: f64 },
@@ -512,6 +520,36 @@ pub(super) fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     out
 }
 
+/// Which way a route's first segment runs — stub against first planted
+/// bend. `Some(true)` is horizontal. Judged once, when the drag starts:
+/// judging it live would flip as the part crosses the bend.
+pub(super) fn first_leg_axis(stub: (f64, f64), first: (f64, f64)) -> Option<bool> {
+    if (stub.1 - first.1).abs() < 0.01 {
+        Some(true)
+    } else if (stub.0 - first.0).abs() < 0.01 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// KiCad's stretch, completed: dragging a part slides the first bend along
+/// the first segment's own axis, so the segment stays parallel to itself
+/// and only changes length. Without this, a planted bend at the old stub
+/// height makes the route run out, all the way back up to where the part
+/// used to be, and down again — a wall of wire the user never drew.
+pub(super) fn follow_first_bend(
+    stub: (f64, f64),
+    axis: Option<bool>,
+    first: &mut (f64, f64),
+) {
+    match axis {
+        Some(true) => first.1 = stub.1,
+        Some(false) => first.0 = stub.0,
+        None => {}
+    }
+}
+
 /// The label a single-pin part wears for its wiring state.
 pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
     let base = match kind {
@@ -712,6 +750,42 @@ mod tests {
         assert_eq!(snap_to(13.0, 4.0), 12.0);
         assert_eq!(snap_to(13.4, 1.0), 13.0);
         assert_eq!(snap_to(23.0, 16.0), 16.0);
+    }
+
+    /// The screenshot bug: a part dragged far below its planted bend grew a
+    /// wall of wire back up to the old height. The first bend must slide
+    /// along the first segment's own axis, and the route afterwards must
+    /// never double back on itself.
+    #[test]
+    fn dragging_a_part_slides_the_first_bend_not_the_history() {
+        let mut part = led(96.0, 96.0, 26);
+        let stub = stub_point(&part, 0);
+        // A user-planted bend, dead level with the stub: a horizontal first
+        // leg, exactly the screenshot's shape.
+        part.waypoints[0] = vec![(stub.0 + 160.0, stub.1)];
+        let axis = first_leg_axis(stub, part.waypoints[0][0]);
+        assert_eq!(axis, Some(true), "level with the stub means horizontal");
+
+        // Drag the part a long way down.
+        part.y += 160.0;
+        let moved_stub = stub_point(&part, 0);
+        follow_first_bend(moved_stub, axis, &mut part.waypoints[0][0]);
+        assert_eq!(
+            part.waypoints[0][0].1, moved_stub.1,
+            "a horizontal first leg follows the stub's height",
+        );
+
+        // And the rendered route must have no U-turn: no two consecutive
+        // segments on the same axis in opposite directions.
+        let route = wire_path(&part, 0, (560.0, 96.0)).expect("wired");
+        for window in route.windows(3) {
+            let (a, b, c) = (window[0], window[1], window[2]);
+            let vertical = (a.0 - b.0).abs() < 0.01 && (b.0 - c.0).abs() < 0.01;
+            let horizontal = (a.1 - b.1).abs() < 0.01 && (b.1 - c.1).abs() < 0.01;
+            let doubles_back = (vertical && (b.1 - a.1) * (c.1 - b.1) < 0.0)
+                || (horizontal && (b.0 - a.0) * (c.0 - b.0) < 0.0);
+            assert!(!doubles_back, "route doubles back: {a:?} {b:?} {c:?}");
+        }
     }
 
     #[test]
