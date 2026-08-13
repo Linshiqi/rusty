@@ -16,6 +16,9 @@
 
 use leptos::{ev, prelude::*};
 
+mod geometry;
+
+use geometry::*;
 use rusty_embed::SimBoard;
 
 use crate::{
@@ -155,467 +158,6 @@ pub fn Simulate() -> impl IntoView {
             </div>
         }
         .into_any()
-    }
-}
-
-/// One thing on the canvas, whatever its kind — the editor edits these and
-/// splits them back into the wire model on save.
-#[derive(Clone, PartialEq)]
-enum PartKind {
-    Led { color: String },
-    Button,
-    Rgb,
-    /// pins are segments a..g.
-    Seven,
-    /// Shows the `[rusty:disp]` channel; needs no pins.
-    Display,
-    /// A slider sending `P<pin>=<0..255>`.
-    Pot,
-}
-
-impl PartKind {
-    /// How many wires this part runs to the chip.
-    fn wires(&self) -> usize {
-        match self {
-            PartKind::Rgb => 3,
-            PartKind::Seven => 7,
-            PartKind::Display => 0,
-            _ => 1,
-        }
-    }
-
-    /// Fixed body height, so a turned part's anchors are exact rather than
-    /// whatever the browser laid out.
-    fn height(&self) -> f64 {
-        match self {
-            PartKind::Seven => 52.0,
-            PartKind::Display => 44.0,
-            _ => 28.0,
-        }
-    }
-
-    /// Fixed body width, so wire anchors land on the body edge exactly.
-    fn width(&self) -> f64 {
-        match self {
-            PartKind::Seven => 78.0,
-            PartKind::Display => 140.0,
-            PartKind::Pot => 130.0,
-            _ => 110.0,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq)]
-struct EditPart {
-    /// Quarter turns, clockwise. The body rotates in CSS and the wire
-    /// anchors rotate with the same arithmetic, so the two never disagree.
-    rot: u16,
-    kind: PartKind,
-    /// pins[0] for LEDs, buttons and pots; RGB uses three; seven uses all.
-    pins: [u8; 7],
-    label: String,
-    x: f64,
-    y: f64,
-    /// User-drawn bends per wire slot; empty routes automatically.
-    waypoints: [Vec<(f64, f64)>; 7],
-}
-
-fn pins3(a: u8, b: u8, c: u8) -> [u8; 7] {
-    [a, b, c, 0, 0, 0, 0]
-}
-
-/// The file's flat route list, spread into per-slot waypoint arrays.
-fn waypoints_of(routes: &[Vec<(f64, f64)>]) -> [Vec<(f64, f64)>; 7] {
-    let mut out: [Vec<(f64, f64)>; 7] = Default::default();
-    for (slot, route) in routes.iter().take(7).enumerate() {
-        out[slot] = route.clone();
-    }
-    out
-}
-
-/// Back to the file shape: one route per wire slot, trailing empties kept so
-/// slot indexes stay aligned, fully-empty lists collapsed to nothing.
-fn routes_of(waypoints: &[Vec<(f64, f64)>; 7], wires: usize) -> Vec<Vec<(f64, f64)>> {
-    let slice = &waypoints[..wires];
-    if slice.iter().all(Vec::is_empty) {
-        Vec::new()
-    } else {
-        slice.to_vec()
-    }
-}
-
-fn parts_of(board: &SimBoard) -> Vec<EditPart> {
-    let mut out = Vec::new();
-    for (index, led) in board.leds.iter().enumerate() {
-        out.push(EditPart {
-            kind: PartKind::Led {
-                color: led.color.clone(),
-            },
-            pins: pins3(led.pin, 0, 0),
-            label: led.label.clone(),
-            x: led.x.unwrap_or(60.0),
-            y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
-            waypoints: waypoints_of(&led.routes),
-            rot: led.rot,
-        });
-    }
-    for button in &board.buttons {
-        out.push(EditPart {
-            kind: PartKind::Button,
-            pins: pins3(button.pin, 0, 0),
-            label: button.label.clone(),
-            x: button.x.unwrap_or(60.0),
-            y: button.y.unwrap_or(180.0),
-            waypoints: waypoints_of(&button.routes),
-            rot: button.rot,
-        });
-    }
-    for rgb in &board.rgbs {
-        out.push(EditPart {
-            kind: PartKind::Rgb,
-            pins: pins3(rgb.r, rgb.g, rgb.b),
-            label: rgb.label.clone(),
-            x: rgb.x.unwrap_or(60.0),
-            y: rgb.y.unwrap_or(240.0),
-            waypoints: waypoints_of(&rgb.routes),
-            rot: rgb.rot,
-        });
-    }
-    for seven in &board.sevens {
-        out.push(EditPart {
-            kind: PartKind::Seven,
-            pins: seven.pins,
-            label: seven.label.clone(),
-            x: seven.x.unwrap_or(160.0),
-            y: seven.y.unwrap_or(60.0),
-            waypoints: waypoints_of(&seven.routes),
-            rot: seven.rot,
-        });
-    }
-    for display in &board.displays {
-        out.push(EditPart {
-            kind: PartKind::Display,
-            pins: [0; 7],
-            label: display.label.clone(),
-            x: display.x.unwrap_or(160.0),
-            y: display.y.unwrap_or(160.0),
-            waypoints: Default::default(),
-            rot: display.rot,
-        });
-    }
-    for pot in &board.pots {
-        out.push(EditPart {
-            kind: PartKind::Pot,
-            pins: pins3(pot.pin, 0, 0),
-            label: pot.label.clone(),
-            x: pot.x.unwrap_or(60.0),
-            y: pot.y.unwrap_or(280.0),
-            waypoints: waypoints_of(&pot.routes),
-            rot: pot.rot,
-        });
-    }
-    out
-}
-
-fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
-    let mut board = SimBoard {
-        chip: chip.to_string(),
-        kit_x: Some(kit.0),
-        kit_y: Some(kit.1),
-        leds: Vec::new(),
-        buttons: Vec::new(),
-        rgbs: Vec::new(),
-        sevens: Vec::new(),
-        displays: Vec::new(),
-        pots: Vec::new(),
-    };
-    for part in parts {
-        match &part.kind {
-            PartKind::Led { color } => board.leds.push(rusty_embed::SimLed {
-                pin: part.pins[0],
-                color: color.clone(),
-                label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 1),
-                rot: part.rot,
-            }),
-            PartKind::Button => board.buttons.push(rusty_embed::SimButton {
-                pin: part.pins[0],
-                label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 1),
-                rot: part.rot,
-            }),
-            PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
-                r: part.pins[0],
-                g: part.pins[1],
-                b: part.pins[2],
-                label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 3),
-                rot: part.rot,
-            }),
-            PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
-                pins: part.pins,
-                label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 7),
-                rot: part.rot,
-            }),
-            PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
-                label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                rot: part.rot,
-            }),
-            PartKind::Pot => board.pots.push(rusty_embed::SimPot {
-                pin: part.pins[0],
-                label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 1),
-                rot: part.rot,
-            }),
-        }
-    }
-    board
-}
-
-/// Colour classes for a single-hue lamp.
-fn lamp_classes(color: &str, lit: bool) -> &'static str {
-    match (color, lit) {
-        ("green", true) => "bg-[#3ddc84] shadow-[0_0_12px_3px_rgba(61,220,132,0.55)]",
-        ("green", false) => "bg-[#1d4a2f]",
-        ("blue", true) => "bg-[#4aa8ff] shadow-[0_0_12px_3px_rgba(74,168,255,0.55)]",
-        ("blue", false) => "bg-[#1d3350]",
-        ("red", true) => "bg-[#ff5c5c] shadow-[0_0_12px_3px_rgba(255,92,92,0.55)]",
-        ("red", false) => "bg-[#4a1d1d]",
-        ("yellow", true) => "bg-[#ffd75c] shadow-[0_0_12px_3px_rgba(255,215,92,0.5)]",
-        ("yellow", false) => "bg-[#4a3f1d]",
-        (_, true) => "bg-label shadow-[0_0_12px_3px_rgba(255,255,255,0.4)]",
-        (_, false) => "bg-line-strong",
-    }
-}
-
-/// Additive mix for the RGB lens, from three channel levels.
-fn rgb_style(r: bool, g: bool, b: bool) -> &'static str {
-    match (r, g, b) {
-        (false, false, false) => "background: #2a2d33",
-        (true, false, false) => "background: #ff5c5c; box-shadow: 0 0 12px 3px rgba(255,92,92,0.55)",
-        (false, true, false) => "background: #3ddc84; box-shadow: 0 0 12px 3px rgba(61,220,132,0.55)",
-        (false, false, true) => "background: #4aa8ff; box-shadow: 0 0 12px 3px rgba(74,168,255,0.55)",
-        (true, true, false) => "background: #ffd75c; box-shadow: 0 0 12px 3px rgba(255,215,92,0.55)",
-        (true, false, true) => "background: #d97cff; box-shadow: 0 0 12px 3px rgba(217,124,255,0.55)",
-        (false, true, true) => "background: #5ce8e8; box-shadow: 0 0 12px 3px rgba(92,232,232,0.55)",
-        (true, true, true) => "background: #f4f4f4; box-shadow: 0 0 12px 3px rgba(255,255,255,0.5)",
-    }
-}
-
-/// One editor state the undo stack holds: every part plus the kit position.
-type Snapshot = (Vec<EditPart>, (f64, f64));
-
-/// What the pointer is currently moving.
-#[derive(Clone, Copy, PartialEq)]
-enum Drag {
-    Part { index: usize, dx: f64, dy: f64 },
-    Kit { dx: f64, dy: f64 },
-    /// Panning the sheet: screen-space start of view translation.
-    Pan { start_tx: f64, start_ty: f64, px: f64, py: f64 },
-    /// Pulling a new connection out of a part's pin stub.
-    Wire { part: usize, slot: usize },
-    /// Pushing one segment of a wire sideways, the way a schematic editor
-    /// moves a corner: the segment keeps its direction and the two bends at
-    /// its ends follow it.
-    Segment {
-        part: usize,
-        slot: usize,
-        first: usize,
-        second: usize,
-        horizontal: bool,
-        /// Pointer position along the moving axis when the drag began.
-        grab: f64,
-        /// The segment's own position along that axis when it began.
-        base: f64,
-    },
-}
-
-/// What a right-click landed on. The menu is about this and nothing else —
-/// that is the entire point of a context menu.
-#[derive(Clone, Copy, PartialEq)]
-enum MenuTarget {
-    Wire(usize, usize),
-    Part(usize),
-    Sheet,
-}
-
-const SNAP: f64 = 8.0;
-const KIT_W: f64 = 150.0;
-const KIT_H: f64 = 230.0;
-/// Pin rows per side of the schematic devkit.
-const KIT_ROWS: usize = 15;
-/// "This pin is not wired to anything" — new parts start here, and
-/// disconnecting returns here. 255 is no GPIO on any supported chip.
-const UNWIRED: u8 = 255;
-
-fn snap(value: f64) -> f64 {
-    (value / SNAP).round() * SNAP
-}
-
-/// The classic 30-pin ESP32 devkit pinout, top to bottom, left then right.
-/// `None` rows (power, ground, EN) refuse wires — an LED soldered to GND on
-/// both ends is a diagram nobody meant.
-fn kit_rows() -> [(&'static str, Option<u8>); 30] {
-    [
-        ("EN", None),
-        ("36", Some(36)),
-        ("39", Some(39)),
-        ("34", Some(34)),
-        ("35", Some(35)),
-        ("32", Some(32)),
-        ("33", Some(33)),
-        ("25", Some(25)),
-        ("26", Some(26)),
-        ("27", Some(27)),
-        ("14", Some(14)),
-        ("12", Some(12)),
-        ("13", Some(13)),
-        ("GND", None),
-        ("VIN", None),
-        ("3V3", None),
-        ("GND", None),
-        ("15", Some(15)),
-        ("2", Some(2)),
-        ("4", Some(4)),
-        ("16", Some(16)),
-        ("17", Some(17)),
-        ("5", Some(5)),
-        ("18", Some(18)),
-        ("19", Some(19)),
-        ("21", Some(21)),
-        ("RX", Some(3)),
-        ("TX", Some(1)),
-        ("22", Some(22)),
-        ("23", Some(23)),
-    ]
-}
-
-fn row_of_gpio(pin: u8) -> Option<usize> {
-    kit_rows().iter().position(|(_, gpio)| *gpio == Some(pin))
-}
-
-/// World coordinates of a kit row's pin circle.
-fn row_point(kit: (f64, f64), row: usize) -> (f64, f64) {
-    if row < KIT_ROWS {
-        (kit.0 + 10.0, kit.1 + 16.0 + row as f64 * 14.0)
-    } else {
-        (
-            kit.0 + KIT_W - 10.0,
-            kit.1 + 16.0 + (row - KIT_ROWS) as f64 * 14.0,
-        )
-    }
-}
-
-/// Which kit row a world point lands on, if any.
-fn row_under(kit: (f64, f64), point: (f64, f64)) -> Option<usize> {
-    let (kx, ky) = kit;
-    let (x, y) = point;
-    if y < ky + 9.0 || y > ky + 16.0 + KIT_ROWS as f64 * 14.0 {
-        return None;
-    }
-    let row = (((y - ky - 16.0) / 14.0).round().max(0.0)) as usize;
-    if row >= KIT_ROWS {
-        return None;
-    }
-    if x >= kx - 8.0 && x <= kx + 30.0 {
-        Some(row)
-    } else if x >= kx + KIT_W - 30.0 && x <= kx + KIT_W + 8.0 {
-        Some(row + KIT_ROWS)
-    } else {
-        None
-    }
-}
-
-/// A point turned about a centre, in quarter turns.
-fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (f64, f64) {
-    let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
-    let (rx, ry) = match rot % 360 {
-        90 => (-dy, dx),
-        180 => (-dx, -dy),
-        270 => (dy, -dx),
-        _ => (dx, dy),
-    };
-    (centre.0 + rx, centre.1 + ry)
-}
-
-/// Where a part's `slot`-th wire leaves its body — after the part's own
-/// rotation, because CSS turns the body about its centre and the wires have
-/// to arrive at the same place the eye sees the stub.
-fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
-    let (w, h) = (part.kind.width(), part.kind.height());
-    let upright = (part.x + w, part.y + 14.0 + slot as f64 * 6.0);
-    rotate_about(upright, (part.x + w / 2.0, part.y + h / 2.0), part.rot)
-}
-
-/// The whole drawn path of one wire: the part's stub, the bends the user
-/// has placed, and the chip pin — orthogonal by construction, as every
-/// schematic wire is.
-fn wire_path(part: &EditPart, slot: usize, kit: (f64, f64)) -> Option<Vec<(f64, f64)>> {
-    let pin = part.pins[slot];
-    if pin == UNWIRED {
-        return None;
-    }
-    let row = row_of_gpio(pin)?;
-    let from = stub_point(part, slot);
-    let to = row_point(kit, row);
-
-    let mut points = vec![from];
-    if part.waypoints[slot].is_empty() {
-        // An untouched wire takes the tidy way round: out of the stub, along
-        // a lane of its own, into the pin.
-        let lane = if row < KIT_ROWS {
-            to.0 - 24.0 - (row as f64 * 4.0)
-        } else {
-            to.0 + 24.0 + ((row - KIT_ROWS) as f64 * 4.0)
-        };
-        points.push((lane, from.1));
-        points.push((lane, to.1));
-    } else {
-        points.extend(part.waypoints[slot].iter().copied());
-    }
-    points.push(to);
-    Some(orthogonalize(points))
-}
-
-/// Insert elbows so every segment runs purely horizontally or vertically.
-/// Idempotent, so a path that came back from a drag survives a round trip.
-fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
-    let mut out: Vec<(f64, f64)> = Vec::with_capacity(points.len() + 2);
-    out.push(points[0]);
-    for pair in points.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        if (a.0 - b.0).abs() > 0.01 && (a.1 - b.1).abs() > 0.01 {
-            out.push((b.0, a.1));
-        }
-        out.push(b);
-    }
-    out
-}
-
-/// The label a single-pin part wears for its wiring state.
-fn single_pin_label(kind: &PartKind, pin: u8) -> String {
-    let base = match kind {
-        PartKind::Button => "BTN",
-        PartKind::Pot => "POT",
-        _ => "GPIO",
-    };
-    if pin == UNWIRED {
-        format!("{base} —")
-    } else {
-        format!("{base}{pin}")
     }
 }
 
@@ -1273,8 +815,21 @@ fn BoardEditor(
                                 guides.set((guide_x, guide_y));
                                 parts.update(|list| {
                                     if let Some(part) = list.get_mut(index) {
+                                        // Hand-drawn bends belong to the part,
+                                        // not to the sheet. Leaving them behind
+                                        // is what made a moved part look
+                                        // unplugged: the wire still reached its
+                                        // pin, through a shape drawn for where
+                                        // the part used to be.
+                                        let (dx, dy) = (x - part.x, y - part.y);
                                         part.x = x;
                                         part.y = y;
+                                        for route in &mut part.waypoints {
+                                            for point in route.iter_mut() {
+                                                point.0 += dx;
+                                                point.1 += dy;
+                                            }
+                                        }
                                     }
                                 });
                                 dirty.set(true);
@@ -1362,11 +917,12 @@ fn BoardEditor(
                             )
                         }
                     >
-                        // The sheet's own layer. Its empty space never
-                        // catches the pointer — only the grid rect would, and
-                        // it opts out — so a press on nothing still pans.
+                        // Two layers, because a part must not be able to
+                        // hide a wire: the grid sits under everything, the
+                        // wires over everything. Neither takes the pointer
+                        // except where a wire's own grab handle says so.
                         <svg
-                            class="absolute"
+                            class="pointer-events-none absolute"
                             style="left: -2000px; top: -2000px"
                             width="6000"
                             height="6000"
@@ -1387,247 +943,6 @@ fn BoardEditor(
                                 fill="url(#sheet-grid)"
                                 style="pointer-events: none"
                             />
-                            <g transform="translate(2000, 2000)">
-                                // ── wires: grab a segment, push it ──────────
-                                {move || {
-                                    let kit = kit_pos.get();
-                                    let picked = selected_wire.get();
-                                    parts
-                                        .get()
-                                        .iter()
-                                        .enumerate()
-                                        .flat_map(|(part_index, part)| {
-                                            (0..part.kind.wires())
-                                                .filter_map(|slot| {
-                                                    let points = wire_path(part, slot, kit)?;
-                                                    let from = points[0];
-                                                    let to = *points.last()?;
-                                                    let is_picked =
-                                                        picked == Some((part_index, slot));
-                                                    let stroke = if is_picked {
-                                                        "#e05d38"
-                                                    } else {
-                                                        "#7d8694"
-                                                    };
-                                                    let width =
-                                                        if is_picked { "2.4" } else { "1.6" };
-                                                    let path = points
-                                                        .iter()
-                                                        .map(|(x, y)| format!("{x},{y}"))
-                                                        .collect::<Vec<_>>()
-                                                        .join(" ");
-
-                                                    // One grab handle per
-                                                    // segment. Pushing a
-                                                    // segment is how a
-                                                    // schematic editor moves
-                                                    // a corner — you never
-                                                    // hunt for the vertex.
-                                                    let grabs = points
-                                                        .windows(2)
-                                                        .enumerate()
-                                                        .map(|(seg, pair)| {
-                                                            let (a, b) = (pair[0], pair[1]);
-                                                            let horizontal =
-                                                                (a.1 - b.1).abs() < 0.5;
-                                                            let cursor = if horizontal {
-                                                                "row-resize"
-                                                            } else {
-                                                                "col-resize"
-                                                            };
-                                                            let drawn = points.clone();
-                                                            let menu_at = menu;
-                                                            view! {
-                                                                <line
-                                                                    x1=a.0
-                                                                    y1=a.1
-                                                                    x2=b.0
-                                                                    y2=b.1
-                                                                    stroke="transparent"
-                                                                    stroke-width="12"
-                                                                    style=format!(
-                                                                        "pointer-events: stroke; cursor: {cursor}",
-                                                                    )
-                                                                    on:contextmenu=move |event: ev::MouseEvent| {
-                                                                        event.prevent_default();
-                                                                        event.stop_propagation();
-                                                                        selected.set(None);
-                                                                        selected_wire
-                                                                            .set(Some((part_index, slot)));
-                                                                        menu_at
-                                                                            .set(Some((
-                                                                                f64::from(event.client_x()),
-                                                                                f64::from(event.client_y()),
-                                                                                MenuTarget::Wire(part_index, slot),
-                                                                            )));
-                                                                    }
-                                                                    on:pointerdown=move |event: ev::PointerEvent| {
-                                                                        if event.button() != 0 {
-                                                                            return;
-                                                                        }
-                                                                        event.prevent_default();
-                                                                        event.stop_propagation();
-                                                                        selected.set(None);
-                                                                        selected_wire
-                                                                            .set(Some((part_index, slot)));
-                                                                        if let Some(element) =
-                                                                            canvas.get_untracked()
-                                                                        {
-                                                                            let _ = element.focus();
-                                                                        }
-                                                                        checkpoint();
-                                                                        // Freeze the drawn path
-                                                                        // into real bends, so the
-                                                                        // segment has movable
-                                                                        // points on both sides —
-                                                                        // and the two anchored
-                                                                        // ends stay put by
-                                                                        // growing an elbow.
-                                                                        let ends = parts
-                                                                            .try_update(|list| {
-                                                                                let p = list.get_mut(part_index)?;
-                                                                                let mut inner: Vec<(f64, f64)> = drawn
-                                                                                    [1..drawn.len() - 1]
-                                                                                    .to_vec();
-                                                                                let mut first = seg as isize - 1;
-                                                                                let mut second = seg as isize;
-                                                                                if first < 0 {
-                                                                                    inner.insert(0, drawn[0]);
-                                                                                    first = 0;
-                                                                                    second = 1;
-                                                                                }
-                                                                                if second as usize >= inner.len() {
-                                                                                    inner.push(to);
-                                                                                    second = inner.len() as isize - 1;
-                                                                                }
-                                                                                p.waypoints[slot] = inner;
-                                                                                Some((first as usize, second as usize))
-                                                                            })
-                                                                            .flatten();
-                                                                        if let Some((first, second)) = ends {
-                                                                            let world = to_world(
-                                                                                f64::from(event.client_x()),
-                                                                                f64::from(event.client_y()),
-                                                                            );
-                                                                            drag.set(Some(Drag::Segment {
-                                                                                part: part_index,
-                                                                                slot,
-                                                                                first,
-                                                                                second,
-                                                                                horizontal,
-                                                                                grab: if horizontal {
-                                                                                    world.1
-                                                                                } else {
-                                                                                    world.0
-                                                                                },
-                                                                                base: if horizontal { a.1 } else { a.0 },
-                                                                            }));
-                                                                        }
-                                                                    }
-                                                                />
-                                                            }
-                                                        })
-                                                        .collect_view();
-
-                                                    // Corner pips, so the
-                                                    // selected wire shows
-                                                    // where its bends are.
-                                                    let bends = is_picked
-                                                        .then(|| {
-                                                            points[1..points.len() - 1]
-                                                                .iter()
-                                                                .map(|(bx, by)| {
-                                                                    view! {
-                                                                        <rect
-                                                                            x=bx - 2.5
-                                                                            y=by - 2.5
-                                                                            width="5"
-                                                                            height="5"
-                                                                            fill="#e05d38"
-                                                                        />
-                                                                    }
-                                                                })
-                                                                .collect_view()
-                                                        });
-
-                                                    Some(view! {
-                                                        <polyline
-                                                            points=path
-                                                            fill="none"
-                                                            stroke=stroke
-                                                            stroke-width=width
-                                                            style="pointer-events: none"
-                                                        />
-                                                        <circle cx=from.0 cy=from.1 r="2.6" fill="#c9a227" style="pointer-events: none" />
-                                                        <circle cx=to.0 cy=to.1 r="2.6" fill="#c9a227" style="pointer-events: none" />
-                                                        {bends}
-                                                        {grabs}
-                                                    })
-                                                })
-                                                .collect::<Vec<_>>()
-                                        })
-                                        .collect_view()
-                                }}
-
-                                // ── alignment guides ────────────────────────
-                                {move || {
-                                    let (gx, gy) = guides.get();
-                                    view! {
-                                        {gx
-                                            .map(|x| {
-                                                view! {
-                                                    <line
-                                                        x1=x
-                                                        y1=-2000
-                                                        x2=x
-                                                        y2=4000
-                                                        stroke="#e0a838"
-                                                        stroke-width="0.8"
-                                                        stroke-dasharray="4 4"
-                                                        style="pointer-events: none"
-                                                    />
-                                                }
-                                            })}
-                                        {gy
-                                            .map(|y| {
-                                                view! {
-                                                    <line
-                                                        x1=-2000
-                                                        y1=y
-                                                        x2=4000
-                                                        y2=y
-                                                        stroke="#e0a838"
-                                                        stroke-width="0.8"
-                                                        stroke-dasharray="4 4"
-                                                        style="pointer-events: none"
-                                                    />
-                                                }
-                                            })}
-                                    }
-                                }}
-
-                                // ── the ghost while pulling a new wire ──────
-                                {move || {
-                                    let target = ghost.get()?;
-                                    let Some(Drag::Wire { part, slot }) = drag.get() else {
-                                        return None;
-                                    };
-                                    let from = parts
-                                        .with(|list| list.get(part).map(|p| stub_point(p, slot)))?;
-                                    Some(view! {
-                                        <line
-                                            x1=from.0
-                                            y1=from.1
-                                            x2=target.0
-                                            y2=target.1
-                                            stroke="#e0a838"
-                                            stroke-width="1.8"
-                                            stroke-dasharray="5 4"
-                                            style="pointer-events: none"
-                                        />
-                                    })
-                                }}
-                            </g>
                         </svg>
 
                         // the devkit — labelled pins, drop targets, draggable
@@ -1947,6 +1262,255 @@ fn BoardEditor(
                                 })
                                 .collect_view()
                         }}
+
+                        <svg
+                            class="pointer-events-none absolute"
+                            style="left: -2000px; top: -2000px"
+                            width="6000"
+                            height="6000"
+                        >
+                            <g transform="translate(2000, 2000)">
+                                // ── wires: grab a segment, push it ──────────
+                                {move || {
+                                    let kit = kit_pos.get();
+                                    let picked = selected_wire.get();
+                                    parts
+                                        .get()
+                                        .iter()
+                                        .enumerate()
+                                        .flat_map(|(part_index, part)| {
+                                            (0..part.kind.wires())
+                                                .filter_map(|slot| {
+                                                    let points = wire_path(part, slot, kit)?;
+                                                    let from = points[0];
+                                                    let to = *points.last()?;
+                                                    let is_picked =
+                                                        picked == Some((part_index, slot));
+                                                    let stroke = if is_picked {
+                                                        "#e05d38"
+                                                    } else {
+                                                        "#7d8694"
+                                                    };
+                                                    let width =
+                                                        if is_picked { "2.4" } else { "1.6" };
+                                                    let path = points
+                                                        .iter()
+                                                        .map(|(x, y)| format!("{x},{y}"))
+                                                        .collect::<Vec<_>>()
+                                                        .join(" ");
+
+                                                    // One grab handle per
+                                                    // segment. Pushing a
+                                                    // segment is how a
+                                                    // schematic editor moves
+                                                    // a corner — you never
+                                                    // hunt for the vertex.
+                                                    let grabs = points
+                                                        .windows(2)
+                                                        .enumerate()
+                                                        .map(|(seg, pair)| {
+                                                            let (a, b) = (pair[0], pair[1]);
+                                                            let horizontal =
+                                                                (a.1 - b.1).abs() < 0.5;
+                                                            let cursor = if horizontal {
+                                                                "row-resize"
+                                                            } else {
+                                                                "col-resize"
+                                                            };
+                                                            let drawn = points.clone();
+                                                            let menu_at = menu;
+                                                            view! {
+                                                                <line
+                                                                    x1=a.0
+                                                                    y1=a.1
+                                                                    x2=b.0
+                                                                    y2=b.1
+                                                                    stroke="transparent"
+                                                                    stroke-width="12"
+                                                                    style=format!(
+                                                                        "pointer-events: stroke; cursor: {cursor}",
+                                                                    )
+                                                                    on:contextmenu=move |event: ev::MouseEvent| {
+                                                                        event.prevent_default();
+                                                                        event.stop_propagation();
+                                                                        selected.set(None);
+                                                                        selected_wire
+                                                                            .set(Some((part_index, slot)));
+                                                                        menu_at
+                                                                            .set(Some((
+                                                                                f64::from(event.client_x()),
+                                                                                f64::from(event.client_y()),
+                                                                                MenuTarget::Wire(part_index, slot),
+                                                                            )));
+                                                                    }
+                                                                    on:pointerdown=move |event: ev::PointerEvent| {
+                                                                        if event.button() != 0 {
+                                                                            return;
+                                                                        }
+                                                                        event.prevent_default();
+                                                                        event.stop_propagation();
+                                                                        selected.set(None);
+                                                                        selected_wire
+                                                                            .set(Some((part_index, slot)));
+                                                                        if let Some(element) =
+                                                                            canvas.get_untracked()
+                                                                        {
+                                                                            let _ = element.focus();
+                                                                        }
+                                                                        checkpoint();
+                                                                        // Freeze the drawn path
+                                                                        // into real bends, so the
+                                                                        // segment has movable
+                                                                        // points on both sides —
+                                                                        // and the two anchored
+                                                                        // ends stay put by
+                                                                        // growing an elbow.
+                                                                        let ends = parts
+                                                                            .try_update(|list| {
+                                                                                let p = list.get_mut(part_index)?;
+                                                                                let mut inner: Vec<(f64, f64)> = drawn
+                                                                                    [1..drawn.len() - 1]
+                                                                                    .to_vec();
+                                                                                let mut first = seg as isize - 1;
+                                                                                let mut second = seg as isize;
+                                                                                if first < 0 {
+                                                                                    inner.insert(0, drawn[0]);
+                                                                                    first = 0;
+                                                                                    second = 1;
+                                                                                }
+                                                                                if second as usize >= inner.len() {
+                                                                                    inner.push(to);
+                                                                                    second = inner.len() as isize - 1;
+                                                                                }
+                                                                                p.waypoints[slot] = inner;
+                                                                                Some((first as usize, second as usize))
+                                                                            })
+                                                                            .flatten();
+                                                                        if let Some((first, second)) = ends {
+                                                                            let world = to_world(
+                                                                                f64::from(event.client_x()),
+                                                                                f64::from(event.client_y()),
+                                                                            );
+                                                                            drag.set(Some(Drag::Segment {
+                                                                                part: part_index,
+                                                                                slot,
+                                                                                first,
+                                                                                second,
+                                                                                horizontal,
+                                                                                grab: if horizontal {
+                                                                                    world.1
+                                                                                } else {
+                                                                                    world.0
+                                                                                },
+                                                                                base: if horizontal { a.1 } else { a.0 },
+                                                                            }));
+                                                                        }
+                                                                    }
+                                                                />
+                                                            }
+                                                        })
+                                                        .collect_view();
+
+                                                    // Corner pips, so the
+                                                    // selected wire shows
+                                                    // where its bends are.
+                                                    let bends = is_picked
+                                                        .then(|| {
+                                                            points[1..points.len() - 1]
+                                                                .iter()
+                                                                .map(|(bx, by)| {
+                                                                    view! {
+                                                                        <rect
+                                                                            x=bx - 2.5
+                                                                            y=by - 2.5
+                                                                            width="5"
+                                                                            height="5"
+                                                                            fill="#e05d38"
+                                                                        />
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                        });
+
+                                                    Some(view! {
+                                                        <polyline
+                                                            points=path
+                                                            fill="none"
+                                                            stroke=stroke
+                                                            stroke-width=width
+                                                            style="pointer-events: none"
+                                                        />
+                                                        <circle cx=from.0 cy=from.1 r="2.6" fill="#c9a227" style="pointer-events: none" />
+                                                        <circle cx=to.0 cy=to.1 r="2.6" fill="#c9a227" style="pointer-events: none" />
+                                                        {bends}
+                                                        {grabs}
+                                                    })
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .collect_view()
+                                }}
+
+                                // ── alignment guides ────────────────────────
+                                {move || {
+                                    let (gx, gy) = guides.get();
+                                    view! {
+                                        {gx
+                                            .map(|x| {
+                                                view! {
+                                                    <line
+                                                        x1=x
+                                                        y1=-2000
+                                                        x2=x
+                                                        y2=4000
+                                                        stroke="#e0a838"
+                                                        stroke-width="0.8"
+                                                        stroke-dasharray="4 4"
+                                                        style="pointer-events: none"
+                                                    />
+                                                }
+                                            })}
+                                        {gy
+                                            .map(|y| {
+                                                view! {
+                                                    <line
+                                                        x1=-2000
+                                                        y1=y
+                                                        x2=4000
+                                                        y2=y
+                                                        stroke="#e0a838"
+                                                        stroke-width="0.8"
+                                                        stroke-dasharray="4 4"
+                                                        style="pointer-events: none"
+                                                    />
+                                                }
+                                            })}
+                                    }
+                                }}
+
+                                // ── the ghost while pulling a new wire ──────
+                                {move || {
+                                    let target = ghost.get()?;
+                                    let Some(Drag::Wire { part, slot }) = drag.get() else {
+                                        return None;
+                                    };
+                                    let from = parts
+                                        .with(|list| list.get(part).map(|p| stub_point(p, slot)))?;
+                                    Some(view! {
+                                        <line
+                                            x1=from.0
+                                            y1=from.1
+                                            x2=target.0
+                                            y2=target.1
+                                            stroke="#e0a838"
+                                            stroke-width="1.8"
+                                            stroke-dasharray="5 4"
+                                            style="pointer-events: none"
+                                        />
+                                    })
+                                }}
+                            </g>
+                        </svg>
                     </div>
 
                     {move || {

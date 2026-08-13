@@ -284,6 +284,17 @@ usty`) holds `location.toml`
   `error writing JS loader file to stage dir / os error 3`. `cargo tauri dev`
   already runs `trunk serve` for you — to rebuild, touch a source file and let
   it do it.
+- **A part that hides a wire reads as a broken wire.** The board canvas draws
+  the grid under everything and the wires *over* everything, in two SVG layers
+  with the parts between: a 140px display parked on a net used to swallow its
+  middle and look like a disconnection. Both SVG layers are
+  `pointer-events: none`; only a wire's own grab handles opt back in with
+  `pointer-events: stroke`, so a top layer spanning the sheet still lets
+  presses through to parts and to the pan gesture.
+- **Hand-drawn wire bends belong to the part, not to the sheet.** Dragging a
+  part translates its waypoints with it; leaving them behind kept the wire
+  connected to its pin through a shape drawn for where the part used to be,
+  which is indistinguishable from a bug.
 - **Leptos flushes to the DOM in a microtask.** Clicking an element and reading
   the DOM back in the *same* synchronous block always shows the pre-update
   state. When driving the UI from a browser tool, put the click and the
