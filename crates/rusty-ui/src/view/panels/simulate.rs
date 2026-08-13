@@ -18,7 +18,11 @@ use leptos::{ev, prelude::*};
 
 use rusty_embed::SimBoard;
 
-use crate::{controller, state::AppState, view::components::Empty};
+use crate::{
+    controller,
+    state::AppState,
+    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
+};
 
 #[component]
 pub fn Simulate() -> impl IntoView {
@@ -398,8 +402,29 @@ enum Drag {
     Pan { start_tx: f64, start_ty: f64, px: f64, py: f64 },
     /// Pulling a new connection out of a part's pin stub.
     Wire { part: usize, slot: usize },
-    /// Moving one waypoint of an existing wire.
-    Waypoint { part: usize, slot: usize, index: usize },
+    /// Pushing one segment of a wire sideways, the way a schematic editor
+    /// moves a corner: the segment keeps its direction and the two bends at
+    /// its ends follow it.
+    Segment {
+        part: usize,
+        slot: usize,
+        first: usize,
+        second: usize,
+        horizontal: bool,
+        /// Pointer position along the moving axis when the drag began.
+        grab: f64,
+        /// The segment's own position along that axis when it began.
+        base: f64,
+    },
+}
+
+/// What a right-click landed on. The menu is about this and nothing else —
+/// that is the entire point of a context menu.
+#[derive(Clone, Copy, PartialEq)]
+enum MenuTarget {
+    Wire(usize, usize),
+    Part(usize),
+    Sheet,
 }
 
 const SNAP: f64 = 8.0;
@@ -497,24 +522,49 @@ fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
     )
 }
 
-/// Index at which a clicked point should insert into a polyline's waypoint
-/// list: after the nearest segment start.
-fn insert_index(points: &[(f64, f64)], click: (f64, f64)) -> usize {
-    let mut best = 0usize;
-    let mut best_d = f64::MAX;
-    for (i, pair) in points.windows(2).enumerate() {
-        let (a, b) = (pair[0], pair[1]);
-        let (px, py) = (b.0 - a.0, b.1 - a.1);
-        let len2 = (px * px + py * py).max(1e-6);
-        let t = (((click.0 - a.0) * px + (click.1 - a.1) * py) / len2).clamp(0.0, 1.0);
-        let (cx, cy) = (a.0 + t * px, a.1 + t * py);
-        let d = (click.0 - cx).powi(2) + (click.1 - cy).powi(2);
-        if d < best_d {
-            best_d = d;
-            best = i;
-        }
+/// The whole drawn path of one wire: the part's stub, the bends the user
+/// has placed, and the chip pin — orthogonal by construction, as every
+/// schematic wire is.
+fn wire_path(part: &EditPart, slot: usize, kit: (f64, f64)) -> Option<Vec<(f64, f64)>> {
+    let pin = part.pins[slot];
+    if pin == UNWIRED {
+        return None;
     }
-    best
+    let row = row_of_gpio(pin)?;
+    let from = stub_point(part, slot);
+    let to = row_point(kit, row);
+
+    let mut points = vec![from];
+    if part.waypoints[slot].is_empty() {
+        // An untouched wire takes the tidy way round: out of the stub, along
+        // a lane of its own, into the pin.
+        let lane = if row < KIT_ROWS {
+            to.0 - 24.0 - (row as f64 * 4.0)
+        } else {
+            to.0 + 24.0 + ((row - KIT_ROWS) as f64 * 4.0)
+        };
+        points.push((lane, from.1));
+        points.push((lane, to.1));
+    } else {
+        points.extend(part.waypoints[slot].iter().copied());
+    }
+    points.push(to);
+    Some(orthogonalize(points))
+}
+
+/// Insert elbows so every segment runs purely horizontally or vertically.
+/// Idempotent, so a path that came back from a drag survives a round trip.
+fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(points.len() + 2);
+    out.push(points[0]);
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if (a.0 - b.0).abs() > 0.01 && (a.1 - b.1).abs() > 0.01 {
+            out.push((b.0, a.1));
+        }
+        out.push(b);
+    }
+    out
 }
 
 /// The label a single-pin part wears for its wiring state.
@@ -549,6 +599,8 @@ fn BoardEditor(
     let dirty = RwSignal::new(false);
     let selected = RwSignal::new(None::<usize>);
     let selected_wire = RwSignal::new(None::<(usize, usize)>);
+    // (client x, client y, what was clicked)
+    let menu = RwSignal::new(None::<(f64, f64, MenuTarget)>);
     let drag = RwSignal::new(None::<Drag>);
     // While pulling a wire: current cursor in world coords, and the row the
     // cursor hovers, when it is one that accepts wires.
@@ -634,6 +686,59 @@ fn BoardEditor(
             (client_x - rect.left() - tx) / k,
             (client_y - rect.top() - ty) / k,
         )
+    };
+
+    let straighten = move |part_index: usize, slot: usize| {
+        checkpoint();
+        parts.update(|list| {
+            if let Some(p) = list.get_mut(part_index) {
+                p.waypoints[slot].clear();
+            }
+        });
+        dirty.set(true);
+    };
+    let disconnect = move |part_index: usize, slot: usize| {
+        checkpoint();
+        parts.update(|list| {
+            if let Some(p) = list.get_mut(part_index) {
+                p.pins[slot] = UNWIRED;
+                p.waypoints[slot].clear();
+                if p.kind.wires() == 1 {
+                    p.label = single_pin_label(&p.kind, UNWIRED);
+                }
+            }
+        });
+        selected_wire.set(None);
+        dirty.set(true);
+    };
+    let remove_part = move |index: usize| {
+        checkpoint();
+        parts.update(|list| {
+            if index < list.len() {
+                list.remove(index);
+            }
+        });
+        selected.set(None);
+        selected_wire.set(None);
+        dirty.set(true);
+    };
+    let duplicate_part = move |index: usize| {
+        checkpoint();
+        parts.update(|list| {
+            let Some(original) = list.get(index).cloned() else {
+                return;
+            };
+            // Same pins — two lamps on one GPIO is legal wiring — but its
+            // own routes, because the copy sits somewhere else.
+            list.push(EditPart {
+                x: original.x + 24.0,
+                y: original.y + 24.0,
+                waypoints: Default::default(),
+                ..original
+            });
+            selected.set(Some(list.len() - 1));
+        });
+        dirty.set(true);
     };
 
     // Disconnect the selected wire, or remove the selected part.
@@ -942,7 +1047,18 @@ fn BoardEditor(
                             *k = next;
                         });
                     }
+                    on:contextmenu=move |event: ev::MouseEvent| {
+                        event.prevent_default();
+                        menu.set(Some((
+                            f64::from(event.client_x()),
+                            f64::from(event.client_y()),
+                            MenuTarget::Sheet,
+                        )));
+                    }
                     on:pointerdown=move |event: ev::PointerEvent| {
+                        if event.button() != 0 {
+                            return;
+                        }
                         if let Some(element) = canvas.get_untracked()
                             && let Some(target) = event.target()
                             && let Ok(node) = wasm_bindgen::JsCast::dyn_into::<web_sys::Node>(target)
@@ -996,12 +1112,30 @@ fn BoardEditor(
                                     .filter(|r| kit_rows()[*r].1.is_some());
                                 hover_row.set(row);
                             }
-                            Drag::Waypoint { part, slot, index } => {
+                            Drag::Segment {
+                                part,
+                                slot,
+                                first,
+                                second,
+                                horizontal,
+                                grab,
+                                base,
+                            } => {
+                                let axis = if horizontal { world.1 } else { world.0 };
+                                let value = snap(base + axis - grab);
                                 parts.update(|list| {
-                                    if let Some(p) = list.get_mut(part)
-                                        && let Some(wp) = p.waypoints[slot].get_mut(index)
-                                    {
-                                        *wp = (snap(world.0), snap(world.1));
+                                    if let Some(p) = list.get_mut(part) {
+                                        for index in [first, second] {
+                                            if let Some(point) =
+                                                p.waypoints[slot].get_mut(index)
+                                            {
+                                                if horizontal {
+                                                    point.1 = value;
+                                                } else {
+                                                    point.0 = value;
+                                                }
+                                            }
+                                        }
                                     }
                                 });
                                 dirty.set(true);
@@ -1049,8 +1183,11 @@ fn BoardEditor(
                             )
                         }
                     >
+                        // The sheet's own layer. Its empty space never
+                        // catches the pointer — only the grid rect would, and
+                        // it opts out — so a press on nothing still pans.
                         <svg
-                            class="pointer-events-none absolute"
+                            class="absolute"
                             style="left: -2000px; top: -2000px"
                             width="6000"
                             height="6000"
@@ -1065,9 +1202,14 @@ fn BoardEditor(
                                     <circle cx="1" cy="1" r="1" fill="#23262c" />
                                 </pattern>
                             </defs>
-                            <rect width="6000" height="6000" fill="url(#sheet-grid)" />
+                            <rect
+                                width="6000"
+                                height="6000"
+                                fill="url(#sheet-grid)"
+                                style="pointer-events: none"
+                            />
                             <g transform="translate(2000, 2000)">
-                                // ── wires: one per connected pin ────────────
+                                // ── wires: grab a segment, push it ──────────
                                 {move || {
                                     let kit = kit_pos.get();
                                     let picked = selected_wire.get();
@@ -1078,34 +1220,9 @@ fn BoardEditor(
                                         .flat_map(|(part_index, part)| {
                                             (0..part.kind.wires())
                                                 .filter_map(|slot| {
-                                                    let pin = part.pins[slot];
-                                                    if pin == UNWIRED {
-                                                        return None;
-                                                    }
-                                                    let row = row_of_gpio(pin)?;
-                                                    let from = stub_point(part, slot);
-                                                    let to = row_point(kit, row);
-                                                    let mut points = vec![from];
-                                                    points
-                                                        .extend(part.waypoints[slot].iter().copied());
-                                                    // Without user waypoints,
-                                                    // an L keeps it tidy.
-                                                    if part.waypoints[slot].is_empty() {
-                                                        let mid = if row < KIT_ROWS {
-                                                            to.0 - 24.0 - (row as f64 * 4.0)
-                                                        } else {
-                                                            to.0 + 24.0
-                                                                + ((row - KIT_ROWS) as f64 * 4.0)
-                                                        };
-                                                        points.push((mid, from.1));
-                                                        points.push((mid, to.1));
-                                                    }
-                                                    points.push(to);
-                                                    let path = points
-                                                        .iter()
-                                                        .map(|(x, y)| format!("{x},{y}"))
-                                                        .collect::<Vec<_>>()
-                                                        .join(" ");
+                                                    let points = wire_path(part, slot, kit)?;
+                                                    let from = points[0];
+                                                    let to = *points.last()?;
                                                     let is_picked =
                                                         picked == Some((part_index, slot));
                                                     let stroke = if is_picked {
@@ -1113,120 +1230,159 @@ fn BoardEditor(
                                                     } else {
                                                         "#7d8694"
                                                     };
-                                                    let width = if is_picked { "2.4" } else { "1.6" };
-                                                    let handles = is_picked
+                                                    let width =
+                                                        if is_picked { "2.4" } else { "1.6" };
+                                                    let path = points
+                                                        .iter()
+                                                        .map(|(x, y)| format!("{x},{y}"))
+                                                        .collect::<Vec<_>>()
+                                                        .join(" ");
+
+                                                    // One grab handle per
+                                                    // segment. Pushing a
+                                                    // segment is how a
+                                                    // schematic editor moves
+                                                    // a corner — you never
+                                                    // hunt for the vertex.
+                                                    let grabs = points
+                                                        .windows(2)
+                                                        .enumerate()
+                                                        .map(|(seg, pair)| {
+                                                            let (a, b) = (pair[0], pair[1]);
+                                                            let horizontal =
+                                                                (a.1 - b.1).abs() < 0.5;
+                                                            let cursor = if horizontal {
+                                                                "row-resize"
+                                                            } else {
+                                                                "col-resize"
+                                                            };
+                                                            let drawn = points.clone();
+                                                            let menu_at = menu;
+                                                            view! {
+                                                                <line
+                                                                    x1=a.0
+                                                                    y1=a.1
+                                                                    x2=b.0
+                                                                    y2=b.1
+                                                                    stroke="transparent"
+                                                                    stroke-width="12"
+                                                                    style=format!(
+                                                                        "pointer-events: stroke; cursor: {cursor}",
+                                                                    )
+                                                                    on:contextmenu=move |event: ev::MouseEvent| {
+                                                                        event.prevent_default();
+                                                                        event.stop_propagation();
+                                                                        selected.set(None);
+                                                                        selected_wire
+                                                                            .set(Some((part_index, slot)));
+                                                                        menu_at
+                                                                            .set(Some((
+                                                                                f64::from(event.client_x()),
+                                                                                f64::from(event.client_y()),
+                                                                                MenuTarget::Wire(part_index, slot),
+                                                                            )));
+                                                                    }
+                                                                    on:pointerdown=move |event: ev::PointerEvent| {
+                                                                        if event.button() != 0 {
+                                                                            return;
+                                                                        }
+                                                                        event.prevent_default();
+                                                                        event.stop_propagation();
+                                                                        selected.set(None);
+                                                                        selected_wire
+                                                                            .set(Some((part_index, slot)));
+                                                                        if let Some(element) =
+                                                                            canvas.get_untracked()
+                                                                        {
+                                                                            let _ = element.focus();
+                                                                        }
+                                                                        checkpoint();
+                                                                        // Freeze the drawn path
+                                                                        // into real bends, so the
+                                                                        // segment has movable
+                                                                        // points on both sides —
+                                                                        // and the two anchored
+                                                                        // ends stay put by
+                                                                        // growing an elbow.
+                                                                        let ends = parts
+                                                                            .try_update(|list| {
+                                                                                let p = list.get_mut(part_index)?;
+                                                                                let mut inner: Vec<(f64, f64)> = drawn
+                                                                                    [1..drawn.len() - 1]
+                                                                                    .to_vec();
+                                                                                let mut first = seg as isize - 1;
+                                                                                let mut second = seg as isize;
+                                                                                if first < 0 {
+                                                                                    inner.insert(0, drawn[0]);
+                                                                                    first = 0;
+                                                                                    second = 1;
+                                                                                }
+                                                                                if second as usize >= inner.len() {
+                                                                                    inner.push(to);
+                                                                                    second = inner.len() as isize - 1;
+                                                                                }
+                                                                                p.waypoints[slot] = inner;
+                                                                                Some((first as usize, second as usize))
+                                                                            })
+                                                                            .flatten();
+                                                                        if let Some((first, second)) = ends {
+                                                                            let world = to_world(
+                                                                                f64::from(event.client_x()),
+                                                                                f64::from(event.client_y()),
+                                                                            );
+                                                                            drag.set(Some(Drag::Segment {
+                                                                                part: part_index,
+                                                                                slot,
+                                                                                first,
+                                                                                second,
+                                                                                horizontal,
+                                                                                grab: if horizontal {
+                                                                                    world.1
+                                                                                } else {
+                                                                                    world.0
+                                                                                },
+                                                                                base: if horizontal { a.1 } else { a.0 },
+                                                                            }));
+                                                                        }
+                                                                    }
+                                                                />
+                                                            }
+                                                        })
+                                                        .collect_view();
+
+                                                    // Corner pips, so the
+                                                    // selected wire shows
+                                                    // where its bends are.
+                                                    let bends = is_picked
                                                         .then(|| {
-                                                            parts
-                                                                .with_untracked(|l| {
-                                                                    l[part_index].waypoints[slot]
-                                                                        .clone()
-                                                                })
-                                                                .into_iter()
-                                                                .enumerate()
-                                                                .map(|(wp_index, (wx, wy))| {
+                                                            points[1..points.len() - 1]
+                                                                .iter()
+                                                                .map(|(bx, by)| {
                                                                     view! {
                                                                         <rect
-                                                                            x=wx - 3.5
-                                                                            y=wy - 3.5
-                                                                            width="7"
-                                                                            height="7"
-                                                                            fill="#c9a227"
-                                                                            stroke="#101216"
-                                                                            style="pointer-events: auto; cursor: move"
-                                                                            on:pointerdown=move |event: ev::PointerEvent| {
-                                                                                event.stop_propagation();
-                                                                                checkpoint();
-                                                                                drag.set(Some(Drag::Waypoint {
-                                                                                    part: part_index,
-                                                                                    slot,
-                                                                                    index: wp_index,
-                                                                                }));
-                                                                            }
+                                                                            x=bx - 2.5
+                                                                            y=by - 2.5
+                                                                            width="5"
+                                                                            height="5"
+                                                                            fill="#e05d38"
                                                                         />
                                                                     }
                                                                 })
                                                                 .collect_view()
                                                         });
+
                                                     Some(view! {
-                                                        // Fat invisible twin
-                                                        // makes the wire
-                                                        // clickable.
-                                                        <polyline
-                                                            points=path.clone()
-                                                            fill="none"
-                                                            stroke="transparent"
-                                                            stroke-width="10"
-                                                            style="pointer-events: stroke; cursor: pointer"
-                                                            on:pointerdown=move |event: ev::PointerEvent| {
-                                                                event.stop_propagation();
-                                                            }
-                                                            on:click=move |event: ev::MouseEvent| {
-                                                                event.stop_propagation();
-                                                                selected.set(None);
-                                                                selected_wire
-                                                                    .set(Some((part_index, slot)));
-                                                                if let Some(element) =
-                                                                    canvas.get_untracked()
-                                                                {
-                                                                    let _ = element.focus();
-                                                                }
-                                                            }
-                                                            on:dblclick=move |event: ev::MouseEvent| {
-                                                                event.stop_propagation();
-                                                                let world = to_world(
-                                                                    f64::from(event.client_x()),
-                                                                    f64::from(event.client_y()),
-                                                                );
-                                                                checkpoint();
-                                                                parts.update(|list| {
-                                                                    let Some(p) =
-                                                                        list.get_mut(part_index)
-                                                                    else {
-                                                                        return;
-                                                                    };
-                                                                    // Rebuild the drawn point list
-                                                                    // to find where this belongs.
-                                                                    let from =
-                                                                        stub_point(p, slot);
-                                                                    let row = row_of_gpio(p.pins[slot]);
-                                                                    let mut pts = vec![from];
-                                                                    pts.extend(
-                                                                        p.waypoints[slot]
-                                                                            .iter()
-                                                                            .copied(),
-                                                                    );
-                                                                    if let Some(row) = row {
-                                                                        pts.push(row_point(
-                                                                            kit_pos.get_untracked(),
-                                                                            row,
-                                                                        ));
-                                                                    }
-                                                                    let at =
-                                                                        insert_index(&pts, world);
-                                                                    p.waypoints[slot].insert(
-                                                                        at.min(
-                                                                            p.waypoints[slot].len(),
-                                                                        ),
-                                                                        (
-                                                                            snap(world.0),
-                                                                            snap(world.1),
-                                                                        ),
-                                                                    );
-                                                                });
-                                                                selected_wire
-                                                                    .set(Some((part_index, slot)));
-                                                                dirty.set(true);
-                                                            }
-                                                        />
                                                         <polyline
                                                             points=path
                                                             fill="none"
                                                             stroke=stroke
                                                             stroke-width=width
+                                                            style="pointer-events: none"
                                                         />
-                                                        <circle cx=from.0 cy=from.1 r="2.6" fill="#c9a227" />
-                                                        <circle cx=to.0 cy=to.1 r="2.6" fill="#c9a227" />
-                                                        {handles}
+                                                        <circle cx=from.0 cy=from.1 r="2.6" fill="#c9a227" style="pointer-events: none" />
+                                                        <circle cx=to.0 cy=to.1 r="2.6" fill="#c9a227" style="pointer-events: none" />
+                                                        {bends}
+                                                        {grabs}
                                                     })
                                                 })
                                                 .collect::<Vec<_>>()
@@ -1251,6 +1407,7 @@ fn BoardEditor(
                                             stroke="#e0a838"
                                             stroke-width="1.8"
                                             stroke-dasharray="5 4"
+                                            style="pointer-events: none"
                                         />
                                     })
                                 }}
@@ -1468,7 +1625,21 @@ fn BoardEditor(
 
                                     view! {
                                         <div
+                                            on:contextmenu=move |event: ev::MouseEvent| {
+                                                event.prevent_default();
+                                                event.stop_propagation();
+                                                selected.set(Some(index));
+                                                selected_wire.set(None);
+                                                menu.set(Some((
+                                                    f64::from(event.client_x()),
+                                                    f64::from(event.client_y()),
+                                                    MenuTarget::Part(index),
+                                                )));
+                                            }
                                             on:pointerdown=move |event: ev::PointerEvent| {
+                                                if event.button() != 0 {
+                                                    return;
+                                                }
                                                 event.prevent_default();
                                                 event.stop_propagation();
                                                 selected.set(Some(index));
@@ -1555,6 +1726,104 @@ fn BoardEditor(
                                 .collect_view()
                         }}
                     </div>
+
+                    {move || {
+                        let (x, y, target) = menu.get()?;
+                        let close = Callback::new(move |_| menu.set(None));
+                        let items = match target {
+                            MenuTarget::Wire(part_index, slot) => {
+                                view! {
+                                    <MenuItem
+                                        label="Straighten"
+                                        on_select=Callback::new(move |_| {
+                                            straighten(part_index, slot);
+                                            menu.set(None);
+                                        })
+                                    />
+                                    <MenuSeparator />
+                                    <MenuItem
+                                        label="Disconnect"
+                                        shortcut="Del"
+                                        danger=true
+                                        on_select=Callback::new(move |_| {
+                                            disconnect(part_index, slot);
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                                    .into_any()
+                            }
+                            MenuTarget::Part(index) => {
+                                let wires = parts
+                                    .with_untracked(|list| {
+                                        list.get(index).map(|p| p.kind.wires()).unwrap_or(0)
+                                    });
+                                view! {
+                                    <MenuItem
+                                        label="Duplicate"
+                                        on_select=Callback::new(move |_| {
+                                            duplicate_part(index);
+                                            menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
+                                        label="Disconnect wires"
+                                        disabled=wires == 0
+                                        on_select=Callback::new(move |_| {
+                                            for slot in 0..wires {
+                                                disconnect(index, slot);
+                                            }
+                                            menu.set(None);
+                                        })
+                                    />
+                                    <MenuSeparator />
+                                    <MenuItem
+                                        label="Remove"
+                                        shortcut="Del"
+                                        danger=true
+                                        on_select=Callback::new(move |_| {
+                                            remove_part(index);
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                                    .into_any()
+                            }
+                            MenuTarget::Sheet => {
+                                view! {
+                                    <MenuItem
+                                        label="Undo"
+                                        shortcut="Ctrl+Z"
+                                        disabled=history.with_untracked(Vec::is_empty)
+                                        on_select=Callback::new(move |_| {
+                                            undo();
+                                            menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
+                                        label="Redo"
+                                        shortcut="Ctrl+Y"
+                                        disabled=future.with_untracked(Vec::is_empty)
+                                        on_select=Callback::new(move |_| {
+                                            redo();
+                                            menu.set(None);
+                                        })
+                                    />
+                                    <MenuSeparator />
+                                    <MenuItem
+                                        label="Reset view"
+                                        shortcut="1:1"
+                                        on_select=Callback::new(move |_| {
+                                            view.set((0.0, 0.0, 1.0));
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                                    .into_any()
+                            }
+                        };
+                        Some(view! { <ContextMenu x=x y=y on_close=close>{items}</ContextMenu> })
+                    }}
                 </div>
 
                 <div class="flex w-[190px] flex-none flex-col border-l border-line bg-sidebar">
@@ -1577,20 +1846,12 @@ fn BoardEditor(
                                     </p>
                                     <p class="text-footnote text-label-4">
                                         {format!(
-                                            "{bends} bend(s) — double-click the wire to add one, drag the squares to move them",
+                                            "{bends} bend(s) — drag any segment of the wire to move it; right-click for more",
                                         )}
                                     </p>
                                     <button
                                         type="button"
-                                        on:click=move |_| {
-                                            checkpoint();
-                                            parts.update(|list| {
-                                                if let Some(p) = list.get_mut(part_index) {
-                                                    p.waypoints[slot].clear();
-                                                }
-                                            });
-                                            dirty.set(true);
-                                        }
+                                        on:click=move |_| straighten(part_index, slot)
                                         class="rounded-[6px] px-2 py-1 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
                                     >
                                         "Straighten"

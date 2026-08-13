@@ -171,6 +171,18 @@
         : all;
       return { hits, files: new Set(hits.map((h) => h.path)).size, truncated: false, error: null };
     },
+    plan_simulation: () => ({
+      supported: true, reason: null, missing: [],
+      steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
+      board: {
+        chip: "esp32", kitX: 460, kitY: 40,
+        leds: [{ pin: 26, color: "green", label: "GPIO26", x: 60, y: 40, routes: [] }],
+        buttons: [], rgbs: [], sevens: [], displays: [], pots: [],
+      },
+      parts: [],
+    }),
+    save_sim_board: (a) => { window.__mock.savedBoard = a.board; return null; },
+    run_simulation: () => new Promise(() => {}),
     toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
     firmware_list: () => [],
     chip_catalogue: () => [],

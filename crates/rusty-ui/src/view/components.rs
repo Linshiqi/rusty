@@ -283,3 +283,68 @@ pub fn ErrorBanner(error: crate::ipc::IpcError, on_dismiss: Callback<()>) -> imp
         </div>
     }
 }
+
+/// A right-click menu: a panel at the pointer over a dismissing backdrop.
+///
+/// The chrome only. Every surface builds its own items, because a context
+/// menu that is not about the thing under the pointer is just a worse main
+/// menu — the whole reason to right-click is that the answer is local.
+#[component]
+pub fn ContextMenu(x: f64, y: f64, on_close: Callback<()>, children: Children) -> impl IntoView {
+    view! {
+        <div
+            class="fixed inset-0 z-50"
+            on:pointerdown=move |_| on_close.run(())
+            on:contextmenu=move |event: leptos::ev::MouseEvent| {
+                event.prevent_default();
+                on_close.run(());
+            }
+        >
+            <div
+                class="absolute min-w-[200px] rounded-[8px] bg-raised py-1 shadow-2xl ring-1 ring-line-strong"
+                style=format!("left: {x}px; top: {y}px")
+                on:pointerdown=move |event: leptos::ev::PointerEvent| event.stop_propagation()
+            >
+                {children()}
+            </div>
+        </div>
+    }
+}
+
+/// One row of a context menu.
+#[component]
+pub fn MenuItem(
+    #[prop(into)] label: String,
+    #[prop(optional, into)] shortcut: Option<String>,
+    #[prop(optional)] danger: bool,
+    #[prop(optional)] disabled: bool,
+    on_select: Callback<()>,
+) -> impl IntoView {
+    let tone = if danger { "text-crimson" } else { "text-label-2" };
+    view! {
+        <button
+            type="button"
+            disabled=disabled
+            on:click=move |_| on_select.run(())
+            class=format!(
+                "flex w-full items-center gap-8 px-3 py-1 text-left text-footnote {tone} \
+                 hover:bg-selection hover:text-label disabled:pointer-events-none \
+                 disabled:opacity-35",
+            )
+        >
+            <span class="flex-1 truncate">{label}</span>
+            {shortcut
+                .map(|keys| {
+                    view! {
+                        <span class="shrink-0 font-mono text-caption text-label-4">{keys}</span>
+                    }
+                })}
+        </button>
+    }
+}
+
+/// A hairline between groups of menu items.
+#[component]
+pub fn MenuSeparator() -> impl IntoView {
+    view! { <div class="my-1 h-px bg-line" /> }
+}

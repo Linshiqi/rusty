@@ -16,7 +16,11 @@ use wasm_bindgen::JsCast;
 use rusty_edit::{Document, Entry, Line, Span, Token};
 use rusty_lsp::{CompletionItem, DiagSeverity, FileDiagnostic, SemanticSpan};
 
-use crate::{controller, state::AppState, view::components::Empty};
+use crate::{
+    controller,
+    state::AppState,
+    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
+};
 
 /// Shared by both layers. They must agree exactly or the caret drifts from the
 /// character it is over, a column at a time, all the way across the line.
@@ -57,6 +61,8 @@ pub fn FilesPanel() -> impl IntoView {
 #[component]
 fn Tree() -> impl IntoView {
     let state = AppState::expect();
+    let tree_menu = RwSignal::new(None::<(f64, f64, TreeTarget)>);
+    provide_context(TreeMenu(tree_menu));
 
     view! {
         <div class="flex w-[240px] flex-none flex-col border-r border-line bg-sidebar">
@@ -103,8 +109,163 @@ fn Tree() -> impl IntoView {
                     view! { <Level entries=tree depth=0 /> }.into_any()
                 }}
             </div>
+
+            {move || {
+                let (x, y, target) = tree_menu.get()?;
+                let close = Callback::new(move |_| tree_menu.set(None));
+                let path = target.path.clone();
+                let (open_path, copy_path, search_path) =
+                    (path.clone(), path.clone(), path.clone());
+                let is_dir = target.is_dir;
+                Some(
+                    view! {
+                        <ContextMenu x=x y=y on_close=close>
+                            <MenuItem
+                                label=if is_dir { "Expand or collapse" } else { "Open" }
+                                on_select=Callback::new(move |_| {
+                                    if is_dir {
+                                        state
+                                            .expanded
+                                            .update(|open| {
+                                                match open.iter().position(|p| p == &open_path) {
+                                                    Some(at) => {
+                                                        open.remove(at);
+                                                    }
+                                                    None => open.push(open_path.clone()),
+                                                }
+                                            });
+                                    } else {
+                                        controller::open_file(state, open_path.clone());
+                                    }
+                                    tree_menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="Search in this scope"
+                                on_select=Callback::new(move |_| {
+                                    search_within(state, &search_path, is_dir);
+                                    tree_menu.set(None);
+                                })
+                            />
+                            <MenuSeparator />
+                            <MenuItem
+                                label="Copy path"
+                                on_select=Callback::new(move |_| {
+                                    copy_to_clipboard(&copy_path);
+                                    tree_menu.set(None);
+                                })
+                            />
+                        </ContextMenu>
+                    },
+                )
+            }}
         </div>
     }
+}
+
+/// Where the file tree's right-click menu is, and what it is about.
+///
+/// Context rather than a prop: the tree renders itself recursively, and
+/// threading a signal through every level would be a parameter that exists
+/// only because of how the rows are drawn.
+#[derive(Clone, Copy)]
+struct TreeMenu(RwSignal<Option<(f64, f64, TreeTarget)>>);
+
+#[derive(Clone)]
+struct TreeTarget {
+    path: String,
+    is_dir: bool,
+}
+
+/// Put text on the clipboard. A refusal (no permission, no clipboard) is
+/// silent: nothing was destroyed, and a banner for a failed copy is noise.
+fn copy_to_clipboard(text: &str) {
+    if let Some(window) = web_sys::window() {
+        let _ = window.navigator().clipboard().write_text(text);
+    }
+}
+
+/// Scope the project search to one path and go there.
+fn search_within(state: AppState, path: &str, is_dir: bool) {
+    state.search_include.set(if is_dir {
+        format!("{path}/**")
+    } else {
+        path.to_string()
+    });
+    state.active_panel.set("search".to_string());
+}
+
+/// Format with rustfmt and save, landing the caret where the eye already is.
+/// Shared by Ctrl+S and the editor's own menu, so the two cannot drift.
+fn format_and_save(state: AppState, area: NodeRef<html::Textarea>) {
+    let caret = area
+        .get_untracked()
+        .and_then(|element| caret_line_col(&element, &state.draft.get_untracked()));
+    controller::format_then_save(state, caret, move |text, caret| {
+        record_edit(state);
+        echo_edit(state, text);
+        let Some(element) = area.get_untracked() else {
+            return;
+        };
+        element.set_value(text);
+        // The old caret's line and column, clamped into the reformatted
+        // text. rustfmt moves lines, not the one being typed on, so this
+        // lands where the eye already is.
+        if let Some((line, col)) = caret {
+            let last = text.split('\n').count().saturating_sub(1);
+            let line = (line as usize).min(last) as u32;
+            let width = text
+                .split('\n')
+                .nth(line as usize)
+                .map(|l| l.chars().count() as u32)
+                .unwrap_or(0);
+            let unit = utf16_offset_of(text, line, col.min(width));
+            let _ = element.set_selection_start(Some(unit));
+            let _ = element.set_selection_end(Some(unit));
+        }
+    });
+}
+
+/// UTF-16 code units in `text` — what a textarea counts selections in.
+fn utf16_len(text: &str) -> u32 {
+    text.encode_utf16().count() as u32
+}
+
+/// Read the clipboard and drop it in at the caret. Async because that is the
+/// only way a browser hands over the clipboard; a refusal lands nowhere,
+/// which is what a blocked paste should do.
+fn paste_at_caret(state: AppState, area: NodeRef<html::Textarea>) {
+    use wasm_bindgen_futures::JsFuture;
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let promise = window.navigator().clipboard().read_text();
+    leptos::task::spawn_local(async move {
+        let Ok(value) = JsFuture::from(promise).await else {
+            return;
+        };
+        let Some(text) = value.as_string() else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        if let Some(element) = area.get_untracked() {
+            insert_at_caret(&element, state, &text);
+        }
+    });
+}
+
+/// The editor's selection as (byte range, text), when there is one.
+fn selection_of(area: &web_sys::HtmlTextAreaElement, text: &str) -> Option<(usize, usize, String)> {
+    let from = area.selection_start().ok().flatten()? as usize;
+    let to = area.selection_end().ok().flatten()? as usize;
+    if to <= from {
+        return None;
+    }
+    let (from, to) = (byte_of_utf16(text, from), byte_of_utf16(text, to));
+    Some((from, to, text[from..to].to_string()))
 }
 
 /// One level of the tree, and every level under it.
@@ -154,10 +315,28 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                 }
             };
 
+            let menu = {
+                let path = path.clone();
+                move |event: ev::MouseEvent| {
+                    event.prevent_default();
+                    event.stop_propagation();
+                    let TreeMenu(menu) = expect_context::<TreeMenu>();
+                    menu.set(Some((
+                        f64::from(event.client_x()),
+                        f64::from(event.client_y()),
+                        TreeTarget {
+                            path: path.clone(),
+                            is_dir,
+                        },
+                    )));
+                }
+            };
+
             view! {
                 <button
                     type="button"
                     on:click=activate
+                    on:contextmenu=menu
                     style=format!("padding-left: {}px", 10 + depth * 12)
                     class=move || {
                         let base = "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left \
@@ -239,6 +418,7 @@ pub(super) fn Editor() -> impl IntoView {
 #[component]
 fn TabStrip() -> impl IntoView {
     let state = AppState::expect();
+    let menu = RwSignal::new(None::<(f64, f64, String)>);
 
     view! {
         <div class="flex flex-none items-stretch overflow-x-auto border-b border-line bg-sidebar">
@@ -319,11 +499,24 @@ fn TabStrip() -> impl IntoView {
                              px-2.5 py-1.5 font-mono text-footnote text-label-3 hover:bg-sunken \
                              hover:text-label-2"
                         };
+                        let open_menu = {
+                            let path = path.clone();
+                            move |event: ev::MouseEvent| {
+                                event.prevent_default();
+                                event.stop_propagation();
+                                menu.set(Some((
+                                    f64::from(event.client_x()),
+                                    f64::from(event.client_y()),
+                                    path.clone(),
+                                )));
+                            }
+                        };
                         view! {
                             <div
                                 title=path.clone()
                                 on:click=activate
                                 on:auxclick=middle_close
+                                on:contextmenu=open_menu
                                 class=tab_class
                             >
                                 <span class="max-w-[18ch] truncate">{name}</span>
@@ -351,6 +544,45 @@ fn TabStrip() -> impl IntoView {
                         }
                     })
                     .collect_view()
+            }}
+
+            {move || {
+                let (x, y, path) = menu.get()?;
+                let close = Callback::new(move |_| menu.set(None));
+                let (this, others, copy) = (path.clone(), path.clone(), path.clone());
+                Some(
+                    view! {
+                        <ContextMenu x=x y=y on_close=close>
+                            <MenuItem
+                                label="Close"
+                                shortcut="Ctrl+W"
+                                on_select=Callback::new(move |_| {
+                                    controller::close_tab(state, this.clone());
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="Close others"
+                                on_select=Callback::new(move |_| {
+                                    for open in state.tabs.get_untracked() {
+                                        if open != others {
+                                            controller::close_tab(state, open);
+                                        }
+                                    }
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuSeparator />
+                            <MenuItem
+                                label="Copy path"
+                                on_select=Callback::new(move |_| {
+                                    copy_to_clipboard(&copy);
+                                    menu.set(None);
+                                })
+                            />
+                        </ContextMenu>
+                    },
+                )
             }}
         </div>
     }
@@ -439,6 +671,7 @@ fn Surface(document: Document) -> impl IntoView {
     // True while the pointer is over the card itself. Reading the card —
     // scrolling it, selecting from it — must not count as leaving.
     let on_card = RwSignal::new(false);
+    let editor_menu = RwSignal::new(None::<(f64, f64)>);
     // Which completion row the keyboard is on. Reset when a new popup arrives.
     let picked = RwSignal::new(0usize);
     Effect::new(move |_| {
@@ -568,6 +801,142 @@ fn Surface(document: Document) -> impl IntoView {
     view! {
         <div class="relative flex min-h-0 flex-1 flex-col">
             <FindBar area=area scroller=scroller />
+
+            // The editor's own menu. It keeps the clipboard three every text
+            // box has, and adds what only this editor knows: where a name is
+            // defined, what rust-analyzer would fix, how the file formats.
+            {
+                let path = path.clone();
+                move || {
+                    let (x, y) = editor_menu.get()?;
+                    let close = Callback::new(move |_| editor_menu.set(None));
+                    let path = path.clone();
+                    let has_selection = area
+                        .get_untracked()
+                        .zip(Some(state.draft.get_untracked()))
+                        .and_then(|(element, text)| selection_of(&element, &text))
+                        .is_some();
+                    let (goto_path, fix_path) = (path.clone(), path.clone());
+                    Some(
+                        view! {
+                            <ContextMenu x=x y=y on_close=close>
+                                <MenuItem
+                                    label="Cut"
+                                    shortcut="Ctrl+X"
+                                    disabled=!has_selection || read_only
+                                    on_select=Callback::new(move |_| {
+                                        if let Some(element) = area.get_untracked() {
+                                            let text = state.draft.get_untracked();
+                                            if let Some((from, to, picked)) =
+                                                selection_of(&element, &text)
+                                            {
+                                                copy_to_clipboard(&picked);
+                                                record_edit(state);
+                                                let mut next = text.clone();
+                                                next.replace_range(from..to, "");
+                                                echo_edit(state, &next);
+                                                state.draft.set(next.clone());
+                                                element.set_value(&next);
+                                                let caret = utf16_len(&next[..from]);
+                                                let _ = element.set_selection_start(Some(caret));
+                                                let _ = element.set_selection_end(Some(caret));
+                                                controller::schedule_pulse(state);
+                                            }
+                                        }
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuItem
+                                    label="Copy"
+                                    shortcut="Ctrl+C"
+                                    disabled=!has_selection
+                                    on_select=Callback::new(move |_| {
+                                        if let Some(element) = area.get_untracked() {
+                                            let text = state.draft.get_untracked();
+                                            if let Some((_, _, picked)) =
+                                                selection_of(&element, &text)
+                                            {
+                                                copy_to_clipboard(&picked);
+                                            }
+                                        }
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuItem
+                                    label="Paste"
+                                    shortcut="Ctrl+V"
+                                    disabled=read_only
+                                    on_select=Callback::new(move |_| {
+                                        paste_at_caret(state, area);
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuSeparator />
+                                <MenuItem
+                                    label="Go to definition"
+                                    shortcut="Ctrl+Click"
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        if let Some(element) = area.get_untracked()
+                                            && let Some((line, col)) = caret_line_col(
+                                                &element,
+                                                &state.draft.get_untracked(),
+                                            )
+                                        {
+                                            controller::goto_definition(
+                                                state,
+                                                goto_path.clone(),
+                                                line,
+                                                col,
+                                            );
+                                        }
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuItem
+                                    label="Quick fix"
+                                    shortcut="Ctrl+."
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        if let Some(element) = area.get_untracked()
+                                            && let Some((line, col)) = caret_line_col(
+                                                &element,
+                                                &state.draft.get_untracked(),
+                                            )
+                                        {
+                                            controller::request_actions(
+                                                state,
+                                                fix_path.clone(),
+                                                line,
+                                                col,
+                                            );
+                                        }
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuSeparator />
+                                <MenuItem
+                                    label="Format and save"
+                                    shortcut="Ctrl+S"
+                                    disabled=read_only
+                                    on_select=Callback::new(move |_| {
+                                        format_and_save(state, area);
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuItem
+                                    label="Find in file"
+                                    shortcut="Ctrl+F"
+                                    on_select=Callback::new(move |_| {
+                                        state.find_open.set(true);
+                                        editor_menu.set(None);
+                                    })
+                                />
+                            </ContextMenu>
+                        },
+                    )
+                }
+            }
         <div node_ref=scroller class="relative min-h-0 flex-1 overflow-auto">
             // w-max: the row is as wide as the longest line, so the textarea
             // overlay (inset-0 in the column beside the gutter) covers every
@@ -704,6 +1073,14 @@ fn Surface(document: Document) -> impl IntoView {
                         class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre text-transparent caret-rust outline-none"
                         style=metrics
                         prop:value=move || state.draft.get()
+                        on:contextmenu=move |event: ev::MouseEvent| {
+                            event.prevent_default();
+                            editor_menu
+                                .set(Some((
+                                    f64::from(event.client_x()),
+                                    f64::from(event.client_y()),
+                                )));
+                        }
                         on:scroll=move |_| {
                             let Some(element) = area.get_untracked() else {
                                 return;
@@ -1021,33 +1398,7 @@ fn Surface(document: Document) -> impl IntoView {
                                 && event.key().eq_ignore_ascii_case("s")
                             {
                                 event.prevent_default();
-                                let caret = area.get_untracked().and_then(|element| {
-                                    caret_line_col(&element, &state.draft.get_untracked())
-                                });
-                                controller::format_then_save(state, caret, move |text, caret| {
-                                    record_edit(state);
-                                    echo_edit(state, text);
-                                    let Some(element) = area.get_untracked() else {
-                                        return;
-                                    };
-                                    element.set_value(text);
-                                    // The old caret's line and column, clamped
-                                    // into the reformatted text. rustfmt moves
-                                    // lines, not the one being typed on, so
-                                    // this lands where the eye already is.
-                                    if let Some((line, col)) = caret {
-                                        let last = text.split('\n').count().saturating_sub(1);
-                                        let line = (line as usize).min(last) as u32;
-                                        let width = text
-                                            .split('\n')
-                                            .nth(line as usize)
-                                            .map(|l| l.chars().count() as u32)
-                                            .unwrap_or(0);
-                                        let unit = utf16_offset_of(text, line, col.min(width));
-                                        let _ = element.set_selection_start(Some(unit));
-                                        let _ = element.set_selection_end(Some(unit));
-                                    }
-                                });
+                                format_and_save(state, area);
                                 return;
                             }
                             if event.key() == "Enter" {
