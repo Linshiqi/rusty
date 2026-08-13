@@ -96,52 +96,23 @@ fn DockTabs() -> impl IntoView {
                             {tab.label()}
                             <DockCount tab=tab />
                         </button>
+                        // The shell picker sits beside its tab, not at the
+                        // far edge next to the collapse chevron — two
+                        // unrelated dropdown arrows in one corner read as
+                        // one broken control.
+                        {(tab == DockTab::Terminal)
+                            .then(|| {
+                                view! {
+                                    <Show when=move || selected.get()>
+                                        <ShellPicker />
+                                    </Show>
+                                }
+                            })}
                     }
                 })
                 .collect_view()}
 
             <span class="flex-1" />
-
-            <Show when=move || {
-                state.dock_tab.get() == DockTab::Terminal && state.dock_open.get()
-            }>
-                // The shell picker, as every editor's terminal has: the
-                // built-in plus whatever the machine carries. Choosing one
-                // stores the preference and restarts the shell.
-                {
-                    controller::load_shell_choices(state);
-                    controller::load_shell_info(state);
-                }
-                <select
-                    class="h-6 rounded-[5px] bg-sunken px-1.5 text-footnote text-label-2 outline-none"
-                    prop:value=move || {
-                        state
-                            .shell_info
-                            .get()
-                            .and_then(|info| info.preference)
-                            .unwrap_or_else(|| "auto".to_string())
-                    }
-                    on:change=move |event| {
-                        controller::set_terminal_shell(
-                            state,
-                            Some(event_target_value(&event)),
-                        );
-                    }
-                >
-                    {move || {
-                        state
-                            .shell_choices
-                            .get()
-                            .into_iter()
-                            .map(|choice| {
-                                view! {
-                                    <option value=choice.value>{choice.label}</option>
-                                }
-                            })
-                            .collect_view()
-                    }}
-                </select>
-            </Show>
 
             <Show when=move || state.dock_tab.get() == DockTab::Output && state.dock_open.get()>
                 // VSCode's pair: which channel, then a text filter. The
@@ -205,6 +176,57 @@ fn DockTabs() -> impl IntoView {
                 </span>
             </button>
         </div>
+    }
+}
+
+#[component]
+fn ShellPicker() -> impl IntoView {
+    let state = AppState::expect();
+    controller::load_shell_choices(state);
+    controller::load_shell_info(state);
+
+    view! {
+        <select
+            title="Which shell the terminal runs"
+            class="h-6 rounded-[5px] bg-sunken px-1.5 text-footnote text-label-2 outline-none"
+            prop:value=move || {
+                state
+                    .shell_info
+                    .get()
+                    .and_then(|info| info.preference)
+                    .unwrap_or_else(|| "auto".to_string())
+            }
+            on:change=move |event| {
+                controller::set_terminal_shell(state, Some(event_target_value(&event)));
+            }
+        >
+            {move || {
+                let mut choices = state.shell_choices.get();
+                // A stored preference the list does not carry (an uninstalled
+                // shell, an old bare-name value) still has to be visible —
+                // a select whose value matches nothing renders blank.
+                if let Some(preference) =
+                    state.shell_info.get().and_then(|info| info.preference)
+                    && !choices.iter().any(|c| c.value == preference)
+                {
+                    let short = preference
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(&preference)
+                        .to_string();
+                    choices.push(rusty_embed::ShellChoice {
+                        label: format!("{short} (current)"),
+                        value: preference,
+                    });
+                }
+                choices
+                    .into_iter()
+                    .map(|choice| {
+                        view! { <option value=choice.value>{choice.label}</option> }
+                    })
+                    .collect_view()
+            }}
+        </select>
     }
 }
 
