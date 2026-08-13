@@ -3,13 +3,18 @@
 //! Usage: cargo run -p rusty-term --example pty_probe
 
 fn main() {
-    let exe = std::env::current_dir()
-        .unwrap()
-        .join("target/debug/rusty-app.exe");
-    let argv = vec![
-        exe.to_string_lossy().into_owned(),
-        "--builtin-shell".to_string(),
-    ];
+    // Default: the built-in shell. Any argv can be passed instead —
+    // `--example pty_probe -- powershell.exe` probes that shell.
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
+        let exe = std::env::current_dir()
+            .unwrap()
+            .join("target/debug/rusty-app.exe");
+        argv = vec![
+            exe.to_string_lossy().into_owned(),
+            "--builtin-shell".to_string(),
+        ];
+    }
     let (terminal, updates) =
         rusty_term::Terminal::spawn(None, 100, 24, Some(&argv)).expect("spawn");
 

@@ -45,11 +45,18 @@ pub fn TerminalView() -> impl IntoView {
     let selection = RwSignal::new(None::<((usize, usize), (usize, usize))>);
     let selecting = RwSignal::new(false);
 
-    // Where the pointer is, in cells. The 8/4 are the host's px-2 py-1.
-    let cell_at = move |offset_x: f64, offset_y: f64| {
+    // Where the pointer is, in cells — from client coordinates against the
+    // host's rect. offsetX cannot be used: it is relative to whichever SPAN
+    // the pointer happens to be over, which put selections a prompt's width
+    // away from the mouse. The 8/4 are the host's px-2 py-1.
+    let cell_at = move |client_x: f64, client_y: f64| {
+        let Some(element) = host.get_untracked() else {
+            return (0usize, 0usize);
+        };
+        let rect = element.get_bounding_client_rect();
         let cell = cell_w.get_untracked().max(1.0);
-        let col = ((offset_x - 8.0) / cell).floor().max(0.0) as usize;
-        let row = ((offset_y - 4.0) / LINE_HEIGHT).floor().max(0.0) as usize;
+        let col = (((client_x - rect.left()) - 8.0) / cell).floor().max(0.0) as usize;
+        let row = (((client_y - rect.top()) - 4.0) / LINE_HEIGHT).floor().max(0.0) as usize;
         (row, col)
     };
 
@@ -258,7 +265,7 @@ pub fn TerminalView() -> impl IntoView {
                     if let Some(element) = host.get_untracked() {
                         let _ = element.focus();
                     }
-                    let at = cell_at(event.offset_x() as f64, event.offset_y() as f64);
+                    let at = cell_at(f64::from(event.client_x()), f64::from(event.client_y()));
                     selection.set(Some((at, at)));
                     selecting.set(true);
                 }
@@ -266,7 +273,7 @@ pub fn TerminalView() -> impl IntoView {
                     if !selecting.get_untracked() {
                         return;
                     }
-                    let at = cell_at(event.offset_x() as f64, event.offset_y() as f64);
+                    let at = cell_at(f64::from(event.client_x()), f64::from(event.client_y()));
                     selection.update(|sel| {
                         if let Some((_, head)) = sel {
                             *head = at;

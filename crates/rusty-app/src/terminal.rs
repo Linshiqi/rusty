@@ -74,34 +74,56 @@ pub async fn set_terminal_shell(value: Option<String>) -> Result<(), CommandErro
 /// lists a shell that fails to start.
 #[tauri::command]
 pub async fn terminal_shells() -> Result<Vec<rusty_embed::ShellChoice>, CommandError> {
-    fn on_path(program: &str) -> bool {
-        let Some(paths) = std::env::var_os("PATH") else {
-            return false;
-        };
-        std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
+    // Full paths, found — never bare names. `bash.exe` on PATH is
+    // System32's WSL relay on most Windows machines, which is how picking
+    // "Git Bash" produced a WSL error about /bin/bash.
+    fn find_on_path(program: &str) -> Option<std::path::PathBuf> {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(program))
+            .find(|p| p.is_file())
     }
 
     let mut out = vec![rusty_embed::ShellChoice {
         label: "rusty bash (built-in)".to_string(),
         value: "auto".to_string(),
     }];
-    let candidates: &[(&str, &str)] = if cfg!(windows) {
-        &[
+    let mut push = |label: &str, path: std::path::PathBuf| {
+        out.push(rusty_embed::ShellChoice {
+            label: label.to_string(),
+            value: path.to_string_lossy().into_owned(),
+        });
+    };
+    if cfg!(windows) {
+        for (label, program) in [
             ("PowerShell 7", "pwsh.exe"),
             ("Windows PowerShell", "powershell.exe"),
             ("Command Prompt", "cmd.exe"),
-            ("Git Bash", "bash.exe"),
             ("Nushell", "nu.exe"),
-        ]
+        ] {
+            if let Some(path) = find_on_path(program) {
+                push(label, path);
+            }
+        }
+        // Git Bash by its real homes; the PATH hit is the WSL relay.
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+        for candidate in [
+            std::path::PathBuf::from(&program_files).join(r"Git\bin\bash.exe"),
+            std::path::PathBuf::from(&program_files).join(r"Git\usr\bin\bash.exe"),
+        ] {
+            if candidate.is_file() {
+                push("Git Bash", candidate);
+                break;
+            }
+        }
     } else {
-        &[("bash", "bash"), ("zsh", "zsh"), ("fish", "fish"), ("Nushell", "nu")]
-    };
-    for (label, program) in candidates {
-        if on_path(program) {
-            out.push(rusty_embed::ShellChoice {
-                label: (*label).to_string(),
-                value: (*program).to_string(),
-            });
+        for (label, program) in
+            [("bash", "bash"), ("zsh", "zsh"), ("fish", "fish"), ("Nushell", "nu")]
+        {
+            if let Some(path) = find_on_path(program) {
+                push(label, path);
+            }
         }
     }
     Ok(out)

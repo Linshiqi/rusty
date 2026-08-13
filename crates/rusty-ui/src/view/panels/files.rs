@@ -1698,10 +1698,16 @@ fn Surface(document: Document) -> impl IntoView {
                                     + 2.0;
                                 format!("top: {y}px")
                             };
+                            // The card reads at the editor's own scale: a
+                            // zoomed-in buffer with an 11px tooltip under it
+                            // reads as two unrelated programs.
+                            let font = 11.0 * zoom.get();
                             view! {
                                 <div
-                                    class="absolute z-20 max-w-[70ch] overflow-y-auto rounded-[8px] bg-raised px-3 py-2 font-mono text-footnote leading-relaxed whitespace-pre-wrap shadow-2xl ring-1 ring-line-strong select-text"
-                                    style=format!("left: {x}px; {place}; max-height: 40vh")
+                                    class="absolute z-20 max-w-[70ch] overflow-y-auto rounded-[8px] bg-raised px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap shadow-2xl ring-1 ring-line-strong select-text"
+                                    style=format!(
+                                        "left: {x}px; {place}; max-height: 40vh; font-size: {font}px",
+                                    )
                                     on:mouseenter=move |_| on_card.set(true)
                                     on:mouseleave=move |_| {
                                         on_card.set(false);
