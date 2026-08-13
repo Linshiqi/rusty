@@ -45,6 +45,9 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Terminal => {
                             view! { <crate::view::terminal::TerminalView /> }.into_any()
                         }
+                        DockTab::Waves => {
+                            view! { <crate::view::waves::WavesTab /> }.into_any()
+                        }
                         DockTab::Devices => view! { <DevicesTab /> }.into_any(),
                     }}
                 </div>
@@ -156,6 +159,7 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             }
             DockTab::Output => (state.log.with(Vec::len), Tone::Neutral),
             DockTab::Terminal => (0, Tone::Neutral),
+            DockTab::Waves => (0, Tone::Neutral),
             DockTab::Devices => (0, Tone::Neutral),
         };
 

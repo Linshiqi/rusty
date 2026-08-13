@@ -116,7 +116,9 @@ back an MCP server later, so third parties get them too.
 
 Espressif's QEMU boots the same merged image `espflash` would burn, and
 everything the board view knows travels as text on that one serial line:
-`[rusty:gpio] 26=1,27=0` and `[rusty:disp] hello` out of the firmware,
+`[rusty:gpio] 26=1,27=0` (or `[rusty:gpio@1234] …` with the systimer in
+microseconds — what the Waves panel and the VCD export time by) and
+`[rusty:disp] hello` out of the firmware,
 `B14=1` and `P34=128` into it. `protocol.rs` owns the parsing, compiled
 unconditionally because the frontend reads the stream as it passes.
 

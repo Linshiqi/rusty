@@ -67,6 +67,20 @@ pub async fn install_sim_tool(
     Ok(last_code)
 }
 
+/// The captured waveform, written where the build artefacts already live.
+/// Returns the absolute path so the dock can name it.
+#[tauri::command]
+pub async fn save_sim_trace(text: String, state: State<'_, AppState>) -> Result<String, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let dir = root.join("target/rusty-sim");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| CommandError::new(format!("could not create {}: {e}", dir.display())))?;
+    let path = dir.join("trace.vcd");
+    std::fs::write(&path, text)
+        .map_err(|e| CommandError::new(format!("could not write {}: {e}", path.display())))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// A line into the running simulation's stdin — how a button press on the
 /// board view reaches the firmware's UART.
 #[tauri::command]

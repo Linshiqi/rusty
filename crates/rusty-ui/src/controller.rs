@@ -699,6 +699,85 @@ pub fn delete_key(state: AppState, profile: String) {
     });
 }
 
+/// One gpio report into the waveform capture.
+///
+/// The first report decides the clock: stamped reports run on the firmware's
+/// systimer, unstamped ones on the host's arrival time — never both, because
+/// a trace that mixes time bases is a trace that lies. Capped so an hour of
+/// simulation cannot eat the tab.
+fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
+    use crate::state::TraceClock;
+
+    const CAP: usize = 200_000;
+
+    let host_now_us = || -> u64 {
+        web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| (p.now() * 1000.0) as u64)
+            .unwrap_or(0)
+    };
+
+    state.sim_trace.update(|trace| {
+        let clock = *trace.clock.get_or_insert(if report.at_us.is_some() {
+            TraceClock::Firmware
+        } else {
+            TraceClock::Host
+        });
+        let at = match (clock, report.at_us) {
+            (TraceClock::Firmware, Some(us)) => us,
+            // A late unstamped line in a firmware-clocked trace (or the
+            // reverse) would corrupt the axis; reuse the last moment
+            // instead, which keeps the event without inventing a time.
+            (TraceClock::Firmware, None) => {
+                trace.events.last().map(|(t, ..)| *t).unwrap_or(0)
+            }
+            (TraceClock::Host, _) => host_now_us(),
+        };
+        for (pin, level) in report.pins {
+            trace.events.push((at, pin, level));
+        }
+        if trace.events.len() > CAP {
+            let drop = trace.events.len() - CAP;
+            trace.events.drain(..drop);
+            trace.truncated = true;
+        }
+    });
+}
+
+/// Write the captured trace as VCD into the project's target directory,
+/// where PulseView and GTKWave can open it.
+pub fn export_vcd(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        text: String,
+    }
+
+    let trace = state.sim_trace.get_untracked();
+    if trace.events.is_empty() {
+        return;
+    }
+    let args = Args {
+        text: rusty_embed::to_vcd(&trace.events),
+    };
+    spawn_local(async move {
+        match ipc::call::<_, String>(cmd::sim::SAVE_TRACE, &args).await {
+            Ok(path) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("waveform written to {path} — PulseView and GTKWave open it"),
+                    level: None,
+                });
+                state.show_dock(crate::state::DockTab::Output);
+            }
+            Err(error) => state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: error.message,
+                level: Some(LogLevel::Error),
+            }),
+        }
+    });
+}
+
 // ─── crates ──────────────────────────────────────────────────────────────────
 
 /// Ask crates.io about every direct dependency. Slow by design — one index
@@ -785,6 +864,7 @@ pub fn run_simulation(state: AppState, debug: bool) {
         return;
     }
     state.sim_gpio.set(std::collections::HashMap::new());
+    state.sim_trace.set(crate::state::SimTrace::default());
     state.sim_display.set(String::new());
 
     // Like stream_to_terminal, with one interception: the firmware's pin
@@ -808,12 +888,13 @@ pub fn run_simulation(state: AppState, debug: bool) {
                     }
                     return;
                 }
-                if let Some(pins) = rusty_embed::parse_gpio_report(&line.text) {
+                if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
                     state.sim_gpio.update(|gpio| {
-                        for (pin, level) in pins {
-                            gpio.insert(pin, level);
+                        for (pin, level) in &report.pins {
+                            gpio.insert(*pin, *level);
                         }
                     });
+                    record_trace(state, report);
                 } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
                     state.sim_display.set(text);
                 } else {

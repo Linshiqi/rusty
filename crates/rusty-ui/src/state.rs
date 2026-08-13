@@ -20,6 +20,26 @@ use std::collections::HashMap;
 
 use crate::ipc::IpcError;
 
+/// Whose clock the trace timestamps are on.
+///
+/// Mixing the two silently is how a waveform lies, so the panel shows which
+/// one it got. Firmware means `[rusty:gpio@µs]` stamps from the systimer;
+/// Host means the firmware sent none and arrival time stood in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceClock {
+    Firmware,
+    Host,
+}
+
+/// A captured pin trace: time-ordered `(µs, pin, level)`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SimTrace {
+    pub events: Vec<(u64, u8, bool)>,
+    pub clock: Option<TraceClock>,
+    /// True when the cap was hit and the oldest events were dropped.
+    pub truncated: bool,
+}
+
 /// An open editor that is not on screen — everything needed to come back
 /// exactly as left.
 ///
@@ -95,19 +115,27 @@ pub enum DockTab {
     Output,
     /// A real shell behind a pseudo-terminal. You talking to the machine.
     Terminal,
+    /// Pin waveforms captured from the running simulation.
+    Waves,
     /// Serial ports and probes currently attached.
     Devices,
 }
 
 impl DockTab {
-    pub const ALL: [DockTab; 4] =
-        [DockTab::Problems, DockTab::Output, DockTab::Terminal, DockTab::Devices];
+    pub const ALL: [DockTab; 5] = [
+        DockTab::Problems,
+        DockTab::Output,
+        DockTab::Terminal,
+        DockTab::Waves,
+        DockTab::Devices,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             DockTab::Problems => "Problems",
             DockTab::Output => "Output",
             DockTab::Terminal => "Terminal",
+            DockTab::Waves => "Waves",
             DockTab::Devices => "Devices",
         }
     }
@@ -309,6 +337,8 @@ pub struct AppState {
     pub assistant_open: RwSignal<bool>,
     /// What the firmware last printed to the `[rusty:disp]` channel.
     pub sim_display: RwSignal<String>,
+    /// The waveform capture for the current simulation run.
+    pub sim_trace: RwSignal<SimTrace>,
     /// Pin levels the running firmware has reported, for the board view.
     pub sim_gpio: RwSignal<std::collections::HashMap<u8, bool>>,
     /// The simulation plan for the open project, when the panel asked.
@@ -465,6 +495,7 @@ impl AppState {
             crate_rows: RwSignal::new(None),
             assistant_open: RwSignal::new(false),
             sim_display: RwSignal::new(String::new()),
+            sim_trace: RwSignal::new(SimTrace::default()),
             sim_gpio: RwSignal::new(std::collections::HashMap::new()),
             sim_plan: RwSignal::new(None),
             sim_install_failed: RwSignal::new(Vec::new()),

@@ -115,6 +115,7 @@ pub mod sim {
     pub const RUN: &str = "run_simulation";
     pub const SAVE_BOARD: &str = "save_sim_board";
     pub const SEND: &str = "sim_send";
+    pub const SAVE_TRACE: &str = "save_sim_trace";
     pub const INSTALL: &str = "install_sim_tool";
 }
 

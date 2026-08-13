@@ -96,7 +96,7 @@
   // Tree paths are project-relative and /-separated, exactly as the real
   // tree.rs builds them — the paths are identities the reveal flow compares.
   const MAIN = "src/main.rs";
-  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [] };
+  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [] };
 
   const handlers = {
     recent_projects: () => [ROOT],
@@ -184,7 +184,8 @@
       debugTool: null,
     }),
     save_sim_board: (a) => { window.__mock.savedBoard = a.board; return null; },
-    run_simulation: () => new Promise(() => {}),
+    run_simulation: (a) => { window.__mock.simChannel = a.onLine; return new Promise(() => {}); },
+    save_sim_trace: (a) => { window.__mock.traces.push(a.text); return "E:\mock\firmware\target\rusty-sim\trace.vcd"; },
     toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
     firmware_list: () => [],
     chip_catalogue: () => [],

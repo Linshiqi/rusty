@@ -17,7 +17,7 @@ pub mod protocol;
 pub mod chip;
 
 pub use model::*;
-pub use protocol::{parse_display_report, parse_gpio_report};
+pub use protocol::{GpioReport, parse_display_report, parse_gpio_report, to_vcd};
 
 #[cfg(feature = "backend")]
 pub mod catalog;
