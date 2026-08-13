@@ -608,7 +608,7 @@ fn BoardEditor(
                                 selected_wire.set(None);
                                 selected.set(None);
                             }
-                            "r" | "R" if !event.ctrl_key() => {
+                            "r" | "R" | " " if !event.ctrl_key() => {
                                 if let Some(index) = selected.get_untracked() {
                                     event.prevent_default();
                                     rotate_part(index);
@@ -1180,26 +1180,45 @@ fn BoardEditor(
                                             />
                                         }
                                             .into_any(),
-                                        PartKind::Button => view! {
+                                        PartKind::Button => {
+                                            // The press the button itself
+                                            // shows. A button is an input:
+                                            // waiting for the firmware to
+                                            // report it back meant no click
+                                            // ever looked like anything.
+                                            let held = RwSignal::new(false);
+                                            view! {
                                             <span
                                                 on:pointerdown=move |event: ev::PointerEvent| {
+                                                    event.stop_propagation();
+                                                    held.set(true);
                                                     if running.get_untracked() {
-                                                        event.stop_propagation();
                                                         controller::sim_press(
                                                             state, pins[0], true,
                                                         );
                                                     }
                                                 }
                                                 on:pointerup=move |_| {
+                                                    held.set(false);
                                                     if running.get_untracked() {
                                                         controller::sim_press(
                                                             state, pins[0], false,
                                                         );
                                                     }
                                                 }
+                                                on:pointerleave=move |_| {
+                                                    if held.get_untracked() {
+                                                        held.set(false);
+                                                        if running.get_untracked() {
+                                                            controller::sim_press(
+                                                                state, pins[0], false,
+                                                            );
+                                                        }
+                                                    }
+                                                }
                                                 class=move || {
-                                                    let pressed = running.get()
-                                                        && level(pins[0]);
+                                                    let pressed = held.get()
+                                                        || (running.get() && level(pins[0]));
                                                     format!(
                                                         "grid size-5 shrink-0 cursor-pointer place-items-center rounded-[5px] ring-1 ring-[#5a626e] {}",
                                                         if pressed {
@@ -1213,7 +1232,8 @@ fn BoardEditor(
                                                 <span class="size-2 rounded-full bg-[#9aa3b0]" />
                                             </span>
                                         }
-                                            .into_any(),
+                                            .into_any()
+                                        }
                                     };
 
                                     view! {
@@ -1676,7 +1696,7 @@ fn BoardEditor(
                                 view! {
                                     <MenuItem
                                         label="Rotate 90°"
-                                        shortcut="R"
+                                        shortcut="Space"
                                         on_select=Callback::new(move |_| {
                                             rotate_part(index);
                                             menu.set(None);

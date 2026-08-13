@@ -38,13 +38,13 @@ impl PartKind {
     }
 
     /// Fixed body height, so a turned part's anchors are exact rather than
-    /// whatever the browser laid out.
+    /// whatever the browser laid out. Tall enough for every stub at the
+    /// chip's own row pitch: seven pins crowded into 52px read as one
+    /// smudge, and KiCad's oldest rule is that pins sit a full grid step
+    /// apart.
     pub(super) fn height(&self) -> f64 {
-        match self {
-            PartKind::Seven => 52.0,
-            PartKind::Display => 44.0,
-            _ => 28.0,
-        }
+        let wired = self.wires().max(1) as f64;
+        wired.mul_add(SLOT_PITCH, 12.0).max(28.0)
     }
 
     /// Fixed body width, so wire anchors land on the body edge exactly.
@@ -329,7 +329,7 @@ pub(super) const KIT_H: f64 = 264.0;
 /// was dragged.
 pub(super) const ROW_PITCH: f64 = 16.0;
 pub(super) const STUB_OFFSET: f64 = 16.0;
-pub(super) const SLOT_PITCH: f64 = 8.0;
+pub(super) const SLOT_PITCH: f64 = 16.0;
 /// Pin rows per side of the schematic devkit.
 pub(super) const KIT_ROWS: usize = 15;
 /// "This pin is not wired to anything" — new parts start here, and
