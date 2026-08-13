@@ -162,29 +162,58 @@ fn Appearance() -> impl IntoView {
     view! {
         <Field
             label="Interface scale"
-            help="Browser-style zoom over the whole window, 70% to 160%. Takes effect as you \
-                  drag; the editor's own Ctrl+wheel text zoom is separate."
+            help="Browser-style zoom over the whole window, 70% to 160%. Applies when you \
+                  release the slider; the editor's own Ctrl+wheel text zoom is separate."
         >
             <div class="flex items-center gap-3">
-                <input
-                    type="range"
-                    min="70"
-                    max="160"
-                    step="5"
-                    prop:value=move || format!("{:.0}", state.ui_zoom.get() * 100.0)
-                    on:input=move |event| {
-                        if let Ok(percent) = event_target_value(&event).parse::<f64>() {
-                            let factor = (percent / 100.0).clamp(0.7, 1.6);
-                            state.ui_zoom.set(factor);
-                            crate::state::remember_ui_zoom(factor);
-                            controller::apply_ui_zoom(state);
-                        }
+                // The preview during the drag is the label, never the zoom:
+                // zooming the window mid-drag rescales the slider under the
+                // pointer, which feeds back into the value — the whole
+                // interface shook until the pointer escaped.
+                {
+                    let preview = RwSignal::new(None::<f64>);
+                    view! {
+                        <input
+                            type="range"
+                            min="70"
+                            max="160"
+                            step="5"
+                            prop:value=move || {
+                                let factor = preview
+                                    .get()
+                                    .unwrap_or_else(|| state.ui_zoom.get());
+                                format!("{:.0}", factor * 100.0)
+                            }
+                            on:input=move |event| {
+                                if let Ok(percent) =
+                                    event_target_value(&event).parse::<f64>()
+                                {
+                                    preview.set(Some((percent / 100.0).clamp(0.7, 1.6)));
+                                }
+                            }
+                            on:change=move |event| {
+                                if let Ok(percent) =
+                                    event_target_value(&event).parse::<f64>()
+                                {
+                                    let factor = (percent / 100.0).clamp(0.7, 1.6);
+                                    preview.set(None);
+                                    state.ui_zoom.set(factor);
+                                    crate::state::remember_ui_zoom(factor);
+                                    controller::apply_ui_zoom(state);
+                                }
+                            }
+                            class="w-56 accent-rust"
+                        />
+                        <span class="tnum w-[5ch] font-mono text-callout text-label-2">
+                            {move || {
+                                let factor = preview
+                                    .get()
+                                    .unwrap_or_else(|| state.ui_zoom.get());
+                                format!("{:.0}%", factor * 100.0)
+                            }}
+                        </span>
                     }
-                    class="w-56 accent-rust"
-                />
-                <span class="tnum w-[5ch] font-mono text-callout text-label-2">
-                    {move || format!("{:.0}%", state.ui_zoom.get() * 100.0)}
-                </span>
+                }
             </div>
         </Field>
         <Field
