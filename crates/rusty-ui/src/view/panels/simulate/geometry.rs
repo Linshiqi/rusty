@@ -28,7 +28,11 @@ impl PartKind {
         match self {
             PartKind::Rgb => 3,
             PartKind::Seven => 7,
-            PartKind::Display => 0,
+            // SDA and SCL, like the I2C module it stands for. The screen
+            // content still arrives over the serial channel today; the pins
+            // are where the coming I2C decode will attach, and a part that
+            // floats outside the circuit reads as a mistake either way.
+            PartKind::Display => 2,
             _ => 1,
         }
     }
@@ -144,11 +148,11 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
     for display in &board.displays {
         out.push(EditPart {
             kind: PartKind::Display,
-            pins: [0; 7],
+            pins: [display.sda, display.scl, 0, 0, 0, 0, 0],
             label: display.label.clone(),
             x: display.x.unwrap_or(160.0),
             y: display.y.unwrap_or(160.0),
-            waypoints: Default::default(),
+            waypoints: waypoints_of(&display.routes),
             rot: display.rot,
         });
     }
@@ -217,9 +221,12 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
             }),
             PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
                 label: part.label.clone(),
+                sda: part.pins[0],
+                scl: part.pins[1],
                 x: Some(part.x),
                 y: Some(part.y),
                 rot: part.rot,
+                routes: routes_of(&part.waypoints, 2),
             }),
             PartKind::Pot => board.pots.push(rusty_embed::SimPot {
                 pin: part.pins[0],
@@ -439,6 +446,36 @@ pub(super) fn wire_path(part: &EditPart, slot: usize, kit: (f64, f64)) -> Option
     Some(orthogonalize(points))
 }
 
+/// Drop the points a route no longer needs: consecutive duplicates, and any
+/// bend whose neighbours run straight through it. This is what merges two
+/// segments the user has dragged into line — the KiCad behaviour: aligned
+/// segments become one segment, and the next grab moves them as one.
+pub(super) fn simplify_route(full: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(full.len());
+    for point in full {
+        if let Some(last) = out.last()
+            && (last.0 - point.0).abs() < 0.01
+            && (last.1 - point.1).abs() < 0.01
+        {
+            continue;
+        }
+        out.push(point);
+        while out.len() >= 3 {
+            let c = out[out.len() - 1];
+            let b = out[out.len() - 2];
+            let a = out[out.len() - 3];
+            let collinear = ((a.0 - b.0).abs() < 0.01 && (b.0 - c.0).abs() < 0.01)
+                || ((a.1 - b.1).abs() < 0.01 && (b.1 - c.1).abs() < 0.01);
+            if collinear {
+                out.remove(out.len() - 2);
+            } else {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// Insert elbows so every segment runs purely horizontally or vertically.
 /// Idempotent, so a path that came back from a drag survives a round trip.
 pub(super) fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
@@ -593,6 +630,55 @@ mod tests {
         let back = parts_of(&board);
         assert_eq!(back.len(), 1);
         assert_eq!(back[0], part);
+    }
+
+    #[test]
+    fn aligned_segments_merge_into_one() {
+        // Two horizontal runs at the same height, joined by a redundant
+        // bend: the bend must go, leaving one segment.
+        let route = vec![
+            (0.0, 10.0),
+            (40.0, 10.0),
+            (80.0, 10.0),
+            (80.0, 50.0),
+        ];
+        assert_eq!(
+            simplify_route(route),
+            vec![(0.0, 10.0), (80.0, 10.0), (80.0, 50.0)],
+        );
+
+        // A zero-length jog — the residue a drag leaves — vanishes whole.
+        let jog = vec![
+            (0.0, 10.0),
+            (40.0, 10.0),
+            (40.0, 10.0),
+            (90.0, 10.0),
+            (90.0, 40.0),
+        ];
+        assert_eq!(
+            simplify_route(jog),
+            vec![(0.0, 10.0), (90.0, 10.0), (90.0, 40.0)],
+        );
+
+        // Genuine corners survive untouched.
+        let l = vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)];
+        assert_eq!(simplify_route(l.clone()), l);
+    }
+
+    #[test]
+    fn a_display_wires_its_two_i2c_pins() {
+        let display = EditPart {
+            kind: PartKind::Display,
+            pins: [21, 22, 0, 0, 0, 0, 0],
+            label: "DISPLAY".to_string(),
+            x: 100.0,
+            y: 100.0,
+            waypoints: Default::default(),
+            rot: 0,
+        };
+        assert_eq!(display.kind.wires(), 2);
+        assert!(wire_path(&display, 0, (460.0, 40.0)).is_some(), "sda routes");
+        assert!(wire_path(&display, 1, (460.0, 40.0)).is_some(), "scl routes");
     }
 
     #[test]

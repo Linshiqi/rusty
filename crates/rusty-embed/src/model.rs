@@ -501,6 +501,10 @@ pub struct SimTool {
     pub install: String,
 }
 
+fn unwired_pin() -> u8 {
+    255
+}
+
 /// Serde's skip test for the common case: most parts are never turned.
 pub(crate) fn is_upright(rot: &u16) -> bool {
     *rot == 0
@@ -605,6 +609,15 @@ pub struct SimSeven {
 #[serde(rename_all = "camelCase")]
 pub struct SimDisplay {
     pub label: String,
+    /// The I2C pins the module hangs on. 255 = not wired yet — old board
+    /// files carry no pins at all, and an unwired screen still shows text.
+    #[serde(default = "unwired_pin")]
+    pub sda: u8,
+    #[serde(default = "unwired_pin")]
+    pub scl: u8,
+    /// User-drawn waypoints per wire (sda, scl), world coordinates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Vec<(f64, f64)>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

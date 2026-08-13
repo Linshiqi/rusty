@@ -771,6 +771,25 @@ fn BoardEditor(
                     }
                     on:pointerup=move |_| {
                         guides.set((None, None));
+                        // A finished segment drag tidies its route: aligned
+                        // segments merge, zero-length jogs vanish — so the
+                        // next grab moves one segment, not two shards.
+                        if let Some(Drag::Segment { part, slot, .. }) = drag.get_untracked() {
+                            let kit = kit_pos.get_untracked();
+                            parts.update(|list| {
+                                if let Some(p) = list.get_mut(part) {
+                                    let pin = p.pins[slot];
+                                    if let Some(row) = row_of_gpio(pin) {
+                                        let mut full = vec![stub_point(p, slot)];
+                                        full.extend(p.waypoints[slot].iter().copied());
+                                        full.push(row_point(kit, row));
+                                        let tidy = simplify_route(full);
+                                        p.waypoints[slot] =
+                                            tidy[1..tidy.len() - 1].to_vec();
+                                    }
+                                }
+                            });
+                        }
                         if let Some(Drag::Wire { part, slot }) = drag.get_untracked() {
                             // Landing on a GPIO row wires the pin; anywhere
                             // else cancels. Wiring IS pin assignment.
@@ -1112,7 +1131,7 @@ fn BoardEditor(
                                             </span>
                                             // pin stubs: the gold dots wires
                                             // pull out of
-                                            {(!matches!(kind, PartKind::Display))
+                                            {(wires > 0)
                                                 .then(|| {
                                                     (0..wires)
                                                         .map(|slot| {
@@ -1602,13 +1621,14 @@ fn BoardEditor(
                                         PartKind::Pot => "Potentiometer",
                                     }}
                                 </span>
-                                {(!matches!(part.kind, PartKind::Display))
+                                {(part.kind.wires() > 0)
                                     .then(|| {
                                         let names: &[&str] = match part.kind {
                                             PartKind::Rgb => &["r", "g", "b"],
                                             PartKind::Seven => {
                                                 &["a", "b", "c", "d", "e", "f", "g"]
                                             }
+                                            PartKind::Display => &["sda", "scl"],
                                             _ => &["pin"],
                                         };
                                         view! {
@@ -1632,15 +1652,6 @@ fn BoardEditor(
                                                      the chip"
                                                 </p>
                                             </div>
-                                        }
-                                    })}
-                                {matches!(part.kind, PartKind::Display)
-                                    .then(|| {
-                                        view! {
-                                            <p class="text-footnote leading-snug text-label-4">
-                                                "Shows whatever the firmware prints as \
-                                                 [rusty:disp] <text> — no pins to wire."
-                                            </p>
                                         }
                                     })}
                                 {matches!(part.kind, PartKind::Led { .. })

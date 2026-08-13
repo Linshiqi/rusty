@@ -303,9 +303,12 @@ fn board_view(root: &Path) -> Option<SimBoard> {
     #[derive(serde::Deserialize)]
     struct FileDisplay {
         label: Option<String>,
+        sda: Option<u8>,
+        scl: Option<u8>,
         x: Option<f64>,
         y: Option<f64>,
         rot: Option<u16>,
+        routes: Option<Vec<Vec<(f64, f64)>>>,
     }
     #[derive(serde::Deserialize)]
     struct FilePot {
@@ -432,9 +435,12 @@ fn board_view(root: &Path) -> Option<SimBoard> {
             .into_iter()
             .map(|display| SimDisplay {
                 label: display.label.unwrap_or_else(|| "DISPLAY".to_string()),
+                sda: display.sda.unwrap_or(255),
+                scl: display.scl.unwrap_or(255),
                 x: display.x,
                 y: display.y,
                 rot: display.rot.unwrap_or(0),
+                routes: display.routes.unwrap_or_default(),
             })
             .collect(),
         pots: parsed
@@ -735,6 +741,10 @@ fn error_chain(error: &dyn std::error::Error) -> String {
     parts.join(" ← ")
 }
 
+fn is_unwired(pin: &u8) -> bool {
+    *pin == 255
+}
+
 /// Create the directory the image step writes into. espflash does not make
 /// parent directories, and "os error 3" from a missing folder reads like a
 /// broken tool rather than a missing mkdir.
@@ -893,12 +903,18 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
     #[derive(serde::Serialize)]
     struct FileDisplay<'a> {
         label: &'a str,
+        #[serde(skip_serializing_if = "is_unwired")]
+        sda: u8,
+        #[serde(skip_serializing_if = "is_unwired")]
+        scl: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         x: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         y: Option<f64>,
         #[serde(skip_serializing_if = "crate::model::is_upright")]
         rot: u16,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        routes: &'a Vec<Vec<(f64, f64)>>,
     }
     #[derive(serde::Serialize)]
     struct FilePot<'a> {
@@ -1026,9 +1042,12 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
             .iter()
             .map(|display| FileDisplay {
                 label: &display.label,
+                sda: display.sda,
+                scl: display.scl,
                 x: display.x.map(|v| v.round()),
                 y: display.y.map(|v| v.round()),
                 rot: display.rot,
+                routes: &display.routes,
             })
             .collect(),
         pot: board
@@ -1163,6 +1182,9 @@ mod tests {
                 rot: 270,
             }],
             displays: vec![SimDisplay {
+                sda: 21,
+                scl: 22,
+                routes: Vec::new(),
                 label: "DISPLAY".to_string(),
                 x: None,
                 y: None,
