@@ -1,0 +1,17 @@
+[package]
+name = "rusty-dbg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+# The session side: a gdb to talk to, and a thread to pump it.
+thiserror = { version = "1.0.69", optional = true }
+
+[features]
+default = ["backend"]
+backend = ["dep:thiserror"]
+
+[lints]
+workspace = true
