@@ -677,31 +677,27 @@ fn Surface(document: Document) -> impl IntoView {
             <span class="mx-1 h-5 w-px bg-line" />
             <button
                 type="button"
-                title="Flash the board"
+                title="Flash the board…"
                 on:click=move |_| state.active_panel.set("flash".to_string())
                 class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
                 <IconView icon=Icon::Flash size=15 />
             </button>
+            // A play icon runs — switching panels without running is the
+            // mismatch that got this button reported. It also switches, so
+            // the board is on screen while the build streams to the dock.
             <button
                 type="button"
-                title="Run in the simulator"
-                on:click=move |_| state.active_panel.set("simulate".to_string())
-                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
+                title="Build and run in the simulator"
+                disabled=move || running.get()
+                on:click=move |_| {
+                    state.active_panel.set("simulate".to_string());
+                    controller::run_simulation(state, false);
+                }
+                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
             >
                 <IconView icon=Icon::Play size=15 />
             </button>
-            {move || {
-                running
-                    .get()
-                    .then(|| {
-                        view! {
-                            <span class="text-footnote text-label-3">
-                                "running — output in the dock"
-                            </span>
-                        }
-                    })
-            }}
         }
         .into_any()
     });

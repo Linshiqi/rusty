@@ -517,14 +517,6 @@ fn BoardEditor(
                 </button>
                 <button
                     type="button"
-                    title="Reset view"
-                    on:click=move |_| view.set((0.0, 0.0, 1.0))
-                    class="grid h-7 place-items-center rounded-[6px] px-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                >
-                    "1:1"
-                </button>
-                <button
-                    type="button"
                     title="Fit everything on screen (F)"
                     on:click=move |_| fit_view()
                     class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
@@ -547,7 +539,11 @@ fn BoardEditor(
                     class="flex h-7 items-center gap-1 rounded-[6px] px-1.5 font-mono text-caption text-label-2 hover:bg-sunken hover:text-label"
                 >
                     <IconView icon=Icon::Grid size=13 />
-                    {move || format!("{}", grid.get() as i32)}
+                    // leading-none, or the caption line box out-talls the
+                    // icon and the digit prints below the glyph's centre.
+                    <span class="tnum leading-none">
+                        {move || format!("{}", grid.get() as i32)}
+                    </span>
                 </button>
                 {move || {
                     running
