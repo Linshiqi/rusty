@@ -326,6 +326,13 @@ usty`) holds `location.toml`
   `error writing JS loader file to stage dir / os error 3`. `cargo tauri dev`
   already runs `trunk serve` for you — to rebuild, touch a source file and let
   it do it.
+- **Every theme block carries the whole palette, or it is not a theme.** A
+  token defined in one block and missing from another leaks across theme
+  choices: the system-dark media block once lacked the `--term` syntax set
+  (light ink on dark ground), and `[data-theme="light"]` lacked it the other
+  way (dark-theme pastels on white). Both read as "the code is unreadable",
+  far from the stylesheet. When adding a token, add it to all four blocks in
+  `input.css`.
 - **A part that hides a wire reads as a broken wire.** The board canvas draws
   the grid under everything and the wires *over* everything, in two SVG layers
   with the parts between: a 140px display parked on a net used to swallow its

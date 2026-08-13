@@ -374,9 +374,9 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::SetTheme(theme) => theme::set(theme),
         Action::ResetLayout => {
-            state.sidebar_width.set(188.0);
+            state.tree_width.set(240.0);
             state.dock_height.set(196.0);
-            remember_size(Divider::Sidebar, 188.0);
+            remember_size(Divider::Tree, 240.0);
             remember_size(Divider::Dock, 196.0);
         }
     }

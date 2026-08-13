@@ -133,6 +133,9 @@ fn DockTabs() -> impl IntoView {
                         })
                         .collect_view()}
                 </select>
+                // No Follow or Clear buttons: following is the default (a
+                // scroll up detaches, the bottom reattaches), and Clear
+                // lives in the right-click menu with the other verbs.
                 <input
                     placeholder="filter (!word excludes)"
                     title="Space-separated terms all must match; !term excludes"
@@ -140,14 +143,6 @@ fn DockTabs() -> impl IntoView {
                     prop:value=move || state.log_filter.get()
                     on:input=move |event| state.log_filter.set(event_target_value(&event))
                 />
-                <FollowToggle />
-                <button
-                    type="button"
-                    class="rounded-[5px] px-2 py-1 text-footnote text-label-2 hover:text-label"
-                    on:click=move |_| state.clear_log()
-                >
-                    "Clear"
-                </button>
             </Show>
 
             <button
@@ -228,29 +223,6 @@ fn passes_filter(text: &str, filter: &str) -> bool {
             haystack.contains(&term.to_lowercase())
         }
     })
-}
-
-#[component]
-fn FollowToggle() -> impl IntoView {
-    let state = AppState::expect();
-
-    view! {
-        <button
-            type="button"
-            title="Stick to the newest line as output arrives"
-            class=move || {
-                let base = "rounded-[5px] px-2 py-1 text-footnote transition-colors";
-                if state.log_follow.get() {
-                    format!("{base} text-rust")
-                } else {
-                    format!("{base} text-label-2 hover:text-label")
-                }
-            }
-            on:click=move |_| state.log_follow.update(|f| *f = !*f)
-        >
-            "Follow"
-        </button>
-    }
 }
 
 /// Where a right-click on a diagnostic row landed, and what the row named.

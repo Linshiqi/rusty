@@ -156,6 +156,27 @@
   --slate-fill: rgb(61 106 147 / 0.11);
   --selection: rgb(189 74 31 / 0.13);
   --focus: rgb(189 74 31 / 0.45);
+
+  /* The mirror of the bug the dark media block had: choosing Light on a
+     dark desktop kept the media block's bright pastels for every token this
+     block did not name — pale ink on white. A theme block carries the whole
+     palette or it is not a theme. */
+  --term-0: #3b3733;
+  --term-1: #b3341f;
+  --term-2: #3f7a34;
+  --term-3: #8a6510;
+  --term-4: #2f5f96;
+  --term-5: #8a4a8f;
+  --term-6: #217a70;
+  --term-7: #5a544d;
+  --term-8: #7d766d;
+  --term-9: #d3512f;
+  --term-10: #4f9a41;
+  --term-11: #b0821a;
+  --term-12: #3f7ac0;
+  --term-13: #a95fae;
+  --term-14: #2c9a8d;
+  --term-15: #1c1a17;
 }
 
 :root[data-theme="dark"] {

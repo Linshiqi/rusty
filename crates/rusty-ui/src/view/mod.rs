@@ -1,8 +1,9 @@
 //! The shell, and the registry it renders.
 //!
-//! Structure borrowed from macOS: a real sidebar with labels rather than an
-//! icon rail, a unified toolbar, and a status bar carrying the facts you check
-//! without looking away from what you are doing.
+//! Structure: a VSCode-style activity bar of icons down the left edge, a
+//! unified toolbar, and a status bar carrying the facts you check without
+//! looking away from what you are doing. The labels went when the bar did —
+//! a tooltip names the icon, and the width the labels cost bought nothing.
 //!
 //! The shell knows no panel by name. It renders whatever [`panels::all`]
 //! returns — the commitment in `docs/extensibility.md` that a contributed panel
@@ -125,10 +126,6 @@ pub fn App() -> impl IntoView {
 
                 <palette::Palette open=palette_open chrome=chrome />
                 <Sidebar />
-                // A rail has one width; only the full sidebar drags.
-                <Show when=move || !state.sidebar_rail.get()>
-                    <split::Handle divider=crate::state::Divider::Sidebar />
-                </Show>
                 <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
                     {move || {
                         state
@@ -296,7 +293,7 @@ fn Sidebar() -> impl IntoView {
     let state = AppState::expect();
     let all: Vec<Panel> = panels::all().into_iter().filter(|p| !p.hidden).collect();
 
-    // Group in declaration order so the sidebar reads top to bottom the way the
+    // Group in declaration order so the bar reads top to bottom the way the
     // work does: understand the project, then talk to the device.
     let mut sections: Vec<(&'static str, Vec<&Panel>)> = Vec::new();
     for panel in &all {
@@ -308,69 +305,19 @@ fn Sidebar() -> impl IntoView {
 
     view! {
         <nav
-            class="flex flex-none flex-col overflow-y-auto bg-sidebar pb-2"
-            style=move || {
-                if state.sidebar_rail.get() {
-                    "width: 46px".to_string()
-                } else {
-                    format!("width: {}px", state.sidebar_width.get())
-                }
-            }
+            class="flex w-[46px] flex-none flex-col overflow-y-auto bg-sidebar pt-1.5 pb-2"
             aria-label="Panels"
         >
-            // The fold toggle rides the top edge, where VSCode keeps its
-            // sidebar controls — parked bottom-left it read as clutter.
-            <div class=move || {
-                if state.sidebar_rail.get() {
-                    "flex justify-center pt-1.5"
-                } else {
-                    "flex justify-end px-2 pt-1.5"
-                }
-            }>
-                <button
-                    type="button"
-                    title=move || {
-                        if state.sidebar_rail.get() {
-                            "Expand the sidebar"
-                        } else {
-                            "Fold the sidebar to icons"
-                        }
-                    }
-                    on:click=move |_| {
-                        state.sidebar_rail.update(|rail| *rail = !*rail);
-                        crate::state::remember_rail(state.sidebar_rail.get_untracked());
-                    }
-                    class="grid size-5 place-items-center rounded-[5px] text-label-4 transition-colors hover:bg-sunken hover:text-label"
-                >
-                    <span class=move || {
-                        if state.sidebar_rail.get() {
-                            "grid -rotate-90 transition-transform"
-                        } else {
-                            "grid rotate-90 transition-transform"
-                        }
-                    }>
-                        <IconView icon=Icon::Chevron size=13 />
-                    </span>
-                </button>
-            </div>
             {sections
                 .into_iter()
-                .map(|(section, group)| {
+                .enumerate()
+                .map(|(index, (_, group))| {
                     view! {
-                        // A group with no name still has to look like a group.
-                        // Rendering nothing at all left "New project" and
-                        // "Assistant" sitting directly under the DEVICE heading,
-                        // which reads as a claim that they are device panels —
-                        // and neither of them touches a device.
-                        {move || {
-                            if state.sidebar_rail.get() || section.is_empty() {
-                                view! { <div class="mx-3 mt-3 mb-2 h-px bg-line" /> }.into_any()
-                            } else {
-                                view! { <components::SectionLabel label=section /> }
-                                    .into_any()
-                            }
-                        }}
-                        <div class="px-2">
+                        // A rule between groups, as VSCode draws them; the
+                        // first group starts at the top edge.
+                        {(index > 0)
+                            .then(|| view! { <div class="mx-3 my-2 h-px bg-line" /> })}
+                        <div class="flex flex-col items-center gap-0.5">
                             {group
                                 .into_iter()
                                 .map(|panel| {
@@ -404,22 +351,19 @@ fn Sidebar() -> impl IntoView {
                                                 state.active_panel.set(id.to_string());
                                             }
                                             class=move || {
-                                                let base = "flex w-full items-center gap-2.5 rounded-[6px] \
-                                                    px-2 py-[5px] text-body transition-colors \
-                                                    disabled:pointer-events-none disabled:opacity-35";
+                                                let base = "grid size-8 place-items-center rounded-[6px] \
+                                                    transition-colors disabled:pointer-events-none \
+                                                    disabled:opacity-35";
                                                 if selected.get() {
-                                                    // macOS marks the selected row with a filled
-                                                    // rounded rect, not a rule down the edge.
-                                                    format!("{base} bg-selection font-medium text-rust")
+                                                    format!("{base} bg-selection text-rust")
                                                 } else {
-                                                    format!("{base} text-label-2 hover:bg-sunken hover:text-label")
+                                                    format!(
+                                                        "{base} text-label-2 hover:bg-sunken hover:text-label",
+                                                    )
                                                 }
                                             }
                                         >
                                             <IconView icon=icon />
-                                            <Show when=move || !state.sidebar_rail.get()>
-                                                <span class="truncate">{title}</span>
-                                            </Show>
                                         </button>
                                     }
                                 })
@@ -428,7 +372,7 @@ fn Sidebar() -> impl IntoView {
                     }
                 })
                 .collect_view()}
-            <div class="mt-auto px-2 pb-2">
+            <div class="mt-auto flex flex-col items-center pt-2">
                 {
                     let SettingsOpen(settings) = expect_context::<SettingsOpen>();
                     view! {
@@ -437,19 +381,18 @@ fn Sidebar() -> impl IntoView {
                             title="Settings (Ctrl+,)"
                             on:click=move |_| settings.update(|open| *open = !*open)
                             class=move || {
-                                let base = "flex w-full items-center gap-2.5 rounded-[6px] px-2 \
-                                            py-[5px] text-body transition-colors";
+                                let base =
+                                    "grid size-8 place-items-center rounded-[6px] transition-colors";
                                 if settings.get() {
-                                    format!("{base} bg-selection font-medium text-rust")
+                                    format!("{base} bg-selection text-rust")
                                 } else {
-                                    format!("{base} text-label-2 hover:bg-sunken hover:text-label")
+                                    format!(
+                                        "{base} text-label-2 hover:bg-sunken hover:text-label",
+                                    )
                                 }
                             }
                         >
                             <IconView icon=Icon::Settings />
-                            <Show when=move || !state.sidebar_rail.get()>
-                                <span>"Settings"</span>
-                            </Show>
                         </button>
                     }
                 }

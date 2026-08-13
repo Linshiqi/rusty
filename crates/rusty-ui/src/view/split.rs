@@ -25,11 +25,6 @@ pub fn install(state: AppState) {
         // status bar and the dock's own tab strip — 59 pixels between them —
         // so the divider ran that far from the pointer for the whole drag.
         match divider {
-            Divider::Sidebar => {
-                let width = (from_size + (event.client_x() as f64 - from_pointer))
-                    .clamp(min, max);
-                state.sidebar_width.set(width);
-            }
             Divider::Tree => {
                 let width = (from_size + (event.client_x() as f64 - from_pointer))
                     .clamp(min, max);
@@ -49,7 +44,6 @@ pub fn install(state: AppState) {
         // of events a second, and localStorage is synchronous.
         if let Some(divider) = state.dragging.get_untracked() {
             let value = match divider {
-                Divider::Sidebar => state.sidebar_width.get_untracked(),
                 Divider::Tree => state.tree_width.get_untracked(),
                 Divider::Dock => state.dock_height.get_untracked(),
             };
@@ -68,7 +62,7 @@ pub fn install(state: AppState) {
 #[component]
 pub fn Handle(divider: Divider) -> impl IntoView {
     let state = AppState::expect();
-    let vertical = matches!(divider, Divider::Sidebar | Divider::Tree);
+    let vertical = divider == Divider::Tree;
 
     let geometry = if vertical {
         "w-px cursor-col-resize before:-left-[3px] before:top-0 before:h-full before:w-[7px]"
@@ -85,9 +79,6 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                 // which looks like the app has broken.
                 event.prevent_default();
                 let (pointer, size) = match divider {
-                    Divider::Sidebar => {
-                        (event.client_x() as f64, state.sidebar_width.get_untracked())
-                    }
                     Divider::Tree => {
                         (event.client_x() as f64, state.tree_width.get_untracked())
                     }
