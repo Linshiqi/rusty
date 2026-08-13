@@ -48,12 +48,14 @@ impl PartKind {
     }
 
     /// Fixed body width, so wire anchors land on the body edge exactly.
+    /// Widths are grid multiples, like everything an anchor derives from —
+    /// a 110px body put every stub 6px off the grid however the part snapped.
     pub(super) fn width(&self) -> f64 {
         match self {
-            PartKind::Seven => 78.0,
-            PartKind::Display => 140.0,
-            PartKind::Pot => 130.0,
-            _ => 110.0,
+            PartKind::Seven => 80.0,
+            PartKind::Display => 144.0,
+            PartKind::Pot => 128.0,
+            _ => 112.0,
         }
     }
 }
@@ -310,7 +312,16 @@ pub(super) enum MenuTarget {
 
 pub(super) const SNAP: f64 = 8.0;
 pub(super) const KIT_W: f64 = 150.0;
-pub(super) const KIT_H: f64 = 230.0;
+pub(super) const KIT_H: f64 = 264.0;
+/// Pin-row pitch on the kit, and the wire-stub pitch on a part. Multiples of
+/// the base grid on purpose — KiCad's oldest rule is that pins live on the
+/// grid, because a snapped segment can only ever meet an anchor that is
+/// itself snapped. The old 14px/6px pitches put every anchor 2px off the
+/// 8px grid, which is why nothing could align no matter how carefully it
+/// was dragged.
+pub(super) const ROW_PITCH: f64 = 16.0;
+pub(super) const STUB_OFFSET: f64 = 16.0;
+pub(super) const SLOT_PITCH: f64 = 8.0;
 /// Pin rows per side of the schematic devkit.
 pub(super) const KIT_ROWS: usize = 15;
 /// "This pin is not wired to anything" — new parts start here, and
@@ -318,7 +329,17 @@ pub(super) const KIT_ROWS: usize = 15;
 pub(super) const UNWIRED: u8 = 255;
 
 pub(super) fn snap(value: f64) -> f64 {
-    (value / SNAP).round() * SNAP
+    snap_to(value, SNAP)
+}
+
+/// The same rounding on a user-chosen grid — the toolbar offers 1/4/8/16px,
+/// because "the grid is too coarse to align" deserved a dial, even after
+/// the real cause (off-grid anchors) was fixed.
+pub(super) fn snap_to(value: f64, grid: f64) -> f64 {
+    if grid <= 1.0 {
+        return value.round();
+    }
+    (value / grid).round() * grid
 }
 
 /// The classic 30-pin ESP32 devkit pinout, top to bottom, left then right.
@@ -366,11 +387,11 @@ pub(super) fn row_of_gpio(pin: u8) -> Option<usize> {
 /// World coordinates of a kit row's pin circle.
 pub(super) fn row_point(kit: (f64, f64), row: usize) -> (f64, f64) {
     if row < KIT_ROWS {
-        (kit.0 + 10.0, kit.1 + 16.0 + row as f64 * 14.0)
+        (kit.0 + 10.0, kit.1 + 16.0 + row as f64 * ROW_PITCH)
     } else {
         (
             kit.0 + KIT_W - 10.0,
-            kit.1 + 16.0 + (row - KIT_ROWS) as f64 * 14.0,
+            kit.1 + 16.0 + (row - KIT_ROWS) as f64 * ROW_PITCH,
         )
     }
 }
@@ -379,10 +400,10 @@ pub(super) fn row_point(kit: (f64, f64), row: usize) -> (f64, f64) {
 pub(super) fn row_under(kit: (f64, f64), point: (f64, f64)) -> Option<usize> {
     let (kx, ky) = kit;
     let (x, y) = point;
-    if y < ky + 9.0 || y > ky + 16.0 + KIT_ROWS as f64 * 14.0 {
+    if y < ky + 9.0 || y > ky + 16.0 + KIT_ROWS as f64 * ROW_PITCH {
         return None;
     }
-    let row = (((y - ky - 16.0) / 14.0).round().max(0.0)) as usize;
+    let row = (((y - ky - 16.0) / ROW_PITCH).round().max(0.0)) as usize;
     if row >= KIT_ROWS {
         return None;
     }
@@ -412,7 +433,7 @@ pub(super) fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (
 /// to arrive at the same place the eye sees the stub.
 pub(super) fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
     let (w, h) = (part.kind.width(), part.kind.height());
-    let upright = (part.x + w, part.y + 14.0 + slot as f64 * 6.0);
+    let upright = (part.x + w, part.y + STUB_OFFSET + slot as f64 * SLOT_PITCH);
     rotate_about(upright, (part.x + w / 2.0, part.y + h / 2.0), part.rot)
 }
 
@@ -544,16 +565,16 @@ mod tests {
     fn a_turned_part_moves_its_stub_with_it() {
         let mut part = led(100.0, 100.0, 26);
         let upright = stub_point(&part, 0);
-        // Width 110, height 28 → centre (155, 114); the stub sits at
-        // (210, 114), so a quarter turn swings it to the bottom of the body.
-        assert_eq!(upright, (210.0, 114.0));
+        // Width 112, height 28 → centre (156, 114); the stub sits on the
+        // grid at (212, 116), and a quarter turn swings it to the bottom.
+        assert_eq!(upright, (212.0, 116.0));
 
         part.rot = 90;
         let turned = stub_point(&part, 0);
-        assert_eq!(turned, (155.0, 169.0));
+        assert_eq!(turned, (154.0, 170.0));
 
         part.rot = 180;
-        assert_eq!(stub_point(&part, 0), (100.0, 114.0));
+        assert_eq!(stub_point(&part, 0), (100.0, 112.0));
 
         part.rot = 360;
         assert_eq!(stub_point(&part, 0), upright, "a full turn is no turn");
@@ -688,5 +709,25 @@ mod tests {
         assert_eq!(snap(5.0), 8.0);
         assert_eq!(snap(-3.0), -0.0);
         assert_eq!(snap(-5.0), -8.0);
+        assert_eq!(snap_to(13.0, 4.0), 12.0);
+        assert_eq!(snap_to(13.4, 1.0), 13.0);
+        assert_eq!(snap_to(23.0, 16.0), 16.0);
+    }
+
+    #[test]
+    fn every_anchor_lies_on_the_base_grid() {
+        // The root cause of "cannot align, ever": anchors 2px off the grid.
+        // Pin rows and stubs must land on multiples of the base step when
+        // the part and kit themselves are snapped.
+        let part = led(96.0, 96.0, 26);
+        let (sx, sy) = stub_point(&part, 0);
+        assert_eq!(sx % SNAP, 0.0, "stub x on grid");
+        assert_eq!(sy % SNAP, 0.0, "stub y on grid");
+
+        let kit = (456.0, 40.0);
+        for row in 0..(2 * KIT_ROWS) {
+            let (_, py) = row_point(kit, row);
+            assert_eq!(py % SNAP, 0.0, "row {row} y on grid");
+        }
     }
 }

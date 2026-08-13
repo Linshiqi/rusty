@@ -192,6 +192,9 @@ fn BoardEditor(
     // Alignment guides shown while a part is being dragged into line with
     // another one — the quiet confirmation every drawing tool gives.
     let guides = RwSignal::new((None::<f64>, None::<f64>));
+    // The active grid step. Coarse grids place, fine grids nudge — and the
+    // dial exists because no single step suits both.
+    let grid = RwSignal::new(SNAP);
     let drag = RwSignal::new(None::<Drag>);
     // While pulling a wire: current cursor in world coords, and the row the
     // cursor hovers, when it is one that accepts wires.
@@ -521,6 +524,23 @@ fn BoardEditor(
                 >
                     "Fit"
                 </button>
+                <button
+                    type="button"
+                    title="Snap grid — click to cycle 1/4/8/16px"
+                    on:click=move |_| {
+                        grid.update(|g| {
+                            *g = match *g as i32 {
+                                1 => 4.0,
+                                4 => 8.0,
+                                8 => 16.0,
+                                _ => 1.0,
+                            }
+                        })
+                    }
+                    class="rounded-[6px] px-2 py-1 font-mono text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                >
+                    {move || format!("grid {}px", grid.get() as i32)}
+                </button>
                 {move || {
                     running
                         .get()
@@ -681,8 +701,9 @@ fn BoardEditor(
                                 });
                             }
                             Drag::Part { index, dx, dy } => {
-                                let mut x = snap(world.0 - dx);
-                                let mut y = snap(world.1 - dy);
+                                let step = grid.get_untracked();
+                                let mut x = snap_to(world.0 - dx, step);
+                                let mut y = snap_to(world.1 - dy, step);
                                 // Line up with what is already on the sheet.
                                 // Alignment that only the grid enforces is
                                 // alignment nobody can see.
@@ -699,6 +720,11 @@ fn BoardEditor(
                                     .collect();
                                 for (ox, oy) in others {
                                     if (ox - x).abs() <= SNAP {
+                                        // Edge alignment stays on the base
+                                        // step whatever the dial says: lining
+                                        // up with a neighbour is the intent
+                                        // fine grids exist to serve.
+
                                         x = ox;
                                         guide_x = Some(ox);
                                     }
@@ -730,7 +756,11 @@ fn BoardEditor(
                                 dirty.set(true);
                             }
                             Drag::Kit { dx, dy } => {
-                                kit_pos.set((snap(world.0 - dx), snap(world.1 - dy)));
+                                let step = grid.get_untracked();
+                                kit_pos.set((
+                                    snap_to(world.0 - dx, step),
+                                    snap_to(world.1 - dy, step),
+                                ));
                                 dirty.set(true);
                             }
                             Drag::Wire { .. } => {
@@ -749,7 +779,31 @@ fn BoardEditor(
                                 base,
                             } => {
                                 let axis = if horizontal { world.1 } else { world.0 };
-                                let value = snap(base + axis - grab);
+                                let step = grid.get_untracked();
+                                let mut value = snap_to(base + axis - grab, step);
+                                // The wire's own endpoints outrank the grid:
+                                // within a step of the stub's or the pin's
+                                // coordinate, land exactly on it — that is
+                                // the alignment the drag was reaching for,
+                                // and the simplifier then merges the runs.
+                                let anchors = parts.with_untracked(|list| {
+                                    let p = list.get(part)?;
+                                    let stub = stub_point(p, slot);
+                                    let pin = row_of_gpio(p.pins[slot])
+                                        .map(|row| row_point(kit_pos.get_untracked(), row));
+                                    Some((stub, pin))
+                                });
+                                if let Some((stub, pin)) = anchors {
+                                    let candidates = [
+                                        Some(if horizontal { stub.1 } else { stub.0 }),
+                                        pin.map(|p| if horizontal { p.1 } else { p.0 }),
+                                    ];
+                                    for anchor in candidates.into_iter().flatten() {
+                                        if (value - anchor).abs() <= step.max(SNAP) {
+                                            value = anchor;
+                                        }
+                                    }
+                                }
                                 parts.update(|list| {
                                     if let Some(p) = list.get_mut(part) {
                                         for index in [first, second] {
@@ -896,7 +950,7 @@ fn BoardEditor(
                                             .enumerate()
                                             .map(|(row, (name, gpio))| {
                                                 let left = row < KIT_ROWS;
-                                                let y = 16 + (row % KIT_ROWS) as i32 * 14;
+                                                let y = 16 + (row % KIT_ROWS) as i32 * ROW_PITCH as i32;
                                                 let cx = if left { 10.0 } else { KIT_W - 10.0 };
                                                 let hot = hovered == Some(row);
                                                 let fill = if hot {
