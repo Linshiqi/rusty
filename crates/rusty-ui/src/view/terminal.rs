@@ -36,6 +36,47 @@ pub fn TerminalView() -> impl IntoView {
     // Last size sent, so a resize observer firing on every layout pass does not
     // send an identical size to the shell dozens of times a second.
     let sent = RwSignal::new((0u16, 0u16));
+    // One cell's advance in px, measured off the ruler — what turns a mouse
+    // position into a column.
+    let cell_w = RwSignal::new(0.0f64);
+    // A drag selection as (anchor, head), each (row, col) in screen cells.
+    // Ours, not the browser's: the grid is a pile of spans the native
+    // selection walks in DOM order, which crosses rows diagonally.
+    let selection = RwSignal::new(None::<((usize, usize), (usize, usize))>);
+    let selecting = RwSignal::new(false);
+
+    // Where the pointer is, in cells. The 8/4 are the host's px-2 py-1.
+    let cell_at = move |offset_x: f64, offset_y: f64| {
+        let cell = cell_w.get_untracked().max(1.0);
+        let col = ((offset_x - 8.0) / cell).floor().max(0.0) as usize;
+        let row = ((offset_y - 4.0) / LINE_HEIGHT).floor().max(0.0) as usize;
+        (row, col)
+    };
+
+    // The selected text, read straight off the screen the frontend already
+    // holds — rows of spans, flattened and sliced by column.
+    let selection_text = move || -> Option<String> {
+        let ((ar, ac), (br, bc)) = selection.get_untracked()?;
+        let (start, end) = if (ar, ac) <= (br, bc) {
+            ((ar, ac), (br, bc))
+        } else {
+            ((br, bc), (ar, ac))
+        };
+        let screen = state.terminal.get_untracked()?;
+        let mut out = Vec::new();
+        for (row_index, row) in screen.rows.iter().enumerate() {
+            if row_index < start.0 || row_index > end.0 {
+                continue;
+            }
+            let text: String = row.spans.iter().map(|span| span.text.as_str()).collect();
+            let chars: Vec<char> = text.chars().collect();
+            let from = if row_index == start.0 { start.1.min(chars.len()) } else { 0 };
+            let to = if row_index == end.0 { end.1.min(chars.len()) } else { chars.len() };
+            out.push(chars[from..to].iter().collect::<String>().trim_end().to_string());
+        }
+        let joined = out.join("\n");
+        (!joined.is_empty()).then_some(joined)
+    };
 
     let measure = move || {
         let (Some(host), Some(ruler)) = (host.get_untracked(), ruler.get_untracked()) else {
@@ -47,6 +88,7 @@ pub fn TerminalView() -> impl IntoView {
         if cell <= 0.0 {
             return;
         }
+        cell_w.set(cell);
         let box_rect = host.get_bounding_client_rect();
         let cols = ((box_rect.width() / cell).floor() as i64).clamp(2, 500) as u16;
         let rows = ((box_rect.height() / LINE_HEIGHT).floor() as i64).clamp(1, 200) as u16;
@@ -80,10 +122,37 @@ pub fn TerminalView() -> impl IntoView {
     let handle = window_event_listener(ev::resize, move |_| measure());
     on_cleanup(move || handle.remove());
 
+    // The reopen half of "changing the shell restarts it". Settings closes
+    // the session and clears the screen signal; nothing else would ever call
+    // open again — the size has not changed, so the measurer stays quiet —
+    // and the panel sat on "Starting a shell…" for ever.
+    Effect::new(move |_| {
+        if state.terminal.with(Option::is_none) {
+            let (cols, rows) = sent.get_untracked();
+            if cols > 0 && host.get_untracked().is_some() {
+                controller::open_terminal(state, cols, rows);
+            }
+        }
+    });
+
     let on_key = move |event: ev::KeyboardEvent| {
         // Let the window's own shortcuts through. `Ctrl K` belongs to the
         // palette even while the terminal has focus; `Ctrl C` does not.
         if event.ctrl_key() && matches!(event.key().as_str(), "k" | "K" | "," | "`") {
+            return;
+        }
+        // Ctrl+C with a selection copies it, as VSCode's terminal does; the
+        // interrupt meaning returns the moment nothing is selected.
+        if event.ctrl_key()
+            && matches!(event.key().as_str(), "c" | "C")
+            && selection.get_untracked().is_some()
+        {
+            event.prevent_default();
+            event.stop_propagation();
+            if let Some(text) = selection_text() {
+                crate::view::components::copy_to_clipboard(&text);
+            }
+            selection.set(None);
             return;
         }
         if let Some(bytes) = encode(&event) {
@@ -156,9 +225,80 @@ pub fn TerminalView() -> impl IntoView {
                         controller::terminal_input(state, text.replace('\n', "\r").into_bytes());
                     }
                 }
-                class="min-h-0 flex-1 cursor-text overflow-hidden px-2 py-1 font-mono outline-none"
+                on:mousedown=move |event: ev::MouseEvent| {
+                    if event.button() != 0 {
+                        return;
+                    }
+                    // Take the drag ourselves; keep focus with the shell.
+                    event.prevent_default();
+                    if let Some(element) = host.get_untracked() {
+                        let _ = element.focus();
+                    }
+                    let at = cell_at(event.offset_x() as f64, event.offset_y() as f64);
+                    selection.set(Some((at, at)));
+                    selecting.set(true);
+                }
+                on:mousemove=move |event: ev::MouseEvent| {
+                    if !selecting.get_untracked() {
+                        return;
+                    }
+                    let at = cell_at(event.offset_x() as f64, event.offset_y() as f64);
+                    selection.update(|sel| {
+                        if let Some((_, head)) = sel {
+                            *head = at;
+                        }
+                    });
+                }
+                on:mouseup=move |_| {
+                    selecting.set(false);
+                    // A click is not a selection.
+                    if let Some((anchor, head)) = selection.get_untracked()
+                        && anchor == head
+                    {
+                        selection.set(None);
+                    }
+                }
+                class="relative min-h-0 flex-1 cursor-text overflow-hidden px-2 py-1 font-mono outline-none select-none"
                 style=format!("font-size: {FONT_SIZE}px; line-height: {LINE_HEIGHT}px")
             >
+                // The selection wash: one rectangle per touched row, over the
+                // text and under the pointer (pointer-events-none), so the
+                // grid itself never re-renders while dragging.
+                {move || {
+                    let ((ar, ac), (br, bc)) = selection.get()?;
+                    let cell = cell_w.get();
+                    if cell <= 0.0 {
+                        return None;
+                    }
+                    let cols = state
+                        .terminal
+                        .with(|t| t.as_ref().map(|s| s.cols as usize))
+                        .unwrap_or(0);
+                    let (start, end) = if (ar, ac) <= (br, bc) {
+                        ((ar, ac), (br, bc))
+                    } else {
+                        ((br, bc), (ar, ac))
+                    };
+                    Some(
+                        (start.0..=end.0)
+                            .map(|row| {
+                                let from = if row == start.0 { start.1 } else { 0 };
+                                let to = if row == end.0 { end.1 } else { cols };
+                                let left = 8.0 + from as f64 * cell;
+                                let width = (to.saturating_sub(from)) as f64 * cell;
+                                let top = 4.0 + row as f64 * LINE_HEIGHT;
+                                view! {
+                                    <div
+                                        class="pointer-events-none absolute bg-selection"
+                                        style=format!(
+                                            "left: {left}px; top: {top}px; width: {width}px; height: {LINE_HEIGHT}px",
+                                        )
+                                    />
+                                }
+                            })
+                            .collect_view(),
+                    )
+                }}
                 {move || {
                     match state.terminal.get() {
                         Some(screen) => view! { <Grid screen=screen /> }.into_any(),
@@ -175,11 +315,8 @@ pub fn TerminalView() -> impl IntoView {
             {move || {
                 let (x, y) = menu.get()?;
                 let close = Callback::new(move |_| menu.set(None));
-                let selection = web_sys::window()
-                    .and_then(|w| w.get_selection().ok().flatten())
-                    .map(|s| s.to_string().as_string().unwrap_or_default())
-                    .unwrap_or_default();
-                let has_selection = !selection.is_empty();
+                let grabbed = selection_text();
+                let has_selection = grabbed.is_some();
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
@@ -187,7 +324,10 @@ pub fn TerminalView() -> impl IntoView {
                                 label="Copy selection"
                                 disabled=!has_selection
                                 on_select=Callback::new(move |_| {
-                                    copy_to_clipboard(&selection);
+                                    if let Some(text) = &grabbed {
+                                        copy_to_clipboard(text);
+                                    }
+                                    selection.set(None);
                                     menu.set(None);
                                 })
                             />

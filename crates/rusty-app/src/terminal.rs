@@ -69,6 +69,44 @@ pub async fn set_terminal_shell(value: Option<String>) -> Result<(), CommandErro
     Ok(())
 }
 
+/// The shells this machine can offer: the built-in first, then whatever
+/// the OS actually carries — detected, not assumed, so the picker never
+/// lists a shell that fails to start.
+#[tauri::command]
+pub async fn terminal_shells() -> Result<Vec<rusty_embed::ShellChoice>, CommandError> {
+    fn on_path(program: &str) -> bool {
+        let Some(paths) = std::env::var_os("PATH") else {
+            return false;
+        };
+        std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
+    }
+
+    let mut out = vec![rusty_embed::ShellChoice {
+        label: "rusty bash (built-in)".to_string(),
+        value: "auto".to_string(),
+    }];
+    let candidates: &[(&str, &str)] = if cfg!(windows) {
+        &[
+            ("PowerShell 7", "pwsh.exe"),
+            ("Windows PowerShell", "powershell.exe"),
+            ("Command Prompt", "cmd.exe"),
+            ("Git Bash", "bash.exe"),
+            ("Nushell", "nu.exe"),
+        ]
+    } else {
+        &[("bash", "bash"), ("zsh", "zsh"), ("fish", "fish"), ("Nushell", "nu")]
+    };
+    for (label, program) in candidates {
+        if on_path(program) {
+            out.push(rusty_embed::ShellChoice {
+                label: (*label).to_string(),
+                value: (*program).to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Open a shell and stream its screen until it exits.
 #[tauri::command]
 pub async fn terminal_open(

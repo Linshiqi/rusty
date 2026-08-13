@@ -15,7 +15,9 @@ repository = "https://github.com/rusty-workbench/rusty"
 authors = ["rusty contributors"]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Deny, not forbid: the built-in shell's console-mode FFI is the one
+# sanctioned exception, opted in per module with a stated reason.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

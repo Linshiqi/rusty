@@ -102,6 +102,47 @@ fn DockTabs() -> impl IntoView {
 
             <span class="flex-1" />
 
+            <Show when=move || {
+                state.dock_tab.get() == DockTab::Terminal && state.dock_open.get()
+            }>
+                // The shell picker, as every editor's terminal has: the
+                // built-in plus whatever the machine carries. Choosing one
+                // stores the preference and restarts the shell.
+                {
+                    controller::load_shell_choices(state);
+                    controller::load_shell_info(state);
+                }
+                <select
+                    class="h-6 rounded-[5px] bg-sunken px-1.5 text-footnote text-label-2 outline-none"
+                    prop:value=move || {
+                        state
+                            .shell_info
+                            .get()
+                            .and_then(|info| info.preference)
+                            .unwrap_or_else(|| "auto".to_string())
+                    }
+                    on:change=move |event| {
+                        controller::set_terminal_shell(
+                            state,
+                            Some(event_target_value(&event)),
+                        );
+                    }
+                >
+                    {move || {
+                        state
+                            .shell_choices
+                            .get()
+                            .into_iter()
+                            .map(|choice| {
+                                view! {
+                                    <option value=choice.value>{choice.label}</option>
+                                }
+                            })
+                            .collect_view()
+                    }}
+                </select>
+            </Show>
+
             <Show when=move || state.dock_tab.get() == DockTab::Output && state.dock_open.get()>
                 // VSCode's pair: which channel, then a text filter. The
                 // channel list is fixed — it is the set of things rusty runs.

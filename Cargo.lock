@@ -5338,11 +5338,14 @@ version = "0.1.0"
 dependencies = [
  "brush-builtins",
  "brush-core",
+ "clap",
+ "libc",
  "portable-pty",
  "serde",
  "thiserror 2.0.20",
  "tokio",
  "vt100",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -81,6 +81,7 @@ pub mod terminal {
     pub const CLOSE: &str = "terminal_close";
     pub const SHELL_INFO: &str = "terminal_shell_info";
     pub const SET_SHELL: &str = "set_terminal_shell";
+    pub const SHELLS: &str = "terminal_shells";
 }
 
 /// Looking at and changing the project's files.

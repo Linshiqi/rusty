@@ -1795,6 +1795,21 @@ pub fn apply_ui_zoom(state: AppState) {
 }
 
 /// What shell the terminal will start.
+/// The shells the picker can offer. Loaded once; a machine does not grow
+/// shells mid-session often enough to poll for.
+pub fn load_shell_choices(state: AppState) {
+    if state.shell_choices.with_untracked(|c| !c.is_empty()) {
+        return;
+    }
+    track(
+        state,
+        async move {
+            ipc::get::<Vec<rusty_embed::ShellChoice>>(cmd::terminal::SHELLS).await
+        },
+        move |choices| state.shell_choices.set(choices),
+    );
+}
+
 pub fn load_shell_info(state: AppState) {
     track(
         state,

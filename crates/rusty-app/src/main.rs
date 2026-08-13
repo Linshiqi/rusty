@@ -89,6 +89,7 @@ fn main() {
             terminal::terminal_close,
             terminal::terminal_shell_info,
             terminal::set_terminal_shell,
+            terminal::terminal_shells,
             commands::feature_rows,
             commands::feature_impact,
             commands::ai_presets,
@@ -221,6 +222,7 @@ mod wire_names {
             cmd::terminal::CLOSE => terminal::terminal_close,
             cmd::terminal::SHELL_INFO => terminal::terminal_shell_info,
             cmd::terminal::SET_SHELL => terminal::set_terminal_shell,
+            cmd::terminal::SHELLS => terminal::terminal_shells,
 
             cmd::features::ROWS => commands::feature_rows,
             cmd::features::IMPACT => commands::feature_impact,

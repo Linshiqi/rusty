@@ -217,6 +217,11 @@
     window_toggle_maximize: () => null,
     terminal_close: () => null,
     window_set_zoom: (a) => { document.documentElement.style.zoom = a.factor; return null; },
+    terminal_shells: () => [
+      { label: "rusty bash (built-in)", value: "auto" },
+      { label: "PowerShell 7", value: "pwsh.exe" },
+      { label: "Git Bash", value: "bash.exe" },
+    ],
     terminal_shell_info: () => ({
       active: window.__mock.shellPref === "system" ? "pwsh.exe" : "rusty's built-in shell",
       preference: window.__mock.shellPref || null,

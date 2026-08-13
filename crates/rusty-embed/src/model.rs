@@ -472,6 +472,15 @@ pub enum LogStream {
 /// What shell the terminal will start, and what choices exist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ShellChoice {
+    /// Human name for the picker: "PowerShell 7", "rusty bash (built-in)".
+    pub label: String,
+    /// What set_terminal_shell stores: "auto", "system", or a program.
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     /// The program the next shell start will actually run.
     pub active: String,
