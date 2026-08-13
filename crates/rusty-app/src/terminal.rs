@@ -26,15 +26,17 @@ const COALESCE: Duration = Duration::from_millis(8);
 
 /// What the next shell start will run, per the stored preference.
 ///
-/// `None` means "let rusty-term pick the system default" — the same code
-/// path as before Nushell existed, so a cleared preference cannot behave
-/// differently from a fresh install.
-fn resolved_shell() -> Option<String> {
+/// The command is argv: Auto is rusty itself re-entered as the built-in
+/// shell — compiled in, so it exists wherever rusty does, starts in the
+/// time an exec takes, and reads the same on every OS. `None` means "let
+/// rusty-term pick the system default".
+fn resolved_shell() -> Option<Vec<String>> {
     match storage::workbench().terminal_shell.as_deref().map(str::trim) {
         Some("system") => None,
-        Some(custom) if !custom.is_empty() => Some(custom.to_string()),
-        _ => rusty_embed::simulate::find_nushell()
-            .map(|path| path.to_string_lossy().into_owned()),
+        Some(custom) if !custom.is_empty() => Some(vec![custom.to_string()]),
+        _ => std::env::current_exe().ok().map(|exe| {
+            vec![exe.to_string_lossy().into_owned(), "--builtin-shell".to_string()]
+        }),
     }
 }
 
@@ -43,10 +45,13 @@ fn resolved_shell() -> Option<String> {
 #[tauri::command]
 pub async fn terminal_shell_info() -> Result<rusty_embed::ShellInfo, CommandError> {
     let preference = storage::workbench().terminal_shell;
-    let active = resolved_shell().unwrap_or_else(rusty_term::default_shell);
+    let active = match resolved_shell() {
+        Some(argv) if argv.len() > 1 => "rusty's built-in shell".to_string(),
+        Some(argv) => argv.into_iter().next().unwrap_or_default(),
+        None => rusty_term::default_shell(),
+    };
     Ok(rusty_embed::ShellInfo {
         active,
-        nushell_installed: rusty_embed::simulate::find_nushell().is_some(),
         preference,
     })
 }

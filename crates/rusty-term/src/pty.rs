@@ -88,7 +88,7 @@ impl Terminal {
         cwd: Option<&Path>,
         cols: u16,
         rows: u16,
-        shell: Option<&str>,
+        shell: Option<&[String]>,
     ) -> Result<(Terminal, Updates)> {
         let size = PtySize {
             rows,
@@ -101,8 +101,14 @@ impl Terminal {
             .openpty(size)
             .map_err(|e| Error::Pty(e.to_string()))?;
 
-        let mut command =
-            CommandBuilder::new(shell.map(str::to_string).unwrap_or_else(default_shell));
+        let mut command = match shell {
+            Some([program, args @ ..]) => {
+                let mut builder = CommandBuilder::new(program);
+                builder.args(args);
+                builder
+            }
+            _ => CommandBuilder::new(default_shell()),
+        };
         if let Some(cwd) = cwd {
             command.cwd(cwd);
         }

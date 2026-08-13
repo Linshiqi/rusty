@@ -219,65 +219,6 @@ fn find_gdb(xtensa: bool) -> Option<PathBuf> {
     on_path(binary)
 }
 
-/// Pinned Nushell — the terminal's built-in shell. One shell that starts
-/// instantly and reads the same on every OS, instead of PowerShell's
-/// two-second profile load here and bash's different verbs there.
-pub const NU_VERSION: &str = "0.106.1";
-
-/// The bundled Nushell, if it is installed — or one already on PATH.
-pub fn find_nushell() -> Option<std::path::PathBuf> {
-    if let Some(tools) = config::data_dir().map(|d| d.join("tools")) {
-        let bundled = tools.join("nu").join(exe("nu"));
-        if bundled.is_file() {
-            return Some(bundled);
-        }
-    }
-    on_path("nu")
-}
-
-/// The archive for the bundled Nushell.
-pub fn nushell_download() -> std::result::Result<QemuDownload, String> {
-    if !cfg!(windows) {
-        return Err(format!(
-            "one-click install only knows the Windows build so far — download Nushell \
-             {NU_VERSION} from https://github.com/nushell/nushell/releases and unpack it \
-             into the data directory's tools/nu/"
-        ));
-    }
-    let Some(tools) = config::data_dir().map(|d| d.join("tools").join("nu")) else {
-        return Err("the data directory could not be resolved".to_string());
-    };
-    std::fs::create_dir_all(&tools)
-        .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
-
-    let asset = format!("nu-{NU_VERSION}-x86_64-pc-windows-msvc.zip");
-    let archive = tools.join("nu.zip");
-    // No Espressif mirror for this one — it is not their project — but the
-    // download ladder's proxy handling still applies.
-    let urls = vec![format!(
-        "https://github.com/nushell/nushell/releases/download/{NU_VERSION}/{asset}"
-    )];
-    let archive_text = archive.to_string_lossy().into_owned();
-    let tools_text = tools.to_string_lossy().into_owned();
-    let extract = CommandPlan {
-        // The absolute Windows tar: it is bsdtar, which reads zip.
-        program: "C:\\Windows\\System32\\tar.exe".to_string(),
-        args: vec![
-            "-xf".to_string(),
-            archive_text.clone(),
-            "-C".to_string(),
-            tools_text.clone(),
-        ],
-        display: format!("tar -xf {archive_text} -C {tools_text}"),
-        rationale: "unpacks Nushell into the data directory's tools/nu/".to_string(),
-    };
-    Ok(QemuDownload {
-        archive,
-        urls,
-        extract,
-    })
-}
-
 /// The archive for a gdb family, mirror ladder included.
 pub fn gdb_download(tool: &str) -> std::result::Result<QemuDownload, String> {
     if tool != "xtensa-esp-elf-gdb" && tool != "riscv32-esp-elf-gdb" {

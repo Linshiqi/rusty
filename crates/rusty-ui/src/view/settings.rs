@@ -383,9 +383,10 @@ fn TerminalShell() -> impl IntoView {
     view! {
         <Field
             label="Shell"
-            help="Auto prefers the bundled Nushell: it starts instantly and reads the same on \
-                  every OS, where PowerShell loads a profile for seconds and each system's \
-                  shell speaks its own dialect. Changing this restarts the shell."
+            help="Auto is rusty's own built-in shell: compiled into the app, starts the \
+                  instant the terminal opens, and reads the same on every OS. Plain \
+                  commands, cd and history — pipes need the system shell. Changing this \
+                  restarts the shell."
         >
             {move || {
                 let Some(info) = state.shell_info.get() else {
@@ -460,26 +461,6 @@ fn TerminalShell() -> impl IntoView {
                                 {active}
                             </code>
                         </div>
-                        {(!info.nushell_installed)
-                            .then(|| {
-                                view! {
-                                    <div class="flex items-center gap-3">
-                                        <Button
-                                            label="Install Nushell"
-                                            kind=ButtonKind::Primary
-                                            on_click=Callback::new(move |_| {
-                                                controller::install_sim_tool(
-                                                    state,
-                                                    "nushell".to_string(),
-                                                );
-                                            })
-                                        />
-                                        <span class="text-callout text-label-3">
-                                            "~15 MB from GitHub into rusty's own tools/"
-                                        </span>
-                                    </div>
-                                }
-                            })}
                     </div>
                 }
                     .into_any()

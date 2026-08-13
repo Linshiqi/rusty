@@ -218,8 +218,7 @@
     terminal_close: () => null,
     window_set_zoom: (a) => { document.documentElement.style.zoom = a.factor; return null; },
     terminal_shell_info: () => ({
-      active: window.__mock.shellPref || "pwsh.exe",
-      nushellInstalled: false,
+      active: window.__mock.shellPref === "system" ? "pwsh.exe" : "rusty's built-in shell",
       preference: window.__mock.shellPref || null,
     }),
     set_terminal_shell: (a) => { window.__mock.shellPref = a.value; return null; },

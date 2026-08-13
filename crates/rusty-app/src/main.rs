@@ -14,6 +14,13 @@ mod terminal;
 mod window;
 
 fn main() {
+    // The built-in shell: this same executable, asked to be the terminal's
+    // process. Checked before Tauri exists so a shell start costs nothing
+    // but the OS exec — which is the point of building it in.
+    if std::env::args().nth(1).as_deref() == Some("--builtin-shell") {
+        rusty_term::builtin::run();
+    }
+
     tauri::Builder::default()
         // The only OS capability the app asks for: picking a workspace folder.
         // Scoped in capabilities/default.json to opening directories, nothing

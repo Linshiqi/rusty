@@ -18,6 +18,8 @@ pub use model::*;
 mod error;
 #[cfg(feature = "backend")]
 pub mod pty;
+#[cfg(feature = "backend")]
+pub mod builtin;
 
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};

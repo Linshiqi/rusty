@@ -475,9 +475,7 @@ pub enum LogStream {
 pub struct ShellInfo {
     /// The program the next shell start will actually run.
     pub active: String,
-    /// Whether the bundled (or PATH) Nushell is available.
-    pub nushell_installed: bool,
-    /// The stored preference: absent = auto (Nushell when present),
+    /// The stored preference: absent = auto (the built-in shell),
     /// "system" = the OS shell, anything else = a custom program.
     pub preference: Option<String>,
 }
