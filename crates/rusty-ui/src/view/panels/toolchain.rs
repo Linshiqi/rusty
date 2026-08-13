@@ -9,6 +9,7 @@
 
 use leptos::prelude::*;
 
+use crate::view::icon::{Icon, IconView};
 use crate::{
     controller,
     state::AppState,
@@ -25,9 +26,9 @@ pub fn Toolchain() -> impl IntoView {
                 type="button"
                 title="Probe the machine again"
                 on:click=move |_| controller::refresh_toolchain(state)
-                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
             >
-                "Re-scan"
+                <IconView icon=Icon::Refresh size=15 />
             </button>
         }
         .into_any()

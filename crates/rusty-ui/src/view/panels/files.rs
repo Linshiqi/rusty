@@ -20,6 +20,7 @@ use crate::{
     controller,
     state::AppState,
     view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
+    view::icon::{Icon, IconView},
 };
 
 /// Shared by both layers. They must agree exactly or the caret drifts from the
@@ -684,35 +685,35 @@ fn Surface(document: Document) -> impl IntoView {
                 title="Format and save (Ctrl+S)"
                 disabled=read_only
                 on:click=move |_| format_and_save(state, area)
-                class="rounded-[7px] bg-rust px-3 py-1 text-callout font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-8 place-items-center rounded-[7px] bg-rust text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
             >
-                "Save"
+                <IconView icon=Icon::Save size=15 />
             </button>
             <button
                 type="button"
-                title="cargo build --release, output in the dock"
+                title="Build — cargo build --release, output in the dock"
                 disabled=move || running.get()
                 on:click=move |_| controller::build_project(state)
-                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
             >
-                "Build"
+                <IconView icon=Icon::Hammer size=15 />
             </button>
             <span class="mx-1 h-5 w-px bg-line" />
             <button
                 type="button"
                 title="Flash the board"
                 on:click=move |_| state.active_panel.set("flash".to_string())
-                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
             >
-                "Flash"
+                <IconView icon=Icon::Flash size=15 />
             </button>
             <button
                 type="button"
                 title="Run in the simulator"
                 on:click=move |_| state.active_panel.set("simulate".to_string())
-                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
             >
-                "Simulate"
+                <IconView icon=Icon::Play size=15 />
             </button>
             {move || {
                 running

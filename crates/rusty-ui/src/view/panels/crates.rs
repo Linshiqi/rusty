@@ -7,6 +7,7 @@
 
 use leptos::prelude::*;
 
+use crate::view::icon::{Icon, IconView};
 use crate::{controller, state::AppState, view::components::Empty};
 
 #[component]
@@ -19,9 +20,9 @@ pub fn Crates() -> impl IntoView {
                 type="button"
                 title="Ask crates.io again"
                 on:click=move |_| controller::load_crate_report(state)
-                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
             >
-                "Refresh"
+                <IconView icon=Icon::Refresh size=15 />
             </button>
         }
         .into_any()

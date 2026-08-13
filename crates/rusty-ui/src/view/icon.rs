@@ -24,6 +24,14 @@ pub enum Icon {
     Settings,
     Wizard,
     Assistant,
+    Play,
+    Stop,
+    Bug,
+    Save,
+    Hammer,
+    Fit,
+    Grid,
+    Refresh,
 }
 
 impl Icon {
@@ -47,8 +55,25 @@ impl Icon {
             Icon::Monitor => "M2.5 4.5h15v11h-15zM5.5 8.5l2.5 2-2.5 2M10.5 12.5h4",
             // Sliders.
             Icon::Features => "M3 6h9M15 6h2M3 14h3M9 14h8M12.5 4v4M6.5 12v4",
-            // A gear.
-            Icon::Settings => "M10 6.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zM10 2v2.4M10 15.6V18M18 10h-2.4M4.4 10H2M15.7 4.3l-1.7 1.7M6 14l-1.7 1.7M15.7 15.7L14 14M6 6L4.3 4.3",
+            // A gear — teeth and a bore, generated from the geometry, because
+            // the earlier circle-with-rays read as a sun.
+            Icon::Settings => "M8.8 4.7 L9.2 2.4 L10.8 2.4 L11.2 4.7 L12.9 5.5 L14.8 4.1 L15.9 5.2 L14.5 7.1 L15.3 8.8 L17.6 9.2 L17.6 10.8 L15.3 11.2 L14.5 12.9 L15.9 14.8 L14.8 15.9 L12.9 14.5 L11.2 15.3 L10.8 17.6 L9.2 17.6 L8.8 15.3 L7.1 14.5 L5.2 15.9 L4.1 14.8 L5.5 12.9 L4.7 11.2 L2.4 10.8 L2.4 9.2 L4.7 8.8 L5.5 7.1 L4.1 5.2 L5.2 4.1 L7.1 5.5 Z M12.4 10a2.4 2.4 0 1 1 -4.8 0a2.4 2.4 0 1 1 4.8 0",
+            // A play triangle.
+            Icon::Play => "M6 3.5 16 10 6 16.5z",
+            // A stop square.
+            Icon::Stop => "M5 5h10v10H5z",
+            // A bug: body, head, legs.
+            Icon::Bug => "M10 6.5a3.5 3.5 0 0 1 3.5 3.5v3a3.5 3.5 0 1 1-7 0v-3A3.5 3.5 0 0 1 10 6.5zM8 6.8 6.2 4.6M12 6.8l1.8-2.2M6.5 10H3.4M16.6 10h-3.1M7 13.5l-2.4 1.8M13 13.5l2.4 1.8",
+            // A floppy disk, the save glyph two generations still read.
+            Icon::Save => "M4 4h9l3 3v9H4zM7 4v4h5V4M6.8 16v-4.5h6.4V16",
+            // A hammer.
+            Icon::Hammer => "M4 15.8 9.6 10.2M9 5.5l2.3-2.3 5.5 5.5L14.5 11zM11.3 3.2l5.5 5.5",
+            // Corners of a frame — fit to view.
+            Icon::Fit => "M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4",
+            // A grid.
+            Icon::Grid => "M3.5 3.5h13v13h-13zM3.5 7.8h13M3.5 12.2h13M7.8 3.5v13M12.2 3.5v13",
+            // Circular arrows.
+            Icon::Refresh => "M16.5 8A6.6 6.6 0 0 0 4.4 6.1M3.5 3v3.5H7M3.5 12a6.6 6.6 0 0 0 12.1 1.9M16.5 17v-3.5H13",
             // A parcel — a crate, literally.
             Icon::Crates => "M10 2.5 17 6.5v7l-7 4-7-4v-7zM10 2.5v8M3 6.5l7 4 7-4",
             // A plus in a rounded square.

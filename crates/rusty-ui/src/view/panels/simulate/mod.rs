@@ -27,6 +27,7 @@ use crate::{
     controller,
     state::AppState,
     view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
+    view::icon::{Icon, IconView},
 };
 
 #[component]
@@ -424,10 +425,11 @@ fn BoardEditor(
                         view! {
                             <button
                                 type="button"
+                                title="Stop the simulation"
                                 on:click=move |_| controller::stop_session_now(state)
-                                class="rounded-[7px] bg-crimson px-4 py-1.5 text-callout font-medium text-white hover:opacity-90"
+                                class="grid size-8 place-items-center rounded-[7px] bg-crimson text-white hover:opacity-90"
                             >
-                                "Stop"
+                                <IconView icon=Icon::Stop size=15 />
                             </button>
                         }
                             .into_any()
@@ -436,11 +438,12 @@ fn BoardEditor(
                         view! {
                             <button
                                 type="button"
+                                title="Build and simulate"
                                 disabled=disabled
                                 on:click=move |_| controller::run_simulation(state, false)
-                                class="rounded-[7px] bg-rust px-4 py-1.5 text-callout font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                class="grid size-8 place-items-center rounded-[7px] bg-rust text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
                             >
-                                "Build and simulate"
+                                <IconView icon=Icon::Play size=15 />
                             </button>
                             <button
                                 type="button"
@@ -452,9 +455,9 @@ fn BoardEditor(
                                     "Install the matching gdb first — see the tools card"
                                 }
                                 on:click=move |_| controller::run_simulation(state, true)
-                                class="rounded-[7px] px-3 py-1.5 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                             >
-                                "Debug"
+                                <IconView icon=Icon::Bug size=15 />
                             </button>
                         }
                             .into_any()
@@ -462,11 +465,12 @@ fn BoardEditor(
                 }}
                 <button
                     type="button"
+                    title="Save the board layout"
                     disabled=move || !dirty.get()
                     on:click=move |_| save.run(())
-                    class="rounded-[7px] px-3 py-1.5 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                    class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                 >
-                    "Save layout"
+                    <IconView icon=Icon::Save size=15 />
                 </button>
                 <span class="mx-1 h-5 w-px bg-line" />
                 <button
@@ -523,9 +527,9 @@ fn BoardEditor(
                     type="button"
                     title="Fit everything on screen (F)"
                     on:click=move |_| fit_view()
-                    class="rounded-[6px] px-2 py-1 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
                 >
-                    "Fit"
+                    <IconView icon=Icon::Fit size=14 />
                 </button>
                 <button
                     type="button"
@@ -540,9 +544,10 @@ fn BoardEditor(
                             }
                         })
                     }
-                    class="rounded-[6px] px-2 py-1 font-mono text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="flex h-7 items-center gap-1 rounded-[6px] px-1.5 font-mono text-caption text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
                 >
-                    {move || format!("grid {}px", grid.get() as i32)}
+                    <IconView icon=Icon::Grid size=13 />
+                    {move || format!("{}", grid.get() as i32)}
                 </button>
                 {move || {
                     running
