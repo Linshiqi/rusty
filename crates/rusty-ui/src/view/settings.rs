@@ -383,10 +383,10 @@ fn TerminalShell() -> impl IntoView {
     view! {
         <Field
             label="Shell"
-            help="Auto is rusty's own built-in shell: compiled into the app, starts the \
-                  instant the terminal opens, and reads the same on every OS. Plain \
-                  commands, cd and history — pipes need the system shell. Changing this \
-                  restarts the shell."
+            help="Auto is rusty's own built-in shell: bash syntax — pipes, redirection, \
+                  variables, globs — compiled into the app, starting the instant the \
+                  terminal opens and reading the same on every OS. Changing this restarts \
+                  the shell."
         >
             {move || {
                 let Some(info) = state.shell_info.get() else {

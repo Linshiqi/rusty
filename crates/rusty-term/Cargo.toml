@@ -15,6 +15,12 @@ serde = { version = "1.0.229", features = ["derive"] }
 # `portable-pty` is wezterm's; on Windows it drives ConPTY, which is what makes
 # an interactive shell work at all rather than a pipe that no prompt appears on.
 portable-pty = { version = "0.9.0", optional = true }
+# The built-in shell's bash engine: a POSIX/bash-compatible shell in Rust.
+# 0.5 is the first release whose Windows PATH handling is real (split_paths
+# and PATHEXT probing); earlier ones cannot find any external command there.
+brush-core = { version = "0.5.0", optional = true }
+brush-builtins = { version = "0.2.0", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
 # Terminal emulation. Doing this in Rust rather than shipping xterm.js is what
 # keeps the promise of no npm in this repository.
 vt100 = { version = "0.16.2", optional = true }
@@ -22,7 +28,7 @@ thiserror = { version = "2.0.20", optional = true }
 
 [features]
 default = ["backend"]
-backend = ["dep:portable-pty", "dep:vt100", "dep:thiserror"]
+backend = ["dep:portable-pty", "dep:vt100", "dep:thiserror", "dep:brush-core", "dep:brush-builtins", "dep:tokio"]
 
 [lints]
 workspace = true

@@ -3,44 +3,54 @@
 //! Compiled into rusty itself and started as `rusty --builtin-shell` inside
 //! the pty, so the terminal works the moment the app is installed — no
 //! download, no PowerShell profile spending two seconds before the prompt,
-//! and the same verbs on every OS because we define them.
+//! and the same language on every OS.
 //!
-//! It is deliberately a *small* shell: a prompt, history, `cd` and friends,
-//! and everything else spawned as a real process inheriting the pty. The
-//! commands this workbench is about — cargo, espflash, probe-rs, git, gdb —
-//! are all of that shape. Pipes and redirection are refused by name rather
-//! than half-implemented: a user who needs them switches to the system shell
-//! in Settings, which is one honest sentence instead of a shell that almost
-//! works.
+//! The language is bash. Execution is `brush-core`, a POSIX/bash-compatible
+//! shell written in Rust, vendored at the workspace root with a Windows PATH
+//! fix (see the root Cargo.toml). Pipes, redirection, globs, variables,
+//! command substitution, conditionals and loops all behave; external
+//! commands — the cargo, espflash, git and gdb this workbench is about —
+//! spawn as real processes inheriting the pty.
 //!
-//! Input arrives as VT sequences (ConPTY translates the keyboard), output is
-//! ANSI the frontend's vt100 already renders. Line editing is ours: echo,
-//! backspace, Ctrl+C, Ctrl+D/`exit`, and arrow-key history.
+//! Only the line editing is ours: echo, backspace, Ctrl+C, and arrow-key
+//! history over the raw VT bytes ConPTY delivers. brush's own interactive
+//! frontend assumes it owns a real console; inside a pty slave the simple
+//! loop is the reliable one.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
 
 /// Run the shell until EOF or `exit`. Never returns to the caller.
 pub fn run() -> ! {
-    let code = repl();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a single-threaded runtime");
+    let code = runtime.block_on(repl());
     std::process::exit(code);
 }
 
-fn repl() -> i32 {
+async fn repl() -> i32 {
     let mut stdout = std::io::stdout();
+
+    let builtins = brush_builtins::default_builtins::<
+        brush_core::extensions::DefaultShellExtensions,
+    >(brush_builtins::BuiltinSet::BashMode);
+    let mut shell = match brush_core::Shell::builder().builtins(builtins).build().await {
+        Ok(shell) => shell,
+        Err(error) => {
+            let _ = writeln!(stdout, "the shell engine failed to start: {error}\r");
+            return 1;
+        }
+    };
+
     let stdin = std::io::stdin();
     let mut bytes = stdin.lock().bytes();
-
-    let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut history: Vec<String> = Vec::new();
 
-    let _ = writeln!(
-        stdout,
-        "rusty shell — plain commands, `cd`, `ls`, history on the arrow keys.\r"
-    );
+    let _ = writeln!(stdout, "rusty shell — bash syntax, built in.\r");
 
     loop {
-        prompt(&mut stdout, &cwd);
+        prompt(&mut stdout, shell.working_dir());
         let Some(line) = read_line(&mut bytes, &mut stdout, &history) else {
             let _ = writeln!(stdout, "\r");
             return 0;
@@ -53,40 +63,36 @@ fn repl() -> i32 {
             history.push(line.clone());
         }
 
-        // Refuse shell syntax by name. Guessing at pipes would produce a
-        // shell that almost works, which is worse than one that says no.
-        if line.contains('|') || line.contains('>') || line.contains('<') {
-            let _ = writeln!(
-                stdout,
-                "the built-in shell keeps to plain commands — pipes and redirection \
-                 need a full shell (Settings > Terminal > System shell)\r"
-            );
+        // `clear` before brush sees it: there is no terminfo in here, and
+        // the two escape bytes are all a clear ever was.
+        if line == "clear" {
+            let _ = write!(stdout, "\x1b[2J\x1b[H");
+            let _ = stdout.flush();
             continue;
         }
 
-        let words = split_words(&line);
-        let Some(head) = words.first().map(String::as_str) else {
-            continue;
-        };
-
-        match head {
-            "exit" => return 0,
-            "clear" => {
-                // Wipe and home, the sequence every terminal understands.
-                let _ = write!(stdout, "\x1b[2J\x1b[H");
-                let _ = stdout.flush();
-            }
-            "pwd" => {
-                let _ = writeln!(stdout, "{}\r", cwd.display());
-            }
-            "cd" => match change_dir(&cwd, words.get(1).map(String::as_str)) {
-                Ok(next) => cwd = next,
-                Err(error) => {
-                    let _ = writeln!(stdout, "cd: {error}\r");
+        let params = shell.default_exec_params();
+        match shell
+            .run_string(line, &brush_core::SourceInfo::default(), &params)
+            .await
+        {
+            Ok(result) => {
+                if matches!(
+                    result.next_control_flow,
+                    brush_core::ExecutionControlFlow::ExitShell,
+                ) {
+                    return if result.is_success() { 0 } else { 1 };
                 }
-            },
-            "ls" => list(&mut stdout, &cwd, words.get(1).map(String::as_str)),
-            _ => run_command(&mut stdout, &cwd, &words),
+                if !result.is_success() {
+                    // The prompt carries no exit-code segment; one quiet
+                    // line keeps failures from passing silently.
+                    let code = u8::from(&result.exit_code);
+                    let _ = writeln!(stdout, "\x1b[31m— exit {code}\x1b[0m\r");
+                }
+            }
+            Err(error) => {
+                let _ = writeln!(stdout, "\x1b[31m{error}\x1b[0m\r");
+            }
         }
     }
 }
@@ -98,7 +104,7 @@ fn prompt(stdout: &mut impl Write, cwd: &std::path::Path) {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| cwd.display().to_string());
-    let _ = write!(stdout, "\x1b[36m{name}\x1b[0m> ");
+    let _ = write!(stdout, "\x1b[36m{name}\x1b[0m$ ");
     let _ = stdout.flush();
 }
 
@@ -172,19 +178,14 @@ fn read_line(
                     line = next;
                 }
             }
-            // UTF-8 continuation and lead bytes accumulate silently until a
-            // full scalar lands; echo per byte would tear glyphs.
+            // UTF-8 lead bytes accumulate to a whole scalar before echoing;
+            // echo per byte would tear glyphs.
+            _ if !byte.is_ascii() => push_utf8(&mut line, byte, bytes, stdout),
             _ => {
                 line.push(byte as char);
-                if byte.is_ascii() && !byte.is_ascii_control() {
+                if !byte.is_ascii_control() {
                     let _ = stdout.write_all(&[byte]);
                     let _ = stdout.flush();
-                } else if !byte.is_ascii() {
-                    // Re-encode the accumulated bytes so multi-byte input
-                    // still echoes; byte-as-char above mangled it, so fix
-                    // the tail of the line first.
-                    line.pop();
-                    push_utf8(&mut line, byte, bytes, stdout);
                 }
             }
         }
@@ -216,128 +217,5 @@ fn push_utf8(
         line.push_str(text);
         let _ = stdout.write_all(&buffer);
         let _ = stdout.flush();
-    }
-}
-
-/// Split on whitespace, honouring double quotes — enough for paths with
-/// spaces, which is what quoting is for in a plain-command shell.
-fn split_words(line: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut quoted = false;
-    for ch in line.chars() {
-        match ch {
-            '"' => quoted = !quoted,
-            c if c.is_whitespace() && !quoted => {
-                if !word.is_empty() {
-                    words.push(std::mem::take(&mut word));
-                }
-            }
-            c => word.push(c),
-        }
-    }
-    if !word.is_empty() {
-        words.push(word);
-    }
-    words
-}
-
-fn change_dir(cwd: &std::path::Path, target: Option<&str>) -> Result<PathBuf, String> {
-    let home = || {
-        std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .map(PathBuf::from)
-            .map_err(|_| "no home directory in the environment".to_string())
-    };
-    let next = match target {
-        None | Some("~") => home()?,
-        Some(rest) if rest.starts_with("~/") || rest.starts_with("~\\") => {
-            home()?.join(&rest[2..])
-        }
-        Some(path) => {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() { candidate } else { cwd.join(candidate) }
-        }
-    };
-    let next = next
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", next.display()))?;
-    if !next.is_dir() {
-        return Err(format!("{} is not a directory", next.display()));
-    }
-    Ok(next)
-}
-
-/// `ls`, the same on every OS: directories first and marked, then files —
-/// consistency is the point of having our own.
-fn list(stdout: &mut impl Write, cwd: &std::path::Path, target: Option<&str>) {
-    let dir = match target {
-        Some(path) => {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() { candidate } else { cwd.join(candidate) }
-        }
-        None => cwd.to_path_buf(),
-    };
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) => {
-            let _ = writeln!(stdout, "ls: {}: {error}\r", dir.display());
-            return;
-        }
-    };
-    let mut names: Vec<(bool, String)> = entries
-        .flatten()
-        .map(|entry| {
-            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
-            (is_dir, entry.file_name().to_string_lossy().into_owned())
-        })
-        .collect();
-    names.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
-    for (is_dir, name) in names {
-        if is_dir {
-            let _ = writeln!(stdout, "\x1b[36m{name}/\x1b[0m\r");
-        } else {
-            let _ = writeln!(stdout, "{name}\r");
-        }
-    }
-}
-
-/// Spawn a real process on the pty's own stdio and wait for it. gdb, cargo
-/// and every other interactive tool take the terminal over directly, which
-/// is the whole reason the shell runs inside the pty at all.
-fn run_command(stdout: &mut impl Write, cwd: &std::path::Path, words: &[String]) {
-    let status = std::process::Command::new(&words[0])
-        .args(&words[1..])
-        .current_dir(cwd)
-        .status();
-    match status {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            let _ = writeln!(stdout, "\x1b[31m— exited with {status}\x1b[0m\r");
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let _ = writeln!(stdout, "not found: {}\r", words[0]);
-        }
-        Err(error) => {
-            let _ = writeln!(stdout, "{}: {error}\r", words[0]);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quoting_keeps_paths_with_spaces_whole() {
-        assert_eq!(
-            split_words(r#"cd "E:\My Projects\blinky""#),
-            vec!["cd".to_string(), r"E:\My Projects\blinky".to_string()],
-        );
-        assert_eq!(split_words("cargo  build   --release"), vec![
-            "cargo".to_string(),
-            "build".to_string(),
-            "--release".to_string(),
-        ]);
     }
 }
