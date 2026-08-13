@@ -10,7 +10,7 @@
 
 use leptos::prelude::*;
 
-use rusty_embed::{LogLevel, LogStream};
+use rusty_embed::LogLevel;
 use rusty_lsp::DiagSeverity;
 
 use crate::{
@@ -536,16 +536,28 @@ fn OutputTab() -> impl IntoView {
                         {lines
                             .into_iter()
                             .map(|line| {
-                                // Level first, then stream: a defmt ERROR is an
-                                // error whichever pipe it arrived on, but an
-                                // unlevelled line on stderr is still worth marking.
+                                // Level first; failing that, read the line.
+                                // The stream is NOT a severity: cargo prints
+                                // its ordinary progress on stderr, and painting
+                                // all of it amber made a clean build look like
+                                // a wall of warnings.
                                 let colour = match line.level {
                                     Some(LogLevel::Error) => "text-crimson",
                                     Some(LogLevel::Warn) => "text-amber",
                                     Some(LogLevel::Info) => "text-label",
                                     Some(LogLevel::Debug) | Some(LogLevel::Trace) => "text-label-3",
-                                    None if line.stream == LogStream::Stderr => "text-amber",
-                                    None => "text-label-2",
+                                    None => {
+                                        let text = line.text.trim_start();
+                                        if text.starts_with("error:")
+                                            || text.starts_with("error[")
+                                        {
+                                            "text-crimson"
+                                        } else if text.starts_with("warning:") {
+                                            "text-amber"
+                                        } else {
+                                            "text-label-2"
+                                        }
+                                    }
                                 };
                                 let for_menu = line.text.clone();
                                 view! {
