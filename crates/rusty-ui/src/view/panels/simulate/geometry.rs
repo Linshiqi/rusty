@@ -336,10 +336,6 @@ pub(super) const KIT_ROWS: usize = 15;
 /// disconnecting returns here. 255 is no GPIO on any supported chip.
 pub(super) const UNWIRED: u8 = 255;
 
-pub(super) fn snap(value: f64) -> f64 {
-    snap_to(value, SNAP)
-}
-
 /// The same rounding on a user-chosen grid — the toolbar offers 1/4/8/16px,
 /// because "the grid is too coarse to align" deserved a dial, even after
 /// the real cause (off-grid anchors) was fixed.
@@ -742,11 +738,11 @@ mod tests {
 
     #[test]
     fn the_snap_grid_rounds_both_ways() {
-        assert_eq!(snap(0.0), 0.0);
-        assert_eq!(snap(3.0), 0.0);
-        assert_eq!(snap(5.0), 8.0);
-        assert_eq!(snap(-3.0), -0.0);
-        assert_eq!(snap(-5.0), -8.0);
+        assert_eq!(snap_to(0.0, SNAP), 0.0);
+        assert_eq!(snap_to(3.0, SNAP), 0.0);
+        assert_eq!(snap_to(5.0, SNAP), 8.0);
+        assert_eq!(snap_to(-3.0, SNAP), -0.0);
+        assert_eq!(snap_to(-5.0, SNAP), -8.0);
         assert_eq!(snap_to(13.0, 4.0), 12.0);
         assert_eq!(snap_to(13.4, 1.0), 13.0);
         assert_eq!(snap_to(23.0, 16.0), 16.0);
