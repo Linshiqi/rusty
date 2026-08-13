@@ -236,7 +236,14 @@ fn BoardEditor(
 
     // A new part arrives unwired: connecting it is the user's move, made by
     // pulling its stub to a chip pin. Auto-wiring guessed; this asks.
-    let add_part = move |kind: PartKind, label_stub: String| {
+    // KiCad's placement: picking a part arms it to the cursor — a ghost
+    // follows the mouse, a click plants it there, Escape puts it back.
+    // Dropping parts at a fixed corner made every placement start with a
+    // drag nobody asked for.
+    let placing = RwSignal::new(None::<(PartKind, String)>);
+    let place_at = RwSignal::new(None::<(f64, f64)>);
+
+    let drop_part = move |kind: PartKind, label_stub: String, x: f64, y: f64| {
         checkpoint();
         parts.update(|list| {
             let label = match &kind {
@@ -257,14 +264,18 @@ fn BoardEditor(
                 kind,
                 pins: [UNWIRED; 7],
                 label,
-                x: snap(60.0 + (list.len() as f64 * 16.0) % 90.0),
-                y: snap(40.0 + (list.len() as f64 * 52.0) % 240.0),
+                x,
+                y,
                 waypoints: Default::default(),
                 rot: 0,
             });
             selected.set(Some(list.len() - 1));
         });
         dirty.set(true);
+    };
+    let add_part = move |kind: PartKind, label_stub: String| {
+        placing.set(Some((kind, label_stub)));
+        place_at.set(None);
     };
 
     let save = Callback::new(move |_: ()| {
@@ -589,6 +600,8 @@ fn BoardEditor(
                             "Escape" => {
                                 // A drag in flight is what Escape is most
                                 // often reaching for.
+                                placing.set(None);
+                                place_at.set(None);
                                 drag.set(None);
                                 ghost.set(None);
                                 guides.set((None, None));
@@ -682,6 +695,24 @@ fn BoardEditor(
                         if event.button() != 0 {
                             return;
                         }
+                        // An armed part lands where the click says, snapped.
+                        if let Some((kind, label)) = placing.get_untracked() {
+                            event.prevent_default();
+                            let step = grid.get_untracked();
+                            let world = to_world(
+                                f64::from(event.client_x()),
+                                f64::from(event.client_y()),
+                            );
+                            drop_part(
+                                kind,
+                                label,
+                                snap_to(world.0, step),
+                                snap_to(world.1, step),
+                            );
+                            placing.set(None);
+                            place_at.set(None);
+                            return;
+                        }
                         if let Some(element) = canvas.get_untracked()
                             && let Some(target) = event.target()
                             && let Ok(node) = wasm_bindgen::JsCast::dyn_into::<web_sys::Node>(target)
@@ -702,6 +733,15 @@ fn BoardEditor(
                         }
                     }
                     on:pointermove=move |event: ev::PointerEvent| {
+                        if placing.with_untracked(Option::is_some) {
+                            let step = grid.get_untracked();
+                            let world = to_world(
+                                f64::from(event.client_x()),
+                                f64::from(event.client_y()),
+                            );
+                            place_at
+                                .set(Some((snap_to(world.0, step), snap_to(world.1, step))));
+                        }
                         let Some(current) = drag.get_untracked() else {
                             return;
                         };
@@ -1519,6 +1559,25 @@ fn BoardEditor(
                                                 .collect::<Vec<_>>()
                                         })
                                         .collect_view()
+                                }}
+
+                                // The armed part's ghost: where a click
+                                // would plant it, at its real footprint.
+                                {move || {
+                                    let (kind, _) = placing.get()?;
+                                    let (x, y) = place_at.get()?;
+                                    let width = kind.width();
+                                    let height = kind.height();
+                                    Some(
+                                        view! {
+                                            <div
+                                                class="pointer-events-none absolute rounded-[8px] bg-selection opacity-80 ring-2 ring-rust"
+                                                style=format!(
+                                                    "left: {x}px; top: {y}px; width: {width}px; height: {height}px",
+                                                )
+                                            />
+                                        },
+                                    )
                                 }}
 
                                 // ── alignment guides ────────────────────────
