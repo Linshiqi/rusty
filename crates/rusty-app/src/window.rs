@@ -42,7 +42,3 @@ pub fn window_close(window: Window) -> Result<(), CommandError> {
     window.close().map_err(fail)
 }
 
-#[tauri::command]
-pub fn window_is_maximized(window: Window) -> Result<bool, CommandError> {
-    window.is_maximized().map_err(fail)
-}

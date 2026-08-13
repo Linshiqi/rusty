@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// The fixed anchor. Everything else is reachable from here.
-pub fn anchor_dir() -> Option<PathBuf> {
+fn anchor_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         std::env::var("APPDATA")

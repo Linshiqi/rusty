@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use crate::{
     catalog::Catalog,
-    model::{Chip, Runtime},
+    model::Chip,
 };
 
 fn builtin() -> &'static Catalog {
@@ -48,27 +48,10 @@ pub fn chips_for_target(target: &str) -> Vec<Chip> {
         .collect()
 }
 
-/// Which runtime a target triple implies.
-///
-/// The `-espidf` suffix is the tell: those targets link the ESP-IDF C framework
-/// and provide `std`. Everything else here is bare metal.
-pub fn runtime_for_target(target: &str) -> Option<Runtime> {
-    if target.ends_with("-espidf") {
-        Some(Runtime::EspIdf)
-    } else if target.ends_with("-none-elf")
-        || target.ends_with("-none-eabi")
-        || target.ends_with("-none-eabihf")
-    {
-        Some(Runtime::BareMetal)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Arch, Flasher, Vendor};
+    use crate::model::{Arch, Flasher, Runtime, Vendor};
 
     #[test]
     fn the_builtin_catalogue_parses_without_problems() {
@@ -148,17 +131,6 @@ mod tests {
         let unique = chips_for_target("xtensa-esp32s3-none-elf");
         assert_eq!(unique.len(), 1);
         assert_eq!(unique[0].id, "esp32s3");
-    }
-
-    #[test]
-    fn runtime_is_read_off_the_triple_suffix() {
-        assert_eq!(runtime_for_target("riscv32imc-esp-espidf"), Some(Runtime::EspIdf));
-        assert_eq!(runtime_for_target("xtensa-esp32-none-elf"), Some(Runtime::BareMetal));
-        // Arm uses -eabi / -eabihf rather than -none-elf; missing these would
-        // make every STM32 project look like it had no recognisable runtime.
-        assert_eq!(runtime_for_target("thumbv7m-none-eabi"), Some(Runtime::BareMetal));
-        assert_eq!(runtime_for_target("thumbv7em-none-eabihf"), Some(Runtime::BareMetal));
-        assert_eq!(runtime_for_target("x86_64-pc-windows-msvc"), None);
     }
 
     #[test]

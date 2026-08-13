@@ -8,6 +8,7 @@
 //! render the part list in the project wizard before any backend call happens.
 
 pub mod model;
+pub mod protocol;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,
@@ -16,6 +17,7 @@ pub mod model;
 pub mod chip;
 
 pub use model::*;
+pub use protocol::{parse_display_report, parse_gpio_report};
 
 #[cfg(feature = "backend")]
 pub mod catalog;

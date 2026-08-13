@@ -690,6 +690,19 @@ pub struct SimPlan {
     pub parts: Vec<PartDef>,
 }
 
+/// A catalogue file that would not load, and why.
+///
+/// A wire type rather than a backend one: the app has to be able to say "your
+/// board file did not parse" in the window, not only in the CLI. It was a
+/// duplicate DTO in `rusty-app` until this housekeeping — exactly the
+/// generated-binding drift rule 1 exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogProblem {
+    pub path: String,
+    pub detail: String,
+}
+
 /// Where rusty keeps its data, for the settings screen to show.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -917,53 +930,3 @@ pub struct ToolchainReport {
     pub problems: Vec<Problem>,
 }
 
-/// Parse one serial line of the firmware's pin reports.
-///
-/// The convention is `[rusty:gpio] 26=1,27=0` — the firmware announcing what
-/// it just set. The board view mirrors the firmware's word, and says so; the
-/// QEMU peripheral models here do not expose register readback to do better.
-pub fn parse_gpio_report(line: &str) -> Option<Vec<(u8, bool)>> {
-    let rest = line.trim().strip_prefix("[rusty:gpio]")?;
-    let mut out = Vec::new();
-    for pair in rest.trim().split(',') {
-        let (pin, level) = pair.trim().split_once('=')?;
-        let pin: u8 = pin.trim().parse().ok()?;
-        let level = matches!(level.trim(), "1" | "true" | "high");
-        out.push((pin, level));
-    }
-    (!out.is_empty()).then_some(out)
-}
-
-/// Parse one `[rusty:disp]` line: the text the firmware wants shown.
-/// An empty payload clears the screen.
-pub fn parse_display_report(line: &str) -> Option<String> {
-    let rest = line.trim().strip_prefix("[rusty:disp]")?;
-    Some(rest.trim().to_string())
-}
-
-#[cfg(test)]
-mod gpio_report_tests {
-    use super::parse_gpio_report;
-
-    #[test]
-    fn gpio_reports_parse_and_reject_noise() {
-        assert_eq!(
-            parse_gpio_report("[rusty:gpio] 26=1,27=0"),
-            Some(vec![(26, true), (27, false)]),
-        );
-        assert_eq!(parse_gpio_report("  [rusty:gpio] 4=high "), Some(vec![(4, true)]));
-        assert_eq!(parse_gpio_report("I (44) boot: Loaded app"), None);
-        assert_eq!(parse_gpio_report("[rusty:gpio] nonsense"), None);
-    }
-
-    #[test]
-    fn display_reports_carry_their_text() {
-        use super::parse_display_report;
-        assert_eq!(
-            parse_display_report("[rusty:disp] tick 42"),
-            Some("tick 42".to_string()),
-        );
-        assert_eq!(parse_display_report("[rusty:disp]"), Some(String::new()));
-        assert_eq!(parse_display_report("I (44) boot: x"), None);
-    }
-}

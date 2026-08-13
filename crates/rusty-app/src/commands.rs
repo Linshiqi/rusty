@@ -187,25 +187,11 @@ pub async fn board_catalogue(state: State<'_, AppState>) -> Answer<Vec<Board>> {
 /// Surfaced rather than swallowed: a user who wrote a board file and cannot
 /// find their board needs to be told the file did not parse, not left to
 /// wonder whether rusty read it at all.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CatalogProblemDto {
-    pub path: String,
-    pub detail: String,
-}
-
 #[tauri::command]
-pub async fn catalog_problems(state: State<'_, AppState>) -> Answer<Vec<CatalogProblemDto>> {
-    Ok(state
-        .catalog()
-        .await
-        .problems()
-        .iter()
-        .map(|p| CatalogProblemDto {
-            path: p.path.clone(),
-            detail: p.detail.clone(),
-        })
-        .collect())
+pub async fn catalog_problems(
+    state: State<'_, AppState>,
+) -> Answer<Vec<rusty_embed::CatalogProblem>> {
+    Ok(state.catalog().await.problems().to_vec())
 }
 
 /// Machine tooling, cross-checked against the open project when there is one.

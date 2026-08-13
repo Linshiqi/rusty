@@ -645,6 +645,60 @@ pub fn save_proxy_setting(
     });
 }
 
+/// Board files that would not parse. Asked for by the Catalogue settings —
+/// a user whose board never appears deserves the reason in the window, not
+/// only in the CLI.
+pub fn load_catalog_problems(state: AppState) {
+    track(
+        state,
+        ipc::get::<Vec<rusty_embed::CatalogProblem>>(cmd::catalog::PROBLEMS),
+        move |problems| state.catalog_problems.set(problems),
+    );
+}
+
+/// Whether a key for this profile is on file. The key itself is never read
+/// back — the credential store is write-only from here, by design.
+pub fn refresh_key_state(state: AppState, profile: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        profile: String,
+    }
+    let args = Args { profile };
+    spawn_local(async move {
+        if let Ok(stored) = ipc::call::<_, bool>(cmd::ai::KEY_CONFIGURED, &args).await {
+            state.ai_key_stored.set(stored);
+        }
+    });
+}
+
+/// Forget the stored key for a profile.
+pub fn delete_key(state: AppState, profile: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        profile: String,
+    }
+    let args = Args {
+        profile: profile.clone(),
+    };
+    spawn_local(async move {
+        match ipc::call::<_, ()>(cmd::ai::DELETE_KEY, &args).await {
+            Ok(()) => {
+                state.ai_key_stored.set(false);
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("the key for {profile} was removed"),
+                    level: None,
+                });
+            }
+            Err(error) => state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: error.message,
+                level: Some(LogLevel::Error),
+            }),
+        }
+    });
+}
+
 // ─── crates ──────────────────────────────────────────────────────────────────
 
 /// Ask crates.io about every direct dependency. Slow by design — one index

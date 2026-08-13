@@ -298,6 +298,11 @@ pub struct AppState {
     pub find_replace: RwSignal<String>,
     /// Which match is current, clamped to the match count at use.
     pub find_index: RwSignal<usize>,
+    /// Board and chip files that would not parse, for the Catalogue screen.
+    pub catalog_problems: RwSignal<Vec<rusty_embed::CatalogProblem>>,
+    /// Whether the assistant profile has a key in the OS credential store.
+    /// The key itself never comes back here — only whether one exists.
+    pub ai_key_stored: RwSignal<bool>,
     /// Direct dependencies against crates.io, when the Crates panel asked.
     pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
     /// The assistant drawer on the right, toggled from the title bar.
@@ -455,6 +460,8 @@ impl AppState {
             signature: RwSignal::new(None),
             semantic: RwSignal::new(None),
             actions: RwSignal::new(None),
+            catalog_problems: RwSignal::new(Vec::new()),
+            ai_key_stored: RwSignal::new(false),
             crate_rows: RwSignal::new(None),
             assistant_open: RwSignal::new(false),
             sim_display: RwSignal::new(String::new()),

@@ -88,7 +88,6 @@ fn main() {
             window::window_minimize,
             window::window_toggle_maximize,
             window::window_close,
-            window::window_is_maximized,
         ])
         .build(tauri::generate_context!())
         .expect("rusty failed to start")
@@ -216,7 +215,6 @@ mod wire_names {
             cmd::window::MINIMIZE => window::window_minimize,
             cmd::window::TOGGLE_MAXIMIZE => window::window_toggle_maximize,
             cmd::window::CLOSE => window::window_close,
-            cmd::window::IS_MAXIMIZED => window::window_is_maximized,
         }
     }
 }

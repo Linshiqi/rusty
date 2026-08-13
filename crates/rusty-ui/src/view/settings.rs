@@ -260,6 +260,14 @@ fn Assistant() -> impl IntoView {
         }
     }));
     let api_key = RwSignal::new(String::new());
+
+    // The stored-key check, refreshed whenever the profile changes: the whole
+    // point of the write-only design is that this boolean is the only thing
+    // the screen can know.
+    Effect::new(move |_| {
+        let profile = draft.with(|d| d.profile.clone());
+        crate::controller::refresh_key_state(state, profile);
+    });
     let verdict = RwSignal::new(None::<String>);
     let models = RwSignal::new(Vec::<String>::new());
 
@@ -400,8 +408,34 @@ fn Assistant() -> impl IntoView {
                             api_key.get_untracked(),
                         );
                         api_key.set(String::new());
+                        crate::controller::refresh_key_state(
+                            state,
+                            draft.get_untracked().profile,
+                        );
                     })
                 />
+                // The one thing this screen is allowed to know about the key.
+                {move || {
+                    if state.ai_key_stored.get() {
+                        view! {
+                            <>
+                                <Pill label="stored" tone=Tone::Patina />
+                                <Button
+                                    label="Remove"
+                                    on_click=Callback::new(move |_| {
+                                        crate::controller::delete_key(
+                                            state,
+                                            draft.get_untracked().profile,
+                                        )
+                                    })
+                                />
+                            </>
+                        }
+                            .into_any()
+                    } else {
+                        view! { <Pill label="none saved" tone=Tone::Neutral /> }.into_any()
+                    }
+                }}
             </div>
         </Field>
 
@@ -505,6 +539,12 @@ fn TextRow(
 fn CatalogueSettings() -> impl IntoView {
     let state = AppState::expect();
 
+    Effect::new(move |first: Option<()>| {
+        if first.is_none() {
+            crate::controller::load_catalog_problems(state);
+        }
+    });
+
     view! {
         <Field
             label="Where definitions come from"
@@ -520,6 +560,38 @@ fn CatalogueSettings() -> impl IntoView {
                 <dd class="m-0">".rusty/boards/*.toml"</dd>
             </dl>
         </Field>
+        {move || {
+            let problems = state.catalog_problems.get();
+            (!problems.is_empty())
+                .then(|| {
+                    view! {
+                        <Field
+                            label="Files that would not load"
+                            help="A malformed file is kept out of the catalogue rather than \
+                                  blanking it — so the board simply never appears, which is \
+                                  why the reason belongs here."
+                        >
+                            <div class="flex flex-col gap-1.5">
+                                {problems
+                                    .into_iter()
+                                    .map(|problem| {
+                                        view! {
+                                            <div class="max-w-[70ch] rounded-[6px] bg-amber-fill px-3 py-2">
+                                                <p class="font-mono text-footnote select-text">
+                                                    {problem.path}
+                                                </p>
+                                                <p class="mt-0.5 text-footnote leading-relaxed text-label-2 select-text">
+                                                    {problem.detail}
+                                                </p>
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        </Field>
+                    }
+                })
+        }}
         <Field label="Loaded">
             <div class="flex items-center gap-2">
                 <Dot tone=Tone::Patina />

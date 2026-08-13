@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::model::{
+use crate::model::{CatalogProblem, 
     Arch, Board, CatalogSource, Chip, Flasher, PinAssignment, ToolchainRequirement, UsbMatch,
     Vendor,
 };
@@ -41,12 +41,6 @@ pub struct Catalog {
     /// catalogue, and silently ignoring it would leave the user staring at a
     /// board that never appears.
     problems: Vec<CatalogProblem>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CatalogProblem {
-    pub path: String,
-    pub detail: String,
 }
 
 impl Catalog {

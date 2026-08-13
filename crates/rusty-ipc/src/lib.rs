@@ -128,7 +128,6 @@ pub mod window {
     pub const MINIMIZE: &str = "window_minimize";
     pub const TOGGLE_MAXIMIZE: &str = "window_toggle_maximize";
     pub const CLOSE: &str = "window_close";
-    pub const IS_MAXIMIZED: &str = "window_is_maximized";
 }
 
 /// The assistant and its configuration.

@@ -30,7 +30,7 @@ impl Encoding {
 }
 
 /// A byte offset in `text` as an LSP `(line, character)`.
-pub fn offset_to_position(text: &str, offset: usize, encoding: Encoding) -> (u32, u32) {
+fn offset_to_position(text: &str, offset: usize, encoding: Encoding) -> (u32, u32) {
     let offset = offset.min(text.len());
     let before = &text[..offset];
     let line = before.bytes().filter(|b| *b == b'\n').count() as u32;

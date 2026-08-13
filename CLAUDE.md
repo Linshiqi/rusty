@@ -58,11 +58,11 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
-| `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write |
-| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion/hover/definition |
+| `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
+| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm) |
@@ -112,11 +112,26 @@ they exist to prevent, not as feature summaries — see `tools/embedded.rs`.
 Adding an analysis means adding a tool. The same definitions are intended to
 back an MCP server later, so third parties get them too.
 
-### 5. Extensibility is data first
+### 5. The simulator's contract is one serial line
+
+Espressif's QEMU boots the same merged image `espflash` would burn, and
+everything the board view knows travels as text on that one serial line:
+`[rusty:gpio] 26=1,27=0` and `[rusty:disp] hello` out of the firmware,
+`B14=1` and `P34=128` into it. `protocol.rs` owns the parsing, compiled
+unconditionally because the frontend reads the stream as it passes.
+
+That is a deliberate ceiling. The QEMU peripheral models expose no GPIO
+readback — probed with QMP on the real register addresses, esp32 and esp32c3
+both read zero — so the board shows *what the firmware says it set*, and the
+panel says so in as many words. A part therefore needs no code in rusty to
+exist, which is why `.rusty/parts/*.toml` can add one.
+
+### 6. Extensibility is data first
 
 See `docs/extensibility.md`. Chips and boards are TOML in three layers
-(built-in < user config < `<project>/.rusty/`). Code extensions go through MCP.
-UI contributions are declarative — extensions never ship markup or styles.
+(built-in < user config < `<project>/.rusty/`); simulator parts are TOML in
+`<project>/.rusty/parts/`. Code extensions go through MCP. UI contributions are
+declarative — extensions never ship markup or styles.
 
 ## Where state lives
 
@@ -134,8 +149,9 @@ usty`) holds `location.toml`
   folder is the cloud-sync story.
 - Secrets stay in the OS credential store, never in the data directory — a
   synced directory must never sync a key.
-- Per-project, team-shared things (board overlays, future simulation configs)
-  live in the project's `.rusty/`, where they are diffed and reviewed.
+- Per-project, team-shared things live in the project's `.rusty/`, where they
+  are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
+  which is what the canvas editor writes) and user-defined parts (`parts/`).
 - Theme and divider positions are localStorage, and that is all that is.
 
 ## Testing conventions
@@ -149,6 +165,13 @@ usty`) holds `location.toml`
 - **Fixtures are real.** `rusty-core/tests/fixtures/feature-lab` is a genuine
   workspace; `tests/memory.rs` writes a real ELF with `object`'s writer. Mocks
   would not have caught the section-flag classification bugs.
+- **Geometry and protocol get tests; views get driven.** The board canvas got
+  its arithmetic wrong three times while none of it was reachable from a test.
+  The pure half now lives in `simulate/geometry.rs` under tests that pin the
+  real pinmap, rotated anchor points, orthogonality and endpoint anchoring.
+  What genuinely needs a browser — a drag, a right-click — is driven through
+  `mock.js` and asserted on numbers read back from the DOM, in a *separate*
+  call from the one that dispatched the event.
 - The built-in catalogue is checked by a `debug_assert!` at load — a typo in
   `data/*.toml` would otherwise surface only as a part mysteriously missing.
 
