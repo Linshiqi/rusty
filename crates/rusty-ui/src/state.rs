@@ -179,6 +179,24 @@ fn stored_size(divider: Divider, fallback: f64) -> f64 {
         .unwrap_or(fallback)
 }
 
+/// Editor font scale from last time. 1.0 is the 12.5px base; the wheel
+/// clamps to the same range, so a hand-edited absurd value cannot produce
+/// a 300px caret.
+fn stored_zoom() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("rusty.editor.zoom").ok().flatten())
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|z| z.clamp(0.6, 2.4))
+        .unwrap_or(1.0)
+}
+
+pub fn remember_zoom(zoom: f64) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item("rusty.editor.zoom", &format!("{zoom:.2}"));
+    }
+}
+
 pub fn remember_size(divider: Divider, value: f64) {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
         let _ = storage.set_item(divider.storage_key(), &value.to_string());
@@ -373,6 +391,9 @@ pub struct AppState {
     /// `*.rs, src/**` — gitignore-style globs, as the boxes in the panel.
     pub search_include: RwSignal<String>,
     pub search_exclude: RwSignal<String>,
+    /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
+    /// the editor derives from it.
+    pub editor_zoom: RwSignal<f64>,
     pub search_results: RwSignal<Option<rusty_edit::SearchResults>>,
     /// Which search is current; a stale reply is dropped, and the debounce
     /// timer checks it before firing.
@@ -518,6 +539,7 @@ impl AppState {
             search_regex: RwSignal::new(false),
             search_include: RwSignal::new(String::new()),
             search_exclude: RwSignal::new(String::new()),
+            editor_zoom: RwSignal::new(stored_zoom()),
             search_results: RwSignal::new(None),
             search_gen: RwSignal::new(0),
             reveal: RwSignal::new(None),

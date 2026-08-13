@@ -570,7 +570,6 @@ fn Header(document: Document) -> impl IntoView {
     let state = AppState::expect();
     let saved = document.text.clone();
     let dirty = Signal::derive(move || state.draft.with(|draft| draft != &saved));
-    let language = document.language.clone();
 
     view! {
         <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
@@ -608,16 +607,6 @@ fn Header(document: Document) -> impl IntoView {
                         </span>
                     }
                 })}
-            {language.map(|name| view! { <span class="text-footnote text-label-3">{name}</span> })}
-            <button
-                type="button"
-                disabled=move || !dirty.get()
-                title="Ctrl S"
-                class="rounded-[5px] px-2 py-0.5 text-footnote text-label-2 transition-colors hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                on:click=move |_| controller::save_file(state)
-            >
-                "Save"
-            </button>
         </div>
     }
 }
@@ -649,6 +638,25 @@ fn Surface(document: Document) -> impl IntoView {
     // scrolling it, selecting from it — must not count as leaving.
     let on_card = RwSignal::new(false);
     let editor_menu = RwSignal::new(None::<(f64, f64)>);
+
+    let zoom = state.editor_zoom;
+
+    // Where `line` sits in the scroller's visible box: (pixels from the top
+    // of the view, view height). The overlays decide their direction with
+    // this — a card that always opens downward is unreadable for exactly the
+    // lines nearest the dock, which is where the eye spends half its time.
+    let line_in_view = move |line: u32| {
+        scroller.get_untracked().map(|el| {
+            (
+                8.0 + f64::from(line) * LINE_HEIGHT * zoom.get() - f64::from(el.scroll_top()),
+                f64::from(el.client_height()),
+            )
+        })
+    };
+    // Downward-opening overlays flip up past ~55% of the view.
+    let opens_up = move |line: u32| {
+        line_in_view(line).is_some_and(|(top, height)| top > height * 0.55)
+    };
 
     // The coding toolbar: what a person editing firmware reaches for. Save
     // rides the same format-then-save path as Ctrl+S; Build shares the one
@@ -758,7 +766,8 @@ fn Surface(document: Document) -> impl IntoView {
                         // A third of the viewport above the target line, so
                         // the jump lands in context rather than at the top
                         // edge.
-                        let top = f64::from(target.line) * LINE_HEIGHT - 120.0;
+                        let top =
+                            f64::from(target.line) * LINE_HEIGHT * zoom.get_untracked() - 120.0;
                         scroller.set_scroll_top(top.max(0.0) as i32);
                     }
                 },
@@ -768,12 +777,18 @@ fn Surface(document: Document) -> impl IntoView {
     }
 
     // Both layers carry this verbatim. Any difference in font, size or line
-    // height and the caret walks away from its glyph.
-    let metrics = format!(
-        "font-size: {FONT_SIZE}px; line-height: {LINE_HEIGHT}px; \
-         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; \
-         tab-size: 4"
-    );
+    // height and the caret walks away from its glyph. Ctrl+wheel scales the
+    // whole thing; every pixel computed below multiplies by the same factor.
+    let metrics = Signal::derive(move || {
+        let z = zoom.get();
+        format!(
+            "font-size: {}px; line-height: {}px; \
+             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; \
+             tab-size: 4",
+            FONT_SIZE * z,
+            LINE_HEIGHT * z,
+        )
+    });
 
     let on_input = {
         let path = path.clone();
@@ -970,7 +985,22 @@ fn Surface(document: Document) -> impl IntoView {
                     )
                 }
             }
-        <div node_ref=scroller class="relative min-h-0 flex-1 overflow-auto">
+        <div
+            node_ref=scroller
+            class="relative min-h-0 flex-1 overflow-auto"
+            // Ctrl+wheel scales the editor font, as every editor since
+            // forever. The browser's own page zoom is exactly what this
+            // prevent_default suppresses.
+            on:wheel=move |event: ev::WheelEvent| {
+                if !event.ctrl_key() {
+                    return;
+                }
+                event.prevent_default();
+                let step = if event.delta_y() < 0.0 { 1.1 } else { 1.0 / 1.1 };
+                zoom.update(|z| *z = (*z * step).clamp(0.6, 2.4));
+                crate::state::remember_zoom(zoom.get_untracked());
+            }
+        >
             // w-max: the row is as wide as the longest line, so the textarea
             // overlay (inset-0 in the column beside the gutter) covers every
             // glyph. At viewport width, a long line overflowed the column and
@@ -980,7 +1010,6 @@ fn Surface(document: Document) -> impl IntoView {
                 // Line numbers scroll with the text rather than floating, so a
                 // long file's numbers stay beside their lines.
                 {
-                    let metrics = metrics.clone();
                     move || {
                         let count = state.highlighted.with(Vec::len).max(1);
                         // Tailwind's border-box made a bare `width: 5ch` mean
@@ -992,7 +1021,10 @@ fn Surface(document: Document) -> impl IntoView {
                         view! {
                             <div
                                 class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
-                                style=format!("{metrics}; width: calc({digits}ch + 20px)")
+                                style=format!(
+                                    "{}; width: calc({digits}ch + 20px)",
+                                    metrics.get(),
+                                )
                             >
                                 {(1..=count)
                                     .map(|n| view! { <div>{n.to_string()}</div> })
@@ -1018,6 +1050,7 @@ fn Surface(document: Document) -> impl IntoView {
                             return ().into_any();
                         }
                         let current = state.find_index.get().min(matches.len() - 1);
+                        let z = zoom.get();
                         matches
                             .iter()
                             .take(500)
@@ -1025,11 +1058,11 @@ fn Surface(document: Document) -> impl IntoView {
                             .map(|(index, (from, to))| {
                                 let (line, col) = line_col_of_byte(&text, *from);
                                 let (_, end_col) = line_col_of_byte(&text, *to);
-                                let x = 8.0 + column_px(&text, line, col);
-                                let width =
-                                    (column_px(&text, line, end_col) - column_px(&text, line, col))
-                                        .max(2.0);
-                                let y = 8.0 + f64::from(line) * LINE_HEIGHT;
+                                let x = 8.0 + column_px(&text, line, col) * z;
+                                let width = ((column_px(&text, line, end_col)
+                                    - column_px(&text, line, col)) * z)
+                                    .max(2.0);
+                                let y = 8.0 + f64::from(line) * LINE_HEIGHT * z;
                                 let wash = if index == current {
                                     "pointer-events-none absolute rounded-[3px] bg-amber-fill"
                                 } else {
@@ -1039,7 +1072,8 @@ fn Surface(document: Document) -> impl IntoView {
                                     <div
                                         class=wash
                                         style=format!(
-                                            "left: {x}px; top: {y}px; width: {width}px; height: {LINE_HEIGHT}px",
+                                            "left: {x}px; top: {y}px; width: {width}px; height: {h}px",
+                                            h = LINE_HEIGHT * z,
                                         )
                                     />
                                 }
@@ -1049,7 +1083,7 @@ fn Surface(document: Document) -> impl IntoView {
                     }}
                     <pre
                         class="pointer-events-none m-0 overflow-visible py-2 pr-4 pl-2 whitespace-pre"
-                        style=metrics.clone()
+                        style=move || metrics.get()
                         aria-hidden="true"
                     >
                         {
@@ -1104,7 +1138,7 @@ fn Surface(document: Document) -> impl IntoView {
                         autocomplete="off"
                         disabled=read_only
                         class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre text-transparent caret-rust outline-none"
-                        style=metrics
+                        style=move || metrics.get()
                         prop:value=move || state.draft.get()
                         on:contextmenu=move |event: ev::MouseEvent| {
                             event.prevent_default();
@@ -1145,6 +1179,7 @@ fn Surface(document: Document) -> impl IntoView {
                                     &state.draft.get_untracked(),
                                     event.offset_x() as f64,
                                     event.offset_y() as f64,
+                                    zoom.get_untracked(),
                                 ) {
                                     controller::goto_definition(
                                         state,
@@ -1165,6 +1200,7 @@ fn Surface(document: Document) -> impl IntoView {
                                     &state.draft.get_untracked(),
                                     event.offset_x() as f64,
                                     event.offset_y() as f64,
+                                    zoom.get_untracked(),
                                 );
                                 if hover_cell.get_untracked() == cell {
                                     return;
@@ -1472,12 +1508,25 @@ fn Surface(document: Document) -> impl IntoView {
                                     &state.draft.get_untracked(),
                                     range.start_line,
                                     range.start_col,
-                                );
-                            let y = 8.0 + f64::from(range.end_line + 1) * LINE_HEIGHT + 2.0;
+                                ) * zoom.get();
+                            // Above the token when the token is low in the
+                            // view — a card clipped by the dock reads as no
+                            // card at all.
+                            let place = if opens_up(range.start_line) {
+                                let y = 8.0
+                                    + f64::from(range.start_line) * LINE_HEIGHT * zoom.get()
+                                    - 4.0;
+                                format!("top: {y}px; transform: translateY(-100%)")
+                            } else {
+                                let y = 8.0
+                                    + f64::from(range.end_line + 1) * LINE_HEIGHT * zoom.get()
+                                    + 2.0;
+                                format!("top: {y}px")
+                            };
                             view! {
                                 <div
                                     class="absolute z-20 max-w-[70ch] overflow-y-auto rounded-[8px] bg-raised px-3 py-2 font-mono text-footnote leading-relaxed whitespace-pre-wrap shadow-2xl ring-1 ring-line-strong select-text"
-                                    style=format!("left: {x}px; top: {y}px; max-height: 40vh")
+                                    style=format!("left: {x}px; {place}; max-height: 40vh")
                                     on:mouseenter=move |_| on_card.set(true)
                                     on:mouseleave=move |_| {
                                         on_card.set(false);
@@ -1502,11 +1551,17 @@ fn Surface(document: Document) -> impl IntoView {
                                 return ().into_any();
                             }
                             let chosen = picked_action.get().min(fixes.len().saturating_sub(1));
-                            let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT + 2.0;
+                            let place = if opens_up(line) {
+                                let y = 8.0 + f64::from(line) * LINE_HEIGHT * zoom.get() - 4.0;
+                                format!("top: {y}px; transform: translateY(-100%)")
+                            } else {
+                                let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                format!("top: {y}px")
+                            };
                             view! {
                                 <div
                                     class="absolute z-20 min-w-[280px] rounded-[8px] bg-raised py-1 font-mono text-footnote shadow-2xl ring-1 ring-line-strong"
-                                    style=format!("left: 48px; top: {y}px")
+                                    style=format!("left: 48px; {place}")
                                 >
                                     {fixes
                                         .into_iter()
@@ -1559,7 +1614,18 @@ fn Surface(document: Document) -> impl IntoView {
                             if for_path != path {
                                 return ().into_any();
                             }
-                            let top = 8.0 + f64::from(line) * LINE_HEIGHT - 4.0;
+            // Above by nature — it describes the call being typed — but
+                            // near the top of the view "above" is off screen,
+                            // so it flips below the line there.
+                            let place = if line_in_view(line)
+                                .is_some_and(|(top, _)| top < 96.0)
+                            {
+                                let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                format!("top: {y}px")
+                            } else {
+                                let y = 8.0 + f64::from(line) * LINE_HEIGHT * zoom.get() - 4.0;
+                                format!("top: {y}px; transform: translateY(-100%)")
+                            };
                             let label = info.label;
                             let split = match (info.param_start, info.param_end) {
                                 (Some(start), Some(end)) => {
@@ -1594,7 +1660,7 @@ fn Surface(document: Document) -> impl IntoView {
                                 <div
                                     class="absolute z-10 max-w-[76ch] rounded-[8px] bg-raised px-3 py-1.5 font-mono text-footnote shadow-xl ring-1 ring-line-strong"
                                     style=format!(
-                                        "left: 8px; top: {top}px; transform: translateY(-100%)",
+                                        "left: 8px; {place}",
                                     )
                                 >
                                     <div class="whitespace-pre-wrap select-text">
@@ -1647,8 +1713,14 @@ fn Surface(document: Document) -> impl IntoView {
                                 return ().into_any();
                             }
                             let chosen = picked.get().min(shown.len() - 1);
-                            let x = 8.0 + column_px(&draft, popup.line, popup.word_start);
-                            let y = 8.0 + f64::from(popup.line + 1) * LINE_HEIGHT + 2.0;
+                            let x = 8.0 + column_px(&draft, popup.line, popup.word_start) * zoom.get();
+                            let place = if opens_up(popup.line) {
+                                let y = 8.0 + f64::from(popup.line) * LINE_HEIGHT * zoom.get() - 4.0;
+                                format!("top: {y}px; transform: translateY(-100%)")
+                            } else {
+                                let y = 8.0 + f64::from(popup.line + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                format!("top: {y}px")
+                            };
                             // A window around the selection rather than a
                             // scrollbar: nine rows is what the eye takes in,
                             // and the arrows walk the rest into view.
@@ -1656,7 +1728,7 @@ fn Surface(document: Document) -> impl IntoView {
                             view! {
                                 <div
                                     class="absolute z-20 min-w-[260px] rounded-[8px] bg-raised py-1 font-mono text-footnote shadow-2xl ring-1 ring-line-strong"
-                                    style=format!("left: {x}px; top: {y}px")
+                                    style=format!("left: {x}px; {place}")
                                 >
                                     {shown
                                         .into_iter()
@@ -1947,13 +2019,14 @@ fn keep_caret_in_view(
     let Some((line, _)) = caret_line_col(area, &text) else {
         return;
     };
-    let y = 8.0 + f64::from(line) * LINE_HEIGHT;
+    let lh = LINE_HEIGHT * state.editor_zoom.get_untracked();
+    let y = 8.0 + f64::from(line) * lh;
     let view_top = f64::from(outer.scroll_top());
     let view_height = f64::from(outer.client_height());
-    if y < view_top + LINE_HEIGHT {
-        outer.set_scroll_top((y - LINE_HEIGHT * 3.0).max(0.0) as i32);
-    } else if y + LINE_HEIGHT * 2.0 > view_top + view_height {
-        outer.set_scroll_top((y + LINE_HEIGHT * 4.0 - view_height) as i32);
+    if y < view_top + lh {
+        outer.set_scroll_top((y - lh * 3.0).max(0.0) as i32);
+    } else if y + lh * 2.0 > view_top + view_height {
+        outer.set_scroll_top((y + lh * 4.0 - view_height) as i32);
     }
 }
 
@@ -2012,10 +2085,11 @@ fn find_jump(state: AppState, scroller: NodeRef<html::Div>, direction: i32) {
     state.find_index.set(next);
     let (line, _) = line_col_of_byte(&text, matches[next].0);
     if let Some(outer) = scroller.get_untracked() {
-        let y = 8.0 + f64::from(line) * LINE_HEIGHT;
+        let lh = LINE_HEIGHT * state.editor_zoom.get_untracked();
+        let y = 8.0 + f64::from(line) * lh;
         let top = f64::from(outer.scroll_top());
         let height = f64::from(outer.client_height());
-        if y < top + LINE_HEIGHT || y + LINE_HEIGHT * 2.0 > top + height {
+        if y < top + lh || y + lh * 2.0 > top + height {
             outer.set_scroll_top((y - height / 3.0).max(0.0) as i32);
         }
     }
@@ -2438,9 +2512,9 @@ fn newline_indent(text: &str, caret: usize) -> String {
 /// The column is found by measuring, not dividing: a CJK glyph is two cells
 /// wide in a monospace font, so `x / ch` drifts one column per ideograph and
 /// hover would describe the wrong token on any line with a Chinese comment.
-fn cell_under(text: &str, offset_x: f64, offset_y: f64) -> Option<(u32, u32)> {
+fn cell_under(text: &str, offset_x: f64, offset_y: f64, zoom: f64) -> Option<(u32, u32)> {
     // The 8s are the text column's pl-2 / py-2.
-    let line = ((offset_y - 8.0) / LINE_HEIGHT).floor();
+    let line = ((offset_y - 8.0) / (LINE_HEIGHT * zoom)).floor();
     if line < 0.0 {
         return None;
     }
@@ -2453,7 +2527,7 @@ fn cell_under(text: &str, offset_x: f64, offset_y: f64) -> Option<(u32, u32)> {
     }
     let mut reached = 0.0;
     for (index, ch) in content.chars().enumerate() {
-        let advance = advance_of(ch);
+        let advance = advance_of(ch) * zoom;
         if reached + advance > x {
             return Some((line, index as u32));
         }
