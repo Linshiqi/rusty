@@ -119,9 +119,7 @@
         { name: "main.rs", path: MAIN, isDir: false, children: [] },
       ]},
       { name: "Cargo.toml", path: "Cargo.toml", isDir: false, children: [] },
-      ].concat(a && a.showHidden ? [{ name: ".cargo", path: ".cargo", isDir: true, children: [
-        { name: "config.toml", path: ".cargo/config.toml", isDir: false, children: [] },
-      ]}] : []);
+      ];
     },
     // Stateful, as the disk is: what save wrote is what open reads back.
     // Without this, format-on-save looks broken in the mock — the re-read
@@ -185,6 +183,14 @@
     }),
     save_sim_board: (a) => { window.__mock.savedBoard = a.board; return null; },
     run_simulation: (a) => { window.__mock.simChannel = a.onLine; return new Promise(() => {}); },
+    // One cargo-style warning so the Output panel's location links can be
+    // exercised: the ` --> path:line:col` must render as a click-to-open.
+    run_command: (a) => new Promise((resolve) => {
+      const send = (text) => a.onLine.send({ stream: "stderr", text, level: null });
+      send("warning: unused variable: `state`");
+      send("  --> src\\bin\\main.rs:62:33");
+      resolve(0);
+    }),
     save_sim_trace: (a) => { window.__mock.traces.push(a.text); return "E:\mock\firmware\target\rusty-sim\trace.vcd"; },
     toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
     firmware_list: () => [],

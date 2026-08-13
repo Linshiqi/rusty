@@ -23,12 +23,12 @@ const MAX_DEPTH: usize = 12;
 /// Built whole rather than a level at a time. A source tree with `target/`
 /// excluded is a few hundred entries — small enough that lazily expanding
 /// directories would add a round trip per click and save nothing.
-pub fn read(root: &Path, show_hidden: bool) -> Result<Vec<Entry>> {
+pub fn read(root: &Path) -> Result<Vec<Entry>> {
     let mut top = Vec::new();
 
     let walk = WalkBuilder::new(root)
         .max_depth(Some(MAX_DEPTH))
-        .hidden(false) // our own filter below decides, so a toggle can exist
+        .hidden(false) // our own filter below decides
         .git_ignore(true)
         .git_global(false)
         .parents(false)
@@ -37,15 +37,12 @@ pub fn read(root: &Path, show_hidden: bool) -> Result<Vec<Entry>> {
         // `target/` and its tens of thousands of files would land in the tree
         // the first time anyone built.
         .require_git(false)
-        // Dot-entries are noise until the day they are the answer, so they
-        // hide behind a toggle. `.git` is never the answer: its object store
-        // holds thousands of files no editor should list, let alone open.
+        // Dot-entries never show. There was a toggle once; it earned its keep
+        // for nobody, and the files it revealed — .cargo, .rusty — are edited
+        // through their own panels, not by hand.
         .filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
-            if name == ".git" {
-                return false;
-            }
-            show_hidden || entry.depth() == 0 || !name.starts_with('.')
+            entry.depth() == 0 || !name.starts_with('.')
         })
         .build();
 
@@ -149,7 +146,7 @@ mod tests {
     fn build_output_is_not_in_the_tree() {
         let dir = scratch();
         let mut paths = Vec::new();
-        flatten(&read(dir.path(), false).unwrap(), &mut paths);
+        flatten(&read(dir.path()).unwrap(), &mut paths);
 
         assert!(
             !paths.iter().any(|p| p.starts_with("target")),
@@ -157,34 +154,27 @@ mod tests {
         );
     }
 
-    /// Dot-entries hide until asked for — and `.git` stays hidden even then,
-    /// because its object store is thousands of files no tree should list.
+    /// Dot-entries never show — .git's object store alone is thousands of
+    /// files no tree should list, and the rest are edited through panels.
     #[test]
-    fn dotted_entries_hide_behind_the_toggle_and_git_always() {
+    fn dotted_entries_never_show() {
         let dir = scratch();
         std::fs::create_dir_all(dir.path().join(".git/info")).unwrap();
         std::fs::write(dir.path().join(".git/info/exclude"), "# git\n").unwrap();
 
-        let mut default_paths = Vec::new();
-        flatten(&read(dir.path(), false).unwrap(), &mut default_paths);
+        let mut paths = Vec::new();
+        flatten(&read(dir.path()).unwrap(), &mut paths);
         assert!(
-            !default_paths.iter().any(|p| p.starts_with('.')),
-            "hidden by default: {default_paths:?}",
+            !paths.iter().any(|p| p.starts_with('.')),
+            "dot-entries must stay out of the tree: {paths:?}",
         );
-
-        let mut shown = Vec::new();
-        flatten(&read(dir.path(), true).unwrap(), &mut shown);
-        assert!(shown.contains(&".cargo/config.toml".to_string()), "{shown:?}");
-        assert!(
-            !shown.iter().any(|p| p.starts_with(".git/") || p == ".git"),
-            ".git is never listed: {shown:?}",
-        );
+        assert!(paths.contains(&"Cargo.toml".to_string()), "{paths:?}");
     }
 
     #[test]
     fn nesting_is_preserved_and_directories_come_first() {
         let dir = scratch();
-        let tree = read(dir.path(), false).unwrap();
+        let tree = read(dir.path()).unwrap();
 
         let names: Vec<_> = tree.iter().map(|e| e.name.as_str()).collect();
         let first_file = names.iter().position(|n| !n.starts_with('.') && n.contains('.'));

@@ -143,6 +143,15 @@ See `docs/extensibility.md`. Chips and boards are TOML in three layers
 `<project>/.rusty/parts/`. Code extensions go through MCP. UI contributions are
 declarative — extensions never ship markup or styles.
 
+## UI conventions
+
+Chrome actions are icon buttons with a `title` tooltip — flat like VSCode's,
+no ring, no fill; colour lands on the glyph (accent Play, crimson Stop). Text
+appears in a control only when it carries state (a zoom %, a grid size).
+Dot-entries never show in the file tree. Every dock surface answers a
+right-click with its own menu or not at all — the browser's default menu is
+always a bug.
+
 ## Where state lives
 
 One rule decides: **if the backend, the CLI, or another window could ever care,

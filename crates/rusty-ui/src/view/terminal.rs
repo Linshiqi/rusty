@@ -13,7 +13,11 @@ use leptos::{ev, html, prelude::*};
 
 use rusty_term::{Colour, Screen, Style};
 
-use crate::{controller, state::AppState};
+use crate::{
+    controller,
+    state::AppState,
+    view::components::{ContextMenu, MenuItem, MenuSeparator, copy_to_clipboard},
+};
 
 /// Cell metrics, in pixels.
 ///
@@ -89,8 +93,33 @@ pub fn TerminalView() -> impl IntoView {
         }
     };
 
+    let menu = RwSignal::new(None::<(f64, f64)>);
+    // Paste through the same normalisation the keyboard path uses — a bare \n
+    // would be swallowed by shells that expect \r for Enter.
+    let paste_clipboard = move || {
+        use wasm_bindgen_futures::JsFuture;
+        leptos::task::spawn_local(async move {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let promise = window.navigator().clipboard().read_text();
+            if let Ok(value) = JsFuture::from(promise).await
+                && let Some(text) = value.as_string()
+                && !text.is_empty()
+            {
+                controller::terminal_input(state, text.replace('\n', "\r").into_bytes());
+            }
+        });
+    };
+
     view! {
-        <div class="relative flex min-h-0 flex-1 flex-col bg-content">
+        <div
+            class="relative flex min-h-0 flex-1 flex-col bg-content"
+            on:contextmenu=move |event: ev::MouseEvent| {
+                event.prevent_default();
+                menu.set(Some((event.client_x() as f64, event.client_y() as f64)));
+            }
+        >
             // The ruler is a hundred characters of the same font, off screen.
             // Its width divided by a hundred is the cell advance, which is the
             // only reliable way to know how many columns fit.
@@ -142,6 +171,46 @@ pub fn TerminalView() -> impl IntoView {
                     }
                 }}
             </div>
+
+            {move || {
+                let (x, y) = menu.get()?;
+                let close = Callback::new(move |_| menu.set(None));
+                let selection = web_sys::window()
+                    .and_then(|w| w.get_selection().ok().flatten())
+                    .map(|s| s.to_string().as_string().unwrap_or_default())
+                    .unwrap_or_default();
+                let has_selection = !selection.is_empty();
+                Some(
+                    view! {
+                        <ContextMenu x=x y=y on_close=close>
+                            <MenuItem
+                                label="Copy selection"
+                                disabled=!has_selection
+                                on_select=Callback::new(move |_| {
+                                    copy_to_clipboard(&selection);
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="Paste"
+                                on_select=Callback::new(move |_| {
+                                    paste_clipboard();
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuSeparator />
+                            <MenuItem
+                                label="Restart shell"
+                                danger=true
+                                on_select=Callback::new(move |_| {
+                                    controller::close_terminal(state);
+                                    menu.set(None);
+                                })
+                            />
+                        </ContextMenu>
+                    },
+                )
+            }}
         </div>
     }
 }

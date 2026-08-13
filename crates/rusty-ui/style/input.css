@@ -104,6 +104,27 @@
 
     --selection: rgb(228 112 63 / 0.18);
     --focus: rgb(228 112 63 / 0.5);
+
+    /* The ANSI-and-syntax palette must flip with the surfaces. This block
+       once left it out, so a system-dark desktop rendered the light theme's
+       ink colours on a dark background — every token a mud tone, which is
+       how "the code is hard to read" reached the bug tracker. */
+    --term-0: #2a2724;
+    --term-1: #ef6b56;
+    --term-2: #92cf7b;
+    --term-3: #e2bb52;
+    --term-4: #7cb2e3;
+    --term-5: #d29ade;
+    --term-6: #5accbd;
+    --term-7: #b8b0a6;
+    --term-8: #6d665e;
+    --term-9: #ff8b74;
+    --term-10: #a2dd89;
+    --term-11: #f5cd6e;
+    --term-12: #9bc9f2;
+    --term-13: #dda6e2;
+    --term-14: #74d8cb;
+    --term-15: #f5f1eb;
   }
 }
 
@@ -164,17 +185,17 @@
 
   --term-0: #2a2724;
   --term-1: #ef6b56;
-  --term-2: #86c46f;
-  --term-3: #ddb03c;
-  --term-4: #6ba3d6;
-  --term-5: #c98ad0;
-  --term-6: #4fc0b2;
+  --term-2: #92cf7b;
+  --term-3: #e2bb52;
+  --term-4: #7cb2e3;
+  --term-5: #d29ade;
+  --term-6: #5accbd;
   --term-7: #b8b0a6;
   --term-8: #6d665e;
   --term-9: #ff8b74;
   --term-10: #a2dd89;
-  --term-11: #f2c65c;
-  --term-12: #8dbdea;
+  --term-11: #f5cd6e;
+  --term-12: #9bc9f2;
   --term-13: #dda6e2;
   --term-14: #74d8cb;
   --term-15: #f5f1eb;
@@ -314,13 +335,17 @@ body {
 .tok-keyword { color: var(--term-5); }
 .tok-string { color: var(--term-2); }
 .tok-number { color: var(--term-3); }
-.tok-comment { color: var(--label-3); font-style: italic; }
+/* One shade brighter than it was: at --label-3 a comment sat close enough to
+   the background that reading it was work, and comments are meant to be read. */
+.tok-comment { color: var(--label-2); font-style: italic; }
 .tok-type { color: var(--term-6); }
 .tok-function { color: var(--term-4); }
 /* The function family's yellow, as VSCode taught — red made every
    #[attribute] block read as an error. */
 .tok-macro { color: var(--term-11); }
-.tok-punctuation { color: var(--label-2); }
+/* Full brightness, like VSCode: braces and semicolons are the skeleton of the
+   line, and at 64% they made whole blocks read as faded. */
+.tok-punctuation { color: var(--label); }
 /* Semantic tokens only — the lexical pass never produces Variable. The hue
    matches what VSCode dark+ taught everyone a local means. */
 .tok-variable { color: var(--term-12); }

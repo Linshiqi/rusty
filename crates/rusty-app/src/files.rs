@@ -5,14 +5,11 @@ use tauri::State;
 
 use crate::{error::CommandError, state::AppState};
 
-/// The project tree, with build output already excluded.
+/// The project tree, with build output and dot-entries already excluded.
 #[tauri::command]
-pub async fn file_tree(
-    show_hidden: bool,
-    state: State<'_, AppState>,
-) -> Result<Vec<Entry>, CommandError> {
+pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(rusty_edit::read_tree(&root, show_hidden)?)
+    Ok(rusty_edit::read_tree(&root)?)
 }
 
 /// One file, highlighted.

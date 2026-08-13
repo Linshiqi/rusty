@@ -373,8 +373,6 @@ pub struct AppState {
     /// `*.rs, src/**` — gitignore-style globs, as the boxes in the panel.
     pub search_include: RwSignal<String>,
     pub search_exclude: RwSignal<String>,
-    /// Show dot-entries in the file tree. Off by default; `.git` never shows.
-    pub show_hidden: RwSignal<bool>,
     pub search_results: RwSignal<Option<rusty_edit::SearchResults>>,
     /// Which search is current; a stale reply is dropped, and the debounce
     /// timer checks it before firing.
@@ -520,7 +518,6 @@ impl AppState {
             search_regex: RwSignal::new(false),
             search_include: RwSignal::new(String::new()),
             search_exclude: RwSignal::new(String::new()),
-            show_hidden: RwSignal::new(false),
             search_results: RwSignal::new(None),
             search_gen: RwSignal::new(0),
             reveal: RwSignal::new(None),

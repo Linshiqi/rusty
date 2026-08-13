@@ -200,6 +200,14 @@ pub fn ProblemRow(problem: rusty_embed::Problem) -> impl IntoView {
     }
 }
 
+/// Put text on the clipboard. A refusal (no permission, no clipboard) is
+/// silent: nothing was destroyed, and a banner for a failed copy is noise.
+pub fn copy_to_clipboard(text: &str) {
+    if let Some(window) = web_sys::window() {
+        let _ = window.navigator().clipboard().write_text(text);
+    }
+}
+
 /// A shell command, shown verbatim with one click to copy it.
 ///
 /// Embedded work happens in a terminal as much as in a window, so every command
@@ -212,12 +220,10 @@ pub fn CommandLine(#[prop(into)] command: String) -> impl IntoView {
     let to_copy = command.clone();
 
     let copy = move |_| {
-        if let Some(clipboard) = web_sys::window().map(|w| w.navigator().clipboard()) {
-            let _ = clipboard.write_text(&to_copy);
-            copied.set(true);
-            // No timer to reset it: the confirmation is for the click that just
-            // happened, and it goes away with the next render of this panel.
-        }
+        copy_to_clipboard(&to_copy);
+        copied.set(true);
+        // No timer to reset it: the confirmation is for the click that just
+        // happened, and it goes away with the next render of this panel.
     };
 
     view! {

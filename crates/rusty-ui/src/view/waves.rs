@@ -15,6 +15,7 @@ use leptos::{ev, prelude::*};
 use crate::{
     controller,
     state::{AppState, TraceClock},
+    view::components::{ContextMenu, MenuItem},
 };
 
 /// Lane geometry, in pixels.
@@ -50,8 +51,27 @@ pub fn WavesTab() -> impl IntoView {
             .max(50.0)
     };
 
+    // One framing routine for the button and the context menu — two copies
+    // would drift the day one of them learns about margins.
+    let fit = move || {
+        let trace = state.sim_trace.get_untracked();
+        let (Some(first), Some(last)) = (trace.events.first(), trace.events.last()) else {
+            return;
+        };
+        let span = (last.0 - first.0).max(1) as f64;
+        follow.set(false);
+        window.set((first.0 as f64, span / plot_width()));
+    };
+    let menu = RwSignal::new(None::<(f64, f64)>);
+
     view! {
-        <div class="flex min-h-0 flex-1 flex-col">
+        <div
+            class="flex min-h-0 flex-1 flex-col"
+            on:contextmenu=move |event: ev::MouseEvent| {
+                event.prevent_default();
+                menu.set(Some((event.client_x() as f64, event.client_y() as f64)));
+            }
+        >
             <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
                 {move || {
                     let trace = state.sim_trace.get();
@@ -95,17 +115,7 @@ pub fn WavesTab() -> impl IntoView {
                     type="button"
                     title="Frame the whole capture"
                     class="rounded-[5px] px-2 py-0.5 text-footnote text-label-3 ring-1 ring-line hover:text-label"
-                    on:click=move |_| {
-                        let trace = state.sim_trace.get_untracked();
-                        let (Some(first), Some(last)) =
-                            (trace.events.first(), trace.events.last())
-                        else {
-                            return;
-                        };
-                        let span = (last.0 - first.0).max(1) as f64;
-                        follow.set(false);
-                        window.set((first.0 as f64, span / plot_width()));
-                    }
+                    on:click=move |_| fit()
                 >
                     "Fit"
                 </button>
@@ -356,6 +366,46 @@ pub fn WavesTab() -> impl IntoView {
                         .into_any()
                 }}
             </div>
+
+            {move || {
+                let (x, y) = menu.get()?;
+                let close = Callback::new(move |_| menu.set(None));
+                let follow_label = if follow.get_untracked() {
+                    "Stop following"
+                } else {
+                    "Follow newest edge"
+                };
+                let no_trace = state.sim_trace.with_untracked(|t| t.events.is_empty());
+                Some(
+                    view! {
+                        <ContextMenu x=x y=y on_close=close>
+                            <MenuItem
+                                label="Fit the whole capture"
+                                disabled=no_trace
+                                on_select=Callback::new(move |_| {
+                                    fit();
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label=follow_label
+                                on_select=Callback::new(move |_| {
+                                    follow.update(|f| *f = !*f);
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="Export VCD"
+                                disabled=no_trace
+                                on_select=Callback::new(move |_| {
+                                    controller::export_vcd(state);
+                                    menu.set(None);
+                                })
+                            />
+                        </ContextMenu>
+                    },
+                )
+            }}
         </div>
     }
 }

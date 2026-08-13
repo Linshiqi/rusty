@@ -16,7 +16,8 @@ use rusty_lsp::DiagSeverity;
 use crate::{
     controller,
     state::{AppState, Divider, DockTab},
-    view::components::{Dot, ProblemRow, Tone},
+    view::components::{ContextMenu, Dot, MenuItem, MenuSeparator, ProblemRow, Tone, copy_to_clipboard},
+    view::loclink::{self, Piece},
 };
 
 #[component]
@@ -199,11 +200,23 @@ fn FollowToggle() -> impl IntoView {
     }
 }
 
+/// Where a right-click on a diagnostic row landed, and what the row named.
+#[derive(Clone)]
+struct DiagMenuAt {
+    x: f64,
+    y: f64,
+    path: String,
+    line: u32,
+    col: u32,
+    message: String,
+}
+
 #[component]
 fn ProblemsTab() -> impl IntoView {
     let state = AppState::expect();
+    let menu = RwSignal::new(None::<DiagMenuAt>);
 
-    move || {
+    let rows = move || {
         let problems = state.problems();
         // Compiler diagnostics, flattened out of the per-file map. They join
         // the config problems here because "why does my project not build" has
@@ -243,19 +256,60 @@ fn ProblemsTab() -> impl IntoView {
                 {diags
                     .into_iter()
                     .map(|(path, diagnostic)| {
-                        view! { <DiagnosticRow path=path diagnostic=diagnostic /> }
+                        view! { <DiagnosticRow path=path diagnostic=diagnostic menu=menu /> }
                     })
                     .collect_view()}
             </div>
         }
         .into_any()
+    };
+
+    view! {
+        // The wrapper eats the browser's own context menu even over the empty
+        // state — every dock surface answers a right-click itself or not at all.
+        <div
+            class="flex min-h-0 flex-1 flex-col"
+            on:contextmenu=move |event: leptos::ev::MouseEvent| event.prevent_default()
+        >
+            {rows}
+            {move || {
+                let at = menu.get()?;
+                let close = Callback::new(move |_| menu.set(None));
+                let (path, line, col) = (at.path.clone(), at.line, at.col);
+                let message = at.message.clone();
+                Some(
+                    view! {
+                        <ContextMenu x=at.x y=at.y on_close=close>
+                            <MenuItem
+                                label="Open in the editor"
+                                on_select=Callback::new(move |_| {
+                                    controller::open_at(state, path.clone(), line, col);
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="Copy message"
+                                on_select=Callback::new(move |_| {
+                                    copy_to_clipboard(&message);
+                                    menu.set(None);
+                                })
+                            />
+                        </ContextMenu>
+                    },
+                )
+            }}
+        </div>
     }
 }
 
 /// One compiler finding. Clicking it opens the file — the squiggle is already
 /// waiting on the line.
 #[component]
-fn DiagnosticRow(path: String, diagnostic: rusty_lsp::FileDiagnostic) -> impl IntoView {
+fn DiagnosticRow(
+    path: String,
+    diagnostic: rusty_lsp::FileDiagnostic,
+    menu: RwSignal<Option<DiagMenuAt>>,
+) -> impl IntoView {
     let state = AppState::expect();
     let tone = match diagnostic.severity {
         DiagSeverity::Error => Tone::Crimson,
@@ -263,6 +317,8 @@ fn DiagnosticRow(path: String, diagnostic: rusty_lsp::FileDiagnostic) -> impl In
         _ => Tone::Slate,
     };
     let open_path = path.clone();
+    let menu_path = path.clone();
+    let menu_message = diagnostic.message.clone();
     let (line, col) = (diagnostic.start_line, diagnostic.start_col);
     let place = format!("{path}:{}", diagnostic.start_line + 1);
     let origin = match (&diagnostic.source, &diagnostic.code) {
@@ -280,6 +336,19 @@ fn DiagnosticRow(path: String, diagnostic: rusty_lsp::FileDiagnostic) -> impl In
                 // the top of the file makes the click look broken — which is
                 // exactly what it did before the editor had tabs.
                 controller::open_at(state, open_path.clone(), line, col);
+            }
+            on:contextmenu=move |event: leptos::ev::MouseEvent| {
+                event.prevent_default();
+                menu.set(
+                    Some(DiagMenuAt {
+                        x: event.client_x() as f64,
+                        y: event.client_y() as f64,
+                        path: menu_path.clone(),
+                        line,
+                        col,
+                        message: menu_message.clone(),
+                    }),
+                );
             }
             class="flex w-full items-start gap-2.5 border-b border-line px-4 py-2 text-left transition-colors last:border-b-0 hover:bg-sunken"
         >
@@ -322,6 +391,8 @@ fn OutputTab() -> impl IntoView {
     // Where the view was last time, so an upward scroll can be told from the
     // follow's own downward one.
     let last_top = RwSignal::new(0);
+    // Right-click: position, plus the clicked line's text when there was one.
+    let menu = RwSignal::new(None::<(f64, f64, Option<String>)>);
 
     // Stick to the newest line. The Follow toggle existed from the start and
     // flipped a flag nothing read, so a build scrolled past while the view sat
@@ -362,6 +433,10 @@ fn OutputTab() -> impl IntoView {
     view! {
         <div
             node_ref=scroller
+            on:contextmenu=move |event: leptos::ev::MouseEvent| {
+                event.prevent_default();
+                menu.set(Some((event.client_x() as f64, event.client_y() as f64, None)));
+            }
             on:scroll=move |_| {
                 let Some(element) = scroller.get_untracked() else { return };
                 let top = element.scroll_top();
@@ -416,10 +491,49 @@ fn OutputTab() -> impl IntoView {
                                     None if line.stream == LogStream::Stderr => "text-amber",
                                     None => "text-label-2",
                                 };
+                                let for_menu = line.text.clone();
                                 view! {
-                                    <div class=format!(
-                                        "whitespace-pre-wrap {colour}",
-                                    )>{line.text}</div>
+                                    <div
+                                        class=format!("whitespace-pre-wrap {colour}")
+                                        on:contextmenu=move |event: leptos::ev::MouseEvent| {
+                                            event.prevent_default();
+                                            event.stop_propagation();
+                                            menu.set(
+                                                Some((
+                                                    event.client_x() as f64,
+                                                    event.client_y() as f64,
+                                                    Some(for_menu.clone()),
+                                                )),
+                                            );
+                                        }
+                                    >
+                                        {loclink::split_locations(&line.text)
+                                            .into_iter()
+                                            .map(|piece| match piece {
+                                                Piece::Text(text) => text.into_any(),
+                                                Piece::Loc { display, path, line, col } => {
+                                                    view! {
+                                                        <button
+                                                            type="button"
+                                                            title="Open in the editor"
+                                                            class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-rust"
+                                                            on:click=move |_| {
+                                                                controller::open_at(
+                                                                    state,
+                                                                    path.clone(),
+                                                                    line.saturating_sub(1),
+                                                                    col.saturating_sub(1),
+                                                                );
+                                                            }
+                                                        >
+                                                            {display}
+                                                        </button>
+                                                    }
+                                                        .into_any()
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </div>
                                 }
                             })
                             .collect_view()}
@@ -467,19 +581,85 @@ fn OutputTab() -> impl IntoView {
                     })
             }}
         </div>
+
+        {move || {
+            let (x, y, line) = menu.get()?;
+            let close = Callback::new(move |_| menu.set(None));
+            let follow_label = if state.log_follow.get_untracked() {
+                "Stop following"
+            } else {
+                "Follow new output"
+            };
+            Some(
+                view! {
+                    <ContextMenu x=x y=y on_close=close>
+                        {line
+                            .map(|text| {
+                                view! {
+                                    <MenuItem
+                                        label="Copy line"
+                                        on_select=Callback::new(move |_| {
+                                            copy_to_clipboard(&text);
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                            })}
+                        <MenuItem
+                            label="Copy all"
+                            on_select=Callback::new(move |_| {
+                                let all = state
+                                    .log
+                                    .with_untracked(|lines| {
+                                        lines
+                                            .iter()
+                                            .map(|l| l.text.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    });
+                                copy_to_clipboard(&all);
+                                menu.set(None);
+                            })
+                        />
+                        <MenuSeparator />
+                        <MenuItem
+                            label=follow_label
+                            on_select=Callback::new(move |_| {
+                                state.log_follow.update(|f| *f = !*f);
+                                menu.set(None);
+                            })
+                        />
+                        <MenuItem
+                            label="Clear"
+                            on_select=Callback::new(move |_| {
+                                state.clear_log();
+                                menu.set(None);
+                            })
+                        />
+                    </ContextMenu>
+                },
+            )
+        }}
     }
 }
 
 #[component]
 fn DevicesTab() -> impl IntoView {
     let state = AppState::expect();
+    let menu = RwSignal::new(None::<(f64, f64)>);
 
     // The same picker the Flash and Monitor panels use, and the same state
     // behind it: choosing a device here selects it there. Two lists of what is
     // plugged in would eventually disagree, and the one showing a device that
     // is gone is the one the user happens to be looking at.
     view! {
-        <div class="min-h-0 flex-1 overflow-y-auto pb-2">
+        <div
+            class="min-h-0 flex-1 overflow-y-auto pb-2"
+            on:contextmenu=move |event: leptos::ev::MouseEvent| {
+                event.prevent_default();
+                menu.set(Some((event.client_x() as f64, event.client_y() as f64)));
+            }
+        >
             <crate::view::panels::Devices />
             <div class="mt-1 flex items-center gap-2 px-4">
                 <Dot tone=Tone::Neutral />
@@ -501,5 +681,30 @@ fn DevicesTab() -> impl IntoView {
                 </button>
             </div>
         </div>
+
+        {move || {
+            let (x, y) = menu.get()?;
+            let close = Callback::new(move |_| menu.set(None));
+            Some(
+                view! {
+                    <ContextMenu x=x y=y on_close=close>
+                        <MenuItem
+                            label="Rescan devices"
+                            on_select=Callback::new(move |_| {
+                                controller::scan_devices(state);
+                                menu.set(None);
+                            })
+                        />
+                        <MenuItem
+                            label="Reload catalogue"
+                            on_select=Callback::new(move |_| {
+                                controller::load_catalog(state);
+                                menu.set(None);
+                            })
+                        />
+                    </ContextMenu>
+                },
+            )
+        }}
     }
 }

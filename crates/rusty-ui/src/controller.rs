@@ -1720,21 +1720,12 @@ pub fn run_session(state: AppState, plan: CommandPlan) {
 
 /// Re-read the project tree.
 pub fn refresh_tree(state: AppState) {
-    #[derive(serde::Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Args {
-        show_hidden: bool,
-    }
-
     if !state.has_project() {
         return;
     }
-    let args = Args {
-        show_hidden: state.show_hidden.get_untracked(),
-    };
     track(
         state,
-        async move { ipc::call::<_, Vec<Entry>>(cmd::files::TREE, &args).await },
+        async move { ipc::call::<_, Vec<Entry>>(cmd::files::TREE, &()).await },
         move |entries| state.file_tree.set(entries),
     );
 }

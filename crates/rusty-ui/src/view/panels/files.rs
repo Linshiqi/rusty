@@ -73,29 +73,11 @@ fn Tree() -> impl IntoView {
                 </span>
                 <button
                     type="button"
-                    title="Show files and folders whose names start with a dot"
-                    class=move || {
-                        let base = "rounded-[5px] px-1.5 py-0.5 text-footnote";
-                        if state.show_hidden.get() {
-                            format!("{base} bg-selection text-rust")
-                        } else {
-                            format!("{base} text-label-3 hover:text-label")
-                        }
-                    }
-                    on:click=move |_| {
-                        state.show_hidden.update(|show| *show = !*show);
-                        controller::refresh_tree(state);
-                    }
-                >
-                    "Hidden"
-                </button>
-                <button
-                    type="button"
                     title="Re-read the project"
-                    class="rounded-[5px] px-1.5 py-0.5 text-footnote text-label-3 hover:text-label"
+                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
                     on:click=move |_| controller::refresh_tree(state)
                 >
-                    "Refresh"
+                    <IconView icon=Icon::Refresh size=13 />
                 </button>
             </div>
             <div class="min-h-0 flex-1 overflow-auto pb-2">
@@ -178,13 +160,7 @@ struct TreeTarget {
     is_dir: bool,
 }
 
-/// Put text on the clipboard. A refusal (no permission, no clipboard) is
-/// silent: nothing was destroyed, and a banner for a failed copy is noise.
-fn copy_to_clipboard(text: &str) {
-    if let Some(window) = web_sys::window() {
-        let _ = window.navigator().clipboard().write_text(text);
-    }
-}
+use crate::view::components::copy_to_clipboard;
 
 /// Scope the project search to one path and go there.
 fn search_within(state: AppState, path: &str, is_dir: bool) {
