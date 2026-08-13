@@ -1332,7 +1332,17 @@ fn BoardEditor(
                                             )
                                         >
                                             {face}
-                                            <span class="min-w-0 flex-1 truncate font-mono text-caption text-[#d7dce3]">
+                                            // The label counter-rotates with
+                                            // the readouts: the body turns,
+                                            // the writing stays readable.
+                                            <span
+                                                class="min-w-0 flex-1 truncate font-mono text-caption text-[#d7dce3]"
+                                                style=if rot == 180 {
+                                                    "transform: rotate(180deg)"
+                                                } else {
+                                                    ""
+                                                }
+                                            >
                                                 {label}
                                             </span>
                                             // pin stubs: the gold dots wires
