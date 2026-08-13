@@ -112,21 +112,21 @@ pub fn inline(text: &str) -> Vec<Inline> {
 
     while at < chars.len() {
         let rest: String = chars[at..].iter().collect();
-        if chars[at] == '`' {
-            if let Some(end) = rest[1..].find('`') {
-                flush(&mut plain, &mut out);
-                out.push(Inline::Code(rest[1..1 + end].to_string()));
-                at += end + 2;
-                continue;
-            }
+        if chars[at] == '`'
+            && let Some(end) = rest[1..].find('`')
+        {
+            flush(&mut plain, &mut out);
+            out.push(Inline::Code(rest[1..1 + end].to_string()));
+            at += end + 2;
+            continue;
         }
-        if rest.starts_with("**") {
-            if let Some(end) = rest[2..].find("**") {
-                flush(&mut plain, &mut out);
-                out.push(Inline::Bold(rest[2..2 + end].to_string()));
-                at += end + 4;
-                continue;
-            }
+        if let Some(after) = rest.strip_prefix("**")
+            && let Some(end) = after.find("**")
+        {
+            flush(&mut plain, &mut out);
+            out.push(Inline::Bold(after[..end].to_string()));
+            at += end + 4;
+            continue;
         }
         if chars[at] == '[' {
             // [label](url) — the label may itself carry `code`.
