@@ -952,6 +952,12 @@ pub fn install_sim_tool(state: AppState, name: String) {
                 state
                     .sim_install_failed
                     .update(|failed| failed.retain(|t| t != &name));
+                // The world just changed: re-probe the machine, and give the
+                // editor its language server the moment it exists.
+                refresh_toolchain(state);
+                if name == "rust-analyzer" {
+                    start_lsp(state);
+                }
             }
             Ok(code) => {
                 note_exit(state, code);

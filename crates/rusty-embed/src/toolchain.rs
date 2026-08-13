@@ -12,8 +12,8 @@ use std::process::Command;
 use crate::{
     chip,
     model::{
-        EmbeddedProject, Problem, Severity, ToolStatus, Toolchain, ToolchainReport,
-        ToolchainStatus,
+        CommandPlan, EmbeddedProject, Problem, Severity, ToolStatus, Toolchain,
+        ToolchainReport, ToolchainStatus,
     },
 };
 
@@ -74,6 +74,90 @@ pub fn install_command(tool: &str) -> Option<&'static str> {
         .iter()
         .find(|(name, ..)| *name == tool)
         .map(|(_, _, install, _)| *install)
+}
+
+/// The steps that install one tool, ready for the shared session runner —
+/// every line of every step streams into the dock, and only a failure sends
+/// anyone to the manual command.
+///
+/// One table drives probing, manual instructions and one-click installs, so
+/// a tool cannot be probed under one spelling and installed under another.
+/// rustup itself is the one thing this cannot install: it is the installer.
+pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>, String> {
+    let cargo_install = |package: &str, why: &str| -> Vec<CommandPlan> {
+        vec![CommandPlan {
+            program: "cargo".to_string(),
+            args: vec![
+                "install".to_string(),
+                package.to_string(),
+                "--locked".to_string(),
+            ],
+            display: format!("cargo install {package} --locked"),
+            rationale: why.to_string(),
+        }]
+    };
+
+    match tool {
+        "espflash" => Ok(cargo_install(
+            "espflash",
+            "builds espflash into ~/.cargo/bin, where flashing and the simulator look",
+        )),
+        "probe-rs" => Ok(cargo_install(
+            "probe-rs-tools",
+            "the probe-rs CLI: JTAG/SWD flashing, debugging, defmt over RTT",
+        )),
+        "esp-generate" => Ok(cargo_install(
+            "esp-generate",
+            "the template generator behind File > New project",
+        )),
+        "ldproxy" => Ok(cargo_install(
+            "ldproxy",
+            "the linker shim ESP-IDF (std) builds route through",
+        )),
+        "rust-analyzer" => Ok(vec![CommandPlan {
+            program: "rustup".to_string(),
+            args: vec![
+                "component".to_string(),
+                "add".to_string(),
+                "rust-analyzer".to_string(),
+                "--toolchain".to_string(),
+                "stable".to_string(),
+            ],
+            display: "rustup component add rust-analyzer --toolchain stable".to_string(),
+            rationale: "the stable component; rusty resolves it directly, so the esp \
+                        toolchain's missing component stops mattering"
+                .to_string(),
+        }]),
+        // Two steps by design: the first is quick, the second downloads the
+        // Xtensa toolchain and is honestly slow — better one visible slow
+        // step than a guide page nobody finds.
+        "espup" => Ok(vec![
+            CommandPlan {
+                program: "cargo".to_string(),
+                args: vec![
+                    "install".to_string(),
+                    "espup".to_string(),
+                    "--locked".to_string(),
+                ],
+                display: "cargo install espup --locked".to_string(),
+                rationale: "the Xtensa toolchain manager itself".to_string(),
+            },
+            CommandPlan {
+                program: "espup".to_string(),
+                args: vec!["install".to_string()],
+                display: "espup install".to_string(),
+                rationale: "downloads the esp toolchain (Xtensa rustc + gcc) — a gigabyte-\
+                            class download, so this step takes minutes"
+                    .to_string(),
+            },
+        ]),
+        "rustup" => Err(
+            "rustup is the installer everything else rides on — get it from \
+             https://rustup.rs, then everything here becomes one click"
+                .to_string(),
+        ),
+        other => Err(format!("no install recipe for {other}")),
+    }
 }
 
 /// Inspect the machine.

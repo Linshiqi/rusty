@@ -127,23 +127,78 @@ pub fn Toolchain() -> impl IntoView {
                                         {(!present)
                                             .then(|| {
                                                 let command = tool.install_command.clone();
-                                                // rustup's "install command" is a URL, not
-                                                // something to paste into a shell.
+                                                // rustup's "install command" is a URL — it
+                                                // is the installer everything else rides
+                                                // on, so it stays a pointer, not a button.
                                                 if command.starts_with("http") {
-                                                    view! {
+                                                    return view! {
                                                         <div class="mt-1.5 font-mono text-footnote text-slate select-text">
                                                             {command}
                                                         </div>
                                                     }
-                                                        .into_any()
-                                                } else {
-                                                    view! {
-                                                        <div class="mt-1.5">
-                                                            <CommandLine command=command />
-                                                        </div>
-                                                    }
-                                                        .into_any()
+                                                        .into_any();
                                                 }
+                                                let name = tool.name.clone();
+                                                let failed = {
+                                                    let name = name.clone();
+                                                    Signal::derive(move || {
+                                                        state
+                                                            .sim_install_failed
+                                                            .with(|f| f.contains(&name))
+                                                    })
+                                                };
+                                                view! {
+                                                    <div class="mt-1.5 flex items-center gap-2.5">
+                                                        <button
+                                                            type="button"
+                                                            disabled=move || {
+                                                                state.session_running.get()
+                                                            }
+                                                            on:click={
+                                                                let name = name.clone();
+                                                                move |_| {
+                                                                    controller::install_sim_tool(
+                                                                        state,
+                                                                        name.clone(),
+                                                                    )
+                                                                }
+                                                            }
+                                                            class="rounded-[6px] bg-rust px-2.5 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                                        >
+                                                            "Install"
+                                                        </button>
+                                                        {move || {
+                                                            state
+                                                                .session_running
+                                                                .get()
+                                                                .then(|| {
+                                                                    view! {
+                                                                        <span class="text-footnote text-label-3">
+                                                                            "output in the dock"
+                                                                        </span>
+                                                                    }
+                                                                })
+                                                        }}
+                                                    </div>
+                                                    // The command earns its place back only
+                                                    // when the button has failed.
+                                                    {move || {
+                                                        let command = command.clone();
+                                                        failed
+                                                            .get()
+                                                            .then(|| {
+                                                                view! {
+                                                                    <div class="mt-1.5">
+                                                                        <p class="mb-1 text-footnote text-label-2">
+                                                                            "Automatic install failed — by hand:"
+                                                                        </p>
+                                                                        <CommandLine command=command />
+                                                                    </div>
+                                                                }
+                                                            })
+                                                    }}
+                                                }
+                                                    .into_any()
                                             })}
                                     </div>
                                 </div>

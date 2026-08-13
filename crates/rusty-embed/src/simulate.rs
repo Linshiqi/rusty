@@ -510,20 +510,6 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// one click in the panel, the dock shows every line, and only a failure
 /// sends anyone to the manual instructions.
 pub fn install_steps(tool: &str) -> std::result::Result<Vec<CommandPlan>, String> {
-    if tool == "espflash" {
-        return Ok(vec![CommandPlan {
-            program: "cargo".to_string(),
-            args: vec![
-                "install".to_string(),
-                "espflash".to_string(),
-                "--locked".to_string(),
-            ],
-            display: "cargo install espflash --locked".to_string(),
-            rationale: "builds espflash into ~/.cargo/bin, where the simulator looks"
-                .to_string(),
-        }]);
-    }
-
     if tool.starts_with("qemu-system-") {
         return Err(format!(
             "qemu installs through its own download path — this is a bug if it surfaces; \
@@ -531,8 +517,9 @@ pub fn install_steps(tool: &str) -> std::result::Result<Vec<CommandPlan>, String
              into the data directory's tools/qemu/"
         ));
     }
-
-    Err(format!("no installer for {tool}"))
+    // One recipe table for every cargo/rustup-installed tool, shared with
+    // the Toolchain panel, so the two cannot drift.
+    crate::toolchain::install_steps(tool)
 }
 
 /// The QEMU archive for one architecture: where to put it, the URLs to try
@@ -1251,12 +1238,27 @@ mod tests {
         let espflash = install_steps("espflash").expect("espflash installs");
         assert_eq!(espflash.len(), 1);
         assert!(espflash[0].display.contains("cargo install espflash"));
+        // The shared table serves the rest of the workbench's tools too.
+        let espup = install_steps("espup").expect("espup installs");
+        assert_eq!(espup.len(), 2, "install espup, then espup install");
+        assert!(espup[1].display.contains("espup install"));
+        let ra = install_steps("rust-analyzer").expect("rust-analyzer installs");
+        assert!(ra[0].display.contains("rustup component add"));
+        assert!(
+            install_steps("rustup").is_err(),
+            "the installer itself cannot be one-clicked, and says so",
+        );
 
         assert!(
             install_steps("qemu-system-xtensa").is_err(),
             "qemu goes through its own download path",
         );
-        assert!(install_steps("probe-rs").is_err(), "unknown tools are named, not guessed");
+        let probers = install_steps("probe-rs").expect("probe-rs installs now");
+        assert!(probers[0].display.contains("probe-rs-tools"));
+        assert!(
+            install_steps("some-imaginary-tool").is_err(),
+            "unknown tools are named, not guessed",
+        );
     }
 
     #[test]
