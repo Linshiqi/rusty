@@ -23,32 +23,22 @@ pub(super) fn Library(
                     <span class="px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                         "Parts"
                     </span>
-                    {[
-                        ("green", "bg-[#3ddc84]"),
-                        ("blue", "bg-[#4aa8ff]"),
-                        ("red", "bg-[#ff5c5c]"),
-                        ("yellow", "bg-[#ffd75c]"),
-                    ]
-                        .into_iter()
-                        .map(|(color, swatch)| {
-                            view! {
-                                <button
-                                    type="button"
-                                    title=format!("Add a {color} LED (unwired)")
-                                    on:click=move |_| add_part(
-                                        PartKind::Led {
-                                            color: color.to_string(),
-                                        },
-                                        String::new(),
-                                    )
-                                    class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                                >
-                                    <span class=format!("size-3.5 rounded-full {swatch}") />
-                                    <span>{format!("{color} LED")}</span>
-                                </button>
-                            }
-                        })
-                        .collect_view()}
+                    // One LED, not one per colour: the colour is a property,
+                    // picked in the panel on the right once it is selected.
+                    <button
+                        type="button"
+                        title="Add an LED (unwired) — pick its colour in the properties panel"
+                        on:click=move |_| add_part(
+                            PartKind::Led {
+                                color: "red".to_string(),
+                            },
+                            String::new(),
+                        )
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="size-3.5 rounded-full bg-[#ff5c5c]" />
+                        <span>"LED"</span>
+                    </button>
                     <button
                         type="button"
                         title="Pressing it sends B<pin>=1/0 into the firmware's UART"
