@@ -458,9 +458,9 @@ pub(super) fn wire_path(part: &EditPart, slot: usize, kit: (f64, f64)) -> Option
         // An untouched wire takes the tidy way round: out of the stub, along
         // a lane of its own, into the pin.
         let lane = if row < KIT_ROWS {
-            to.0 - 24.0 - (row as f64 * 4.0)
+            to.0 - 24.0 - (row as f64 * 8.0)
         } else {
-            to.0 + 24.0 + ((row - KIT_ROWS) as f64 * 4.0)
+            to.0 + 24.0 + ((row - KIT_ROWS) as f64 * 8.0)
         };
         points.push((lane, from.1));
         points.push((lane, to.1));

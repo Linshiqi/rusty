@@ -15,8 +15,10 @@ fn main() {
             "--builtin-shell".to_string(),
         ];
     }
+    // RUSTY_PROBE_CWD reproduces the app's working-directory choice.
+    let cwd = std::env::var("RUSTY_PROBE_CWD").ok().map(std::path::PathBuf::from);
     let (terminal, updates) =
-        rusty_term::Terminal::spawn(None, 100, 24, Some(&argv)).expect("spawn");
+        rusty_term::Terminal::spawn(cwd.as_deref(), 100, 24, Some(&argv)).expect("spawn");
 
     let start = std::time::Instant::now();
     std::thread::spawn(move || while updates.wait() {});

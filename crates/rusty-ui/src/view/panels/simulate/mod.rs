@@ -1123,7 +1123,20 @@ fn BoardEditor(
                                         }
                                             .into_any(),
                                         PartKind::Seven => view! {
-                                            <svg width="26" height="42" viewBox="0 0 26 42">
+                                            // A digit mounted upside-down
+                                            // still reads upright — KiCad
+                                            // keeps symbol text readable
+                                            // whatever the body does.
+                                            <svg
+                                                width="26"
+                                                height="42"
+                                                viewBox="0 0 26 42"
+                                                style=if rot == 180 {
+                                                    "transform: rotate(180deg)"
+                                                } else {
+                                                    ""
+                                                }
+                                            >
                                                 {
                                                     let seg = move |slot: usize| {
                                                         if level(pins[slot]) {
@@ -1146,7 +1159,14 @@ fn BoardEditor(
                                         }
                                             .into_any(),
                                         PartKind::Display => view! {
-                                            <span class="grid min-h-[34px] min-w-[110px] place-items-center rounded-[4px] bg-[#0d1a12] px-2 py-1 font-mono text-caption text-[#3ddc84] ring-1 ring-[#1d4a2f]">
+                                            <span
+                                                class="grid min-h-[34px] min-w-[110px] place-items-center rounded-[4px] bg-[#0d1a12] px-2 py-1 font-mono text-caption text-[#3ddc84] ring-1 ring-[#1d4a2f]"
+                                                style=if rot == 180 {
+                                                    "transform: rotate(180deg)"
+                                                } else {
+                                                    ""
+                                                }
+                                            >
                                                 {move || {
                                                     let text = state.sim_display.get();
                                                     if text.is_empty() {
