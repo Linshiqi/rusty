@@ -103,6 +103,43 @@ fn DockTabs() -> impl IntoView {
             <span class="flex-1" />
 
             <Show when=move || state.dock_tab.get() == DockTab::Output && state.dock_open.get()>
+                // VSCode's pair: which channel, then a text filter. The
+                // channel list is fixed — it is the set of things rusty runs.
+                <select
+                    title="Show one output channel"
+                    class="h-6 rounded-[5px] bg-sunken px-1 text-footnote text-label-2 outline-none"
+                    on:change=move |event| {
+                        let value = event_target_value(&event);
+                        let pick = CHANNELS
+                            .iter()
+                            .find(|c| **c == value)
+                            .copied()
+                            .unwrap_or("all");
+                        state.log_pick.set(pick);
+                    }
+                >
+                    {CHANNELS
+                        .iter()
+                        .map(|c| {
+                            let channel = *c;
+                            view! {
+                                <option
+                                    value=channel
+                                    selected=move || state.log_pick.get() == channel
+                                >
+                                    {channel}
+                                </option>
+                            }
+                        })
+                        .collect_view()}
+                </select>
+                <input
+                    placeholder="filter (!word excludes)"
+                    title="Space-separated terms all must match; !term excludes"
+                    class="h-6 w-40 rounded-[5px] bg-sunken px-1.5 text-footnote outline-none placeholder:text-label-4"
+                    prop:value=move || state.log_filter.get()
+                    on:input=move |event| state.log_filter.set(event_target_value(&event))
+                />
                 <FollowToggle />
                 <button
                     type="button"
@@ -173,6 +210,24 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             }
         })
     }
+}
+
+/// Every channel a line can carry. "all" is the view's word, not a tag.
+const CHANNELS: [&str; 8] =
+    ["all", "build", "flash", "monitor", "simulate", "commands", "tools", "app"];
+
+/// True when the line passes the Output panel's filter box. Terms AND
+/// together; a `!` prefix excludes. Case-insensitive, as every log filter
+/// people actually use is.
+fn passes_filter(text: &str, filter: &str) -> bool {
+    let haystack = text.to_lowercase();
+    filter.split_whitespace().all(|term| {
+        if let Some(excluded) = term.strip_prefix('!') {
+            excluded.is_empty() || !haystack.contains(&excluded.to_lowercase())
+        } else {
+            haystack.contains(&term.to_lowercase())
+        }
+    })
 }
 
 #[component]
@@ -463,7 +518,30 @@ fn OutputTab() -> impl IntoView {
             class="min-h-0 flex-1 overflow-y-auto"
         >
             {move || {
-                let lines = state.log.get();
+                let pick = state.log_pick.get();
+                let filter = state.log_filter.get();
+                let all = state.log.get();
+                let total = all.len();
+                let lines: Vec<_> = all
+                    .into_iter()
+                    .filter(|(source, line)| {
+                        (pick == "all" || *source == pick)
+                            && (filter.is_empty() || passes_filter(&line.text, &filter))
+                    })
+                    .map(|(_, line)| line)
+                    .collect();
+                let hidden = total - lines.len();
+                if lines.is_empty() && total > 0 {
+                    return view! {
+                        <p class="px-4 py-3 text-callout text-label-3">
+                            {format!(
+                                "All {total} lines are hidden by the current channel and \
+                                 filter.",
+                            )}
+                        </p>
+                    }
+                        .into_any();
+                }
                 if lines.is_empty() {
                     return view! {
                         <p class="px-4 py-3 text-callout text-label-2">
@@ -475,6 +553,14 @@ fn OutputTab() -> impl IntoView {
                 }
                 view! {
                     <div class="px-3 py-2 font-mono text-footnote leading-[1.6] select-text">
+                        {(hidden > 0)
+                            .then(|| {
+                                view! {
+                                    <div class="text-caption text-label-4">
+                                        {format!("… {hidden} lines hidden by the filter")}
+                                    </div>
+                                }
+                            })}
                         {lines
                             .into_iter()
                             .map(|line| {
@@ -611,7 +697,7 @@ fn OutputTab() -> impl IntoView {
                                     .with_untracked(|lines| {
                                         lines
                                             .iter()
-                                            .map(|l| l.text.as_str())
+                                            .map(|(_, l)| l.text.as_str())
                                             .collect::<Vec<_>>()
                                             .join("\n")
                                     });

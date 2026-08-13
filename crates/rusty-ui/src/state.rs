@@ -475,7 +475,18 @@ pub struct AppState {
     /// Lives here rather than in the Flash panel so it survives switching
     /// panels — watching a device is something you do *while* reading the
     /// memory report, not instead of it.
-    pub log: RwSignal<Vec<LogLine>>,
+    /// Device and tool output, each line tagged with the channel that was
+    /// speaking — build, flash, simulate — so the Output panel can show one
+    /// conversation at a time, the way VSCode's channel picker does.
+    pub log: RwSignal<Vec<(&'static str, LogLine)>>,
+    /// Which channel new lines belong to. Sessions set it on start;
+    /// `note_exit` drops it back to "app", where one-off notices live.
+    pub log_source: RwSignal<&'static str>,
+    /// The channel the Output panel shows; "all" shows everything.
+    pub log_pick: RwSignal<&'static str>,
+    /// Substring filter over shown lines. Space-separated terms must all
+    /// match; a `!` prefix excludes instead.
+    pub log_filter: RwSignal<String>,
     /// Whether the log view sticks to the bottom as lines arrive. Turned off
     /// automatically when the user scrolls up, which is the only way to read
     /// something in a stream that is still moving.
@@ -581,14 +592,19 @@ impl AppState {
             dock_open: RwSignal::new(true),
             dock_tab: RwSignal::new(DockTab::Problems),
             log: RwSignal::new(Vec::new()),
+            log_source: RwSignal::new("app"),
+            log_pick: RwSignal::new("all"),
+            log_filter: RwSignal::new(String::new()),
             log_follow: RwSignal::new(true),
             in_flight: RwSignal::new(0),
             error: RwSignal::new(None),
         }
     }
 
-    /// Append device output, trimming the oldest once past capacity.
+    /// Append device output, trimming the oldest once past capacity. The
+    /// line lands in whichever channel is speaking right now.
     pub fn push_log(&self, line: LogLine) {
+        let source = self.log_source.get_untracked();
         self.log.update(|lines| {
             if lines.len() >= LOG_CAPACITY {
                 // Drain a batch rather than one at a time: removing from the
@@ -596,7 +612,7 @@ impl AppState {
                 // device would spend more time shuffling than rendering.
                 lines.drain(..LOG_CAPACITY / 10);
             }
-            lines.push(line);
+            lines.push((source, line));
         });
     }
 

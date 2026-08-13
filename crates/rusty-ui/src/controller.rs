@@ -795,6 +795,7 @@ pub fn build_project(state: AppState) {
                         would get"
                 .to_string(),
         },
+        "build",
     );
 }
 
@@ -817,6 +818,7 @@ pub fn load_crate_report(state: AppState) {
 /// `cargo add name@version` through the shared session slot, then re-analyse
 /// — the manifest changed, so the old graph and the old rows are both stale.
 pub fn upgrade_crate(state: AppState, name: String, version: String) {
+    state.log_source.set("tools");
     if state.session_running.get_untracked() || version.is_empty() {
         return;
     }
@@ -883,6 +885,7 @@ pub fn run_simulation(state: AppState, debug: bool) {
     if state.session_running.get_untracked() {
         return;
     }
+    state.log_source.set("simulate");
     state.sim_gpio.set(std::collections::HashMap::new());
     state.sim_trace.set(crate::state::SimTrace::default());
     state.sim_display.set(String::new());
@@ -952,6 +955,7 @@ pub fn run_simulation(state: AppState, debug: bool) {
 /// One-click install of a missing simulator tool, streamed to the dock.
 /// Success refreshes the plan; failure reveals the manual instructions.
 pub fn install_sim_tool(state: AppState, name: String) {
+    state.log_source.set("tools");
     #[derive(serde::Serialize)]
     struct Args {
         name: String,
@@ -1530,6 +1534,7 @@ pub fn choose(state: AppState, choice: WizardChoice) {
 /// decision rusty must not make quietly is where the code lands, and that is
 /// exactly what the folder picker asks.
 pub fn create_project(state: AppState, choice: WizardChoice) {
+    state.log_source.set("tools");
     #[derive(serde::Serialize)]
     struct Args {
         choice: WizardChoice,
@@ -1687,6 +1692,8 @@ fn stream_to_terminal(state: AppState) -> ipc::Channel {
 /// Note how a spawned tool ended, in the terminal where its output is.
 fn note_exit(state: AppState, code: Option<i32>) {
     state.session_running.set(false);
+    let source = state.log_source;
+    set_timeout(move || source.set("app"), std::time::Duration::ZERO);
     let text = match code {
         Some(0) | None => "— finished".to_string(),
         Some(code) => format!("— exited with status {code}"),
@@ -1699,7 +1706,8 @@ fn note_exit(state: AppState, code: Option<i32>) {
 }
 
 /// Run the planned command, streaming its output into the terminal.
-pub fn run_session(state: AppState, plan: CommandPlan) {
+pub fn run_session(state: AppState, plan: CommandPlan, channel: &'static str) {
+    state.log_source.set(channel);
     #[derive(serde::Serialize)]
     struct Args {
         plan: CommandPlan,
@@ -2522,6 +2530,7 @@ pub fn run_command(state: AppState, line: String) {
 }
 
 fn run_command_then(state: AppState, line: String, after: impl FnOnce(Option<i32>) + 'static) {
+    state.log_source.set("commands");
     let mut parts = line.split_whitespace().map(str::to_string);
     let Some(program) = parts.next() else {
         return;

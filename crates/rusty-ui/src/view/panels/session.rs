@@ -34,6 +34,11 @@ pub fn Session(
     verb: String,
 ) -> impl IntoView {
     let state = AppState::expect();
+    // The Output channel this session's lines belong to.
+    let channel = match action {
+        FlashAction::Monitor => "monitor",
+        _ => "flash",
+    };
 
     // Enumerate on open, and re-plan whenever the device or the binary changes.
     // A stale command line is worse than none: it is the one the user reads and
@@ -66,7 +71,7 @@ pub fn Session(
         view! {
             <div class="flex-1 overflow-y-auto">
                 <Devices />
-                <Plan verb=verb.clone() />
+                <Plan verb=verb.clone() channel=channel />
             </div>
         }
         .into_any()
@@ -208,7 +213,7 @@ fn DeviceRow(
 
 /// The command, and the button that runs it.
 #[component]
-fn Plan(#[prop(into)] verb: String) -> impl IntoView {
+fn Plan(#[prop(into)] verb: String, channel: &'static str) -> impl IntoView {
     let state = AppState::expect();
 
     view! {
@@ -273,7 +278,7 @@ fn Plan(#[prop(into)] verb: String) -> impl IntoView {
                             disabled=Signal::derive(move || state.session_running.get())
                             on_click=Callback::new(move |_| {
                                 if let Some(plan) = state.plan.get_untracked() {
-                                    controller::run_session(state, plan);
+                                    controller::run_session(state, plan, channel);
                                 }
                             })
                         />
