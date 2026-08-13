@@ -17,7 +17,6 @@ pub enum Icon {
     Memory,
     Flash,
     Simulate,
-    Monitor,
     Crates,
     Settings,
     Wizard,
@@ -50,8 +49,6 @@ impl Icon {
             Icon::Flash => "M11 2.5 4.5 11.5H9l-1 6 6.5-9H10z",
             // A play triangle in a rounded frame — run, without hardware.
             Icon::Simulate => "M4 4.5h12v11H4zM8.5 7.5l4 2.5-4 2.5z",
-            // A terminal.
-            Icon::Monitor => "M2.5 4.5h15v11h-15zM5.5 8.5l2.5 2-2.5 2M10.5 12.5h4",
             // A gear — teeth and a bore, generated from the geometry, because
             // the earlier circle-with-rays read as a sun.
             Icon::Settings => "M8.8 4.7 L9.2 2.4 L10.8 2.4 L11.2 4.7 L12.9 5.5 L14.8 4.1 L15.9 5.2 L14.5 7.1 L15.3 8.8 L17.6 9.2 L17.6 10.8 L15.3 11.2 L14.5 12.9 L15.9 14.8 L14.8 15.9 L12.9 14.5 L11.2 15.3 L10.8 17.6 L9.2 17.6 L8.8 15.3 L7.1 14.5 L5.2 15.9 L4.1 14.8 L5.5 12.9 L4.7 11.2 L2.4 10.8 L2.4 9.2 L4.7 8.8 L5.5 7.1 L4.1 5.2 L5.2 4.1 L7.1 5.5 Z M12.4 10a2.4 2.4 0 1 1 -4.8 0a2.4 2.4 0 1 1 4.8 0",

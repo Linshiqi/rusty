@@ -26,31 +26,24 @@ use crate::{
 /// it is about *this* board rather than about flashing in general — and a
 /// standing lecture above the controls is read once and skipped forever after.
 #[component]
-pub fn Session(
-    action: FlashAction,
-    /// What the primary button says. The action alone does not name itself in
-    /// the user's terms — `FlashAndMonitor` is not a verb anyone says.
-    #[prop(into)]
-    verb: String,
-) -> impl IntoView {
+pub fn Session() -> impl IntoView {
     let state = AppState::expect();
-    // The Output channel this session's lines belong to.
-    let channel = match action {
-        FlashAction::Monitor => "monitor",
-        _ => "flash",
-    };
+    // What pressing the button will do. Flash-and-monitor is the inner loop;
+    // attach-only exists for a board that is already misbehaving — reflashing
+    // it first destroys the state you were trying to look at.
+    let mode = RwSignal::new(FlashAction::FlashAndMonitor);
 
-    // Enumerate on open, and re-plan whenever the device or the binary changes.
-    // A stale command line is worse than none: it is the one the user reads and
-    // believes before pressing the button.
+    // Enumerate on open, and re-plan whenever the device, the binary or the
+    // mode changes. A stale command line is worse than none: it is the one
+    // the user reads and believes before pressing the button.
     Effect::new(move |first: Option<()>| {
         if first.is_none() {
             controller::scan_devices(state);
         }
-        // Both are read so the effect re-runs when either changes.
+        // All three are read so the effect re-runs when any changes.
         let _ = state.transport.get();
         let _ = state.current_firmware();
-        controller::plan_session(state, action);
+        controller::plan_session(state, mode.get());
     });
 
     move || {
@@ -71,7 +64,36 @@ pub fn Session(
         view! {
             <div class="flex-1 overflow-y-auto">
                 <Devices />
-                <Plan verb=verb.clone() channel=channel />
+                <div class="flex items-center gap-1.5 px-4 pt-3">
+                    {[
+                        (FlashAction::FlashAndMonitor, "Flash and monitor"),
+                        (FlashAction::Monitor, "Attach only"),
+                    ]
+                        .into_iter()
+                        .map(|(action, label)| {
+                            let picked = Signal::derive(move || mode.get() == action);
+                            view! {
+                                <button
+                                    type="button"
+                                    on:click=move |_| mode.set(action)
+                                    class=move || {
+                                        let base = "rounded-full px-3 py-1 text-footnote transition-colors";
+                                        if picked.get() {
+                                            format!("{base} bg-selection font-medium text-rust")
+                                        } else {
+                                            format!(
+                                                "{base} text-label-2 hover:bg-sunken hover:text-label",
+                                            )
+                                        }
+                                    }
+                                >
+                                    {label}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+                <Plan mode=mode />
             </div>
         }
         .into_any()
@@ -213,13 +235,19 @@ fn DeviceRow(
 
 /// The command, and the button that runs it.
 #[component]
-fn Plan(#[prop(into)] verb: String, channel: &'static str) -> impl IntoView {
+fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
     let state = AppState::expect();
 
     view! {
         <SectionLabel label="Command" />
         {move || {
             let running = state.session_running.get();
+            // The button names what this mode does, and the Output channel
+            // follows it — `FlashAndMonitor` is not a verb anyone says.
+            let (verb, channel) = match mode.get() {
+                FlashAction::Monitor => ("Attach", "monitor"),
+                _ => ("Flash and monitor", "flash"),
+            };
 
             let Some(plan) = state.plan.get() else {
                 // Say which half is missing. "Cannot flash" with no reason is
@@ -238,7 +266,7 @@ fn Plan(#[prop(into)] verb: String, channel: &'static str) -> impl IntoView {
             let firmware = state.current_firmware();
             let rationale = plan.rationale.clone();
             let display = plan.display.clone();
-            let verb = verb.clone();
+            let verb = verb.to_string();
 
             view! {
                 <div class="px-4 pb-4">

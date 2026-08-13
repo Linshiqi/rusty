@@ -193,7 +193,19 @@
     }),
     save_sim_trace: (a) => { window.__mock.traces.push(a.text); return "E:\mock\firmware\target\rusty-sim\trace.vcd"; },
     toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
-    firmware_list: () => [],
+    serial_ports: () => [{ name: "COM3", bridge: "CP210x", boards: ["ESP32 DevKit"], likelyBoard: true, usb: null }],
+    debug_probes: () => [],
+    firmware_list: () => [{
+      path: "target/xtensa-esp32-none-elf/release/blinky", name: "blinky",
+      profile: "release", target: "xtensa-esp32-none-elf", bytes: 1234567,
+      modified: 1765600000, matchesConfiguredTarget: true,
+    }],
+    plan_flash: (a) => ({
+      program: "espflash", args: ["flash", "--monitor"],
+      display: a.action === "monitor" ? "espflash monitor --port COM3"
+        : "espflash flash --monitor target/xtensa-esp32-none-elf/release/blinky",
+      rationale: "mock: espflash speaks the ROM bootloader on this transport",
+    }),
     chip_catalogue: () => [],
     board_catalogue: () => [],
     catalog_problems: () => [],

@@ -1,20 +1,14 @@
-//! Getting the binary onto the board.
+//! The device workspace: what is plugged in, and getting firmware onto it.
+//!
+//! One page for both verbs. Flash-and-monitor is the inner loop; attach-only
+//! is its sibling for a board already running — the Monitor panel that used
+//! to hold it was this page minus one toggle, twice the navigation.
 
 use leptos::prelude::*;
-
-use rusty_embed::FlashAction;
 
 use crate::view::panels::session::Session;
 
 #[component]
 pub fn Flash() -> impl IntoView {
-    view! {
-        <Session
-            // Flash *and* monitor is the inner loop — writing an image and then
-            // not seeing what it printed is a step nobody wants on its own, and
-            // the Monitor panel is there for attaching without rewriting.
-            action=FlashAction::FlashAndMonitor
-            verb="Flash and monitor"
-        />
-    }
+    view! { <Session /> }
 }

@@ -10,7 +10,6 @@ mod features;
 mod files;
 mod flash;
 mod memory;
-mod monitor;
 mod search;
 mod session;
 mod simulate;
@@ -96,15 +95,6 @@ pub fn all() -> Vec<Panel> {
             needs_project: true,
             hidden: false,
             render: || simulate::Simulate().into_any(),
-        },
-        Panel {
-            id: "monitor",
-            title: "Monitor",
-            section: "Device",
-            icon: Icon::Monitor,
-            needs_project: true,
-            hidden: false,
-            render: || monitor::Monitor().into_any(),
         },
         Panel {
             id: "wizard",
