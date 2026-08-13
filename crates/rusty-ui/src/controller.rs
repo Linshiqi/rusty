@@ -1116,6 +1116,11 @@ fn tabs_key(root: &str) -> String {
 
 /// Write the strip to localStorage: open paths, active one first.
 pub fn remember_tabs(state: AppState) {
+    // Nor to overwrite: one detached window remembering its single tab
+    // would wipe the shell's strip for the next launch.
+    if state.detached.with_untracked(Option::is_some) {
+        return;
+    }
     let Some(root) = state
         .project
         .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
@@ -1135,6 +1140,11 @@ pub fn remember_tabs(state: AppState) {
 /// Reopen the tabs the project had last time. Missing files fail their open
 /// quietly through the normal error path; the strip simply ends up shorter.
 pub fn restore_tabs(state: AppState, root: &str) {
+    // A detached window edits one file; the shell's saved strip is not its
+    // business to reopen.
+    if state.detached.with_untracked(Option::is_some) {
+        return;
+    }
     let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
         return;
     };
@@ -1575,7 +1585,7 @@ pub fn create_project(state: AppState, choice: WizardChoice) {
                 // describing a decision that has already been carried out,
                 // while the thing it produced is somewhere the user has to go
                 // and find.
-                state.active_panel.set("overview".to_string());
+                state.active_panel.set("files".to_string());
             },
         );
     });

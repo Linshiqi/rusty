@@ -56,7 +56,8 @@ pub fn Crates() -> impl IntoView {
                         "Direct dependencies"
                     </span>
                 </div>
-                <div class="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+                <div class="min-h-0 flex-1 overflow-y-auto">
+                    <div class="px-5 py-3">
                     {move || {
                         let Some(rows) = state.crate_rows.get() else {
                             return view! {
@@ -135,6 +136,13 @@ pub fn Crates() -> impl IntoView {
                             .collect_view()
                             .into_any()
                     }}
+                    </div>
+                    // The feature matrix rides below the dependency list —
+                    // one page about what the workspace pulls in and why,
+                    // instead of a second panel that was mostly empty space.
+                    <div class="border-t border-line">
+                        <super::features::Features />
+                    </div>
                 </div>
             </div>
         }

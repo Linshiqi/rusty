@@ -13,13 +13,11 @@ use leptos::prelude::*;
 pub enum Icon {
     Files,
     Search,
-    Overview,
     Toolchain,
     Memory,
     Flash,
     Simulate,
     Monitor,
-    Features,
     Crates,
     Settings,
     Wizard,
@@ -42,20 +40,18 @@ impl Icon {
             Icon::Files => "M5 2.5h6l4 4V17.5H5zM11 2.5V7h4",
             // A magnifier.
             Icon::Search => "M8.7 3.2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM12.8 12.8 17 17",
-            // Four panes — a dashboard.
-            Icon::Overview => "M3 3.5h5.5v5.5H3zM11.5 3.5H17v5.5h-5.5zM3 11.5h5.5V17H3zM11.5 11.5H17V17h-5.5z",
-            // A wrench.
-            Icon::Toolchain => "M13.2 3.4a3.9 3.9 0 0 0-4.6 5.1L3.4 13.7a1.6 1.6 0 0 0 2.3 2.3l5.2-5.2a3.9 3.9 0 0 0 5.1-4.6l-2.4 2.4-2-2z",
-            // Stacked bars — regions of a memory map.
-            Icon::Memory => "M3 5h14M3 10h9M3 15h12",
+            // A toolbox — the wrench read as Settings, which every other
+            // app taught people a wrench means.
+            Icon::Toolchain => "M3.5 8.5h13v7h-13zM8 8.5V7.2a2 2 0 0 1 4 0v1.3M3.5 11.5h5M11.5 11.5h5M8.5 10.5h3v2h-3z",
+            // A RAM chip: body, legs, a window — three bare lines read as
+            // a text list, not as silicon.
+            Icon::Memory => "M4.5 6.5h11v7h-11zM7 6.5V4.2M10 6.5V4.2M13 6.5V4.2M7 13.5v2.3M10 13.5v2.3M13 13.5v2.3M7.5 9h5v2h-5z",
             // A bolt.
             Icon::Flash => "M11 2.5 4.5 11.5H9l-1 6 6.5-9H10z",
             // A play triangle in a rounded frame — run, without hardware.
             Icon::Simulate => "M4 4.5h12v11H4zM8.5 7.5l4 2.5-4 2.5z",
             // A terminal.
             Icon::Monitor => "M2.5 4.5h15v11h-15zM5.5 8.5l2.5 2-2.5 2M10.5 12.5h4",
-            // Sliders.
-            Icon::Features => "M3 6h9M15 6h2M3 14h3M9 14h8M12.5 4v4M6.5 12v4",
             // A gear — teeth and a bore, generated from the geometry, because
             // the earlier circle-with-rays read as a sun.
             Icon::Settings => "M8.8 4.7 L9.2 2.4 L10.8 2.4 L11.2 4.7 L12.9 5.5 L14.8 4.1 L15.9 5.2 L14.5 7.1 L15.3 8.8 L17.6 9.2 L17.6 10.8 L15.3 11.2 L14.5 12.9 L15.9 14.8 L14.8 15.9 L12.9 14.5 L11.2 15.3 L10.8 17.6 L9.2 17.6 L8.8 15.3 L7.1 14.5 L5.2 15.9 L4.1 14.8 L5.5 12.9 L4.7 11.2 L2.4 10.8 L2.4 9.2 L4.7 8.8 L5.5 7.1 L4.1 5.2 L5.2 4.1 L7.1 5.5 Z M12.4 10a2.4 2.4 0 1 1 -4.8 0a2.4 2.4 0 1 1 4.8 0",

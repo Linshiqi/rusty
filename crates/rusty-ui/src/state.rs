@@ -169,6 +169,31 @@ impl Divider {
     }
 }
 
+/// The `detach` query parameter, percent-decoded — the file this window
+/// exists to edit, when it is that kind of window.
+fn detached_path() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let raw = search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("detach="))?;
+    // Decode %XX; the backend encodes everything outside [A-Za-z0-9._-/].
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' && at + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).ok().filter(|p| !p.is_empty())
+}
+
 fn stored_size(divider: Divider, fallback: f64) -> f64 {
     let (min, max) = divider.bounds();
     web_sys::window()
@@ -433,6 +458,11 @@ pub struct AppState {
     ///
     /// A fixed-size panel is the first thing anyone tries to drag, and finding
     /// that they cannot is the moment a tool starts feeling rigid.
+    /// `Some(path)` when this window was booted with `?detach=<path>` — a
+    /// single file's editor, not the shell. Panels that show project-wide
+    /// chrome (the tree, the tab strip) check it; so does everything that
+    /// would write session state a one-file window has no business writing.
+    pub detached: RwSignal<Option<String>>,
     pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
     /// Which divider is being dragged, if any. Held centrally so the window
@@ -559,8 +589,9 @@ impl AppState {
             expanded: RwSignal::new(Vec::new()),
             terminal: RwSignal::new(None),
             session_running: RwSignal::new(false),
-            active_panel: RwSignal::new("overview".to_string()),
+            active_panel: RwSignal::new("files".to_string()),
             recents: RwSignal::new(Vec::new()),
+            detached: RwSignal::new(detached_path()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
             dragging: RwSignal::new(None),

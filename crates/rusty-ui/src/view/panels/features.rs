@@ -51,7 +51,7 @@ pub fn Features() -> impl IntoView {
                 <Empty
                     title="No Cargo analysis"
                     detail="Feature resolution runs over the whole dependency graph, which needs \
-                            `cargo metadata` to have succeeded. The Overview panel says why it \
+                            `cargo metadata` to have succeeded. The Problems panel says why it \
                             did not."
                 />
             }

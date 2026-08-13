@@ -11,7 +11,6 @@ mod files;
 mod flash;
 mod memory;
 mod monitor;
-mod overview;
 mod search;
 mod session;
 mod simulate;
@@ -52,15 +51,6 @@ pub fn all() -> Vec<Panel> {
             render: || search::SearchPanel().into_any(),
         },
         Panel {
-            id: "overview",
-            title: "Overview",
-            section: "Project",
-            icon: Icon::Overview,
-            needs_project: false,
-            hidden: false,
-            render: || overview::Overview().into_any(),
-        },
-        Panel {
             id: "toolchain",
             title: "Toolchain",
             section: "Project",
@@ -88,15 +78,6 @@ pub fn all() -> Vec<Panel> {
             needs_project: true,
             hidden: false,
             render: || crates::Crates().into_any(),
-        },
-        Panel {
-            id: "features",
-            title: "Features",
-            section: "Project",
-            icon: Icon::Features,
-            needs_project: true,
-            hidden: false,
-            render: || features::Features().into_any(),
         },
         Panel {
             id: "flash",

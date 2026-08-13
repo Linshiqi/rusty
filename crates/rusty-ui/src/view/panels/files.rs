@@ -49,6 +49,17 @@ pub fn FilesPanel() -> impl IntoView {
             .into_any();
         }
 
+        // A detached window is the editor alone — VSCode's shape: the tree
+        // and the strip belong to the shell that spawned it.
+        if state.detached.with_untracked(Option::is_some) {
+            return view! {
+                <div class="flex min-h-0 flex-1">
+                    <Editor />
+                </div>
+            }
+            .into_any();
+        }
+
         view! {
             <div class="flex min-h-0 flex-1">
                 <Tree />
@@ -546,6 +557,9 @@ fn TabStrip() -> impl IntoView {
     let state = AppState::expect();
     let menu = RwSignal::new(None::<(f64, f64, String)>);
 
+    if state.detached.with_untracked(Option::is_some) {
+        return ().into_any();
+    }
     view! {
         <div class="flex flex-none items-stretch overflow-x-auto border-b border-line bg-sidebar">
             {move || {
@@ -723,6 +737,7 @@ fn TabStrip() -> impl IntoView {
             }}
         </div>
     }
+    .into_any()
 }
 
 #[component]

@@ -73,13 +73,35 @@ pub fn App() -> impl IntoView {
     // development should not lose the open project.
     controller::restore(state);
 
+    // The browser's own chrome never belongs in the app: no native context
+    // menu anywhere (surfaces that want one draw their own), and none of the
+    // navigation shortcuts — F5 would tear the workbench down mid-session,
+    // Ctrl+P prints a web page nobody asked for, Alt+arrows walk a history
+    // that does not exist. F12 stays: our own debugging lives there.
+    let menus = window_event_listener(leptos::ev::contextmenu, |event| {
+        event.prevent_default();
+    });
+    let keys = window_event_listener(leptos::ev::keydown, |event: leptos::ev::KeyboardEvent| {
+        let key = event.key();
+        let blocked = key == "F5"
+            || (event.ctrl_key() && matches!(key.as_str(), "p" | "P" | "u" | "U" | "j" | "J"))
+            || (event.alt_key() && matches!(key.as_str(), "ArrowLeft" | "ArrowRight"));
+        if blocked {
+            event.prevent_default();
+        }
+    });
+    // Leaked deliberately: they live as long as the window, and dropping the
+    // handles would silently detach them.
+    std::mem::forget(menus);
+    std::mem::forget(keys);
+
     let settings_open = RwSignal::new(false);
     provide_context(SettingsOpen(settings_open));
 
     // A `?detach=<path>` boot means this window is one file's editor, not
     // the whole shell: no sidebar, no dock, no menu bar — the OS gives it a
     // frame, and closing it is closing it.
-    if let Some(path) = detached_path() {
+    if let Some(path) = state.detached.get_untracked() {
         let opened = RwSignal::new(false);
         Effect::new(move |_| {
             if state.has_project() && !opened.get_untracked() {
@@ -183,31 +205,6 @@ pub fn App() -> impl IntoView {
         </div>
     }
     .into_any()
-}
-
-/// The `detach` query parameter, percent-decoded — the file this window
-/// exists to edit, when it is that kind of window.
-fn detached_path() -> Option<String> {
-    let search = web_sys::window()?.location().search().ok()?;
-    let raw = search
-        .trim_start_matches('?')
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("detach="))?;
-    // Decode %XX; the backend encodes everything outside [A-Za-z0-9._-/].
-    let bytes = raw.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'%' && at + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            at += 3;
-        } else {
-            out.push(bytes[at]);
-            at += 1;
-        }
-    }
-    String::from_utf8(out).ok().filter(|p| !p.is_empty())
 }
 
 /// Renders the active panel, or explains why it cannot.
