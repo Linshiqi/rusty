@@ -136,6 +136,11 @@ pub struct WorkbenchState {
     /// force direct; anything else = an explicit proxy URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
+    /// Keyboard shortcut overrides: action id → chord ("Ctrl+K"). Only the
+    /// changed ones live here; defaults stay in code, so a new default in a
+    /// newer rusty reaches everyone who has not overridden that action.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub keybinds: std::collections::BTreeMap<String, String>,
 }
 
 fn workbench_path() -> Option<PathBuf> {

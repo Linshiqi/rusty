@@ -129,6 +129,8 @@ pub fn open_recent(state: AppState, path: String, announce: bool) {
             Ok(result) => {
                 project_opened(state, result);
                 load_recents(state);
+    load_keybinds(state);
+    apply_ui_zoom(state);
             }
             Err(error) => {
                 state.push_log(LogLine {
@@ -1772,6 +1774,61 @@ pub fn detach_file(state: AppState, path: String) {
     track(
         state,
         async move { ipc::call::<_, ()>(cmd::files::DETACH, &Args { path }).await },
+        |()| {},
+    );
+}
+
+/// Push the remembered interface scale to the webview. Through `track`, so
+/// "command not found" — the stale-backend symptom — surfaces as a banner
+/// instead of a slider that silently does nothing.
+pub fn apply_ui_zoom(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        factor: f64,
+    }
+    let factor = state.ui_zoom.get_untracked();
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::window::SET_ZOOM, &Args { factor }).await },
+        |()| {},
+    );
+}
+
+/// The stored shortcut overrides.
+pub fn load_keybinds(state: AppState) {
+    track(
+        state,
+        async move {
+            ipc::call::<_, std::collections::HashMap<String, String>>(
+                cmd::workbench::KEYBINDS,
+                &(),
+            )
+            .await
+        },
+        move |map| state.keybinds.set(map),
+    );
+}
+
+/// Override one shortcut (or clear the override with `None`). Optimistic:
+/// the map updates now, the file catches up.
+pub fn save_keybind(state: AppState, id: String, chord: Option<String>) {
+    state.keybinds.update(|map| match &chord {
+        Some(chord) => {
+            map.insert(id.clone(), chord.clone());
+        }
+        None => {
+            map.remove(&id);
+        }
+    });
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        id: String,
+        chord: Option<String>,
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::SET_KEYBIND, &Args { id, chord }).await },
         |()| {},
     );
 }

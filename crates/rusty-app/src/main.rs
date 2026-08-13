@@ -37,6 +37,8 @@ fn main() {
             commands::relocate_storage,
             commands::proxy_setting,
             commands::set_proxy_setting,
+            commands::keybinds,
+            commands::set_keybind,
             files::file_tree,
             files::open_file,
             files::save_file,
@@ -91,6 +93,7 @@ fn main() {
             window::window_minimize,
             window::window_toggle_maximize,
             window::window_close,
+            window::window_set_zoom,
         ])
         .build(tauri::generate_context!())
         .expect("rusty failed to start")
@@ -161,6 +164,8 @@ mod wire_names {
             cmd::workbench::RELOCATE => commands::relocate_storage,
             cmd::workbench::PROXY => commands::proxy_setting,
             cmd::workbench::SET_PROXY => commands::set_proxy_setting,
+            cmd::workbench::KEYBINDS => commands::keybinds,
+            cmd::workbench::SET_KEYBIND => commands::set_keybind,
             cmd::files::TREE => files::file_tree,
             cmd::files::OPEN => files::open_file,
             cmd::files::SAVE => files::save_file,
@@ -221,6 +226,7 @@ mod wire_names {
             cmd::window::MINIMIZE => window::window_minimize,
             cmd::window::TOGGLE_MAXIMIZE => window::window_toggle_maximize,
             cmd::window::CLOSE => window::window_close,
+            cmd::window::SET_ZOOM => window::window_set_zoom,
         }
     }
 }

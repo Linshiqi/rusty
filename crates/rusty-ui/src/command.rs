@@ -62,7 +62,7 @@ pub struct Command {
     /// The heading it appears under, and part of what a search matches.
     pub group: &'static str,
     /// Shown right-aligned. `None` for anything without a binding.
-    pub shortcut: Option<&'static str>,
+    pub shortcut: Option<String>,
 }
 
 /// Everything available right now.
@@ -72,8 +72,17 @@ pub struct Command {
 /// to add it — the same reason the shell renders from the registry.
 pub fn all(state: AppState) -> Vec<Command> {
     let mut out = Vec::new();
+    // What each action's key actually is right now — overrides included, so
+    // the palette never advertises a chord that stopped working.
+    let bound = crate::view::palette::effective(state);
+    let chord = |action: Action| {
+        bound
+            .iter()
+            .find(|(binding, _)| binding.action == action)
+            .map(|(_, chord)| chord.clone())
+    };
 
-    for (index, panel) in panels::all().into_iter().enumerate() {
+    for panel in panels::all() {
         // Disabled panels stay listed but say why, rather than vanishing —
         // a palette that hides things teaches people it cannot be trusted.
         let blocked = panel.needs_project && !state.has_project();
@@ -85,10 +94,7 @@ pub fn all(state: AppState) -> Vec<Command> {
                 panel.title.to_string()
             },
             group: "Go to",
-            shortcut: match index {
-                0..=8 => Some(SHORTCUT_DIGITS[index]),
-                _ => None,
-            },
+            shortcut: chord(Action::ShowPanel(panel.id)),
         });
     }
 
@@ -99,8 +105,12 @@ pub fn all(state: AppState) -> Vec<Command> {
         shortcut,
     };
 
-    out.push(action(Action::OpenProject, "Open project…", Some("Ctrl O")));
-    out.push(action(Action::RefreshProject, "Re-check project", Some("Ctrl R")));
+    out.push(action(Action::OpenProject, "Open project…", chord(Action::OpenProject)));
+    out.push(action(
+        Action::RefreshProject,
+        "Re-check project",
+        chord(Action::RefreshProject),
+    ));
     out.push(action(Action::RefreshToolchain, "Re-scan toolchain", None));
     out.push(action(Action::ReloadCatalog, "Reload chips and boards", None));
 
@@ -111,7 +121,7 @@ pub fn all(state: AppState) -> Vec<Command> {
         shortcut,
     };
 
-    out.push(view(Action::ToggleDock, "Toggle the panel below", Some("Ctrl `")));
+    out.push(view(Action::ToggleDock, "Toggle the panel below", chord(Action::ToggleDock)));
     out.push(view(Action::ShowDock(DockTab::Problems), "Show problems", None));
     out.push(view(Action::ShowDock(DockTab::Output), "Show output", None));
     out.push(view(Action::ShowDock(DockTab::Terminal), "Show terminal", None));
@@ -131,7 +141,7 @@ pub fn all(state: AppState) -> Vec<Command> {
         action: Action::OpenSettings,
         title: "Settings".to_string(),
         group: "Settings",
-        shortcut: Some("Ctrl ,"),
+        shortcut: chord(Action::OpenSettings),
     });
 
     out
@@ -148,18 +158,13 @@ pub fn recent_label(path: &str) -> String {
     format!("{name} — {path}")
 }
 
-/// Labels for the first nine panels' number shortcuts.
-const SHORTCUT_DIGITS: [&str; 9] = [
-    "Ctrl 1", "Ctrl 2", "Ctrl 3", "Ctrl 4", "Ctrl 5", "Ctrl 6", "Ctrl 7", "Ctrl 8", "Ctrl 9",
-];
-
 /// One row in a menu.
 #[derive(Clone)]
 pub enum Item {
     Entry {
         action: Action,
         label: String,
-        shortcut: Option<&'static str>,
+        shortcut: Option<String>,
         /// Greyed out until a project is open, the way File > Save is greyed
         /// out with no document. Present but unavailable says "this exists and
         /// here is when"; hidden says nothing at all.
@@ -176,7 +181,7 @@ pub struct Menu {
     pub items: Vec<Item>,
 }
 
-fn entry(action: Action, label: &str, shortcut: Option<&'static str>) -> Item {
+fn entry(action: Action, label: &str, shortcut: Option<String>) -> Item {
     Item::Entry {
         action,
         label: label.to_string(),
@@ -185,7 +190,7 @@ fn entry(action: Action, label: &str, shortcut: Option<&'static str>) -> Item {
     }
 }
 
-fn project_entry(action: Action, label: &str, shortcut: Option<&'static str>) -> Item {
+fn project_entry(action: Action, label: &str, shortcut: Option<String>) -> Item {
     Item::Entry {
         action,
         label: label.to_string(),
@@ -201,12 +206,20 @@ fn project_entry(action: Action, label: &str, shortcut: Option<&'static str>) ->
 /// registry for the same reason they are in the sidebar — a contributed panel
 /// appears in View without anyone remembering to add it.
 pub fn menus(state: AppState) -> Vec<Menu> {
+    let bound = crate::view::palette::effective(state);
+    let chord = |action: Action| {
+        bound
+            .iter()
+            .find(|(binding, _)| binding.action == action)
+            .map(|(_, chord)| chord.clone())
+    };
+
     // Shaped like VSCode's View menu: palette on top, appearance folded into
     // a submenu, then the panels the sidebar shows — and only those. The
     // wizard and the assistant have their own doors; listing them here made
     // the menu a pile.
     let mut view_items = vec![
-        entry(Action::OpenPalette, "Command palette…", Some("Ctrl K")),
+        entry(Action::OpenPalette, "Command palette…", chord(Action::OpenPalette)),
         Item::Separator,
         Item::Submenu {
             label: "Appearance",
@@ -220,17 +233,17 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         },
         Item::Separator,
     ];
-    for (index, panel) in panels::all().into_iter().filter(|p| !p.hidden).enumerate() {
+    for panel in panels::all().into_iter().filter(|p| !p.hidden) {
         view_items.push(Item::Entry {
             action: Action::ShowPanel(panel.id),
             label: panel.title.to_string(),
-            shortcut: SHORTCUT_DIGITS.get(index).copied(),
+            shortcut: chord(Action::ShowPanel(panel.id)),
             needs_project: panel.needs_project,
         });
     }
     view_items.extend([
         Item::Separator,
-        entry(Action::ToggleDock, "Panel below", Some("Ctrl `")),
+        entry(Action::ToggleDock, "Panel below", chord(Action::ToggleDock)),
         entry(Action::ShowDock(DockTab::Problems), "Problems", None),
         entry(Action::ShowDock(DockTab::Output), "Output", None),
         entry(Action::ShowDock(DockTab::Terminal), "Terminal", None),
@@ -244,7 +257,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             items: {
                 let mut items = vec![
                     entry(Action::ShowPanel("wizard"), "New project…", None),
-                    entry(Action::OpenProject, "Open project…", Some("Ctrl O")),
+                    entry(Action::OpenProject, "Open project…", chord(Action::OpenProject)),
                 ];
                 let recents = state.recents.get_untracked();
                 if !recents.is_empty() {
@@ -263,7 +276,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 }
                 items.extend([
                     Item::Separator,
-                    entry(Action::OpenSettings, "Settings…", Some("Ctrl ,")),
+                    entry(Action::OpenSettings, "Settings…", chord(Action::OpenSettings)),
                     Item::Separator,
                     entry(Action::CloseWindow, "Exit", None),
                 ]);
@@ -273,24 +286,24 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         Menu {
             title: "Edit",
             items: vec![
-                project_entry(Action::Undo, "Undo", Some("Ctrl Z")),
-                project_entry(Action::Redo, "Redo", Some("Ctrl Y")),
+                project_entry(Action::Undo, "Undo", Some("Ctrl+Z".to_string())),
+                project_entry(Action::Redo, "Redo", Some("Ctrl+Y".to_string())),
                 Item::Separator,
-                project_entry(Action::Cut, "Cut", Some("Ctrl X")),
-                project_entry(Action::Copy, "Copy", Some("Ctrl C")),
-                project_entry(Action::Paste, "Paste", Some("Ctrl V")),
+                project_entry(Action::Cut, "Cut", Some("Ctrl+X".to_string())),
+                project_entry(Action::Copy, "Copy", Some("Ctrl+C".to_string())),
+                project_entry(Action::Paste, "Paste", Some("Ctrl+V".to_string())),
                 Item::Separator,
                 project_entry(
                     Action::ShowPanel("search"),
                     "Search in project",
-                    Some("Ctrl Shift F"),
+                    chord(Action::ShowPanel("search")),
                 ),
             ],
         },
         Menu {
             title: "Project",
             items: vec![
-                project_entry(Action::RefreshProject, "Re-check project", Some("Ctrl R")),
+                project_entry(Action::RefreshProject, "Re-check project", chord(Action::RefreshProject)),
                 entry(Action::RefreshToolchain, "Re-scan toolchain", None),
                 entry(Action::ReloadCatalog, "Reload chips and boards", None),
             ],

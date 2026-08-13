@@ -13,6 +13,115 @@ use crate::{
 };
 
 /// Install the global key handler. Called once, from the shell.
+/// One customisable shortcut: a stable id (what workbench.toml stores
+/// overrides against), the label Settings shows, the factory default, and
+/// what it runs.
+pub struct Binding {
+    pub id: String,
+    pub label: String,
+    pub default: String,
+    pub action: Action,
+}
+
+/// Every bindable command, in the order Settings lists them. Panels come
+/// from the registry, so a contributed panel is bindable without anyone
+/// remembering to add it.
+pub fn defaults() -> Vec<Binding> {
+    let mut out = vec![Binding {
+        id: "palette.open".into(),
+        label: "Command palette".into(),
+        default: "Ctrl+K".into(),
+        action: Action::OpenPalette,
+    }];
+    for (index, panel) in crate::view::panels::all()
+        .into_iter()
+        .filter(|p| !p.hidden)
+        .enumerate()
+        .take(9)
+    {
+        out.push(Binding {
+            id: format!("panel.{}", panel.id),
+            label: format!("Go to {}", panel.title),
+            default: format!("Ctrl+{}", index + 1),
+            action: Action::ShowPanel(panel.id),
+        });
+    }
+    out.extend([
+        Binding {
+            id: "project.open".into(),
+            label: "Open project".into(),
+            default: "Ctrl+O".into(),
+            action: Action::OpenProject,
+        },
+        Binding {
+            id: "project.recheck".into(),
+            label: "Re-check project".into(),
+            default: "Ctrl+R".into(),
+            action: Action::RefreshProject,
+        },
+        Binding {
+            id: "search.project".into(),
+            label: "Search in project".into(),
+            default: "Ctrl+Shift+F".into(),
+            action: Action::ShowPanel("search"),
+        },
+        Binding {
+            id: "dock.toggle".into(),
+            label: "Toggle the panel below".into(),
+            default: "Ctrl+`".into(),
+            action: Action::ToggleDock,
+        },
+        Binding {
+            id: "settings.open".into(),
+            label: "Settings".into(),
+            default: "Ctrl+,".into(),
+            action: Action::OpenSettings,
+        },
+    ]);
+    out
+}
+
+/// The bindings with overrides applied: what the keyboard actually does.
+pub fn effective(state: AppState) -> Vec<(Binding, String)> {
+    let overrides = state.keybinds.get_untracked();
+    defaults()
+        .into_iter()
+        .map(|binding| {
+            let chord = overrides.get(&binding.id).cloned().unwrap_or_else(|| {
+                binding.default.clone()
+            });
+            (binding, chord)
+        })
+        .collect()
+}
+
+/// A key event as a canonical chord string, or None for anything that is
+/// not a chord this system binds (unmodified keys, bare modifiers). Pure so
+/// the canonical form is pinned by tests.
+pub fn chord_of(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<String> {
+    if !ctrl {
+        return None;
+    }
+    if matches!(key, "Control" | "Shift" | "Alt" | "Meta") {
+        return None;
+    }
+    let key = match key {
+        // The shifted spellings arrive pre-shifted; store the base key so
+        // "Ctrl+Shift+F" reads the way people write it.
+        k if k.chars().count() == 1 => k.to_uppercase(),
+        other => other.to_string(),
+    };
+    let mut chord = String::from("Ctrl+");
+    if shift {
+        chord.push_str("Shift+");
+    }
+    if alt {
+        chord.push_str("Alt+");
+    }
+    chord.push_str(&key);
+    Some(chord)
+}
+
 pub fn install(state: AppState, chrome: Chrome) {
     let Chrome {
         palette_open,
@@ -22,7 +131,8 @@ pub fn install(state: AppState, chrome: Chrome) {
     let handle = window_event_listener(ev::keydown, move |event| {
         let key = event.key();
 
-        // Escape closes the topmost thing, innermost first.
+        // Escape closes the topmost thing, innermost first. Not bindable:
+        // an escape key that stopped escaping would strand people.
         if key == "Escape" {
             if palette_open.get_untracked() {
                 palette_open.set(false);
@@ -34,42 +144,33 @@ pub fn install(state: AppState, chrome: Chrome) {
             return;
         }
 
-        // Everything else is modified. Without this check, typing "1" into the
-        // palette's own search box would switch panels underneath it.
-        if !(event.ctrl_key() || event.meta_key()) {
+        // While Settings is capturing a new chord, the keyboard belongs to
+        // the capture box, not to the bindings being edited.
+        if state.keybind_capture.get_untracked().is_some() {
             return;
         }
 
-        let action = match key.as_str() {
-            "k" | "K" => {
-                palette_open.update(|open| *open = !*open);
-                event.prevent_default();
-                return;
-            }
-            "," => Some(Action::OpenSettings),
-            "f" | "F" if event.shift_key() => Some(Action::ShowPanel("search")),
-            "o" | "O" => Some(Action::OpenProject),
-            "r" | "R" => Some(Action::RefreshProject),
-            "`" => Some(Action::ToggleDock),
-            // Ctrl 1..9 goes to the nth panel. Zero is deliberately unbound —
-            // there is no zeroth panel, and binding it to the last one is a
-            // convention nobody expects here.
-            digit => digit
-                .parse::<usize>()
-                .ok()
-                .filter(|d| (1..=9).contains(d))
-                .and_then(|d| {
-                    crate::view::panels::all()
-                        .get(d - 1)
-                        .map(|panel| Action::ShowPanel(panel.id))
-                }),
+        let Some(chord) =
+            chord_of(event.ctrl_key() || event.meta_key(), event.shift_key(), event.alt_key(), &key)
+        else {
+            return;
+        };
+        let Some((binding, _)) = effective(state)
+            .into_iter()
+            .find(|(_, bound)| *bound == chord)
+        else {
+            return;
         };
 
-        if let Some(action) = action {
-            // Only swallow the key once it is known to be ours; Ctrl+A and the
-            // rest must keep working in text fields.
-            event.prevent_default();
-            command::run(action, state, chrome);
+        // Only swallow the key once it is known to be ours; Ctrl+A and the
+        // rest must keep working in text fields.
+        event.prevent_default();
+        if binding.id == "palette.open" {
+            // The palette key toggles — pressing it inside the palette is
+            // how people close it.
+            palette_open.update(|open| *open = !*open);
+        } else {
+            command::run(binding.action, state, chrome);
         }
     });
 
@@ -226,19 +327,3 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
     }
 }
 
-/// Every binding, for the settings screen to list.
-///
-/// Beside the handler above so the two cannot disagree about what a key does.
-/// A shortcut nobody can discover is a shortcut nobody uses, which is why this
-/// is shown in the interface rather than left to documentation.
-pub fn bindings() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("Ctrl K", "Command palette"),
-        ("Ctrl 1…9", "Go to panel"),
-        ("Ctrl O", "Open project"),
-        ("Ctrl R", "Re-check project"),
-        ("Ctrl `", "Toggle the panel below"),
-        ("Ctrl ,", "Settings"),
-        ("Esc", "Close what is in front"),
-    ]
-}

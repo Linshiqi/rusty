@@ -151,9 +151,37 @@ fn Field(
 
 #[component]
 fn Appearance() -> impl IntoView {
+    let state = AppState::expect();
     let theme = RwSignal::new(theme::stored());
 
     view! {
+        <Field
+            label="Interface scale"
+            help="Browser-style zoom over the whole window, 70% to 160%. Takes effect as you \
+                  drag; the editor's own Ctrl+wheel text zoom is separate."
+        >
+            <div class="flex items-center gap-3">
+                <input
+                    type="range"
+                    min="70"
+                    max="160"
+                    step="5"
+                    prop:value=move || format!("{:.0}", state.ui_zoom.get() * 100.0)
+                    on:input=move |event| {
+                        if let Ok(percent) = event_target_value(&event).parse::<f64>() {
+                            let factor = (percent / 100.0).clamp(0.7, 1.6);
+                            state.ui_zoom.set(factor);
+                            crate::state::remember_ui_zoom(factor);
+                            controller::apply_ui_zoom(state);
+                        }
+                    }
+                    class="w-56 accent-rust"
+                />
+                <span class="tnum w-[5ch] font-mono text-callout text-label-2">
+                    {move || format!("{:.0}%", state.ui_zoom.get() * 100.0)}
+                </span>
+            </div>
+        </Field>
         <Field
             label="Theme"
             help="System follows your desktop, including when you change it while rusty is open."
@@ -194,27 +222,145 @@ fn Appearance() -> impl IntoView {
 
 #[component]
 fn Keyboard() -> impl IntoView {
+    let state = AppState::expect();
+
     view! {
         <Field
             label="Shortcuts"
-            help="Not editable yet. Listed here because a shortcut nobody can discover is a \
-                  shortcut nobody uses."
+            help="Click a key to change it: press the new combination, Esc cancels, Backspace \
+                  restores the default. Two commands on one chord — the lower one wins — show \
+                  in amber. Esc itself closes whatever is in front and cannot be rebound."
         >
-            <dl class="grid grid-cols-[max-content_1fr] items-center gap-x-4 gap-y-1.5">
-                {crate::view::palette::bindings()
-                    .into_iter()
-                    .map(|(keys, what)| {
-                        view! {
-                            <dt>
-                                <kbd class="rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote text-label-2">
-                                    {keys}
-                                </kbd>
-                            </dt>
-                            <dd class="m-0 text-callout text-label-2">{what}</dd>
-                        }
-                    })
-                    .collect_view()}
-            </dl>
+            <div class="grid grid-cols-[max-content_1fr_max-content] items-center gap-x-4 gap-y-1.5">
+                {move || {
+                    // Read for reactivity: rows re-render as overrides land.
+                    let overrides = state.keybinds.get();
+                    let rows = crate::view::palette::effective(state);
+                    // A chord bound twice is a surprise worth surfacing.
+                    let mut seen = std::collections::HashMap::new();
+                    for (_, chord) in &rows {
+                        *seen.entry(chord.clone()).or_insert(0) += 1;
+                    }
+                    rows.into_iter()
+                        .map(|(binding, chord)| {
+                            let id = binding.id.clone();
+                            let overridden = overrides.contains_key(&id);
+                            let duplicate = seen.get(&chord).copied().unwrap_or(0) > 1;
+                            let capture_id = id.clone();
+                            let reset_id = id.clone();
+                            let capturing = Signal::derive({
+                                let id = id.clone();
+                                move || {
+                                    state
+                                        .keybind_capture
+                                        .with(|c| c.as_deref() == Some(id.as_str()))
+                                }
+                            });
+                            view! {
+                                <button
+                                    type="button"
+                                    title="Click, then press the new combination"
+                                    on:click=move |_| {
+                                        state.keybind_capture.set(Some(capture_id.clone()));
+                                    }
+                                    on:keydown={
+                                        let id = id.clone();
+                                        move |event: leptos::ev::KeyboardEvent| {
+                                            if !capturing.get_untracked() {
+                                                return;
+                                            }
+                                            event.prevent_default();
+                                            event.stop_propagation();
+                                            match event.key().as_str() {
+                                                "Escape" => {
+                                                    state.keybind_capture.set(None);
+                                                }
+                                                "Backspace" | "Delete" => {
+                                                    controller::save_keybind(
+                                                        state,
+                                                        id.clone(),
+                                                        None,
+                                                    );
+                                                    state.keybind_capture.set(None);
+                                                }
+                                                key => {
+                                                    if let Some(chord) =
+                                                        crate::view::palette::chord_of(
+                                                            event.ctrl_key()
+                                                                || event.meta_key(),
+                                                            event.shift_key(),
+                                                            event.alt_key(),
+                                                            key,
+                                                        )
+                                                    {
+                                                        controller::save_keybind(
+                                                            state,
+                                                            id.clone(),
+                                                            Some(chord),
+                                                        );
+                                                        state.keybind_capture.set(None);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    on:blur=move |_| {
+                                        if capturing.get_untracked() {
+                                            state.keybind_capture.set(None);
+                                        }
+                                    }
+                                    class=move || {
+                                        let base = "justify-self-start rounded-[4px] px-1.5 \
+                                                    py-0.5 font-mono text-footnote";
+                                        if capturing.get() {
+                                            format!("{base} bg-selection text-rust ring-1 ring-rust")
+                                        } else if duplicate {
+                                            format!("{base} bg-sunken text-amber")
+                                        } else {
+                                            format!("{base} bg-sunken text-label-2 hover:text-label")
+                                        }
+                                    }
+                                >
+                                    {move || {
+                                        if capturing.get() {
+                                            "press keys…".to_string()
+                                        } else {
+                                            chord.clone()
+                                        }
+                                    }}
+                                </button>
+                                <span class="text-callout text-label-2">{binding.label}</span>
+                                <span>
+                                    {overridden
+                                        .then(|| {
+                                            view! {
+                                                <button
+                                                    type="button"
+                                                    title="Restore the default"
+                                                    on:click=move |_| {
+                                                        controller::save_keybind(
+                                                            state,
+                                                            reset_id.clone(),
+                                                            None,
+                                                        );
+                                                    }
+                                                    class="rounded-[4px] px-1.5 py-0.5 text-footnote text-label-3 hover:bg-sunken hover:text-label"
+                                                >
+                                                    "reset"
+                                                </button>
+                                            }
+                                        })}
+                                </span>
+                            }
+                        })
+                        .collect_view()
+                }}
+                <kbd class="justify-self-start rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote text-label-3">
+                    "Esc"
+                </kbd>
+                <span class="text-callout text-label-3">"Close what is in front"</span>
+                <span />
+            </div>
         </Field>
     }
 }

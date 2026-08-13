@@ -35,6 +35,14 @@ pub fn window_toggle_maximize(window: Window) -> Result<bool, CommandError> {
     Ok(!maximized)
 }
 
+/// Scale the whole interface, browser-zoom style. CSS pixels stay
+/// self-consistent at every factor, so nothing that measures text — the
+/// editor's hit-testing above all — drifts.
+#[tauri::command]
+pub fn window_set_zoom(factor: f64, webview: tauri::WebviewWindow) -> Result<(), CommandError> {
+    webview.set_zoom(factor.clamp(0.7, 1.6)).map_err(fail)
+}
+
 #[tauri::command]
 pub fn window_close(window: Window) -> Result<(), CommandError> {
     // `close()` rather than `destroy()`, so a future CloseRequested handler can

@@ -29,6 +29,8 @@ pub mod workbench {
     pub const RELOCATE: &str = "relocate_storage";
     pub const PROXY: &str = "proxy_setting";
     pub const SET_PROXY: &str = "set_proxy_setting";
+    pub const KEYBINDS: &str = "keybinds";
+    pub const SET_KEYBIND: &str = "set_keybind";
 }
 
 /// Hardware the workbench knows about.
@@ -131,6 +133,7 @@ pub mod window {
     pub const MINIMIZE: &str = "window_minimize";
     pub const TOGGLE_MAXIMIZE: &str = "window_toggle_maximize";
     pub const CLOSE: &str = "window_close";
+    pub const SET_ZOOM: &str = "window_set_zoom";
 }
 
 /// The assistant and its configuration.

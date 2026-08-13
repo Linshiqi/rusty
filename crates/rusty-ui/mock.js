@@ -216,6 +216,13 @@
     window_minimize: () => null,
     window_toggle_maximize: () => null,
     terminal_close: () => null,
+    window_set_zoom: (a) => { document.documentElement.style.zoom = a.factor; return null; },
+    keybinds: () => window.__mock.keybinds || {},
+    set_keybind: (a) => {
+      const m = (window.__mock.keybinds = window.__mock.keybinds || {});
+      if (a.chord) m[a.id] = a.chord; else delete m[a.id];
+      return null;
+    },
     create_entry: (a) => { window.__mock.created.push(a); return null; },
     open_editor_window: (a) => { window.__mock.detached = a.path; return null; },
   };

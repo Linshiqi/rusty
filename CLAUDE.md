@@ -171,7 +171,8 @@ usty`) holds `location.toml`
 - Per-project, team-shared things live in the project's `.rusty/`, where they
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
-- Theme and divider positions are localStorage, and that is all that is.
+- Theme, divider positions, the editor's text zoom and the interface scale
+  are localStorage, and that is all that is.
 
 ## Testing conventions
 

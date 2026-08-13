@@ -216,6 +216,22 @@ fn stored_zoom() -> f64 {
         .unwrap_or(1.0)
 }
 
+/// The interface scale from last time, clamped to the slider's own range.
+fn stored_ui_zoom() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("rusty.ui.zoom").ok().flatten())
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|z| z.clamp(0.7, 1.6))
+        .unwrap_or(1.0)
+}
+
+pub fn remember_ui_zoom(zoom: f64) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item("rusty.ui.zoom", &format!("{zoom:.2}"));
+    }
+}
+
 pub fn remember_zoom(zoom: f64) {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
         let _ = storage.set_item("rusty.editor.zoom", &format!("{zoom:.2}"));
@@ -463,6 +479,13 @@ pub struct AppState {
     /// chrome (the tree, the tab strip) check it; so does everything that
     /// would write session state a one-file window has no business writing.
     pub detached: RwSignal<Option<String>>,
+    /// Shortcut overrides from workbench.toml: action id → chord.
+    pub keybinds: RwSignal<HashMap<String, String>>,
+    /// The action id Settings is currently capturing a chord for. While set,
+    /// the global shortcut handler stands down.
+    pub keybind_capture: RwSignal<Option<String>>,
+    /// Whole-interface scale, browser-zoom style. 1.0 is native.
+    pub ui_zoom: RwSignal<f64>,
     pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
     /// Which divider is being dragged, if any. Held centrally so the window
@@ -592,6 +615,9 @@ impl AppState {
             active_panel: RwSignal::new("files".to_string()),
             recents: RwSignal::new(Vec::new()),
             detached: RwSignal::new(detached_path()),
+            keybinds: RwSignal::new(HashMap::new()),
+            keybind_capture: RwSignal::new(None),
+            ui_zoom: RwSignal::new(stored_ui_zoom()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
             dragging: RwSignal::new(None),

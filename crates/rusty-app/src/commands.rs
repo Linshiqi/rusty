@@ -104,6 +104,29 @@ pub async fn proxy_setting() -> Answer<serde_json::Value> {
     Ok(serde_json::json!({ "stored": stored, "detected": detected }))
 }
 
+/// The stored shortcut overrides, id → chord.
+#[tauri::command]
+pub async fn keybinds() -> Answer<std::collections::BTreeMap<String, String>> {
+    Ok(storage::workbench().keybinds)
+}
+
+/// Override one shortcut, or clear the override (chord = null) so the
+/// built-in default applies again.
+#[tauri::command]
+pub async fn set_keybind(id: String, chord: Option<String>) -> Answer<()> {
+    let mut state = storage::workbench();
+    match chord.as_deref().map(str::trim) {
+        None | Some("") => {
+            state.keybinds.remove(&id);
+        }
+        Some(chord) => {
+            state.keybinds.insert(id, chord.to_string());
+        }
+    }
+    storage::save_workbench(&state).map_err(CommandError::from)?;
+    Ok(())
+}
+
 /// Store the proxy choice: null/"auto" = detect, "none" = direct, else a URL.
 #[tauri::command]
 pub async fn set_proxy_setting(value: Option<String>) -> Answer<()> {
