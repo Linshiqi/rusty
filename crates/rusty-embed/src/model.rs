@@ -451,6 +451,23 @@ pub enum FlashAction {
 /// and shown to the user verbatim before it runs. Embedded developers reach for
 /// the terminal constantly; hiding the command behind a button is how a tool
 /// becomes something to work around rather than with.
+/// What an update check found.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatus {
+    /// The running build.
+    pub current: String,
+    /// The newest published version, when the check reached GitHub.
+    pub latest: Option<String>,
+    /// Where to get it.
+    pub url: Option<String>,
+    /// True only when `latest` is genuinely ahead of `current`.
+    pub newer: bool,
+    /// Why the check could not answer — no network is the normal state of a
+    /// workbench on a bench, so this is a note rather than an error.
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandPlan {

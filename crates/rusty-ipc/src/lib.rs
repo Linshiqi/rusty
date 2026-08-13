@@ -31,6 +31,8 @@ pub mod workbench {
     pub const SET_PROXY: &str = "set_proxy_setting";
     pub const KEYBINDS: &str = "keybinds";
     pub const SET_KEYBIND: &str = "set_keybind";
+    pub const UPDATE: &str = "check_update";
+    pub const OPEN_URL: &str = "open_url";
 }
 
 /// Hardware the workbench knows about.

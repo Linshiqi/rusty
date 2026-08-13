@@ -710,6 +710,13 @@ pub fn download(
 /// The transport ladder for one configured proxy: as given, then the SOCKS5
 /// spelling of the same address (mixed-port proxies answer both), then no
 /// proxy at all. Deduplicated, order kept.
+/// Every route worth trying, in order — the configured proxy, its SOCKS
+/// twin, then direct. Shared with the update check, which has the same
+/// problem: one proxy URL is not one route.
+pub fn proxy_routes() -> Vec<Option<String>> {
+    proxy_candidates(effective_proxy())
+}
+
 fn proxy_candidates(configured: Option<String>) -> Vec<Option<String>> {
     let mut out: Vec<Option<String>> = Vec::new();
     if let Some(url) = configured {

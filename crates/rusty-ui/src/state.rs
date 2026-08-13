@@ -493,6 +493,8 @@ pub struct AppState {
     /// replaced it — which looked like the terminal flickering for ever.
     pub terminal_epoch: RwSignal<u64>,
     pub shell_info: RwSignal<Option<rusty_embed::ShellInfo>>,
+    /// The last update check's answer. `None` while one is in flight.
+    pub update_status: RwSignal<Option<rusty_embed::UpdateStatus>>,
     /// What the shell picker offers: the built-in plus every shell the
     /// backend actually found on this machine.
     pub shell_choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
@@ -630,6 +632,7 @@ impl AppState {
             ui_zoom: RwSignal::new(stored_ui_zoom()),
             terminal_epoch: RwSignal::new(0),
             shell_info: RwSignal::new(None),
+            update_status: RwSignal::new(None),
             shell_choices: RwSignal::new(Vec::new()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),

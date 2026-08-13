@@ -16,6 +16,9 @@ toml = { version = "1.1.4", optional = true }
 # In-process downloads for tool installs: rustls instead of the OS TLS —
 # Windows schannel aborts on some CDNs — and a mirror can be tried in turn.
 ureq = { version = "3.4.0", optional = true, features = ["socks-proxy"] }
+# Two fields out of GitHub's release answer. Already in the tree via the
+# frontend and the CLI, so this costs nothing a build did not already pay.
+serde_json = { version = "1.0.151", optional = true }
 thiserror = { version = "2.0.20", optional = true }
 object = { version = "0.40.0", optional = true }
 rustc-demangle = { version = "0.1.28", optional = true }
@@ -29,7 +32,7 @@ serialport = { version = "4.9.0", optional = true }
 default = ["backend"]
 backend = [
     "dep:toml",
-    "dep:ureq", "dep:thiserror",
+    "dep:ureq", "dep:thiserror", "dep:serde_json",
     "dep:object",
     "dep:rustc-demangle",
     "dep:serialport",

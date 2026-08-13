@@ -222,6 +222,11 @@
       { label: "PowerShell 7", value: "pwsh.exe" },
       { label: "Git Bash", value: "bash.exe" },
     ],
+    check_update: () => ({
+      current: "0.1.0", latest: "0.2.0", newer: true,
+      url: "https://github.com/Linshiqi/rusty/releases/tag/v0.2.0", note: null,
+    }),
+    open_url: () => null,
     terminal_shell_info: () => ({
       active: window.__mock.shellPref === "system" ? "pwsh.exe" : "rusty's built-in shell",
       preference: window.__mock.shellPref || null,

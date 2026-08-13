@@ -1839,6 +1839,29 @@ pub fn set_terminal_shell(state: AppState, value: Option<String>) {
     );
 }
 
+/// Ask GitHub whether there is a newer rusty.
+pub fn check_update(state: AppState) {
+    state.update_status.set(None);
+    track(
+        state,
+        async move { ipc::get::<rusty_embed::UpdateStatus>(cmd::workbench::UPDATE).await },
+        move |status| state.update_status.set(Some(status)),
+    );
+}
+
+/// Hand a link to the desktop browser.
+pub fn open_url(state: AppState, url: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        url: String,
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::OPEN_URL, &Args { url }).await },
+        move |()| {},
+    );
+}
+
 /// The stored shortcut overrides.
 pub fn load_keybinds(state: AppState) {
     track(

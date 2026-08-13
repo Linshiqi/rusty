@@ -356,6 +356,41 @@ pub async fn plan_flash(
     Ok(plan)
 }
 
+/// Is there a newer rusty? Blocking work — ureq is synchronous — so it
+/// goes to a blocking thread rather than stalling the async runtime for as
+/// long as a proxy takes to time out.
+#[tauri::command]
+pub async fn check_update() -> Answer<rusty_embed::UpdateStatus> {
+    tokio::task::spawn_blocking(rusty_embed::update::check)
+        .await
+        .map_err(|e| CommandError::new(format!("the update check panicked: {e}")))
+}
+
+/// Hand a URL to the desktop. Six lines and no plugin: the platform
+/// openers are stable and this is the only thing rusty opens externally.
+#[tauri::command]
+pub async fn open_url(url: String) -> Answer<()> {
+    // Only http(s), and only what rusty itself produced. A general
+    // "run whatever the frontend says" would be a shell injection with a
+    // friendly name.
+    if !url.starts_with("https://") {
+        return Err(CommandError::new("Only https links can be opened."));
+    }
+    let (program, args): (&str, Vec<&str>) = if cfg!(windows) {
+        ("cmd", vec!["/C", "start", ""])
+    } else if cfg!(target_os = "macos") {
+        ("open", vec![])
+    } else {
+        ("xdg-open", vec![])
+    };
+    std::process::Command::new(program)
+        .args(args)
+        .arg(&url)
+        .spawn()
+        .map_err(|e| CommandError::new(format!("could not open {url}: {e}")))?;
+    Ok(())
+}
+
 // ─── features ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
