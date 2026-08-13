@@ -8,10 +8,9 @@ mod assistant;
 mod crates;
 mod features;
 mod files;
-mod flash;
 mod memory;
 mod search;
-mod session;
+pub(crate) mod session;
 mod simulate;
 mod toolchain;
 mod wizard;
@@ -19,9 +18,6 @@ mod wizard;
 use leptos::prelude::*;
 
 use crate::view::{Panel, icon::Icon};
-
-/// The device picker, so the dock can offer the same one the panels do.
-pub use session::Devices;
 
 /// The assistant's content, for the right-hand drawer.
 pub fn assistant_view() -> leptos::prelude::AnyView {
@@ -77,15 +73,6 @@ pub fn all() -> Vec<Panel> {
             needs_project: true,
             hidden: false,
             render: || crates::Crates().into_any(),
-        },
-        Panel {
-            id: "flash",
-            title: "Flash",
-            section: "Device",
-            icon: Icon::Flash,
-            needs_project: true,
-            hidden: false,
-            render: || flash::Flash().into_any(),
         },
         Panel {
             id: "simulate",

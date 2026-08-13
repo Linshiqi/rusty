@@ -861,7 +861,7 @@ fn Surface(document: Document) -> impl IntoView {
             <button
                 type="button"
                 title="Flash the board…"
-                on:click=move |_| state.active_panel.set("flash".to_string())
+                on:click=move |_| state.show_dock(crate::state::DockTab::Devices)
                 class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
                 <IconView icon=Icon::Flash size=15 />

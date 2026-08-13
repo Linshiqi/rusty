@@ -704,10 +704,7 @@ fn DevicesTab() -> impl IntoView {
     let state = AppState::expect();
     let menu = RwSignal::new(None::<(f64, f64)>);
 
-    // The same picker the Flash and Monitor panels use, and the same state
-    // behind it: choosing a device here selects it there. Two lists of what is
-    // plugged in would eventually disagree, and the one showing a device that
-    // is gone is the one the user happens to be looking at.
+    // One list of what is plugged in, one place to act on it.
     view! {
         <div
             class="min-h-0 flex-1 overflow-y-auto pb-2"
@@ -716,7 +713,10 @@ fn DevicesTab() -> impl IntoView {
                 menu.set(Some((event.client_x() as f64, event.client_y() as f64)));
             }
         >
-            <crate::view::panels::Devices />
+            // The whole device workspace — list, mode toggle, command, run.
+            // It lived in a Flash panel once; every path to it was a detour
+            // past this list, which is where the eye already was.
+            <crate::view::panels::session::Session />
             <div class="mt-1 flex items-center gap-2 px-4">
                 <Dot tone=Tone::Neutral />
                 <span class="text-footnote text-label-3">

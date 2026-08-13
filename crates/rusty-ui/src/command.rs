@@ -304,7 +304,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             items: vec![
                 entry(Action::ScanDevices, "Re-scan ports and probes", None),
                 Item::Separator,
-                project_entry(Action::ShowPanel("flash"), "Flash and monitor…", None),
+                project_entry(Action::ShowDock(DockTab::Devices), "Flash and monitor…", None),
                 Item::Separator,
                 project_entry(Action::ShowPanel("memory"), "Memory report", None),
             ],

@@ -62,7 +62,7 @@ pub fn Session() -> impl IntoView {
         }
 
         view! {
-            <div class="flex-1 overflow-y-auto">
+            <div class="flex-1">
                 <Devices />
                 <div class="flex items-center gap-1.5 px-4 pt-3">
                     {[
