@@ -12,12 +12,30 @@ use leptos::prelude::*;
 use crate::{
     controller,
     state::AppState,
-    view::components::{Button, CommandLine, Dot, Pill, Readout, SectionLabel, Tone},
+    view::components::{CommandLine, Dot, Pill, Readout, SectionLabel, Tone},
 };
 
 #[component]
 pub fn Toolchain() -> impl IntoView {
     let state = AppState::expect();
+
+    let toolbar = Callback::new(move |_| {
+        view! {
+            <button
+                type="button"
+                title="Probe the machine again"
+                on:click=move |_| controller::refresh_toolchain(state)
+                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+            >
+                "Re-scan"
+            </button>
+        }
+        .into_any()
+    });
+    Effect::new(move |_| {
+        state.toolbar.set(Some(toolbar));
+    });
+    on_cleanup(move || state.toolbar.set(None));
 
     move || {
         let Some(report) = state.toolchain.get() else {
@@ -249,14 +267,6 @@ pub fn Toolchain() -> impl IntoView {
                             }
                         })
                         .collect_view()}
-                </div>
-
-                <div class="border-t border-line px-4 py-3">
-                    <Button
-                        label="Re-scan"
-                        on_click=Callback::new(move |_| controller::refresh_toolchain(state))
-                        disabled=Signal::derive(move || state.is_busy())
-                    />
                 </div>
             </div>
         }

@@ -333,6 +333,11 @@ pub struct AppState {
     pub ai_key_stored: RwSignal<bool>,
     /// Direct dependencies against crates.io, when the Crates panel asked.
     pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
+    /// The global toolbar's content, registered by whatever the workspace
+    /// currently shows. A slot rather than a switch: each panel mounts its
+    /// own tools and clears them on unmount, so the row always answers to
+    /// the work on screen and a new panel needs no central edit to join.
+    pub toolbar: RwSignal<Option<Callback<(), AnyView>>>,
     /// The assistant drawer on the right, toggled from the title bar.
     pub assistant_open: RwSignal<bool>,
     /// What the firmware last printed to the `[rusty:disp]` channel.
@@ -493,6 +498,7 @@ impl AppState {
             catalog_problems: RwSignal::new(Vec::new()),
             ai_key_stored: RwSignal::new(false),
             crate_rows: RwSignal::new(None),
+            toolbar: RwSignal::new(None),
             assistant_open: RwSignal::new(false),
             sim_display: RwSignal::new(String::new()),
             sim_trace: RwSignal::new(SimTrace::default()),

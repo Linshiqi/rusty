@@ -672,6 +672,66 @@ fn Surface(document: Document) -> impl IntoView {
     // scrolling it, selecting from it — must not count as leaving.
     let on_card = RwSignal::new(false);
     let editor_menu = RwSignal::new(None::<(f64, f64)>);
+
+    // The coding toolbar: what a person editing firmware reaches for. Save
+    // rides the same format-then-save path as Ctrl+S; Build shares the one
+    // session slot; the last two are the places this work goes next.
+    let toolbar = Callback::new(move |_| {
+        let running = state.session_running;
+        view! {
+            <button
+                type="button"
+                title="Format and save (Ctrl+S)"
+                disabled=read_only
+                on:click=move |_| format_and_save(state, area)
+                class="rounded-[7px] bg-rust px-3 py-1 text-callout font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+            >
+                "Save"
+            </button>
+            <button
+                type="button"
+                title="cargo build --release, output in the dock"
+                disabled=move || running.get()
+                on:click=move |_| controller::build_project(state)
+                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+            >
+                "Build"
+            </button>
+            <span class="mx-1 h-5 w-px bg-line" />
+            <button
+                type="button"
+                title="Flash the board"
+                on:click=move |_| state.active_panel.set("flash".to_string())
+                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+            >
+                "Flash"
+            </button>
+            <button
+                type="button"
+                title="Run in the simulator"
+                on:click=move |_| state.active_panel.set("simulate".to_string())
+                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+            >
+                "Simulate"
+            </button>
+            {move || {
+                running
+                    .get()
+                    .then(|| {
+                        view! {
+                            <span class="text-footnote text-label-3">
+                                "running — output in the dock"
+                            </span>
+                        }
+                    })
+            }}
+        }
+        .into_any()
+    });
+    Effect::new(move |_| {
+        state.toolbar.set(Some(toolbar));
+    });
+    on_cleanup(move || state.toolbar.set(None));
     // Which completion row the keyboard is on. Reset when a new popup arrives.
     let picked = RwSignal::new(0usize);
     Effect::new(move |_| {

@@ -13,6 +13,24 @@ use crate::{controller, state::AppState, view::components::Empty};
 pub fn Crates() -> impl IntoView {
     let state = AppState::expect();
 
+    let toolbar = Callback::new(move |_| {
+        view! {
+            <button
+                type="button"
+                title="Ask crates.io again"
+                on:click=move |_| controller::load_crate_report(state)
+                class="rounded-[7px] px-3 py-1 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+            >
+                "Refresh"
+            </button>
+        }
+        .into_any()
+    });
+    Effect::new(move |_| {
+        state.toolbar.set(Some(toolbar));
+    });
+    on_cleanup(move || state.toolbar.set(None));
+
     Effect::new(move |first: Option<()>| {
         if first.is_none() && state.crate_rows.with(Option::is_none) {
             controller::load_crate_report(state);
@@ -36,15 +54,6 @@ pub fn Crates() -> impl IntoView {
                     <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                         "Direct dependencies"
                     </span>
-                    <span class="flex-1" />
-                    <button
-                        type="button"
-                        title="Ask crates.io again"
-                        on:click=move |_| controller::load_crate_report(state)
-                        class="rounded-[5px] px-1.5 py-0.5 text-footnote text-label-3 hover:text-label"
-                    >
-                        "Refresh"
-                    </button>
                 </div>
                 <div class="min-h-0 flex-1 overflow-y-auto px-5 py-3">
                     {move || {

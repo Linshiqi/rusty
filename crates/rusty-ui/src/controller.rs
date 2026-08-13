@@ -778,6 +778,26 @@ pub fn export_vcd(state: AppState) {
     });
 }
 
+/// `cargo build --release` for the open project, streamed to the dock —
+/// the coding toolbar's Build, sharing the one session slot with
+/// everything else that runs.
+pub fn build_project(state: AppState) {
+    if state.session_running.get_untracked() {
+        return;
+    }
+    run_session(
+        state,
+        CommandPlan {
+            program: "cargo".to_string(),
+            args: vec!["build".to_string(), "--release".to_string()],
+            display: "cargo build --release".to_string(),
+            rationale: "the project's own toolchain builds the exact firmware a device \
+                        would get"
+                .to_string(),
+        },
+    );
+}
+
 // ─── crates ──────────────────────────────────────────────────────────────────
 
 /// Ask crates.io about every direct dependency. Slow by design — one index

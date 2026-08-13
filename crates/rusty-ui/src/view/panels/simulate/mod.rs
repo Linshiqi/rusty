@@ -266,10 +266,10 @@ fn BoardEditor(
         dirty.set(true);
     };
 
-    let save = move |_| {
+    let save = Callback::new(move |_: ()| {
         let board = board_of(&chip, kit_pos.get_untracked(), &parts.get_untracked());
         controller::save_sim_board(state, board, dirty);
-    };
+    });
 
     let to_world = move |client_x: f64, client_y: f64| -> (f64, f64) {
         let Some(element) = canvas.get_untracked() else {
@@ -413,9 +413,12 @@ fn BoardEditor(
         }
     };
 
-    view! {
-        <div class="flex min-h-0 flex-1 flex-col">
-            <div class="flex flex-none items-center gap-1.5 border-b border-line px-4 py-2">
+    // The editor's tools live on the global toolbar while this panel is on
+    // screen — registered on mount, cleared on unmount, so the row always
+    // describes the work in front of the user.
+    let toolbar = Callback::new(move |_| {
+        view! {
+
                 {move || {
                     if running.get() {
                         view! {
@@ -460,7 +463,7 @@ fn BoardEditor(
                 <button
                     type="button"
                     disabled=move || !dirty.get()
-                    on:click=save
+                    on:click=move |_| save.run(())
                     class="rounded-[7px] px-3 py-1.5 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                 >
                     "Save layout"
@@ -556,7 +559,19 @@ fn BoardEditor(
                 <span class="text-caption text-label-4">
                     "drag a stub to a pin to wire · middle-drag pans · R turns · F fits"
                 </span>
-            </div>
+                    }
+        .into_any()
+    });
+    Effect::new(move |_| {
+        state.toolbar.set(Some(toolbar));
+    });
+    // Unconditional clear is safe because the stage drops the old panel
+    // before building the next: our cleanup always runs before a successor
+    // registers.
+    on_cleanup(move || state.toolbar.set(None));
+
+    view! {
+        <div class="flex min-h-0 flex-1 flex-col">
 
             <div class="flex min-h-0 flex-1">
                 <Library user_parts=user_parts on_add=Callback::new(move |(kind, label): (PartKind, String)| add_part(kind, label)) />

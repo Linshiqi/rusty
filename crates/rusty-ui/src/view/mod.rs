@@ -87,6 +87,17 @@ pub fn App() -> impl IntoView {
             // they cannot cover the title bar. Settings used to: its own Done
             // button ended up underneath the menu bar and the page became a
             // room with no door.
+            // The context toolbar: whatever the active workspace registered.
+            // Absent registration collapses the row entirely — no dead strip
+            // over panels that brought no tools.
+            {move || {
+                let content = state.toolbar.get()?;
+                Some(view! {
+                    <div class="flex h-10 flex-none items-center gap-1.5 border-b border-line bg-content px-3">
+                        {content.run(())}
+                    </div>
+                })
+            }}
             <div class="relative flex min-h-0 flex-1">
 
                 <palette::Palette open=palette_open chrome=chrome />
