@@ -135,22 +135,19 @@ pub fn TerminalView() -> impl IntoView {
     // and the panel sat on "Starting a shell…" for ever. Throttled so a
     // shell that fails to start paces at the throttle instead of spinning:
     // the error banner stays readable and the machine stays quiet.
-    let last_open = RwSignal::new(0.0f64);
-    Effect::new(move |_| {
-        if state.terminal.with(Option::is_none) {
+    // Reopen only on a Some -> None transition — an actual close (settings
+    // switch, Restart, an error). On first mount the measurer owns the open;
+    // this effect also firing there started a SECOND session whose epoch
+    // orphaned the first, and the two shells fought over one screen.
+    Effect::new(move |prev: Option<bool>| {
+        let is_none = state.terminal.with(Option::is_none);
+        if is_none && prev == Some(false) {
             let (cols, rows) = sent.get_untracked();
-            let now = web_sys::window()
-                .and_then(|w| w.performance())
-                .map(|p| p.now())
-                .unwrap_or(0.0);
-            if cols > 0
-                && host.get_untracked().is_some()
-                && now - last_open.get_untracked() > 2000.0
-            {
-                last_open.set(now);
+            if cols > 0 && host.get_untracked().is_some() {
                 controller::open_terminal(state, cols, rows);
             }
         }
+        is_none
     });
 
     let on_key = move |event: ev::KeyboardEvent| {

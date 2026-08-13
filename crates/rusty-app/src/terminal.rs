@@ -139,8 +139,15 @@ pub async fn terminal_open(
 ) -> Result<(), CommandError> {
     let cwd = state.root().await;
     let shell = resolved_shell();
-    let (terminal, updates) =
-        Terminal::spawn(cwd.as_deref(), cols.max(2), rows.max(1), shell.as_deref())?;
+    // Traced to the dev console: a terminal that never paints is diagnosed
+    // from these four lines, not from guesses.
+    eprintln!("[terminal] open {cols}x{rows} shell={shell:?}");
+    let spawned = Terminal::spawn(cwd.as_deref(), cols.max(2), rows.max(1), shell.as_deref());
+    if let Err(error) = &spawned {
+        eprintln!("[terminal] spawn failed: {error}");
+    }
+    let (terminal, updates) = spawned?;
+    eprintln!("[terminal] spawned; first frame next");
     let terminal = Arc::new(terminal);
     state.set_terminal(Some(Arc::clone(&terminal))).await;
 
@@ -171,6 +178,7 @@ pub async fn terminal_open(
     .map_err(|e| CommandError::new(format!("the terminal reader panicked: {e}")))?;
 
     state.set_terminal(None).await;
+    eprintln!("[terminal] session ended");
     Ok(())
 }
 
