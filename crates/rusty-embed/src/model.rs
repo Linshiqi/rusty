@@ -558,6 +558,9 @@ pub struct SimLed {
     /// nobody can rotate is a diagram that fights its own wiring.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
+    /// Mirrored left-to-right — what a part on the chip's right wants.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// A push button on the board. Pressing it sends `B<pin>=1` (and release
@@ -579,6 +582,9 @@ pub struct SimButton {
     /// nobody can rotate is a diagram that fights its own wiring.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
+    /// Mirrored left-to-right — what a part on the chip's right wants.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// An RGB LED: three pins, one lens. The lit colour is the additive mix of
@@ -602,6 +608,9 @@ pub struct SimRgb {
     /// nobody can rotate is a diagram that fights its own wiring.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
+    /// Mirrored left-to-right — what a part on the chip's right wants.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// A seven-segment digit: seven GPIO pins, one per segment a..g. Lit
@@ -626,6 +635,9 @@ pub struct SimSeven {
     /// nobody can rotate is a diagram that fights its own wiring.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
+    /// Mirrored left-to-right — what a part on the chip's right wants.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// A small text screen fed by the `[rusty:disp]` serial channel — the
@@ -652,6 +664,9 @@ pub struct SimDisplay {
     /// nobody can rotate is a diagram that fights its own wiring.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
+    /// Mirrored left-to-right — what a part on the chip's right wants.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// A potentiometer: a slider in the UI that sends `P<pin>=<0..255>` into
@@ -673,6 +688,9 @@ pub struct SimPot {
     /// nobody can rotate is a diagram that fights its own wiring.
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
+    /// Mirrored left-to-right — what a part on the chip's right wants.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never

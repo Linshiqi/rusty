@@ -65,6 +65,11 @@ pub(super) struct EditPart {
     /// Quarter turns, clockwise. The body rotates in CSS and the wire
     /// anchors rotate with the same arithmetic, so the two never disagree.
     pub(super) rot: u16,
+    /// Mirrored left-to-right, KiCad's X key. This is what a part on the
+    /// chip's right wants: its stubs face back towards the pins *without*
+    /// reversing their order, which is the one thing rotating by 180 gets
+    /// wrong — and the reason wires to a turned seven-segment crossed.
+    pub(super) flip: bool,
     pub(super) kind: PartKind,
     /// pins[0] for LEDs, buttons and pots; RGB uses three; seven uses all.
     pub(super) pins: [u8; 7],
@@ -112,6 +117,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
             waypoints: waypoints_of(&led.routes),
             rot: led.rot,
+            flip: led.flip,
         });
     }
     for button in &board.buttons {
@@ -123,6 +129,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             y: button.y.unwrap_or(180.0),
             waypoints: waypoints_of(&button.routes),
             rot: button.rot,
+            flip: button.flip,
         });
     }
     for rgb in &board.rgbs {
@@ -134,6 +141,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             y: rgb.y.unwrap_or(240.0),
             waypoints: waypoints_of(&rgb.routes),
             rot: rgb.rot,
+            flip: rgb.flip,
         });
     }
     for seven in &board.sevens {
@@ -145,6 +153,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             y: seven.y.unwrap_or(60.0),
             waypoints: waypoints_of(&seven.routes),
             rot: seven.rot,
+            flip: seven.flip,
         });
     }
     for display in &board.displays {
@@ -156,6 +165,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             y: display.y.unwrap_or(160.0),
             waypoints: waypoints_of(&display.routes),
             rot: display.rot,
+            flip: display.flip,
         });
     }
     for pot in &board.pots {
@@ -167,6 +177,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             y: pot.y.unwrap_or(280.0),
             waypoints: waypoints_of(&pot.routes),
             rot: pot.rot,
+            flip: pot.flip,
         });
     }
     out
@@ -194,6 +205,7 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 1),
                 rot: part.rot,
+                flip: part.flip,
             }),
             PartKind::Button => board.buttons.push(rusty_embed::SimButton {
                 pin: part.pins[0],
@@ -202,6 +214,7 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 1),
                 rot: part.rot,
+                flip: part.flip,
             }),
             PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
                 r: part.pins[0],
@@ -212,6 +225,7 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 3),
                 rot: part.rot,
+                flip: part.flip,
             }),
             PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
                 pins: part.pins,
@@ -220,6 +234,7 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 7),
                 rot: part.rot,
+                flip: part.flip,
             }),
             PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
                 label: part.label.clone(),
@@ -228,6 +243,7 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 x: Some(part.x),
                 y: Some(part.y),
                 rot: part.rot,
+                flip: part.flip,
                 routes: routes_of(&part.waypoints, 2),
             }),
             PartKind::Pot => board.pots.push(rusty_embed::SimPot {
@@ -237,6 +253,7 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 1),
                 rot: part.rot,
+                flip: part.flip,
             }),
         }
     }
@@ -437,7 +454,10 @@ pub(super) fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (
 /// to arrive at the same place the eye sees the stub.
 pub(super) fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
     let (w, h) = (part.kind.width(), part.kind.height());
-    let upright = (part.x + w, part.y + STUB_OFFSET + slot as f64 * SLOT_PITCH);
+    // Mirroring moves the stubs to the left edge and leaves their order
+    // alone; rotation then applies to whichever edge they ended on.
+    let x = if part.flip { part.x } else { part.x + w };
+    let upright = (x, part.y + STUB_OFFSET + slot as f64 * SLOT_PITCH);
     rotate_about(upright, (part.x + w / 2.0, part.y + h / 2.0), part.rot)
 }
 
@@ -565,6 +585,45 @@ pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
 mod tests {
     use super::*;
 
+    /// Mirroring is what a part on the chip's right needs: stubs on the
+    /// near edge, in the same order. Rotating by 180 also brings them
+    /// near, but reverses them — which is what made seven wires cross.
+    #[test]
+    fn mirroring_moves_the_stubs_without_reordering_them() {
+        let mut part = led(200.0, 100.0, 26);
+        part.kind = PartKind::Seven;
+        part.pins = [1, 2, 3, 4, 5, 6, 7];
+
+        let upright: Vec<(f64, f64)> = (0..7).map(|s| stub_point(&part, s)).collect();
+        part.flip = true;
+        let mirrored: Vec<(f64, f64)> = (0..7).map(|s| stub_point(&part, s)).collect();
+        part.flip = false;
+        part.rot = 180;
+        let turned: Vec<(f64, f64)> = (0..7).map(|s| stub_point(&part, s)).collect();
+
+        let width = PartKind::Seven.width();
+        assert!(
+            mirrored.iter().all(|p| (p.0 - 200.0).abs() < 0.01),
+            "mirrored stubs sit on the left edge: {mirrored:?}",
+        );
+        assert!(
+            upright.iter().all(|p| (p.0 - (200.0 + width)).abs() < 0.01),
+            "upright stubs sit on the right edge: {upright:?}",
+        );
+        let order: Vec<f64> = mirrored.iter().map(|p| p.1).collect();
+        let mut sorted = order.clone();
+        sorted.sort_by(f64::total_cmp);
+        assert_eq!(order, sorted, "mirroring keeps slot order top to bottom");
+
+        let turned_order: Vec<f64> = turned.iter().map(|p| p.1).collect();
+        let mut turned_sorted = turned_order.clone();
+        turned_sorted.sort_by(f64::total_cmp);
+        assert_ne!(
+            turned_order, turned_sorted,
+            "rotating by 180 reverses them — the case mirroring exists for",
+        );
+    }
+
     fn led(x: f64, y: f64, pin: u8) -> EditPart {
         EditPart {
             kind: PartKind::Led {
@@ -576,6 +635,7 @@ mod tests {
             y,
             waypoints: Default::default(),
             rot: 0,
+            flip: false,
         }
     }
 
@@ -730,6 +790,7 @@ mod tests {
             y: 100.0,
             waypoints: Default::default(),
             rot: 0,
+            flip: false,
         };
         assert_eq!(display.kind.wires(), 2);
         assert!(wire_path(&display, 0, (460.0, 40.0)).is_some(), "sda routes");

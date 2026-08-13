@@ -394,6 +394,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: led.y,
                 rot: led.rot.unwrap_or(0),
                 routes: led.routes.unwrap_or_default(),
+                            flip: false,
             })
             .collect(),
         buttons: parsed
@@ -406,6 +407,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: b.y,
                 rot: b.rot.unwrap_or(0),
                 routes: b.routes.unwrap_or_default(),
+                            flip: false,
             })
             .collect(),
         rgbs: parsed
@@ -420,6 +422,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: rgb.y,
                 rot: rgb.rot.unwrap_or(0),
                 routes: rgb.routes.unwrap_or_default(),
+                            flip: false,
             })
             .collect(),
         sevens: parsed
@@ -432,6 +435,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: seven.y,
                 rot: seven.rot.unwrap_or(0),
                 routes: seven.routes.unwrap_or_default(),
+                            flip: false,
             })
             .collect(),
         displays: parsed
@@ -445,6 +449,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: display.y,
                 rot: display.rot.unwrap_or(0),
                 routes: display.routes.unwrap_or_default(),
+                            flip: false,
             })
             .collect(),
         pots: parsed
@@ -457,6 +462,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 y: pot.y,
                 rot: pot.rot.unwrap_or(0),
                 routes: pot.routes.unwrap_or_default(),
+                            flip: false,
             })
             .collect(),
     })
@@ -1146,6 +1152,7 @@ mod tests {
                 y: Some(60.0),
                 routes: vec![vec![(120.0, 60.0), (200.0, 90.0)]],
                 rot: 90,
+                            flip: false,
             }],
             buttons: vec![SimButton {
                 pin: 14,
@@ -1154,6 +1161,7 @@ mod tests {
                 y: Some(120.0),
                 routes: Vec::new(),
                 rot: 0,
+                            flip: false,
             }],
             rgbs: vec![SimRgb {
                 r: 21,
@@ -1164,6 +1172,7 @@ mod tests {
                 y: None,
                 routes: Vec::new(),
                 rot: 0,
+                            flip: false,
             }],
             sevens: vec![SimSeven {
                 pins: [1, 2, 3, 4, 5, 6, 7],
@@ -1172,6 +1181,7 @@ mod tests {
                 y: Some(40.0),
                 routes: Vec::new(),
                 rot: 270,
+                            flip: false,
             }],
             displays: vec![SimDisplay {
                 sda: 21,
@@ -1181,6 +1191,7 @@ mod tests {
                 x: None,
                 y: None,
                 rot: 0,
+                            flip: false,
             }],
             pots: vec![SimPot {
                 pin: 34,
@@ -1189,6 +1200,7 @@ mod tests {
                 y: Some(200.0),
                 routes: Vec::new(),
                 rot: 0,
+                            flip: false,
             }],
         };
         save_board(dir.path(), &board).expect("save");

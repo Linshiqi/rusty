@@ -268,6 +268,7 @@ fn BoardEditor(
                 y,
                 waypoints: Default::default(),
                 rot: 0,
+                flip: false,
             });
             selected.set(Some(list.len() - 1));
         });
@@ -1084,6 +1085,17 @@ fn BoardEditor(
                                     let x = part.x;
                                     let y = part.y;
                                     let rot = part.rot;
+                                    let flip = part.flip;
+                                    // Mirroring the body mirrors its writing
+                                    // too; readouts and the label undo
+                                    // whatever the body did, the rule that
+                                    // keeps a turned part readable.
+                                    let readable = match (rot == 180, flip) {
+                                        (true, true) => "transform: rotate(180deg) scaleX(-1)",
+                                        (true, false) => "transform: rotate(180deg)",
+                                        (false, true) => "transform: scaleX(-1)",
+                                        (false, false) => "",
+                                    };
                                     let width = part.kind.width();
                                     let height = part.kind.height();
                                     let label = part.label.clone();
@@ -1131,11 +1143,7 @@ fn BoardEditor(
                                                 width="26"
                                                 height="42"
                                                 viewBox="0 0 26 42"
-                                                style=if rot == 180 {
-                                                    "transform: rotate(180deg)"
-                                                } else {
-                                                    ""
-                                                }
+                                                style=readable
                                             >
                                                 {
                                                     let seg = move |slot: usize| {
@@ -1161,11 +1169,7 @@ fn BoardEditor(
                                         PartKind::Display => view! {
                                             <span
                                                 class="grid min-h-[34px] min-w-[110px] place-items-center rounded-[4px] bg-[#0d1a12] px-2 py-1 font-mono text-caption text-[#3ddc84] ring-1 ring-[#1d4a2f]"
-                                                style=if rot == 180 {
-                                                    "transform: rotate(180deg)"
-                                                } else {
-                                                    ""
-                                                }
+                                                style=readable
                                             >
                                                 {move || {
                                                     let text = state.sim_display.get();
@@ -1328,7 +1332,9 @@ fn BoardEditor(
                                             }
                                             style=format!(
                                                 "left: {x}px; top: {y}px; width: {width}px; \
-                                                 height: {height}px; transform: rotate({rot}deg)",
+                                                 height: {height}px; \
+                                                 transform: rotate({rot}deg){}",
+                                                if flip { " scaleX(-1)" } else { "" },
                                             )
                                         >
                                             {face}
@@ -1337,11 +1343,7 @@ fn BoardEditor(
                                             // the writing stays readable.
                                             <span
                                                 class="min-w-0 flex-1 truncate font-mono text-caption text-[#d7dce3]"
-                                                style=if rot == 180 {
-                                                    "transform: rotate(180deg)"
-                                                } else {
-                                                    ""
-                                                }
+                                                style=readable
                                             >
                                                 {label}
                                             </span>

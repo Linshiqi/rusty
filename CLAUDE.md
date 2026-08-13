@@ -366,6 +366,11 @@ usty`) holds `location.toml`
   `pointer-events: none`; only a wire's own grab handles opt back in with
   `pointer-events: stroke`, so a top layer spanning the sheet still lets
   presses through to parts and to the pan gesture.
+- **Mirror, do not rotate, to face a part at the chip.** Rotating 180° does
+  bring a part's stubs to the near edge — and reverses their order, so seven
+  wires to a seven-segment cross on the way in. `flip` mirrors: near edge,
+  same order. Both transforms mirror the part's *writing* too, so readouts
+  and labels carry the inverse (`readable` in `simulate/mod.rs`).
 - **Wire bends belong to the sheet, not to the part — KiCad semantics.**
   Dragging a part stretches only the stub-to-first-bend segment; every bend
   the user placed stays put, and the orthogonal pass grows the elbow the
