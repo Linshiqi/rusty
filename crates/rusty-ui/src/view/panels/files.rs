@@ -685,7 +685,7 @@ fn Surface(document: Document) -> impl IntoView {
                 title="Format and save (Ctrl+S)"
                 disabled=read_only
                 on:click=move |_| format_and_save(state, area)
-                class="grid size-8 place-items-center rounded-[7px] bg-rust text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-7 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
             >
                 <IconView icon=Icon::Save size=15 />
             </button>
@@ -694,7 +694,7 @@ fn Surface(document: Document) -> impl IntoView {
                 title="Build — cargo build --release, output in the dock"
                 disabled=move || running.get()
                 on:click=move |_| controller::build_project(state)
-                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
             >
                 <IconView icon=Icon::Hammer size=15 />
             </button>
@@ -703,7 +703,7 @@ fn Surface(document: Document) -> impl IntoView {
                 type="button"
                 title="Flash the board"
                 on:click=move |_| state.active_panel.set("flash".to_string())
-                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
                 <IconView icon=Icon::Flash size=15 />
             </button>
@@ -711,7 +711,7 @@ fn Surface(document: Document) -> impl IntoView {
                 type="button"
                 title="Run in the simulator"
                 on:click=move |_| state.active_panel.set("simulate".to_string())
-                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
                 <IconView icon=Icon::Play size=15 />
             </button>

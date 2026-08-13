@@ -427,7 +427,7 @@ fn BoardEditor(
                                 type="button"
                                 title="Stop the simulation"
                                 on:click=move |_| controller::stop_session_now(state)
-                                class="grid size-8 place-items-center rounded-[7px] bg-crimson text-white hover:opacity-90"
+                                class="grid size-7 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
                             >
                                 <IconView icon=Icon::Stop size=15 />
                             </button>
@@ -441,7 +441,7 @@ fn BoardEditor(
                                 title="Build and simulate"
                                 disabled=disabled
                                 on:click=move |_| controller::run_simulation(state, false)
-                                class="grid size-8 place-items-center rounded-[7px] bg-rust text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                class="grid size-7 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
                             >
                                 <IconView icon=Icon::Play size=15 />
                             </button>
@@ -455,7 +455,7 @@ fn BoardEditor(
                                     "Install the matching gdb first — see the tools card"
                                 }
                                 on:click=move |_| controller::run_simulation(state, true)
-                                class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                             >
                                 <IconView icon=Icon::Bug size=15 />
                             </button>
@@ -468,7 +468,7 @@ fn BoardEditor(
                     title="Save the board layout"
                     disabled=move || !dirty.get()
                     on:click=move |_| save.run(())
-                    class="grid size-8 place-items-center rounded-[7px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                 >
                     <IconView icon=Icon::Save size=15 />
                 </button>
@@ -478,7 +478,7 @@ fn BoardEditor(
                     title="Undo (Ctrl+Z)"
                     disabled=move || history.with(Vec::is_empty)
                     on:click=move |_| undo()
-                    class="grid size-7 place-items-center rounded-[6px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                 >
                     "↶"
                 </button>
@@ -487,7 +487,7 @@ fn BoardEditor(
                     title="Redo (Ctrl+Y)"
                     disabled=move || future.with(Vec::is_empty)
                     on:click=move |_| redo()
-                    class="grid size-7 place-items-center rounded-[6px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                 >
                     "↷"
                 </button>
@@ -498,7 +498,7 @@ fn BoardEditor(
                     on:click=move |_| {
                         view.update(|(_, _, k)| *k = (*k / 1.2).max(0.35))
                     }
-                    class="grid size-7 place-items-center rounded-[6px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
                 >
                     "−"
                 </button>
@@ -511,7 +511,7 @@ fn BoardEditor(
                     on:click=move |_| {
                         view.update(|(_, _, k)| *k = (*k * 1.2).min(2.5))
                     }
-                    class="grid size-7 place-items-center rounded-[6px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
                 >
                     "+"
                 </button>
@@ -519,7 +519,7 @@ fn BoardEditor(
                     type="button"
                     title="Reset view"
                     on:click=move |_| view.set((0.0, 0.0, 1.0))
-                    class="rounded-[6px] px-2 py-1 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="grid h-7 place-items-center rounded-[6px] px-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
                 >
                     "1:1"
                 </button>
@@ -527,7 +527,7 @@ fn BoardEditor(
                     type="button"
                     title="Fit everything on screen (F)"
                     on:click=move |_| fit_view()
-                    class="grid size-7 place-items-center rounded-[6px] text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
                 >
                     <IconView icon=Icon::Fit size=14 />
                 </button>
@@ -544,7 +544,7 @@ fn BoardEditor(
                             }
                         })
                     }
-                    class="flex h-7 items-center gap-1 rounded-[6px] px-1.5 font-mono text-caption text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    class="flex h-7 items-center gap-1 rounded-[6px] px-1.5 font-mono text-caption text-label-2 hover:bg-sunken hover:text-label"
                 >
                     <IconView icon=Icon::Grid size=13 />
                     {move || format!("{}", grid.get() as i32)}
