@@ -42,6 +42,13 @@ cd crates/rusty-ui && trunk serve
 # The whole app
 cd crates/rusty-app && cargo tauri dev
 
+# Release: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and
+# .github/workflows/release.yml builds the NSIS installer + rusty-cli and
+# publishes a GitHub Release. With the Tauri updater keypair in the repo
+# secrets (`cargo tauri signer generate`, then TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD), it also emits signed updater
+# artifacts and latest.json — the feed the in-app updater will poll.
+
 # The simulation pipeline, proven end to end on a real project without the
 # window: detect, plan, build, image, boot in Espressif QEMU, count serial
 # lines. Needs espflash and qemu-system-* findable (PATH or the data

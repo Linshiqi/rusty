@@ -1,0 +1,96 @@
+# Tag → installer → GitHub Release.
+#
+# Push a tag like `v0.2.0` and this builds the Windows NSIS installer and the
+# headless CLI, then publishes both on a GitHub Release with generated notes.
+#
+# Upgrades: when the repository has the Tauri updater keypair in its secrets
+# (TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD — made once
+# with `cargo tauri signer generate`), the build also emits signed updater
+# artifacts and a latest.json feed, which is what the in-app updater will
+# poll. Without the secrets the release still ships; only the feed is absent.
+#
+# Everything installs as prebuilt binaries (binstall) — a cold `cargo install
+# trunk tauri-cli` costs ten minutes of every release for nothing.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install trunk and tauri-cli (prebuilt)
+        run: cargo binstall --no-confirm trunk tauri-cli
+
+      # The tag is the version. Patching the config here means a release
+      # needs one gesture — the tag — not a matching version-bump commit.
+      - name: Stamp the tag's version into tauri.conf.json
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          $conf = "crates/rusty-app/tauri.conf.json"
+          (Get-Content $conf) -replace '"version": "[^"]*"', ('"version": "' + $v + '"') |
+            Set-Content -Encoding utf8 $conf
+
+      - name: Build the installer
+        working-directory: crates/rusty-app
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            cargo tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          } else {
+            cargo tauri build
+          }
+
+      - name: Build the headless CLI
+        run: cargo build -p rusty-cli --release
+
+      # The updater feed: version, installer URL, and the signature the
+      # in-app updater verifies. Only meaningful when the build signed.
+      - name: Write latest.json
+        shell: pwsh
+        run: |
+          $sig = Get-ChildItem target/release/bundle/nsis/*.sig -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $sig) { "no signature — skipping the updater feed"; exit 0 }
+          $exe = Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          $feed = @{
+            version = $v
+            pub_date = (Get-Date -AsUTC -Format "yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = (Get-Content $sig.FullName -Raw)
+                url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" + $exe.Name
+              }
+            }
+          }
+          $feed | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 latest.json
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*.sig
+            target/release/rusty-cli.exe
+            latest.json

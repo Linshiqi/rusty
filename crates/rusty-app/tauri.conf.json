@@ -6,8 +6,14 @@
   "build": {
     "frontendDist": "../rusty-ui/dist",
     "devUrl": "http://localhost:1425",
-    "beforeDevCommand": { "script": "trunk serve", "cwd": "../rusty-ui" },
-    "beforeBuildCommand": { "script": "trunk build --release", "cwd": "../rusty-ui" }
+    "beforeDevCommand": {
+      "script": "trunk serve",
+      "cwd": "../rusty-ui"
+    },
+    "beforeBuildCommand": {
+      "script": "trunk build --release",
+      "cwd": "../rusty-ui"
+    }
   },
   "app": {
     "withGlobalTauri": true,
@@ -26,8 +32,14 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ]
   }
 }
