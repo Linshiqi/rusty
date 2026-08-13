@@ -305,7 +305,7 @@ fn Sidebar() -> impl IntoView {
 
     view! {
         <nav
-            class="flex w-[46px] flex-none flex-col overflow-y-auto bg-sidebar pt-1.5 pb-2"
+            class="flex w-[46px] flex-none flex-col overflow-y-auto border-r border-line bg-sidebar pt-1.5 pb-2"
             aria-label="Panels"
         >
             {sections
