@@ -125,11 +125,22 @@ pub fn TerminalView() -> impl IntoView {
     // The reopen half of "changing the shell restarts it". Settings closes
     // the session and clears the screen signal; nothing else would ever call
     // open again — the size has not changed, so the measurer stays quiet —
-    // and the panel sat on "Starting a shell…" for ever.
+    // and the panel sat on "Starting a shell…" for ever. Throttled so a
+    // shell that fails to start paces at the throttle instead of spinning:
+    // the error banner stays readable and the machine stays quiet.
+    let last_open = RwSignal::new(0.0f64);
     Effect::new(move |_| {
         if state.terminal.with(Option::is_none) {
             let (cols, rows) = sent.get_untracked();
-            if cols > 0 && host.get_untracked().is_some() {
+            let now = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now())
+                .unwrap_or(0.0);
+            if cols > 0
+                && host.get_untracked().is_some()
+                && now - last_open.get_untracked() > 2000.0
+            {
+                last_open.set(now);
                 controller::open_terminal(state, cols, rows);
             }
         }
@@ -153,6 +164,19 @@ pub fn TerminalView() -> impl IntoView {
                 crate::view::components::copy_to_clipboard(&text);
             }
             selection.set(None);
+            return;
+        }
+        // A key on an exited shell starts a fresh one — the final screen
+        // stays readable until then, instead of vanishing mid-glance.
+        if state
+            .terminal
+            .with_untracked(|t| t.as_ref().is_some_and(|s| s.exited.is_some()))
+        {
+            event.prevent_default();
+            let (cols, rows) = sent.get_untracked();
+            if cols > 0 {
+                controller::open_terminal(state, cols, rows);
+            }
             return;
         }
         if let Some(bytes) = encode(&event) {

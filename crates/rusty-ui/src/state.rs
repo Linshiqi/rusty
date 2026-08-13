@@ -487,6 +487,11 @@ pub struct AppState {
     /// Whole-interface scale, browser-zoom style. 1.0 is native.
     pub ui_zoom: RwSignal<f64>,
     /// What shell the terminal will start, from the backend.
+    /// Which terminal session is current. Bumped by every open; a session's
+    /// frame and completion callbacks compare before writing, so a replaced
+    /// session's late "the shell is gone" cannot blank the one that
+    /// replaced it — which looked like the terminal flickering for ever.
+    pub terminal_epoch: RwSignal<u64>,
     pub shell_info: RwSignal<Option<rusty_embed::ShellInfo>>,
     /// What the shell picker offers: the built-in plus every shell the
     /// backend actually found on this machine.
@@ -623,6 +628,7 @@ impl AppState {
             keybinds: RwSignal::new(HashMap::new()),
             keybind_capture: RwSignal::new(None),
             ui_zoom: RwSignal::new(stored_ui_zoom()),
+            terminal_epoch: RwSignal::new(0),
             shell_info: RwSignal::new(None),
             shell_choices: RwSignal::new(Vec::new()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),

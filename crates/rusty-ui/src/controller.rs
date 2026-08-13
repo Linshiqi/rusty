@@ -2537,8 +2537,16 @@ pub fn open_terminal(state: AppState, cols: u16, rows: u16) {
         rows: u16,
     }
 
+    // This call's generation. Everything below writes only while it is
+    // still the current one.
+    let epoch = state.terminal_epoch.get_untracked() + 1;
+    state.terminal_epoch.set(epoch);
+
     let channel = ipc::Channel::new();
     let on_frame = Closure::wrap(Box::new(move |value: JsValue| {
+        if state.terminal_epoch.get_untracked() != epoch {
+            return;
+        }
         if let Ok(screen) = serde_wasm_bindgen::from_value::<TermScreen>(value) {
             state.terminal.set(Some(screen));
         }
@@ -2552,14 +2560,24 @@ pub fn open_terminal(state: AppState, cols: u16, rows: u16) {
     // for as long as a terminal is open — which is to say, for ever.
     let args = Args { cols, rows };
     spawn_local(async move {
-        if let Err(e) = ipc::call_streaming::<_, ()>(cmd::terminal::OPEN, &args, "onFrame", &channel)
-            .await
-        {
+        let outcome =
+            ipc::call_streaming::<_, ()>(cmd::terminal::OPEN, &args, "onFrame", &channel).await;
+        // A replaced session's ending is not news: the session that replaced
+        // it owns the screen now.
+        if state.terminal_epoch.get_untracked() != epoch {
+            return;
+        }
+        if let Err(e) = outcome {
             state.error.set(Some(e));
         }
-        // The shell is gone; drop the frame so reopening the tab starts a new
-        // one rather than showing a dead screen.
-        state.terminal.set(None);
+        // A shell that exited leaves its final screen up — it says "exited"
+        // and any key starts a fresh one. Only a session that never produced
+        // an exit (the error path) drops to the placeholder.
+        if state.terminal.with_untracked(|t| {
+            t.as_ref().is_none_or(|screen| screen.exited.is_none())
+        }) {
+            state.terminal.set(None);
+        }
     });
 }
 
