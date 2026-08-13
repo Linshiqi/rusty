@@ -198,6 +198,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         args,
         display,
         rationale: rationale.to_string(),
+            warning: None,
     })
 }
 

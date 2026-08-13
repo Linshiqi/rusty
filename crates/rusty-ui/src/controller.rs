@@ -796,6 +796,7 @@ pub fn build_project(state: AppState) {
             rationale: "the project's own toolchain builds the exact firmware a device \
                         would get"
                 .to_string(),
+                    warning: None,
         },
         "build",
     );
@@ -830,7 +831,8 @@ pub fn upgrade_crate(state: AppState, name: String, version: String) {
         display: format!("cargo add {name}@{version}"),
         rationale: "updates Cargo.toml to the requested version and re-resolves the lockfile"
             .to_string(),
-    };
+                       warning: None,
+               };
     #[derive(serde::Serialize)]
     struct Args {
         plan: CommandPlan,

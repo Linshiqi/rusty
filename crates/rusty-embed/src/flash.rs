@@ -34,6 +34,41 @@ pub struct FlashRequest {
     pub baud: Option<u32>,
 }
 
+/// The chips a port's candidate boards carry — what is plausibly on the
+/// other end of this wire.
+///
+/// Names rather than ids, because that is what device detection stored: the
+/// user reads "ESP32-C3-DevKitM-1", not "esp32c3-devkitm-1".
+pub fn chips_behind(catalog: &crate::catalog::Catalog, board_names: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = catalog
+        .boards()
+        .iter()
+        .filter(|board| board_names.iter().any(|name| name == &board.name))
+        .map(|board| board.chip.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// "This cannot be the chip you are building for", when the evidence says so.
+///
+/// Silence is the default: an adapter rusty does not recognise is not
+/// evidence of anything, and a plan blocked on a guess is exactly the
+/// failure this workbench exists to prevent. But when the port names boards
+/// and *none* of them carries the project's chip, saying nothing means
+/// watching espflash fail on a chip magic mismatch — a message that names
+/// neither the project nor the way out.
+pub fn chip_mismatch(project_chip: &str, candidates: &[String]) -> Option<String> {
+    if candidates.is_empty() || candidates.iter().any(|chip| chip == project_chip) {
+        return None;
+    }
+    let seen = candidates.join(" or ");
+    Some(format!(
+        "This project builds for {project_chip}, but the device on this port          looks like {seen}. Flashing will fail when the bootloader reports a          different chip. Open or create a {seen} project, or pick another port.",
+    ))
+}
+
 /// Decide what to run. Pure — no process is started.
 pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
     let firmware = request.firmware.display().to_string();
@@ -131,6 +166,7 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
         args,
         display,
         rationale: rationale.to_string(),
+            warning: None,
     })
 }
 
@@ -146,6 +182,28 @@ fn quote_if_needed(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mismatch names both chips and a way out — and stays quiet when
+    /// the evidence does not support it, which is most of the time.
+    #[test]
+    fn a_mismatch_is_only_claimed_on_evidence() {
+        let candidates = vec!["esp32c3".to_string(), "esp32c6".to_string()];
+
+        let warning = chip_mismatch("esp32", &candidates).expect("a mismatch");
+        assert!(warning.contains("esp32"), "names the project's chip: {warning}");
+        assert!(warning.contains("esp32c3"), "names what is plugged in: {warning}");
+
+        assert_eq!(
+            chip_mismatch("esp32c3", &candidates),
+            None,
+            "one candidate matching is a match — boards share bridges",
+        );
+        assert_eq!(
+            chip_mismatch("esp32", &[]),
+            None,
+            "an unrecognised adapter is not evidence of the wrong chip",
+        );
+    }
     use std::path::PathBuf;
 
     fn request(chip_id: &str, transport: Transport, action: FlashAction) -> FlashRequest {

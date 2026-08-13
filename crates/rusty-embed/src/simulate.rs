@@ -121,7 +121,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         display: "cargo build --release".to_string(),
         rationale: "the project's own toolchain builds the exact firmware a device would get"
             .to_string(),
-    };
+                        warning: None,
+                };
     let mut image_args = vec![
         "save-image".to_string(),
         "--chip".to_string(),
@@ -137,7 +138,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         rationale: "merges bootloader, partition table and app into the bootable flash image \
                     QEMU maps as the SPI flash"
             .to_string(),
-    };
+                             warning: None,
+                     };
     let qemu_args = vec![
         "-M".to_string(),
         chip.to_string(),
@@ -154,7 +156,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         rationale: "boots the image in Espressif's QEMU; the serial console streams here \
                     until stopped"
             .to_string(),
-    };
+                      warning: None,
+              };
 
     // Debugging is optional on top of the same boot: present when the
     // matching gdb exists, an installable card when it does not.
@@ -261,7 +264,8 @@ pub fn gdb_download(tool: &str) -> std::result::Result<QemuDownload, String> {
         ],
         display: format!("tar -xf {archive_text} -C {tools_text}"),
         rationale: "unpacks the gdb bundle into the data directory's tools/".to_string(),
-    };
+                          warning: None,
+                  };
     Ok(QemuDownload {
         archive,
         urls,
@@ -573,7 +577,8 @@ pub fn qemu_download(tool: &str) -> std::result::Result<QemuDownload, String> {
         rationale: "unpacks into the data directory's tools/qemu — bsdtar handles .tar.xz \
                     and ships with Windows"
             .to_string(),
-    };
+                          warning: None,
+                  };
     Ok(QemuDownload {
         archive,
         urls,

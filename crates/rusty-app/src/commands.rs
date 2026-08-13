@@ -324,14 +324,36 @@ pub async fn plan_flash(
              Fix the problems listed in the Project panel first.",
         ))?;
 
-    Ok(flash::plan(&flash::FlashRequest {
+    // What is plausibly on the other end, before the plan is offered. The
+    // device row already knows the port names boards; the plan knowing it
+    // too is the difference between "espflash failed on a chip magic
+    // mismatch" and a sentence naming both chips.
+    let candidates = match &transport {
+        Transport::Serial { port } => {
+            let catalog = state.catalog().await;
+            let names = device::list_serial_ports(&catalog)
+                .into_iter()
+                .find(|found| &found.name == port)
+                .map(|found| found.boards)
+                .unwrap_or_default();
+            flash::chips_behind(&catalog, &names)
+        }
+        // A probe reports its own target; it is not a bridge chip that
+        // could belong to several boards.
+        Transport::Probe { .. } => Vec::new(),
+    };
+    let warning = flash::chip_mismatch(&chip_id, &candidates);
+
+    let mut plan = flash::plan(&flash::FlashRequest {
         chip_id,
         transport,
         action,
         firmware: PathBuf::from(firmware),
         defmt,
         baud,
-    })?)
+    })?;
+    plan.warning = warning;
+    Ok(plan)
 }
 
 // ─── features ────────────────────────────────────────────────────────────────

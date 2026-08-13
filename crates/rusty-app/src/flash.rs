@@ -153,6 +153,7 @@ pub async fn run_command(
         program,
         args,
         rationale: String::new(),
+        warning: None,
     };
 
     let session = process::spawn(&plan, working_dir.as_deref())?;

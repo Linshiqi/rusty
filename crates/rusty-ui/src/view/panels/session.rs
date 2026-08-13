@@ -266,10 +266,23 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
             let firmware = state.current_firmware();
             let rationale = plan.rationale.clone();
             let display = plan.display.clone();
+            let warning = plan.warning.clone();
             let verb = verb.to_string();
 
             view! {
                 <div class="px-4 pb-4">
+                    // Above the command, because it is about whether to run
+                    // it at all. Not a block: the catalogue can be
+                    // incomplete, and refusing on a guess is the failure
+                    // this warning exists to prevent.
+                    {warning
+                        .map(|text| {
+                            view! {
+                                <p class="mb-2 max-w-[72ch] rounded-[6px] bg-amber-fill px-3 py-2 text-callout leading-relaxed text-amber select-text">
+                                    {text}
+                                </p>
+                            }
+                        })}
                     <CommandLine command=display />
                     <p class="mt-2 max-w-[72ch] text-callout leading-relaxed text-label-2">
                         {rationale}

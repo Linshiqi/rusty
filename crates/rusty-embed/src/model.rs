@@ -460,6 +460,12 @@ pub struct CommandPlan {
     pub display: String,
     /// Why this tool and these flags, in one sentence.
     pub rationale: String,
+    /// Read this before running it. Absent for the ordinary case; present
+    /// when the plan is defensible but something about the situation says
+    /// it will not do what the user expects — a device that cannot be the
+    /// chip this project builds for, for instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
