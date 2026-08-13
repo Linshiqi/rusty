@@ -43,7 +43,8 @@ cd crates/rusty-ui && trunk serve
 cd crates/rusty-app && cargo tauri dev
 
 # Release: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and
-# .github/workflows/release.yml builds the NSIS installer + rusty-cli and
+# .github/workflows/release.yml builds installers on Windows (NSIS), macOS
+# (universal DMG) and Ubuntu (deb + AppImage), plus rusty-cli for each, and
 # publishes a GitHub Release. With the Tauri updater keypair in the repo
 # secrets (`cargo tauri signer generate`, then TAURI_SIGNING_PRIVATE_KEY and
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD), it also emits signed updater
