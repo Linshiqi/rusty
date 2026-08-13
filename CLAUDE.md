@@ -266,6 +266,13 @@ usty`) holds `location.toml`
   ever, so the terminal is a blank rectangle with no error anywhere. `vt100`
   parses but never replies — it has no callback for it — so `pty.rs` scans the
   stream itself and answers DSR and Device Attributes.
+- **A ConPTY child's console still cooks input.** Being inside a pty does
+  not make a process raw: conhost line-buffers and echoes for whoever reads
+  stdin, so the built-in shell saw every command twice and arrows never
+  arrived as VT bytes. A shell child must clear echo/line/processed input
+  and set `ENABLE_VIRTUAL_TERMINAL_INPUT` itself (termios raw on Unix) —
+  and flip processed input back on around child commands, or Ctrl+C stops
+  interrupting them.
 - **On Windows a pty read never reports end-of-file.** The master keeps the
   pseudoconsole open however dead the child is, so exit has to be detected by
   polling `Child::try_wait` on its own thread. Inferring it from the reader
