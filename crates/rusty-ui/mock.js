@@ -180,6 +180,8 @@
         buttons: [], rgbs: [], sevens: [], displays: [], pots: [],
       },
       parts: [],
+      debug: { gdbCommand: "echo mock-gdb" },
+      debugTool: null,
     }),
     save_sim_board: (a) => { window.__mock.savedBoard = a.board; return null; },
     run_simulation: () => new Promise(() => {}),

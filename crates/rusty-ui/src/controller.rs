@@ -773,11 +773,13 @@ pub fn load_sim_plan(state: AppState) {
 
 /// Build, image and boot in QEMU, streaming into the dock. One at a time —
 /// the shared session slot enforces it the same way flashing does.
-pub fn run_simulation(state: AppState) {
+pub fn run_simulation(state: AppState, debug: bool) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
     #[derive(serde::Serialize)]
-    struct Args {}
+    struct Args {
+        debug: bool,
+    }
 
     if state.session_running.get_untracked() {
         return;
@@ -791,6 +793,21 @@ pub fn run_simulation(state: AppState) {
     let on_line = Closure::wrap(Box::new(move |value: JsValue| {
         match serde_wasm_bindgen::from_value::<LogLine>(value) {
             Ok(line) => {
+                // The debug sentinel: QEMU is frozen and listening. Open the
+                // terminal and type the attach line for the user — the gdb
+                // REPL is theirs from there.
+                if line.text.starts_with("[rusty:debug]") {
+                    state.push_log(line);
+                    if let Some(command) = state
+                        .sim_plan
+                        .with_untracked(|p| {
+                            p.as_ref().and_then(|p| p.debug.as_ref().map(|d| d.gdb_command.clone()))
+                        })
+                    {
+                        attach_debugger(state, command);
+                    }
+                    return;
+                }
                 if let Some(pins) = rusty_embed::parse_gpio_report(&line.text) {
                     state.sim_gpio.update(|gpio| {
                         for (pin, level) in pins {
@@ -815,7 +832,7 @@ pub fn run_simulation(state: AppState) {
     state.session_running.set(true);
     state.show_dock(crate::state::DockTab::Output);
     spawn_local(async move {
-        match ipc::call_streaming::<_, Option<i32>>(cmd::sim::RUN, &Args {}, "onLine", &channel)
+        match ipc::call_streaming::<_, Option<i32>>(cmd::sim::RUN, &Args { debug }, "onLine", &channel)
             .await
         {
             Ok(code) => note_exit(state, code),
@@ -942,6 +959,34 @@ pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSi
             }
         }
     });
+}
+
+/// Open the dock terminal and type the gdb attach line into it.
+///
+/// The shell does the launching, so the user sees exactly what ran and owns
+/// the REPL afterwards — break, step, print are theirs, not wrapped.
+fn attach_debugger(state: AppState, command: String) {
+    state.show_dock(crate::state::DockTab::Terminal);
+    // `terminal` holds the shell's latest frame; None means no shell yet.
+    if state.terminal.with_untracked(Option::is_none) {
+        open_terminal(state, 100, 24);
+    }
+    #[derive(serde::Serialize)]
+    struct Args {
+        bytes: Vec<u8>,
+    }
+    // A freshly opened terminal needs a beat before the shell reads keys.
+    set_timeout(
+        move || {
+            let args = Args {
+                bytes: format!("{command}\r").into_bytes(),
+            };
+            spawn_local(async move {
+                let _ = ipc::call::<_, ()>(cmd::terminal::WRITE, &args).await;
+            });
+        },
+        std::time::Duration::from_millis(700),
+    );
 }
 
 /// The panel-facing spelling of "stop whatever session is running".

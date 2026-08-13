@@ -30,8 +30,8 @@ pub async fn install_sim_tool(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    if name.starts_with("qemu-system-") {
-        return install_qemu(&name, on_line, state).await;
+    if name.starts_with("qemu-system-") || name.ends_with("-gdb") {
+        return install_archive(&name, on_line, state).await;
     }
     let steps = simulate::install_steps(&name).map_err(CommandError::new)?;
 
@@ -82,12 +82,16 @@ pub async fn sim_send(text: String, state: State<'_, AppState>) -> Result<(), Co
 /// The download runs on rustls rather than through curl — the user's curl
 /// died with a schannel abort and then could not reach github.com at all;
 /// the Espressif mirror is the second URL for exactly that network.
-async fn install_qemu(
+async fn install_archive(
     name: &str,
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let plan = simulate::qemu_download(name).map_err(CommandError::new)?;
+    let plan = if name.ends_with("-gdb") {
+        simulate::gdb_download(name).map_err(CommandError::new)?
+    } else {
+        simulate::qemu_download(name).map_err(CommandError::new)?
+    };
 
     let feed = on_line.clone();
     let archive = plan.archive.clone();
@@ -139,6 +143,7 @@ async fn install_qemu(
 /// until the user stops it (the same session Stop every panel shares).
 #[tauri::command]
 pub async fn run_simulation(
+    debug: bool,
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
@@ -171,6 +176,46 @@ pub async fn run_simulation(
             level: None,
         });
 
+        let step = if debug && step.program.contains("qemu-system") {
+            // Frozen at the first instruction with the gdbstub listening —
+            // and a deterministic virtual clock, because a debugger that
+            // perturbs timing hides the bugs people came to see.
+            let mut armed = step.clone();
+            for flag in ["-s", "-S", "-icount", "shift=auto,sleep=on"] {
+                armed.args.push(flag.to_string());
+            }
+            armed.display = format!("{} -s -S -icount shift=auto,sleep=on", armed.display);
+            let _ = on_line.send(LogLine {
+                stream: LogStream::Stdout,
+                text: "[rusty:debug] gdbstub on :1234, cpu frozen — attaching gdb in the \
+                       terminal"
+                    .to_string(),
+                level: None,
+            });
+            armed
+        } else {
+            step.clone()
+        };
+        let step = if debug && step.program.contains("qemu-system") {
+            // Frozen at the first instruction with the gdbstub listening —
+            // and a deterministic virtual clock, because a debugger that
+            // perturbs timing hides the bugs people came to see.
+            let mut armed = step.clone();
+            for flag in ["-s", "-S", "-icount", "shift=auto,sleep=on"] {
+                armed.args.push(flag.to_string());
+            }
+            armed.display = format!("{} -s -S -icount shift=auto,sleep=on", armed.display);
+            let _ = on_line.send(LogLine {
+                stream: LogStream::Stdout,
+                text: "[rusty:debug] gdbstub on :1234, cpu frozen — attaching gdb in the \
+                       terminal"
+                    .to_string(),
+                level: None,
+            });
+            armed
+        } else {
+            step.clone()
+        };
         let session = process::spawn(&step, Some(root.as_path()))?;
         state.start_session(session.stopper()).await;
         // The boot step is QEMU; its stdin is the board's input path.

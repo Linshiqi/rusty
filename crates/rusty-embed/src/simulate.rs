@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::model::{
-    CommandPlan, EmbeddedProject, PartDef, SimBoard, SimButton, SimDisplay, SimLed, SimPlan,
-    SimPot, SimRgb, SimSeven, SimTool,
+    CommandPlan, EmbeddedProject, PartDef, SimBoard, SimButton, SimDebug, SimDisplay, SimLed,
+    SimPlan, SimPot, SimRgb, SimSeven, SimTool,
 };
 
 /// Chips Espressif's QEMU actually models, with the system emulator each
@@ -47,6 +47,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             steps: Vec::new(),
             board: None,
             parts: Vec::new(),
+            debug: None,
+            debug_tool: None,
         };
     };
 
@@ -62,6 +64,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             steps: Vec::new(),
             board: None,
             parts: Vec::new(),
+            debug: None,
+            debug_tool: None,
         };
     };
 
@@ -103,6 +107,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             steps: Vec::new(),
             board: None,
             parts: Vec::new(),
+            debug: None,
+            debug_tool: None,
         };
     };
     let binary = package_name(Path::new(&project.root)).unwrap_or_else(|| "app".to_string());
@@ -150,6 +156,37 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
             .to_string(),
     };
 
+    // Debugging is optional on top of the same boot: present when the
+    // matching gdb exists, an installable card when it does not.
+    let xtensa = *emulator == "qemu-system-xtensa";
+    let (debug, debug_tool) = match find_gdb(xtensa) {
+        Some(gdb) => (
+            Some(SimDebug {
+                gdb_command: format!(
+                    "\"{}\" \"{elf}\" -ex \"target remote :1234\"",
+                    gdb.display(),
+                ),
+            }),
+            None,
+        ),
+        None => {
+            let family = if xtensa {
+                "xtensa-esp-elf-gdb"
+            } else {
+                "riscv32-esp-elf-gdb"
+            };
+            (
+                None,
+                Some(SimTool {
+                    name: family.to_string(),
+                    install: format!(
+                        "download {family} from https://github.com/espressif/binutils-gdb/releases/tag/{GDB_RELEASE} into the data directory's tools/"
+                    ),
+                }),
+            )
+        }
+    };
+
     SimPlan {
         supported: true,
         reason: None,
@@ -157,7 +194,79 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         steps: vec![build, image_step, run],
         board: board_view(Path::new(&project.root)),
         parts: user_parts(Path::new(&project.root)),
+        debug,
+        debug_tool,
     }
+}
+
+/// The gdb for an architecture: `xtensa-esp-elf-gdb` or
+/// `riscv32-esp-elf-gdb`, looked for in the data directory's tools/ first,
+/// then PATH. The host's own gdb is useless here — the architecture must
+/// match or `target remote` reads garbage registers.
+fn find_gdb(xtensa: bool) -> Option<PathBuf> {
+    let family = if xtensa { "xtensa-esp-elf-gdb" } else { "riscv32-esp-elf-gdb" };
+    let binary = if xtensa {
+        "xtensa-esp32-elf-gdb"
+    } else {
+        "riscv32-esp-elf-gdb"
+    };
+    if let Some(tools) = config::data_dir().map(|d| d.join("tools")) {
+        let bundled = tools.join(family).join("bin").join(exe(binary));
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+    on_path(binary)
+}
+
+/// The archive for a gdb family, mirror ladder included.
+pub fn gdb_download(tool: &str) -> std::result::Result<QemuDownload, String> {
+    if tool != "xtensa-esp-elf-gdb" && tool != "riscv32-esp-elf-gdb" {
+        return Err(format!("{tool} is not a gdb this installer knows"));
+    }
+    if !cfg!(windows) {
+        return Err(format!(
+            "one-click install only knows the Windows build so far — download {tool} from \
+             https://github.com/espressif/binutils-gdb/releases/tag/{GDB_RELEASE} and unpack \
+             it into the data directory's tools/"
+        ));
+    }
+    let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
+        return Err("the data directory could not be resolved".to_string());
+    };
+    std::fs::create_dir_all(&tools)
+        .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
+
+    let asset = format!("{tool}-{GDB_VERSION}-x86_64-w64-mingw32.zip");
+    let archive = tools.join(format!("{tool}.zip"));
+    let urls = vec![
+        format!(
+            "https://github.com/espressif/binutils-gdb/releases/download/{GDB_RELEASE}/{asset}"
+        ),
+        format!(
+            "https://dl.espressif.com/github_assets/espressif/binutils-gdb/releases/download/{GDB_RELEASE}/{asset}"
+        ),
+    ];
+    let archive_text = archive.to_string_lossy().into_owned();
+    let tools_text = tools.to_string_lossy().into_owned();
+    let extract = CommandPlan {
+        // The absolute Windows tar: it is bsdtar, which reads zip. A bare
+        // `tar` can resolve to MSYS GNU tar on PATH, which does not.
+        program: "C:\\Windows\\System32\\tar.exe".to_string(),
+        args: vec![
+            "-xf".to_string(),
+            archive_text.clone(),
+            "-C".to_string(),
+            tools_text.clone(),
+        ],
+        display: format!("tar -xf {archive_text} -C {tools_text}"),
+        rationale: "unpacks the gdb bundle into the data directory's tools/".to_string(),
+    };
+    Ok(QemuDownload {
+        archive,
+        urls,
+        extract,
+    })
 }
 
 /// The board `.rusty/sim.toml` describes, if the project carries one.
@@ -379,6 +488,11 @@ pub fn user_parts(root: &Path) -> Vec<PartDef> {
 }
 
 
+
+/// The esp-gdb release the installer pulls — like QEMU, pinned to the build
+/// this pipeline is proven against rather than discovered at run time.
+const GDB_RELEASE: &str = "esp-gdb-v14.2_20240403";
+const GDB_VERSION: &str = "14.2_20240403";
 
 /// The QEMU release every install pulls — the version this pipeline is
 /// proven against. Bumped deliberately, not discovered at run time: an

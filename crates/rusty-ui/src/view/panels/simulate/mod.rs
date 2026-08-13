@@ -68,8 +68,12 @@ pub fn Simulate() -> impl IntoView {
             .into_any();
         }
 
-        let missing = plan.missing.clone();
+        let mut missing = plan.missing.clone();
         let blocked = !missing.is_empty();
+        // The gdb gates only Debug, so it joins the card without blocking Run.
+        if let Some(tool) = plan.debug_tool.clone() {
+            missing.push(tool);
+        }
         let running = state.session_running;
 
         view! {
@@ -153,6 +157,7 @@ pub fn Simulate() -> impl IntoView {
                         pots: Vec::new(),
                     })
                     blocked=blocked
+                    debuggable=plan.debug.is_some()
                     user_parts=plan.parts.clone()
                 />
 
@@ -169,6 +174,7 @@ pub fn Simulate() -> impl IntoView {
 fn BoardEditor(
     board: SimBoard,
     blocked: bool,
+    debuggable: bool,
     user_parts: Vec<rusty_embed::PartDef>,
 ) -> impl IntoView {
     let state = AppState::expect();
@@ -425,10 +431,24 @@ fn BoardEditor(
                             <button
                                 type="button"
                                 disabled=disabled
-                                on:click=move |_| controller::run_simulation(state)
+                                on:click=move |_| controller::run_simulation(state, false)
                                 class="rounded-[7px] bg-rust px-4 py-1.5 text-callout font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
                             >
                                 "Build and simulate"
+                            </button>
+                            <button
+                                type="button"
+                                disabled=disabled || !debuggable
+                                title=if debuggable {
+                                    "Boot frozen with the gdbstub listening; gdb attaches in \
+                                     the terminal"
+                                } else {
+                                    "Install the matching gdb first — see the tools card"
+                                }
+                                on:click=move |_| controller::run_simulation(state, true)
+                                class="rounded-[7px] px-3 py-1.5 text-callout text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                            >
+                                "Debug"
                             </button>
                         }
                             .into_any()

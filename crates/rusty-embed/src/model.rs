@@ -671,6 +671,15 @@ pub struct SimBoard {
     pub pots: Vec<SimPot>,
 }
 
+/// Everything the frontend needs to attach a debugger to a frozen boot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimDebug {
+    /// The full command line to type into the terminal: gdb, the ELF, and
+    /// `target remote` — composed here so the frontend never builds paths.
+    pub gdb_command: String,
+}
+
 /// How this project would be simulated, or exactly why it cannot be.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -688,6 +697,13 @@ pub struct SimPlan {
     /// User-defined parts from `.rusty/parts/`, offered in the library.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<PartDef>,
+    /// Present when the right gdb is installed; the Debug button needs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug: Option<SimDebug>,
+    /// The gdb to install when `debug` is absent — same card, same one-click
+    /// installer as every other missing tool, but it only gates Debug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_tool: Option<SimTool>,
 }
 
 /// A catalogue file that would not load, and why.

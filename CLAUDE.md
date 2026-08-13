@@ -120,6 +120,14 @@ everything the board view knows travels as text on that one serial line:
 `B14=1` and `P34=128` into it. `protocol.rs` owns the parsing, compiled
 unconditionally because the frontend reads the stream as it passes.
 
+Debugging rides the same boot: `-s -S` freezes the CPU with the gdbstub on
+:1234, and the terminal attaches the matching esp-gdb (`break main` lands in
+the user's source with full backtraces — proven against the real blinky
+image). Espressif's prebuilt QEMU has the plugin interface compiled OUT
+("plugin interface not enabled in this build"), so register-level tracing
+needs our own QEMU build one day; until then the gdbstub's watchpoints are
+the honest bridge to register truth.
+
 That is a deliberate ceiling. The QEMU peripheral models expose no GPIO
 readback — probed with QMP on the real register addresses, esp32 and esp32c3
 both read zero — so the board shows *what the firmware says it set*, and the
