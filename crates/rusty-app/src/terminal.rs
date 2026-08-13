@@ -149,6 +149,9 @@ pub async fn terminal_open(
     let (terminal, updates) = spawned?;
     eprintln!("[terminal] spawned; first frame next");
     let terminal = Arc::new(terminal);
+    // Kept for the cleanup below: the reader closure consumes the other
+    // handle, and the cleanup has to know which session it is ending.
+    let ours = Arc::clone(&terminal);
     state.set_terminal(Some(Arc::clone(&terminal))).await;
 
     // The first frame is sent before anything arrives, so the view has a shape
@@ -177,7 +180,7 @@ pub async fn terminal_open(
     .await
     .map_err(|e| CommandError::new(format!("the terminal reader panicked: {e}")))?;
 
-    state.set_terminal(None).await;
+    state.release_terminal(&ours).await;
     eprintln!("[terminal] session ended");
     Ok(())
 }

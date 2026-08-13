@@ -2633,9 +2633,14 @@ pub fn terminal_scroll(state: AppState, delta: i32) {
 }
 
 pub fn close_terminal(state: AppState) {
-    state.terminal.set(None);
     spawn_local(async move {
+        // Await the close, *then* clear the screen. Clearing first fires the
+        // view's reopen effect immediately, and the close — still in flight —
+        // then landed on the session that had just replaced this one, killing
+        // the new shell at birth. That is the blank terminal after switching
+        // shells.
         let _ = ipc::get::<serde_json::Value>(cmd::terminal::CLOSE).await;
+        state.terminal.set(None);
     });
 }
 

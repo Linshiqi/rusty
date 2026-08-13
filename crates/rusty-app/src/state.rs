@@ -131,6 +131,20 @@ impl AppState {
         }
     }
 
+    /// Release the slot when a session ends — but only if it still holds
+    /// *that* session.
+    ///
+    /// A finished session used to clear the slot unconditionally, and
+    /// clearing kills whatever it replaces: switching shells let the old
+    /// session's cleanup kill the new session it had just been replaced by,
+    /// which is why the terminal came back blank.
+    pub async fn release_terminal(&self, ours: &Arc<rusty_term::Terminal>) {
+        let mut slot = self.terminal.lock().await;
+        if slot.as_ref().is_some_and(|held| Arc::ptr_eq(held, ours)) {
+            *slot = None;
+        }
+    }
+
     pub async fn set_firmware(&self, path: Option<PathBuf>) {
         self.inner.lock().await.firmware = path;
     }
@@ -201,5 +215,49 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two real shells, the switch-shells sequence: the outgoing session's
+    /// cleanup must not evict — or kill — the session that replaced it.
+    ///
+    /// Real pty sessions rather than mocks, because the bug was in the
+    /// identity of the handle, which a mock would have papered over. It
+    /// cost two rounds of "the terminal is blank after switching".
+    #[tokio::test]
+    async fn a_finished_session_does_not_evict_its_successor() {
+        let spawn = || {
+            let (terminal, _updates) =
+                rusty_term::Terminal::spawn(None, 80, 24, None).expect("a shell");
+            Arc::new(terminal)
+        };
+        let state = AppState::default();
+
+        let first = spawn();
+        state.set_terminal(Some(Arc::clone(&first))).await;
+
+        // The switch: a new session takes the slot…
+        let second = spawn();
+        state.set_terminal(Some(Arc::clone(&second))).await;
+        // …and only then does the old one finish and clean up.
+        state.release_terminal(&first).await;
+
+        let held = state.terminal().await.expect("the new session is still open");
+        assert!(
+            Arc::ptr_eq(&held, &second),
+            "the outgoing session cleared the slot its successor owns",
+        );
+
+        state.release_terminal(&second).await;
+        assert!(
+            state.terminal().await.is_none(),
+            "a session that still owns the slot must be able to release it",
+        );
+        second.kill();
+        first.kill();
     }
 }

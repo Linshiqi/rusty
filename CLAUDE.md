@@ -281,6 +281,16 @@ usty`) holds `location.toml`
   and set `ENABLE_VIRTUAL_TERMINAL_INPUT` itself (termios raw on Unix) —
   and flip processed input back on around child commands, or Ctrl+C stops
   interrupting them.
+- **A terminal session must own its slot by identity, and close before it
+  reopens.** Two races produced the same symptom — a blank terminal after
+  switching shells — and each alone was enough. First, the frontend cleared
+  the screen signal *before* awaiting the close, so the reopen effect started
+  a new session and the in-flight close then killed *it*. Second, a finished
+  session's cleanup called `set_terminal(None)`, whose contract is "kill
+  whatever it replaces": the outgoing session killed its own successor.
+  `release_terminal` now clears only on `Arc::ptr_eq`, `close_terminal`
+  awaits the close before clearing, and a test with two real pty sessions
+  pins the ordering (it fails against either old behaviour).
 - **On Windows a pty read never reports end-of-file.** The master keeps the
   pseudoconsole open however dead the child is, so exit has to be detected by
   polling `Child::try_wait` on its own thread. Inferring it from the reader
