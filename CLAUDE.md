@@ -324,10 +324,12 @@ usty`) holds `location.toml`
   `pointer-events: none`; only a wire's own grab handles opt back in with
   `pointer-events: stroke`, so a top layer spanning the sheet still lets
   presses through to parts and to the pan gesture.
-- **Hand-drawn wire bends belong to the part, not to the sheet.** Dragging a
-  part translates its waypoints with it; leaving them behind kept the wire
-  connected to its pin through a shape drawn for where the part used to be,
-  which is indistinguishable from a bug.
+- **Wire bends belong to the sheet, not to the part — KiCad semantics.**
+  Dragging a part stretches only the stub-to-first-bend segment; every bend
+  the user placed stays put, and the orthogonal pass grows the elbow the
+  stretched segment needs. (An earlier fix translated bends with the part;
+  that read a rendering artefact as a semantics bug and inverted the
+  behaviour every schematic editor has taught.)
 - **Leptos flushes to the DOM in a microtask.** Clicking an element and reading
   the DOM back in the *same* synchronous block always shows the pre-update
   state. When driving the UI from a browser tool, put the click and the

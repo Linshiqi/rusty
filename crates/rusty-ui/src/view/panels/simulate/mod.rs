@@ -736,21 +736,15 @@ fn BoardEditor(
                                 guides.set((guide_x, guide_y));
                                 parts.update(|list| {
                                     if let Some(part) = list.get_mut(index) {
-                                        // Hand-drawn bends belong to the part,
-                                        // not to the sheet. Leaving them behind
-                                        // is what made a moved part look
-                                        // unplugged: the wire still reached its
-                                        // pin, through a shape drawn for where
-                                        // the part used to be.
-                                        let (dx, dy) = (x - part.x, y - part.y);
+                                        // Bends belong to the sheet, exactly as
+                                        // in KiCad: moving a part stretches only
+                                        // the segment from its stub to the first
+                                        // bend, and every bend the user placed
+                                        // stays where they put it. The
+                                        // orthogonal pass grows the one elbow
+                                        // the stretched segment needs.
                                         part.x = x;
                                         part.y = y;
-                                        for route in &mut part.waypoints {
-                                            for point in route.iter_mut() {
-                                                point.0 += dx;
-                                                point.1 += dy;
-                                            }
-                                        }
                                     }
                                 });
                                 dirty.set(true);
@@ -1191,7 +1185,12 @@ fn BoardEditor(
                                                         .map(|slot| {
                                                             let unwired =
                                                                 pins[slot] == UNWIRED;
-                                                            let top = 8.0 + slot as f64 * 6.0;
+                                                            // Centre the 9px dot exactly on
+                                                            // the wire's anchor: same constants
+                                                            // as stub_point, so the dot and the
+                                                            // wire cannot disagree again.
+                                                            let top = STUB_OFFSET - 4.5
+                                                                + slot as f64 * SLOT_PITCH;
                                                             view! {
                                                                 <span
                                                                     title=if unwired {
@@ -1218,7 +1217,7 @@ fn BoardEditor(
                                                                         },
                                                                     )
                                                                     style=format!(
-                                                                        "right: -5px; top: {top}px",
+                                                                        "right: -4.5px; top: {top}px",
                                                                     )
                                                                 />
                                                             }
@@ -1387,13 +1386,38 @@ fn BoardEditor(
                                                             points[1..points.len() - 1]
                                                                 .iter()
                                                                 .map(|(bx, by)| {
+                                                                    let (bx, by) = (*bx, *by);
                                                                     view! {
                                                                         <rect
-                                                                            x=bx - 2.5
-                                                                            y=by - 2.5
-                                                                            width="5"
-                                                                            height="5"
+                                                                            x=bx - 3.5
+                                                                            y=by - 3.5
+                                                                            width="7"
+                                                                            height="7"
                                                                             fill="#e05d38"
+                                                                            style="pointer-events: auto; cursor: pointer"
+                                                                            on:dblclick=move |event: ev::MouseEvent| {
+                                                                                event.stop_propagation();
+                                                                                // A bend is removable on
+                                                                                // its own, not only by
+                                                                                // Straighten-all: find the
+                                                                                // stored waypoint under
+                                                                                // this pip and drop it.
+                                                                                checkpoint();
+                                                                                parts.update(|list| {
+                                                                                    if let Some(p) =
+                                                                                        list.get_mut(part_index)
+                                                                                    {
+                                                                                        p.waypoints[slot].retain(
+                                                                                            |(wx, wy)| {
+                                                                                                (wx - bx).abs() > 0.5
+                                                                                                    || (wy - by).abs()
+                                                                                                        > 0.5
+                                                                                            },
+                                                                                        );
+                                                                                    }
+                                                                                });
+                                                                                dirty.set(true);
+                                                                            }
                                                                         />
                                                                     }
                                                                 })
