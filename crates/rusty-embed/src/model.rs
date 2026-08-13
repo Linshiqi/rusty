@@ -501,6 +501,11 @@ pub struct SimTool {
     pub install: String,
 }
 
+/// Serde's skip test for the common case: most parts are never turned.
+pub(crate) fn is_upright(rot: &u16) -> bool {
+    *rot == 0
+}
+
 /// One LED on the simulated board view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -519,6 +524,10 @@ pub struct SimLed {
     /// automatically". routes[0] belongs to pins[0] (or the only pin).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Vec<(f64, f64)>>,
+    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
+    /// nobody can rotate is a diagram that fights its own wiring.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub rot: u16,
 }
 
 /// A push button on the board. Pressing it sends `B<pin>=1` (and release
@@ -536,6 +545,10 @@ pub struct SimButton {
     /// automatically". routes[0] belongs to pins[0] (or the only pin).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Vec<(f64, f64)>>,
+    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
+    /// nobody can rotate is a diagram that fights its own wiring.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub rot: u16,
 }
 
 /// An RGB LED: three pins, one lens. The lit colour is the additive mix of
@@ -555,6 +568,10 @@ pub struct SimRgb {
     /// automatically". routes[0] belongs to pins[0] (or the only pin).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Vec<(f64, f64)>>,
+    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
+    /// nobody can rotate is a diagram that fights its own wiring.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub rot: u16,
 }
 
 /// A seven-segment digit: seven GPIO pins, one per segment a..g. Lit
@@ -575,6 +592,10 @@ pub struct SimSeven {
     /// automatically". routes[0] belongs to pins[0] (or the only pin).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Vec<(f64, f64)>>,
+    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
+    /// nobody can rotate is a diagram that fights its own wiring.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub rot: u16,
 }
 
 /// A small text screen fed by the `[rusty:disp]` serial channel — the
@@ -588,6 +609,10 @@ pub struct SimDisplay {
     pub x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<f64>,
+    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
+    /// nobody can rotate is a diagram that fights its own wiring.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub rot: u16,
 }
 
 /// A potentiometer: a slider in the UI that sends `P<pin>=<0..255>` into
@@ -605,6 +630,10 @@ pub struct SimPot {
     /// automatically". routes[0] belongs to pins[0] (or the only pin).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Vec<(f64, f64)>>,
+    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
+    /// nobody can rotate is a diagram that fights its own wiring.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub rot: u16,
 }
 
 /// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never

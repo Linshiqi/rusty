@@ -184,6 +184,16 @@ impl PartKind {
         }
     }
 
+    /// Fixed body height, so a turned part's anchors are exact rather than
+    /// whatever the browser laid out.
+    fn height(&self) -> f64 {
+        match self {
+            PartKind::Seven => 52.0,
+            PartKind::Display => 44.0,
+            _ => 28.0,
+        }
+    }
+
     /// Fixed body width, so wire anchors land on the body edge exactly.
     fn width(&self) -> f64 {
         match self {
@@ -197,6 +207,9 @@ impl PartKind {
 
 #[derive(Clone, PartialEq)]
 struct EditPart {
+    /// Quarter turns, clockwise. The body rotates in CSS and the wire
+    /// anchors rotate with the same arithmetic, so the two never disagree.
+    rot: u16,
     kind: PartKind,
     /// pins[0] for LEDs, buttons and pots; RGB uses three; seven uses all.
     pins: [u8; 7],
@@ -243,6 +256,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             x: led.x.unwrap_or(60.0),
             y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
             waypoints: waypoints_of(&led.routes),
+            rot: led.rot,
         });
     }
     for button in &board.buttons {
@@ -253,6 +267,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             x: button.x.unwrap_or(60.0),
             y: button.y.unwrap_or(180.0),
             waypoints: waypoints_of(&button.routes),
+            rot: button.rot,
         });
     }
     for rgb in &board.rgbs {
@@ -263,6 +278,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             x: rgb.x.unwrap_or(60.0),
             y: rgb.y.unwrap_or(240.0),
             waypoints: waypoints_of(&rgb.routes),
+            rot: rgb.rot,
         });
     }
     for seven in &board.sevens {
@@ -273,6 +289,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             x: seven.x.unwrap_or(160.0),
             y: seven.y.unwrap_or(60.0),
             waypoints: waypoints_of(&seven.routes),
+            rot: seven.rot,
         });
     }
     for display in &board.displays {
@@ -283,6 +300,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             x: display.x.unwrap_or(160.0),
             y: display.y.unwrap_or(160.0),
             waypoints: Default::default(),
+            rot: display.rot,
         });
     }
     for pot in &board.pots {
@@ -293,6 +311,7 @@ fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             x: pot.x.unwrap_or(60.0),
             y: pot.y.unwrap_or(280.0),
             waypoints: waypoints_of(&pot.routes),
+            rot: pot.rot,
         });
     }
     out
@@ -319,6 +338,7 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 x: Some(part.x),
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 1),
+                rot: part.rot,
             }),
             PartKind::Button => board.buttons.push(rusty_embed::SimButton {
                 pin: part.pins[0],
@@ -326,6 +346,7 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 x: Some(part.x),
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 1),
+                rot: part.rot,
             }),
             PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
                 r: part.pins[0],
@@ -335,6 +356,7 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 x: Some(part.x),
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 3),
+                rot: part.rot,
             }),
             PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
                 pins: part.pins,
@@ -342,11 +364,13 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 x: Some(part.x),
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 7),
+                rot: part.rot,
             }),
             PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
                 label: part.label.clone(),
                 x: Some(part.x),
                 y: Some(part.y),
+                rot: part.rot,
             }),
             PartKind::Pot => board.pots.push(rusty_embed::SimPot {
                 pin: part.pins[0],
@@ -354,6 +378,7 @@ fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
                 x: Some(part.x),
                 y: Some(part.y),
                 routes: routes_of(&part.waypoints, 1),
+                rot: part.rot,
             }),
         }
     }
@@ -514,12 +539,25 @@ fn row_under(kit: (f64, f64), point: (f64, f64)) -> Option<usize> {
     }
 }
 
-/// Where a part's `slot`-th wire leaves its body.
+/// A point turned about a centre, in quarter turns.
+fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (f64, f64) {
+    let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
+    let (rx, ry) = match rot % 360 {
+        90 => (-dy, dx),
+        180 => (-dx, -dy),
+        270 => (dy, -dx),
+        _ => (dx, dy),
+    };
+    (centre.0 + rx, centre.1 + ry)
+}
+
+/// Where a part's `slot`-th wire leaves its body — after the part's own
+/// rotation, because CSS turns the body about its centre and the wires have
+/// to arrive at the same place the eye sees the stub.
 fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
-    (
-        part.x + part.kind.width(),
-        part.y + 14.0 + slot as f64 * 6.0,
-    )
+    let (w, h) = (part.kind.width(), part.kind.height());
+    let upright = (part.x + w, part.y + 14.0 + slot as f64 * 6.0);
+    rotate_about(upright, (part.x + w / 2.0, part.y + h / 2.0), part.rot)
 }
 
 /// The whole drawn path of one wire: the part's stub, the bends the user
@@ -601,6 +639,9 @@ fn BoardEditor(
     let selected_wire = RwSignal::new(None::<(usize, usize)>);
     // (client x, client y, what was clicked)
     let menu = RwSignal::new(None::<(f64, f64, MenuTarget)>);
+    // Alignment guides shown while a part is being dragged into line with
+    // another one — the quiet confirmation every drawing tool gives.
+    let guides = RwSignal::new((None::<f64>, None::<f64>));
     let drag = RwSignal::new(None::<Drag>);
     // While pulling a wire: current cursor in world coords, and the row the
     // cursor hovers, when it is one that accepts wires.
@@ -665,6 +706,7 @@ fn BoardEditor(
                 x: snap(60.0 + (list.len() as f64 * 16.0) % 90.0),
                 y: snap(40.0 + (list.len() as f64 * 52.0) % 240.0),
                 waypoints: Default::default(),
+                rot: 0,
             });
             selected.set(Some(list.len() - 1));
         });
@@ -686,6 +728,56 @@ fn BoardEditor(
             (client_x - rect.left() - tx) / k,
             (client_y - rect.top() - ty) / k,
         )
+    };
+
+    let rotate_part = move |index: usize| {
+        checkpoint();
+        parts.update(|list| {
+            if let Some(p) = list.get_mut(index) {
+                p.rot = (p.rot + 90) % 360;
+                // The stubs have moved, so hand-drawn routes to them are
+                // about a shape that no longer exists.
+                for route in &mut p.waypoints {
+                    route.clear();
+                }
+            }
+        });
+        dirty.set(true);
+    };
+    let nudge = move |dx: f64, dy: f64| {
+        let Some(index) = selected.get_untracked() else {
+            return;
+        };
+        checkpoint();
+        parts.update(|list| {
+            if let Some(p) = list.get_mut(index) {
+                p.x += dx;
+                p.y += dy;
+            }
+        });
+        dirty.set(true);
+    };
+    // Frame everything the sheet holds, the way every canvas tool's F does.
+    let fit_view = move || {
+        let Some(element) = canvas.get_untracked() else {
+            return;
+        };
+        let rect = element.get_bounding_client_rect();
+        let (kx, ky) = kit_pos.get_untracked();
+        let mut min = (kx, ky);
+        let mut max = (kx + KIT_W, ky + KIT_H);
+        for part in parts.get_untracked() {
+            min.0 = min.0.min(part.x);
+            min.1 = min.1.min(part.y);
+            max.0 = max.0.max(part.x + part.kind.width());
+            max.1 = max.1.max(part.y + part.kind.height());
+        }
+        let (w, h) = (max.0 - min.0 + 80.0, max.1 - min.1 + 80.0);
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let k = (rect.width() / w).min(rect.height() / h).clamp(0.35, 2.5);
+        view.set((-(min.0 - 40.0) * k, -(min.1 - 40.0) * k, k));
     };
 
     let straighten = move |part_index: usize, slot: usize| {
@@ -857,6 +949,14 @@ fn BoardEditor(
                 >
                     "1:1"
                 </button>
+                <button
+                    type="button"
+                    title="Fit everything on screen (F)"
+                    on:click=move |_| fit_view()
+                    class="rounded-[6px] px-2 py-1 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
+                >
+                    "Fit"
+                </button>
                 {move || {
                     running
                         .get()
@@ -870,7 +970,7 @@ fn BoardEditor(
                 }}
                 <span class="flex-1" />
                 <span class="text-caption text-label-4">
-                    "wire a part by dragging its gold stub to a chip pin"
+                    "drag a stub to a pin to wire · middle-drag pans · R turns · F fits"
                 </span>
             </div>
 
@@ -1014,8 +1114,40 @@ fn BoardEditor(
                                 delete_selection();
                             }
                             "Escape" => {
+                                // A drag in flight is what Escape is most
+                                // often reaching for.
+                                drag.set(None);
+                                ghost.set(None);
+                                guides.set((None, None));
                                 selected_wire.set(None);
                                 selected.set(None);
+                            }
+                            "r" | "R" if !event.ctrl_key() => {
+                                if let Some(index) = selected.get_untracked() {
+                                    event.prevent_default();
+                                    rotate_part(index);
+                                }
+                            }
+                            "f" | "F" if !event.ctrl_key() => {
+                                event.prevent_default();
+                                fit_view();
+                            }
+                            "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"
+                                if selected.get_untracked().is_some() =>
+                            {
+                                {
+                                    event.prevent_default();
+                                    // Shift for the fine grid, as every
+                                    // drawing tool spells it.
+                                    let step = if event.shift_key() { 1.0 } else { SNAP };
+                                    let (dx, dy) = match event.key().as_str() {
+                                        "ArrowLeft" => (-step, 0.0),
+                                        "ArrowRight" => (step, 0.0),
+                                        "ArrowUp" => (0.0, -step),
+                                        _ => (0.0, step),
+                                    };
+                                    nudge(dx, dy);
+                                }
                             }
                             _ if event.ctrl_key()
                                 && event.key().eq_ignore_ascii_case("z") => {
@@ -1056,6 +1188,24 @@ fn BoardEditor(
                         )));
                     }
                     on:pointerdown=move |event: ev::PointerEvent| {
+                        // Middle-drag pans from anywhere, including over a
+                        // part — the gesture every schematic and map editor
+                        // shares, and the reason nobody reaches for a
+                        // scrollbar.
+                        if event.button() == 1 {
+                            event.prevent_default();
+                            if let Some(element) = canvas.get_untracked() {
+                                let _ = element.focus();
+                            }
+                            let (tx, ty, _) = view.get_untracked();
+                            drag.set(Some(Drag::Pan {
+                                start_tx: tx,
+                                start_ty: ty,
+                                px: f64::from(event.client_x()),
+                                py: f64::from(event.client_y()),
+                            }));
+                            return;
+                        }
                         if event.button() != 0 {
                             return;
                         }
@@ -1094,10 +1244,37 @@ fn BoardEditor(
                                 });
                             }
                             Drag::Part { index, dx, dy } => {
+                                let mut x = snap(world.0 - dx);
+                                let mut y = snap(world.1 - dy);
+                                // Line up with what is already on the sheet.
+                                // Alignment that only the grid enforces is
+                                // alignment nobody can see.
+                                let mut guide_x = None;
+                                let mut guide_y = None;
+                                let (kx, ky) = kit_pos.get_untracked();
+                                let others: Vec<(f64, f64)> = parts
+                                    .get_untracked()
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(other, _)| *other != index)
+                                    .map(|(_, part)| (part.x, part.y))
+                                    .chain(std::iter::once((kx, ky)))
+                                    .collect();
+                                for (ox, oy) in others {
+                                    if (ox - x).abs() <= SNAP {
+                                        x = ox;
+                                        guide_x = Some(ox);
+                                    }
+                                    if (oy - y).abs() <= SNAP {
+                                        y = oy;
+                                        guide_y = Some(oy);
+                                    }
+                                }
+                                guides.set((guide_x, guide_y));
                                 parts.update(|list| {
                                     if let Some(part) = list.get_mut(index) {
-                                        part.x = snap(world.0 - dx);
-                                        part.y = snap(world.1 - dy);
+                                        part.x = x;
+                                        part.y = y;
                                     }
                                 });
                                 dirty.set(true);
@@ -1143,6 +1320,7 @@ fn BoardEditor(
                         }
                     }
                     on:pointerup=move |_| {
+                        guides.set((None, None));
                         if let Some(Drag::Wire { part, slot }) = drag.get_untracked() {
                             // Landing on a GPIO row wires the pin; anywhere
                             // else cancels. Wiring IS pin assignment.
@@ -1168,6 +1346,7 @@ fn BoardEditor(
                         drag.set(None);
                     }
                     on:pointerleave=move |_| {
+                        guides.set((None, None));
                         ghost.set(None);
                         hover_row.set(None);
                         drag.set(None);
@@ -1390,6 +1569,43 @@ fn BoardEditor(
                                         .collect_view()
                                 }}
 
+                                // ── alignment guides ────────────────────────
+                                {move || {
+                                    let (gx, gy) = guides.get();
+                                    view! {
+                                        {gx
+                                            .map(|x| {
+                                                view! {
+                                                    <line
+                                                        x1=x
+                                                        y1=-2000
+                                                        x2=x
+                                                        y2=4000
+                                                        stroke="#e0a838"
+                                                        stroke-width="0.8"
+                                                        stroke-dasharray="4 4"
+                                                        style="pointer-events: none"
+                                                    />
+                                                }
+                                            })}
+                                        {gy
+                                            .map(|y| {
+                                                view! {
+                                                    <line
+                                                        x1=-2000
+                                                        y1=y
+                                                        x2=4000
+                                                        y2=y
+                                                        stroke="#e0a838"
+                                                        stroke-width="0.8"
+                                                        stroke-dasharray="4 4"
+                                                        style="pointer-events: none"
+                                                    />
+                                                }
+                                            })}
+                                    }
+                                }}
+
                                 // ── the ghost while pulling a new wire ──────
                                 {move || {
                                     let target = ghost.get()?;
@@ -1421,6 +1637,9 @@ fn BoardEditor(
                             view! {
                                 <div
                                     on:pointerdown=move |event: ev::PointerEvent| {
+                                        if event.button() != 0 {
+                                            return;
+                                        }
                                         event.prevent_default();
                                         event.stop_propagation();
                                         checkpoint();
@@ -1492,7 +1711,9 @@ fn BoardEditor(
                                 .map(|(index, part)| {
                                     let x = part.x;
                                     let y = part.y;
+                                    let rot = part.rot;
                                     let width = part.kind.width();
+                                    let height = part.kind.height();
                                     let label = part.label.clone();
                                     let kind = part.kind.clone();
                                     let grab_kind = part.kind.clone();
@@ -1671,7 +1892,8 @@ fn BoardEditor(
                                                 )
                                             }
                                             style=format!(
-                                                "left: {x}px; top: {y}px; width: {width}px",
+                                                "left: {x}px; top: {y}px; width: {width}px; \
+                                                 height: {height}px; transform: rotate({rot}deg)",
                                             )
                                         >
                                             {face}
@@ -1760,6 +1982,14 @@ fn BoardEditor(
                                     });
                                 view! {
                                     <MenuItem
+                                        label="Rotate 90°"
+                                        shortcut="R"
+                                        on_select=Callback::new(move |_| {
+                                            rotate_part(index);
+                                            menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
                                         label="Duplicate"
                                         on_select=Callback::new(move |_| {
                                             duplicate_part(index);
@@ -1810,6 +2040,14 @@ fn BoardEditor(
                                         })
                                     />
                                     <MenuSeparator />
+                                    <MenuItem
+                                        label="Fit to contents"
+                                        shortcut="F"
+                                        on_select=Callback::new(move |_| {
+                                            fit_view();
+                                            menu.set(None);
+                                        })
+                                    />
                                     <MenuItem
                                         label="Reset view"
                                         shortcut="1:1"

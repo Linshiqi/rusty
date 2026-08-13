@@ -189,12 +189,14 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         x: Option<f64>,
         y: Option<f64>,
         routes: Option<Vec<Vec<(f64, f64)>>>,
+        rot: Option<u16>,
     }
     #[derive(serde::Deserialize)]
     struct FileDisplay {
         label: Option<String>,
         x: Option<f64>,
         y: Option<f64>,
+        rot: Option<u16>,
     }
     #[derive(serde::Deserialize)]
     struct FilePot {
@@ -203,6 +205,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         x: Option<f64>,
         y: Option<f64>,
         routes: Option<Vec<Vec<(f64, f64)>>>,
+        rot: Option<u16>,
     }
     #[derive(serde::Deserialize)]
     struct FileButton {
@@ -211,6 +214,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         x: Option<f64>,
         y: Option<f64>,
         routes: Option<Vec<Vec<(f64, f64)>>>,
+        rot: Option<u16>,
     }
     #[derive(serde::Deserialize)]
     struct FileRgb {
@@ -221,6 +225,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         x: Option<f64>,
         y: Option<f64>,
         routes: Option<Vec<Vec<(f64, f64)>>>,
+        rot: Option<u16>,
     }
     #[derive(serde::Deserialize)]
     struct FileBoard {
@@ -236,6 +241,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         x: Option<f64>,
         y: Option<f64>,
         routes: Option<Vec<Vec<(f64, f64)>>>,
+        rot: Option<u16>,
     }
 
     let text = std::fs::read_to_string(root.join(".rusty/sim.toml")).ok()?;
@@ -270,6 +276,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 pin: led.pin,
                 x: led.x,
                 y: led.y,
+                rot: led.rot.unwrap_or(0),
                 routes: led.routes.unwrap_or_default(),
             })
             .collect(),
@@ -281,6 +288,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 pin: b.pin,
                 x: b.x,
                 y: b.y,
+                rot: b.rot.unwrap_or(0),
                 routes: b.routes.unwrap_or_default(),
             })
             .collect(),
@@ -294,6 +302,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 b: rgb.b,
                 x: rgb.x,
                 y: rgb.y,
+                rot: rgb.rot.unwrap_or(0),
                 routes: rgb.routes.unwrap_or_default(),
             })
             .collect(),
@@ -305,6 +314,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 pins: seven.pins,
                 x: seven.x,
                 y: seven.y,
+                rot: seven.rot.unwrap_or(0),
                 routes: seven.routes.unwrap_or_default(),
             })
             .collect(),
@@ -315,6 +325,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 label: display.label.unwrap_or_else(|| "DISPLAY".to_string()),
                 x: display.x,
                 y: display.y,
+                rot: display.rot.unwrap_or(0),
             })
             .collect(),
         pots: parsed
@@ -325,6 +336,7 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 pin: pot.pin,
                 x: pot.x,
                 y: pot.y,
+                rot: pot.rot.unwrap_or(0),
                 routes: pot.routes.unwrap_or_default(),
             })
             .collect(),
@@ -761,6 +773,8 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         y: Option<f64>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         routes: &'a Vec<Vec<(f64, f64)>>,
+        #[serde(skip_serializing_if = "crate::model::is_upright")]
+        rot: u16,
     }
     #[derive(serde::Serialize)]
     struct FileDisplay<'a> {
@@ -769,6 +783,8 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         x: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         y: Option<f64>,
+        #[serde(skip_serializing_if = "crate::model::is_upright")]
+        rot: u16,
     }
     #[derive(serde::Serialize)]
     struct FilePot<'a> {
@@ -780,6 +796,8 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         y: Option<f64>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         routes: &'a Vec<Vec<(f64, f64)>>,
+        #[serde(skip_serializing_if = "crate::model::is_upright")]
+        rot: u16,
     }
     #[derive(serde::Serialize)]
     struct FileButton<'a> {
@@ -791,6 +809,8 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         y: Option<f64>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         routes: &'a Vec<Vec<(f64, f64)>>,
+        #[serde(skip_serializing_if = "crate::model::is_upright")]
+        rot: u16,
     }
     #[derive(serde::Serialize)]
     struct FileRgb<'a> {
@@ -804,6 +824,8 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         y: Option<f64>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         routes: &'a Vec<Vec<(f64, f64)>>,
+        #[serde(skip_serializing_if = "crate::model::is_upright")]
+        rot: u16,
     }
     #[derive(serde::Serialize)]
     struct FileBoard<'a> {
@@ -824,6 +846,8 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
         y: Option<f64>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         routes: &'a Vec<Vec<(f64, f64)>>,
+        #[serde(skip_serializing_if = "crate::model::is_upright")]
+        rot: u16,
     }
 
     let file = File {
@@ -841,6 +865,7 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &led.label,
                 x: led.x.map(|v| v.round()),
                 y: led.y.map(|v| v.round()),
+                rot: led.rot,
                 routes: &led.routes,
             })
             .collect(),
@@ -852,6 +877,7 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &b.label,
                 x: b.x.map(|v| v.round()),
                 y: b.y.map(|v| v.round()),
+                rot: b.rot,
                 routes: &b.routes,
             })
             .collect(),
@@ -865,6 +891,7 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &rgb.label,
                 x: rgb.x.map(|v| v.round()),
                 y: rgb.y.map(|v| v.round()),
+                rot: rgb.rot,
                 routes: &rgb.routes,
             })
             .collect(),
@@ -876,6 +903,7 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &seven.label,
                 x: seven.x.map(|v| v.round()),
                 y: seven.y.map(|v| v.round()),
+                rot: seven.rot,
                 routes: &seven.routes,
             })
             .collect(),
@@ -886,6 +914,7 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &display.label,
                 x: display.x.map(|v| v.round()),
                 y: display.y.map(|v| v.round()),
+                rot: display.rot,
             })
             .collect(),
         pot: board
@@ -896,6 +925,7 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 label: &pot.label,
                 x: pot.x.map(|v| v.round()),
                 y: pot.y.map(|v| v.round()),
+                rot: pot.rot,
                 routes: &pot.routes,
             })
             .collect(),
@@ -990,6 +1020,7 @@ mod tests {
                 x: Some(40.0),
                 y: Some(60.0),
                 routes: vec![vec![(120.0, 60.0), (200.0, 90.0)]],
+                rot: 90,
             }],
             buttons: vec![SimButton {
                 pin: 14,
@@ -997,6 +1028,7 @@ mod tests {
                 x: Some(30.0),
                 y: Some(120.0),
                 routes: Vec::new(),
+                rot: 0,
             }],
             rgbs: vec![SimRgb {
                 r: 21,
@@ -1006,6 +1038,7 @@ mod tests {
                 x: None,
                 y: None,
                 routes: Vec::new(),
+                rot: 0,
             }],
             sevens: vec![SimSeven {
                 pins: [1, 2, 3, 4, 5, 6, 7],
@@ -1013,11 +1046,13 @@ mod tests {
                 x: Some(200.0),
                 y: Some(40.0),
                 routes: Vec::new(),
+                rot: 270,
             }],
             displays: vec![SimDisplay {
                 label: "DISPLAY".to_string(),
                 x: None,
                 y: None,
+                rot: 0,
             }],
             pots: vec![SimPot {
                 pin: 34,
@@ -1025,6 +1060,7 @@ mod tests {
                 x: Some(20.0),
                 y: Some(200.0),
                 routes: Vec::new(),
+                rot: 0,
             }],
         };
         save_board(dir.path(), &board).expect("save");
