@@ -136,9 +136,9 @@ fn Streaming() -> impl IntoView {
                 {(!pending.is_empty())
                     .then(|| {
                         view! {
-                            <p class="max-w-[76ch] text-body leading-relaxed whitespace-pre-wrap select-text">
-                                {pending}
-                            </p>
+                            <div class="max-w-[76ch] text-body select-text">
+                                <crate::view::markdown::Markdown text=pending />
+                            </div>
                         }
                     })}
                 <div class="flex items-center gap-2 text-callout text-label-3">
@@ -221,9 +221,9 @@ fn Bubble(message: Message) -> impl IntoView {
             {(!text.is_empty())
                 .then(|| {
                     view! {
-                        <p class="max-w-[76ch] text-body leading-relaxed whitespace-pre-wrap select-text">
-                            {text}
-                        </p>
+                        <div class="max-w-[76ch] text-body select-text">
+                            <crate::view::markdown::Markdown text=text />
+                        </div>
                     }
                 })}
         </div>

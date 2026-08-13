@@ -2818,7 +2818,9 @@ fn hover_parts(text: &str) -> AnyView {
         .map(|part| match part {
             Part::Rule => view! { <div class="my-1.5 h-px bg-line" /> }.into_any(),
             Part::Prose(prose) => view! {
-                <div class="font-sans whitespace-pre-wrap">{prose.trim().to_string()}</div>
+                <div class="font-sans">
+                    <crate::view::markdown::Markdown text=prose.trim().to_string() />
+                </div>
             }
             .into_any(),
             Part::Code(lines) => view! {

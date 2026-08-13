@@ -13,6 +13,7 @@ pub mod components;
 pub mod dock;
 pub mod icon;
 pub mod loclink;
+pub mod markdown;
 pub mod menu;
 pub mod palette;
 pub mod panels;
