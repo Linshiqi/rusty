@@ -22,7 +22,7 @@ cargo clippy --workspace --all-targets
 
 # The frontend links only the model layers, so these must stay green
 cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
-  -p rusty-edit -p rusty-lsp --no-default-features \
+  -p rusty-edit -p rusty-lsp -p rusty-dbg --no-default-features \
   --target wasm32-unknown-unknown
 
 # Frontend alone, on http://localhost:1425 — much faster to iterate on than a
@@ -70,6 +70,7 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
+| `rusty-dbg` | Debugging: gdb's machine interface parsed, folded into a session state — breakpoints, stepping, stack, variables |
 | `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |

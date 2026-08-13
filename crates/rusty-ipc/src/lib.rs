@@ -113,6 +113,15 @@ pub mod lsp {
     pub const ACTIONS: &str = "lsp_code_actions";
 }
 
+/// Breakpoints, stepping, and what the target is doing.
+pub mod debug {
+    pub const START: &str = "debug_start";
+    pub const BREAKPOINT: &str = "debug_breakpoint";
+    pub const CONTROL: &str = "debug_control";
+    pub const FRAME: &str = "debug_frame";
+    pub const STOP: &str = "debug_stop";
+}
+
 /// The workspace's direct dependencies against crates.io.
 pub mod crates {
     pub const REPORT: &str = "crate_report";

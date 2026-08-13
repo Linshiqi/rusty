@@ -4,6 +4,7 @@
 
 mod ai;
 mod commands;
+mod debug;
 mod error;
 mod files;
 mod flash;
@@ -80,6 +81,11 @@ fn main() {
             commands::serial_ports,
             commands::debug_probes,
             commands::plan_flash,
+            debug::debug_start,
+            debug::debug_breakpoint,
+            debug::debug_control,
+            debug::debug_frame,
+            debug::debug_stop,
             flash::run_flash,
             flash::stop_flash,
             flash::create_project,
@@ -121,6 +127,7 @@ fn main() {
                 tauri::async_runtime::block_on(async {
                     state.set_lsp(None).await;
                     state.set_terminal(None).await;
+                    state.set_debugger(None).await;
                     state.stop_session().await;
                 });
             }
@@ -155,7 +162,7 @@ mod wire_names {
 
     #[test]
     fn every_constant_names_a_real_handler() {
-        use crate::{ai, commands, files, flash, lsp, simulate, terminal, window};
+        use crate::{ai, commands, debug, files, flash, lsp, simulate, terminal, window};
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
@@ -211,6 +218,11 @@ mod wire_names {
             cmd::flash::SERIAL_PORTS => commands::serial_ports,
             cmd::flash::DEBUG_PROBES => commands::debug_probes,
             cmd::flash::PLAN => commands::plan_flash,
+            cmd::debug::START => debug::debug_start,
+            cmd::debug::BREAKPOINT => debug::debug_breakpoint,
+            cmd::debug::CONTROL => debug::debug_control,
+            cmd::debug::FRAME => debug::debug_frame,
+            cmd::debug::STOP => debug::debug_stop,
             cmd::flash::RUN => flash::run_flash,
             cmd::flash::STOP => flash::stop_flash,
 

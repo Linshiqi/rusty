@@ -5252,6 +5252,7 @@ version = "0.1.0"
 dependencies = [
  "rusty-ai",
  "rusty-core",
+ "rusty-dbg",
  "rusty-edit",
  "rusty-embed",
  "rusty-ipc",

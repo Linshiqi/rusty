@@ -17,4 +17,4 @@ pub use model::*;
 #[cfg(feature = "backend")]
 pub mod session;
 #[cfg(feature = "backend")]
-pub use session::{Debugger, Events};
+pub use session::{Debugger, Events, Launch, Target};

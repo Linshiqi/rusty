@@ -206,6 +206,18 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
 /// `riscv32-esp-elf-gdb`, looked for in the data directory's tools/ first,
 /// then PATH. The host's own gdb is useless here — the architecture must
 /// match or `target remote` reads garbage registers.
+/// The gdb that can debug this project's chip, if it is installed.
+///
+/// Architecture decides: an Xtensa gdb cannot debug a RISC-V image, and the
+/// error it produces names neither the chip nor the fix.
+pub fn gdb_for(project: &EmbeddedProject) -> Option<PathBuf> {
+    let xtensa = project
+        .configured_target
+        .as_deref()
+        .is_some_and(|t| t.starts_with("xtensa"));
+    find_gdb(xtensa)
+}
+
 fn find_gdb(xtensa: bool) -> Option<PathBuf> {
     let family = if xtensa { "xtensa-esp-elf-gdb" } else { "riscv32-esp-elf-gdb" };
     let binary = if xtensa {

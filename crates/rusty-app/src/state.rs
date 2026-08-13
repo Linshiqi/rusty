@@ -16,6 +16,8 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub struct AppState {
     inner: Mutex<Open>,
+    /// The debug session, if one is live.
+    debugger: Mutex<Option<Arc<rusty_dbg::Debugger>>>,
     /// The flash or monitor session in flight, if any.
     ///
     /// Only the stopper is kept, not the session: the reader loop blocks on
@@ -100,6 +102,28 @@ impl AppState {
 
     pub async fn root(&self) -> Option<PathBuf> {
         self.inner.lock().await.root.clone()
+    }
+
+    pub async fn debugger(&self) -> Option<Arc<rusty_dbg::Debugger>> {
+        self.debugger.lock().await.clone()
+    }
+
+    /// Register the live debug session, ending whatever it replaces — one
+    /// panel, one session, and a stranded gdb holds the ELF open.
+    pub async fn set_debugger(&self, debugger: Option<Arc<rusty_dbg::Debugger>>) {
+        let previous = std::mem::replace(&mut *self.debugger.lock().await, debugger);
+        if let Some(previous) = previous {
+            previous.stop();
+        }
+    }
+
+    /// Release the slot when a session ends, by identity — the same rule the
+    /// terminal learned: an outgoing session must not evict its successor.
+    pub async fn release_debugger(&self, ours: &Arc<rusty_dbg::Debugger>) {
+        let mut slot = self.debugger.lock().await;
+        if slot.as_ref().is_some_and(|held| Arc::ptr_eq(held, ours)) {
+            *slot = None;
+        }
     }
 
     pub async fn lsp(&self) -> Option<Arc<rusty_lsp::LspClient>> {
