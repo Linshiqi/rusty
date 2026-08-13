@@ -74,6 +74,28 @@ pub fn App() -> impl IntoView {
 
     let settings_open = RwSignal::new(false);
     provide_context(SettingsOpen(settings_open));
+
+    // A `?detach=<path>` boot means this window is one file's editor, not
+    // the whole shell: no sidebar, no dock, no menu bar — the OS gives it a
+    // frame, and closing it is closing it.
+    if let Some(path) = detached_path() {
+        let opened = RwSignal::new(false);
+        Effect::new(move |_| {
+            if state.has_project() && !opened.get_untracked() {
+                opened.set(true);
+                controller::open_file(state, path.clone());
+            }
+        });
+        return view! {
+            <div class="flex h-full flex-col bg-content text-label">
+                <div class="flex min-h-0 flex-1 flex-col">
+                    {panels::files_view()}
+                </div>
+            </div>
+        }
+        .into_any();
+    }
+
     let palette_open = RwSignal::new(false);
     let chrome = crate::command::Chrome {
         settings_open,
@@ -103,7 +125,10 @@ pub fn App() -> impl IntoView {
 
                 <palette::Palette open=palette_open chrome=chrome />
                 <Sidebar />
-                <split::Handle divider=crate::state::Divider::Sidebar />
+                // A rail has one width; only the full sidebar drags.
+                <Show when=move || !state.sidebar_rail.get()>
+                    <split::Handle divider=crate::state::Divider::Sidebar />
+                </Show>
                 <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
                     {move || {
                         state
@@ -160,6 +185,32 @@ pub fn App() -> impl IntoView {
             <StatusBar />
         </div>
     }
+    .into_any()
+}
+
+/// The `detach` query parameter, percent-decoded — the file this window
+/// exists to edit, when it is that kind of window.
+fn detached_path() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let raw = search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("detach="))?;
+    // Decode %XX; the backend encodes everything outside [A-Za-z0-9._-/].
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' && at + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).ok().filter(|p| !p.is_empty())
 }
 
 /// Renders the active panel, or explains why it cannot.
@@ -258,9 +309,50 @@ fn Sidebar() -> impl IntoView {
     view! {
         <nav
             class="flex flex-none flex-col overflow-y-auto bg-sidebar pb-2"
-            style=move || format!("width: {}px", state.sidebar_width.get())
+            style=move || {
+                if state.sidebar_rail.get() {
+                    "width: 46px".to_string()
+                } else {
+                    format!("width: {}px", state.sidebar_width.get())
+                }
+            }
             aria-label="Panels"
         >
+            // The fold toggle rides the top edge, where VSCode keeps its
+            // sidebar controls — parked bottom-left it read as clutter.
+            <div class=move || {
+                if state.sidebar_rail.get() {
+                    "flex justify-center pt-1.5"
+                } else {
+                    "flex justify-end px-2 pt-1.5"
+                }
+            }>
+                <button
+                    type="button"
+                    title=move || {
+                        if state.sidebar_rail.get() {
+                            "Expand the sidebar"
+                        } else {
+                            "Fold the sidebar to icons"
+                        }
+                    }
+                    on:click=move |_| {
+                        state.sidebar_rail.update(|rail| *rail = !*rail);
+                        crate::state::remember_rail(state.sidebar_rail.get_untracked());
+                    }
+                    class="grid size-5 place-items-center rounded-[5px] text-label-4 transition-colors hover:bg-sunken hover:text-label"
+                >
+                    <span class=move || {
+                        if state.sidebar_rail.get() {
+                            "grid -rotate-90 transition-transform"
+                        } else {
+                            "grid rotate-90 transition-transform"
+                        }
+                    }>
+                        <IconView icon=Icon::Chevron size=13 />
+                    </span>
+                </button>
+            </div>
             {sections
                 .into_iter()
                 .map(|(section, group)| {
@@ -270,10 +362,13 @@ fn Sidebar() -> impl IntoView {
                         // "Assistant" sitting directly under the DEVICE heading,
                         // which reads as a claim that they are device panels —
                         // and neither of them touches a device.
-                        {if section.is_empty() {
-                            view! { <div class="mx-4 mt-3 mb-2 h-px bg-line" /> }.into_any()
-                        } else {
-                            view! { <components::SectionLabel label=section /> }.into_any()
+                        {move || {
+                            if state.sidebar_rail.get() || section.is_empty() {
+                                view! { <div class="mx-3 mt-3 mb-2 h-px bg-line" /> }.into_any()
+                            } else {
+                                view! { <components::SectionLabel label=section /> }
+                                    .into_any()
+                            }
                         }}
                         <div class="px-2">
                             {group
@@ -322,7 +417,9 @@ fn Sidebar() -> impl IntoView {
                                             }
                                         >
                                             <IconView icon=icon />
-                                            <span class="truncate">{title}</span>
+                                            <Show when=move || !state.sidebar_rail.get()>
+                                                <span class="truncate">{title}</span>
+                                            </Show>
                                         </button>
                                     }
                                 })
@@ -350,7 +447,9 @@ fn Sidebar() -> impl IntoView {
                             }
                         >
                             <IconView icon=Icon::Settings />
-                            <span>"Settings"</span>
+                            <Show when=move || !state.sidebar_rail.get()>
+                                <span>"Settings"</span>
+                            </Show>
                         </button>
                     }
                 }

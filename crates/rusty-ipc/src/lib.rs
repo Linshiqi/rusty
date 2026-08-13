@@ -84,6 +84,8 @@ pub mod files {
     pub const TREE: &str = "file_tree";
     pub const OPEN: &str = "open_file";
     pub const SAVE: &str = "save_file";
+    pub const CREATE: &str = "create_entry";
+    pub const DETACH: &str = "open_editor_window";
     pub const HIGHLIGHT: &str = "highlight_text";
     pub const OPEN_EXTERNAL: &str = "open_external";
     pub const FORMAT: &str = "format_text";

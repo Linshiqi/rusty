@@ -157,6 +157,37 @@ pub fn save(root: &Path, relative: &str, text: &str) -> Result<()> {
     })
 }
 
+/// Create an empty file or a directory under `root`.
+///
+/// Refuses to touch anything that already exists — "new file" over an
+/// existing name must never become "truncate it". Parent directories are
+/// created for a file, so `src/驱动/mod.rs` works in one step.
+pub fn create(root: &Path, relative: &str, dir: bool) -> Result<()> {
+    let path = resolve(root, relative)?;
+    if path.exists() {
+        return Err(Error::Exists {
+            path: relative.to_string(),
+        });
+    }
+    let write = |source| Error::Write {
+        path: relative.to_string(),
+        source,
+    };
+    if dir {
+        std::fs::create_dir_all(&path).map_err(write)
+    } else {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(write)?;
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map(|_| ())
+            .map_err(write)
+    }
+}
+
 /// Turn a relative path from the frontend into a real one, refusing anything
 /// that leaves the project.
 ///
@@ -200,6 +231,31 @@ mod tests {
         std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
         std::fs::write(dir.path().join("firmware.elf"), [0x7f, b'E', b'L', b'F', 0, 1]).unwrap();
         dir
+    }
+
+    /// Creation refuses what exists and escapes; a nested new file gets its
+    /// parents. The refusal matters most: "new file" over `main.rs` must
+    /// error, not hand back an emptied `main.rs`.
+    #[test]
+    fn create_makes_new_things_and_only_new_things() {
+        let dir = scratch();
+
+        create(dir.path(), "src/驱动/mod.rs", false).unwrap();
+        assert!(dir.path().join("src/驱动/mod.rs").is_file());
+        create(dir.path(), "docs", true).unwrap();
+        assert!(dir.path().join("docs").is_dir());
+
+        assert!(
+            matches!(
+                create(dir.path(), "src/main.rs", false).unwrap_err(),
+                Error::Exists { .. },
+            ),
+            "an existing file must be refused, never truncated",
+        );
+        assert!(matches!(
+            create(dir.path(), "../escape", true).unwrap_err(),
+            Error::Outside { .. },
+        ));
     }
 
     #[test]

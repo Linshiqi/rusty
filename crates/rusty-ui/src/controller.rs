@@ -1718,6 +1718,46 @@ pub fn run_session(state: AppState, plan: CommandPlan) {
 
 // ─── files ───────────────────────────────────────────────────────────────────
 
+/// Create a file or directory, then show it — the tree refreshes, and a new
+/// file opens in the editor, because "New file" means "I want to type in it".
+pub fn create_entry(state: AppState, path: String, dir: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        dir: bool,
+    }
+
+    if !state.has_project() {
+        return;
+    }
+    let opened = path.clone();
+    let args = Args { path, dir };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::files::CREATE, &args).await },
+        move |()| {
+            refresh_tree(state);
+            if !dir {
+                open_file(state, opened.clone());
+            }
+        },
+    );
+}
+
+/// Float a file into its own OS window.
+pub fn detach_file(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::files::DETACH, &Args { path }).await },
+        |()| {},
+    );
+}
+
 /// Re-read the project tree.
 pub fn refresh_tree(state: AppState) {
     if !state.has_project() {

@@ -147,3 +147,9 @@ pub fn all() -> Vec<Panel> {
         },
     ]
 }
+
+/// The files workspace on its own — what a detached editor window renders.
+pub fn files_view() -> leptos::prelude::AnyView {
+    use leptos::prelude::IntoAny;
+    files::FilesPanel().into_any()
+}

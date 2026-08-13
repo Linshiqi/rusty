@@ -30,6 +30,11 @@ pub fn install(state: AppState) {
                     .clamp(min, max);
                 state.sidebar_width.set(width);
             }
+            Divider::Tree => {
+                let width = (from_size + (event.client_x() as f64 - from_pointer))
+                    .clamp(min, max);
+                state.tree_width.set(width);
+            }
             // Anchored to the bottom, so dragging up grows it.
             Divider::Dock => {
                 let height = (from_size + (from_pointer - event.client_y() as f64))
@@ -45,6 +50,7 @@ pub fn install(state: AppState) {
         if let Some(divider) = state.dragging.get_untracked() {
             let value = match divider {
                 Divider::Sidebar => state.sidebar_width.get_untracked(),
+                Divider::Tree => state.tree_width.get_untracked(),
                 Divider::Dock => state.dock_height.get_untracked(),
             };
             remember_size(divider, value);
@@ -62,7 +68,7 @@ pub fn install(state: AppState) {
 #[component]
 pub fn Handle(divider: Divider) -> impl IntoView {
     let state = AppState::expect();
-    let vertical = divider == Divider::Sidebar;
+    let vertical = matches!(divider, Divider::Sidebar | Divider::Tree);
 
     let geometry = if vertical {
         "w-px cursor-col-resize before:-left-[3px] before:top-0 before:h-full before:w-[7px]"
@@ -81,6 +87,9 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                 let (pointer, size) = match divider {
                     Divider::Sidebar => {
                         (event.client_x() as f64, state.sidebar_width.get_untracked())
+                    }
+                    Divider::Tree => {
+                        (event.client_x() as f64, state.tree_width.get_untracked())
                     }
                     Divider::Dock => {
                         (event.client_y() as f64, state.dock_height.get_untracked())

@@ -28,7 +28,7 @@ mod search;
 mod tree;
 
 #[cfg(feature = "backend")]
-pub use document::{Files, save};
+pub use document::{Files, create, save};
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
 #[cfg(feature = "backend")]

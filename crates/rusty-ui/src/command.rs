@@ -115,6 +115,7 @@ pub fn all(state: AppState) -> Vec<Command> {
     out.push(view(Action::ShowDock(DockTab::Problems), "Show problems", None));
     out.push(view(Action::ShowDock(DockTab::Output), "Show output", None));
     out.push(view(Action::ShowDock(DockTab::Terminal), "Show terminal", None));
+    out.push(view(Action::ShowDock(DockTab::Waves), "Show waves", None));
     out.push(view(Action::ShowDock(DockTab::Devices), "Show devices", None));
     out.push(view(Action::ResetLayout, "Reset panel sizes", None));
 
@@ -200,11 +201,26 @@ fn project_entry(action: Action, label: &str, shortcut: Option<&'static str>) ->
 /// registry for the same reason they are in the sidebar — a contributed panel
 /// appears in View without anyone remembering to add it.
 pub fn menus(state: AppState) -> Vec<Menu> {
+    // Shaped like VSCode's View menu: palette on top, appearance folded into
+    // a submenu, then the panels the sidebar shows — and only those. The
+    // wizard and the assistant have their own doors; listing them here made
+    // the menu a pile.
     let mut view_items = vec![
         entry(Action::OpenPalette, "Command palette…", Some("Ctrl K")),
         Item::Separator,
+        Item::Submenu {
+            label: "Appearance",
+            items: vec![
+                entry(Action::SetTheme(Theme::System), "Theme: System", None),
+                entry(Action::SetTheme(Theme::Light), "Theme: Light", None),
+                entry(Action::SetTheme(Theme::Dark), "Theme: Dark", None),
+                Item::Separator,
+                entry(Action::ResetLayout, "Reset panel sizes", None),
+            ],
+        },
+        Item::Separator,
     ];
-    for (index, panel) in panels::all().into_iter().enumerate() {
+    for (index, panel) in panels::all().into_iter().filter(|p| !p.hidden).enumerate() {
         view_items.push(Item::Entry {
             action: Action::ShowPanel(panel.id),
             label: panel.title.to_string(),
@@ -218,12 +234,8 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         entry(Action::ShowDock(DockTab::Problems), "Problems", None),
         entry(Action::ShowDock(DockTab::Output), "Output", None),
         entry(Action::ShowDock(DockTab::Terminal), "Terminal", None),
+        entry(Action::ShowDock(DockTab::Waves), "Waves", None),
         entry(Action::ShowDock(DockTab::Devices), "Devices", None),
-        Item::Separator,
-        entry(Action::SetTheme(Theme::System), "Theme: System", None),
-        entry(Action::SetTheme(Theme::Light), "Theme: Light", None),
-        entry(Action::SetTheme(Theme::Dark), "Theme: Dark", None),
-        entry(Action::ResetLayout, "Reset panel sizes", None),
     ]);
 
     vec![

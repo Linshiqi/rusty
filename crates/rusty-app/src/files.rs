@@ -12,6 +12,62 @@ pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, Command
     Ok(rusty_edit::read_tree(&root)?)
 }
 
+/// A new empty file or directory. Refuses names that already exist.
+#[tauri::command]
+pub async fn create_entry(
+    path: String,
+    dir: bool,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(rusty_edit::create(&root, &path, dir)?)
+}
+
+/// A file in its own OS window — the same frontend, booted straight into
+/// the editor by a `detach` query parameter. Asking twice focuses the
+/// window that already exists instead of stacking a second copy.
+#[tauri::command]
+pub async fn open_editor_window(
+    path: String,
+    app: tauri::AppHandle,
+) -> Result<(), CommandError> {
+    use tauri::Manager;
+
+    // FNV-1a over the path: stable, short, and two files cannot collide in
+    // practice on one project.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    let label = format!("edit-{hash:x}");
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let encoded: String = path
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'/' => {
+                char::from(byte).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect();
+    let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?detach={encoded}").into()),
+    )
+    .title(format!("{name} — rusty"))
+    .inner_size(980.0, 720.0)
+    .build()
+    .map_err(|error| CommandError::new(format!("could not open the editor window: {error}")))?;
+    Ok(())
+}
+
 /// One file, highlighted.
 #[tauri::command]
 pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Document, CommandError> {

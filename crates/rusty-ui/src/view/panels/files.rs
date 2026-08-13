@@ -52,6 +52,7 @@ pub fn FilesPanel() -> impl IntoView {
         view! {
             <div class="flex min-h-0 flex-1">
                 <Tree />
+                <crate::view::split::Handle divider=crate::state::Divider::Tree />
                 <Editor />
             </div>
         }
@@ -64,9 +65,23 @@ fn Tree() -> impl IntoView {
     let state = AppState::expect();
     let tree_menu = RwSignal::new(None::<(f64, f64, TreeTarget)>);
     provide_context(TreeMenu(tree_menu));
+    // A pending "New file" / "New folder": (directory it lands in, is_dir).
+    // The name is typed into a strip under the header; Enter creates.
+    let naming = RwSignal::new(None::<(String, bool)>);
+    let name_box: NodeRef<html::Input> = NodeRef::new();
+    Effect::new(move |_| {
+        if naming.get().is_some()
+            && let Some(input) = name_box.get()
+        {
+            let _ = input.focus();
+        }
+    });
 
     view! {
-        <div class="flex w-[240px] flex-none flex-col border-r border-line bg-sidebar">
+        <div
+            class="flex flex-none flex-col border-r border-line bg-sidebar"
+            style=move || format!("width: {}px", state.tree_width.get())
+        >
             <div class="flex items-center gap-2 px-3 py-2">
                 <span class="flex-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                     "Files"
@@ -80,7 +95,66 @@ fn Tree() -> impl IntoView {
                     <IconView icon=Icon::Refresh size=13 />
                 </button>
             </div>
-            <div class="min-h-0 flex-1 overflow-auto pb-2">
+            {move || {
+                let (parent, dir) = naming.get()?;
+                let hint = if dir { "folder name" } else { "file name" };
+                let shown_parent = if parent.is_empty() {
+                    "./".to_string()
+                } else {
+                    format!("{parent}/")
+                };
+                let commit_parent = parent.clone();
+                Some(
+                    view! {
+                        <div class="flex items-center gap-1.5 border-b border-line px-3 pb-2">
+                            <span class="max-w-[9ch] truncate font-mono text-caption text-label-3">
+                                {shown_parent}
+                            </span>
+                            <input
+                                node_ref=name_box
+                                placeholder=hint
+                                class="min-w-0 flex-1 rounded-[5px] bg-sunken px-1.5 py-0.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
+                                on:keydown=move |event: ev::KeyboardEvent| {
+                                    match event.key().as_str() {
+                                        "Enter" => {
+                                            let name = event_target_value(&event);
+                                            let name = name.trim().trim_matches('/');
+                                            if name.is_empty() {
+                                                return;
+                                            }
+                                            let path = if commit_parent.is_empty() {
+                                                name.to_string()
+                                            } else {
+                                                format!("{commit_parent}/{name}")
+                                            };
+                                            controller::create_entry(state, path, dir);
+                                            naming.set(None);
+                                        }
+                                        "Escape" => naming.set(None),
+                                        _ => {}
+                                    }
+                                }
+                            />
+                        </div>
+                    },
+                )
+            }}
+            // Right-clicking the empty space targets the project root: rows
+            // stop propagation, so only the sheet itself reaches this.
+            <div
+                class="min-h-0 flex-1 overflow-auto pb-2"
+                on:contextmenu=move |event: ev::MouseEvent| {
+                    event.prevent_default();
+                    tree_menu.set(Some((
+                        f64::from(event.client_x()),
+                        f64::from(event.client_y()),
+                        TreeTarget {
+                            path: String::new(),
+                            is_dir: true,
+                        },
+                    )));
+                }
+            >
                 {move || {
                     let tree = state.file_tree.get();
                     if tree.is_empty() {
@@ -97,9 +171,52 @@ fn Tree() -> impl IntoView {
                 let (x, y, target) = tree_menu.get()?;
                 let close = Callback::new(move |_| tree_menu.set(None));
                 let path = target.path.clone();
+                let is_dir = target.is_dir;
+                // Where a "New …" from this row lands: the directory itself,
+                // or a file's parent.
+                let into = if is_dir {
+                    path.clone()
+                } else {
+                    path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+                };
+                let (file_into, folder_into) = (into.clone(), into);
+
+                // Right-clicking the empty sheet targets the project root:
+                // only creation makes sense there.
+                if path.is_empty() {
+                    return Some(
+                        view! {
+                            <ContextMenu x=x y=y on_close=close>
+                                <MenuItem
+                                    label="New file…"
+                                    on_select=Callback::new(move |_| {
+                                        naming.set(Some((String::new(), false)));
+                                        tree_menu.set(None);
+                                    })
+                                />
+                                <MenuItem
+                                    label="New folder…"
+                                    on_select=Callback::new(move |_| {
+                                        naming.set(Some((String::new(), true)));
+                                        tree_menu.set(None);
+                                    })
+                                />
+                                <MenuSeparator />
+                                <MenuItem
+                                    label="Refresh"
+                                    on_select=Callback::new(move |_| {
+                                        controller::refresh_tree(state);
+                                        tree_menu.set(None);
+                                    })
+                                />
+                            </ContextMenu>
+                        }
+                        .into_any(),
+                    );
+                }
+
                 let (open_path, copy_path, search_path) =
                     (path.clone(), path.clone(), path.clone());
-                let is_dir = target.is_dir;
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
@@ -130,6 +247,37 @@ fn Tree() -> impl IntoView {
                                     tree_menu.set(None);
                                 })
                             />
+                            {(!is_dir)
+                                .then(|| {
+                                    let float = path.clone();
+                                    view! {
+                                        <MenuItem
+                                            label="Open in new window"
+                                            on_select=Callback::new(move |_| {
+                                                controller::detach_file(
+                                                    state,
+                                                    float.clone(),
+                                                );
+                                                tree_menu.set(None);
+                                            })
+                                        />
+                                    }
+                                })}
+                            <MenuSeparator />
+                            <MenuItem
+                                label="New file…"
+                                on_select=Callback::new(move |_| {
+                                    naming.set(Some((file_into.clone(), false)));
+                                    tree_menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="New folder…"
+                                on_select=Callback::new(move |_| {
+                                    naming.set(Some((folder_into.clone(), true)));
+                                    tree_menu.set(None);
+                                })
+                            />
                             <MenuSeparator />
                             <MenuItem
                                 label="Copy path"
@@ -139,7 +287,8 @@ fn Tree() -> impl IntoView {
                                 })
                             />
                         </ContextMenu>
-                    },
+                    }
+                    .into_any(),
                 )
             }}
         </div>
@@ -526,7 +675,8 @@ fn TabStrip() -> impl IntoView {
             {move || {
                 let (x, y, path) = menu.get()?;
                 let close = Callback::new(move |_| menu.set(None));
-                let (this, others, copy) = (path.clone(), path.clone(), path.clone());
+                let (this, others, copy, float) =
+                    (path.clone(), path.clone(), path.clone(), path.clone());
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
@@ -535,6 +685,16 @@ fn TabStrip() -> impl IntoView {
                                 shortcut="Ctrl+W"
                                 on_select=Callback::new(move |_| {
                                     controller::close_tab(state, this.clone());
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label="Move to new window"
+                                on_select=Callback::new(move |_| {
+                                    controller::detach_file(state, float.clone());
+                                    // The dirty guard inside close_tab still
+                                    // applies: unsaved work keeps its tab here.
+                                    controller::close_tab(state, float.clone());
                                     menu.set(None);
                                 })
                             />

@@ -32,6 +32,7 @@ pub enum Icon {
     Fit,
     Grid,
     Refresh,
+    Chevron,
 }
 
 impl Icon {
@@ -74,6 +75,8 @@ impl Icon {
             Icon::Grid => "M3.5 3.5h13v13h-13zM3.5 7.8h13M3.5 12.2h13M7.8 3.5v13M12.2 3.5v13",
             // Circular arrows.
             Icon::Refresh => "M16.5 8A6.6 6.6 0 0 0 4.4 6.1M3.5 3v3.5H7M3.5 12a6.6 6.6 0 0 0 12.1 1.9M16.5 17v-3.5H13",
+            // A chevron pointing down; callers rotate it for the other ways.
+            Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.
             Icon::Crates => "M10 2.5 17 6.5v7l-7 4-7-4v-7zM10 2.5v8M3 6.5l7 4 7-4",
             // A plus in a rounded square.

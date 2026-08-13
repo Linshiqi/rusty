@@ -35,4 +35,9 @@ pub enum Error {
     /// confused or hostile and neither deserves the file.
     #[error("{path} is outside the project")]
     Outside { path: String },
+
+    /// Creating something that is already there. Refused rather than
+    /// truncated: "new file" must never be a way to empty an existing one.
+    #[error("{path} already exists")]
+    Exists { path: String },
 }

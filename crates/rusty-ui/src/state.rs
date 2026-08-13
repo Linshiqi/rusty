@@ -146,6 +146,8 @@ impl DockTab {
 pub enum Divider {
     /// Between the sidebar and the panel. Horizontal drag.
     Sidebar,
+    /// Between the file tree and the editor. Horizontal drag.
+    Tree,
     /// Between the panel and the dock. Vertical drag.
     Dock,
 }
@@ -157,6 +159,7 @@ impl Divider {
     pub fn bounds(self) -> (f64, f64) {
         match self {
             Divider::Sidebar => (150.0, 380.0),
+            Divider::Tree => (160.0, 440.0),
             Divider::Dock => (80.0, 600.0),
         }
     }
@@ -164,6 +167,7 @@ impl Divider {
     fn storage_key(self) -> &'static str {
         match self {
             Divider::Sidebar => "rusty.layout.sidebar",
+            Divider::Tree => "rusty.layout.tree",
             Divider::Dock => "rusty.layout.dock",
         }
     }
@@ -189,6 +193,20 @@ fn stored_zoom() -> f64 {
         .and_then(|v| v.parse::<f64>().ok())
         .map(|z| z.clamp(0.6, 2.4))
         .unwrap_or(1.0)
+}
+
+/// Whether the sidebar is folded to its icon rail.
+fn stored_rail() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("rusty.layout.rail").ok().flatten())
+        .is_some_and(|v| v == "1")
+}
+
+pub fn remember_rail(rail: bool) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item("rusty.layout.rail", if rail { "1" } else { "0" });
+    }
 }
 
 pub fn remember_zoom(zoom: f64) {
@@ -434,6 +452,10 @@ pub struct AppState {
     /// A fixed-size panel is the first thing anyone tries to drag, and finding
     /// that they cannot is the moment a tool starts feeling rigid.
     pub sidebar_width: RwSignal<f64>,
+    /// Sidebar folded to a rail of icons — the labels are a luxury a narrow
+    /// window cannot afford.
+    pub sidebar_rail: RwSignal<bool>,
+    pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
     /// Which divider is being dragged, if any. Held centrally so the window
     /// listeners are set up once rather than per handle.
@@ -551,6 +573,8 @@ impl AppState {
             active_panel: RwSignal::new("overview".to_string()),
             recents: RwSignal::new(Vec::new()),
             sidebar_width: RwSignal::new(stored_size(Divider::Sidebar, 188.0)),
+            sidebar_rail: RwSignal::new(stored_rail()),
+            tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
             dragging: RwSignal::new(None),
             drag_from: RwSignal::new((0.0, 0.0)),

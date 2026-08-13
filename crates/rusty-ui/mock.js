@@ -96,7 +96,7 @@
   // Tree paths are project-relative and /-separated, exactly as the real
   // tree.rs builds them — the paths are identities the reveal flow compares.
   const MAIN = "src/main.rs";
-  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [] };
+  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [] };
 
   const handlers = {
     recent_projects: () => [ROOT],
@@ -204,6 +204,8 @@
     window_minimize: () => null,
     window_toggle_maximize: () => null,
     terminal_close: () => null,
+    create_entry: (a) => { window.__mock.created.push(a); return null; },
+    open_editor_window: (a) => { window.__mock.detached = a.path; return null; },
   };
 
   window.__TAURI__ = {

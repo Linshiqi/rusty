@@ -17,6 +17,7 @@ use crate::{
     controller,
     state::{AppState, Divider, DockTab},
     view::components::{ContextMenu, Dot, MenuItem, MenuSeparator, ProblemRow, Tone, copy_to_clipboard},
+    view::icon::{Icon, IconView},
     view::loclink::{self, Piece},
 };
 
@@ -101,17 +102,6 @@ fn DockTabs() -> impl IntoView {
 
             <span class="flex-1" />
 
-            <Show when=move || state.dock_tab.get() == DockTab::Terminal && state.dock_open.get()>
-                <button
-                    type="button"
-                    title="End the shell and start a fresh one"
-                    class="rounded-[5px] px-2 py-1 text-footnote text-label-2 hover:text-label"
-                    on:click=move |_| controller::close_terminal(state)
-                >
-                    "Restart"
-                </button>
-            </Show>
-
             <Show when=move || state.dock_tab.get() == DockTab::Output && state.dock_open.get()>
                 <FollowToggle />
                 <button
@@ -125,13 +115,21 @@ fn DockTabs() -> impl IntoView {
 
             <button
                 type="button"
-                aria-label=move || {
+                title=move || {
                     if state.dock_open.get() { "Collapse panel" } else { "Expand panel" }
                 }
                 class="grid size-6 place-items-center rounded-[5px] text-label-2 hover:bg-sunken hover:text-label"
                 on:click=move |_| state.dock_open.update(|open| *open = !*open)
             >
-                {move || if state.dock_open.get() { "⌄" } else { "⌃" }}
+                <span class=move || {
+                    if state.dock_open.get() {
+                        "grid transition-transform"
+                    } else {
+                        "grid rotate-180 transition-transform"
+                    }
+                }>
+                    <IconView icon=Icon::Chevron size=13 />
+                </span>
             </button>
         </div>
     }
