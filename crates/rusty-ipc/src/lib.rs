@@ -79,6 +79,8 @@ pub mod terminal {
     pub const RESIZE: &str = "terminal_resize";
     pub const SCROLL: &str = "terminal_scroll";
     pub const CLOSE: &str = "terminal_close";
+    pub const SHELL_INFO: &str = "terminal_shell_info";
+    pub const SET_SHELL: &str = "set_terminal_shell";
 }
 
 /// Looking at and changing the project's files.

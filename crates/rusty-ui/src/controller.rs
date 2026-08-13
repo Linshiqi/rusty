@@ -1794,6 +1794,34 @@ pub fn apply_ui_zoom(state: AppState) {
     );
 }
 
+/// What shell the terminal will start.
+pub fn load_shell_info(state: AppState) {
+    track(
+        state,
+        async move {
+            ipc::call::<_, rusty_embed::ShellInfo>(cmd::terminal::SHELL_INFO, &()).await
+        },
+        move |info| state.shell_info.set(Some(info)),
+    );
+}
+
+/// Store the shell preference and restart the shell so it takes effect —
+/// a preference that waits for the next launch reads as a broken setting.
+pub fn set_terminal_shell(state: AppState, value: Option<String>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        value: Option<String>,
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::terminal::SET_SHELL, &Args { value }).await },
+        move |()| {
+            close_terminal(state);
+            load_shell_info(state);
+        },
+    );
+}
+
 /// The stored shortcut overrides.
 pub fn load_keybinds(state: AppState) {
     track(

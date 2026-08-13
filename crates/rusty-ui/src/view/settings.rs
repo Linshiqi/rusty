@@ -24,6 +24,7 @@ use crate::{
 enum Category {
     Appearance,
     Keyboard,
+    Terminal,
     Language,
     Assistant,
     Catalogue,
@@ -32,9 +33,10 @@ enum Category {
 }
 
 impl Category {
-    const ALL: [Category; 7] = [
+    const ALL: [Category; 8] = [
         Category::Appearance,
         Category::Keyboard,
+        Category::Terminal,
         Category::Language,
         Category::Assistant,
         Category::Catalogue,
@@ -46,6 +48,7 @@ impl Category {
         match self {
             Category::Appearance => "Appearance",
             Category::Keyboard => "Keyboard",
+            Category::Terminal => "Terminal",
             Category::Language => "Language",
             Category::Assistant => "Assistant",
             Category::Catalogue => "Catalogue",
@@ -60,6 +63,7 @@ impl Category {
         match self {
             Category::Appearance => "Theme",
             Category::Keyboard => "Shortcuts",
+            Category::Terminal => "Which shell runs",
             Category::Language => "Interface language",
             Category::Assistant => "Model and credentials",
             Category::Catalogue => "Chips and boards",
@@ -119,6 +123,7 @@ pub fn Settings() -> impl IntoView {
                         {move || match selected.get() {
                             Category::Appearance => view! { <Appearance /> }.into_any(),
                             Category::Keyboard => view! { <Keyboard /> }.into_any(),
+                            Category::Terminal => view! { <TerminalShell /> }.into_any(),
                             Category::Language => view! { <Language /> }.into_any(),
                             Category::Assistant => view! { <Assistant /> }.into_any(),
                             Category::Catalogue => view! { <CatalogueSettings /> }.into_any(),
@@ -361,6 +366,124 @@ fn Keyboard() -> impl IntoView {
                 <span class="text-callout text-label-3">"Close what is in front"</span>
                 <span />
             </div>
+        </Field>
+    }
+}
+
+#[component]
+fn TerminalShell() -> impl IntoView {
+    let state = AppState::expect();
+    Effect::new(move |first: Option<()>| {
+        if first.is_none() {
+            controller::load_shell_info(state);
+        }
+    });
+    let custom = RwSignal::new(String::new());
+
+    view! {
+        <Field
+            label="Shell"
+            help="Auto prefers the bundled Nushell: it starts instantly and reads the same on \
+                  every OS, where PowerShell loads a profile for seconds and each system's \
+                  shell speaks its own dialect. Changing this restarts the shell."
+        >
+            {move || {
+                let Some(info) = state.shell_info.get() else {
+                    return view! {
+                        <p class="text-callout text-label-3">"Asking the backend…"</p>
+                    }
+                        .into_any();
+                };
+                let preference = info.preference.clone();
+                let is_auto = preference.is_none();
+                let is_system = preference.as_deref() == Some("system");
+                let is_custom = !is_auto && !is_system;
+                if is_custom && custom.get_untracked().is_empty() {
+                    custom.set(preference.clone().unwrap_or_default());
+                }
+                let active = info.active.clone();
+                view! {
+                    <div class="flex flex-col gap-3">
+                        <div class="inline-flex self-start rounded-[7px] bg-sunken p-0.5">
+                            {[
+                                ("Auto", "auto", is_auto),
+                                ("System shell", "system", is_system),
+                            ]
+                                .into_iter()
+                                .map(|(label, value, selected)| {
+                                    view! {
+                                        <button
+                                            type="button"
+                                            on:click=move |_| {
+                                                controller::set_terminal_shell(
+                                                    state,
+                                                    Some(value.to_string()),
+                                                );
+                                            }
+                                            class=if selected {
+                                                "rounded-[6px] bg-content px-3 py-1 text-callout font-medium shadow-sm"
+                                            } else {
+                                                "rounded-[6px] px-3 py-1 text-callout text-label-2 hover:text-label"
+                                            }
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                })
+                                .collect_view()}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input
+                                placeholder="or a program: nu, fish, C:\\tools\\zsh.exe"
+                                class="w-72 rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
+                                prop:value=move || custom.get()
+                                on:input=move |event| custom.set(event_target_value(&event))
+                                on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                                    if event.key() == "Enter" {
+                                        let value = custom.get_untracked();
+                                        let value = value.trim();
+                                        if !value.is_empty() {
+                                            controller::set_terminal_shell(
+                                                state,
+                                                Some(value.to_string()),
+                                            );
+                                        }
+                                    }
+                                }
+                            />
+                            {is_custom
+                                .then(|| view! { <Pill label="in use" tone=Tone::Rust /> })}
+                        </div>
+                        <div class="flex items-center gap-2 text-callout text-label-2">
+                            <span class="text-label-3">"Next shell:"</span>
+                            <code class="rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote">
+                                {active}
+                            </code>
+                        </div>
+                        {(!info.nushell_installed)
+                            .then(|| {
+                                view! {
+                                    <div class="flex items-center gap-3">
+                                        <Button
+                                            label="Install Nushell"
+                                            kind=ButtonKind::Primary
+                                            on_click=Callback::new(move |_| {
+                                                controller::install_sim_tool(
+                                                    state,
+                                                    "nushell".to_string(),
+                                                );
+                                            })
+                                        />
+                                        <span class="text-callout text-label-3">
+                                            "~15 MB from GitHub into rusty's own tools/"
+                                        </span>
+                                    </div>
+                                }
+                            })}
+                    </div>
+                }
+                    .into_any()
+            }}
         </Field>
     }
 }

@@ -22,4 +22,4 @@ pub mod pty;
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
 #[cfg(feature = "backend")]
-pub use pty::{Terminal, Updates};
+pub use pty::{Terminal, Updates, default_shell};

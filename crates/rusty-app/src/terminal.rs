@@ -10,6 +10,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use rusty_embed::config as storage;
 use rusty_term::{Screen, Terminal};
 use tauri::{State, ipc::Channel};
 
@@ -23,6 +24,46 @@ use crate::{error::CommandError, state::AppState};
 /// invisible while cutting the work by orders of magnitude.
 const COALESCE: Duration = Duration::from_millis(8);
 
+/// What the next shell start will run, per the stored preference.
+///
+/// `None` means "let rusty-term pick the system default" — the same code
+/// path as before Nushell existed, so a cleared preference cannot behave
+/// differently from a fresh install.
+fn resolved_shell() -> Option<String> {
+    match storage::workbench().terminal_shell.as_deref().map(str::trim) {
+        Some("system") => None,
+        Some(custom) if !custom.is_empty() => Some(custom.to_string()),
+        _ => rusty_embed::simulate::find_nushell()
+            .map(|path| path.to_string_lossy().into_owned()),
+    }
+}
+
+/// The shell picture for the settings page: what will run, whether the
+/// bundled Nushell exists, and what the user asked for.
+#[tauri::command]
+pub async fn terminal_shell_info() -> Result<rusty_embed::ShellInfo, CommandError> {
+    let preference = storage::workbench().terminal_shell;
+    let active = resolved_shell().unwrap_or_else(rusty_term::default_shell);
+    Ok(rusty_embed::ShellInfo {
+        active,
+        nushell_installed: rusty_embed::simulate::find_nushell().is_some(),
+        preference,
+    })
+}
+
+/// Store the shell preference: null/"auto" = prefer the bundled Nushell,
+/// "system" = the OS shell, anything else = a program to run.
+#[tauri::command]
+pub async fn set_terminal_shell(value: Option<String>) -> Result<(), CommandError> {
+    let mut state = storage::workbench();
+    state.terminal_shell = match value.as_deref().map(str::trim) {
+        None | Some("") | Some("auto") => None,
+        Some(other) => Some(other.to_string()),
+    };
+    storage::save_workbench(&state).map_err(CommandError::from)?;
+    Ok(())
+}
+
 /// Open a shell and stream its screen until it exits.
 #[tauri::command]
 pub async fn terminal_open(
@@ -32,7 +73,9 @@ pub async fn terminal_open(
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let cwd = state.root().await;
-    let (terminal, updates) = Terminal::spawn(cwd.as_deref(), cols.max(2), rows.max(1))?;
+    let shell = resolved_shell();
+    let (terminal, updates) =
+        Terminal::spawn(cwd.as_deref(), cols.max(2), rows.max(1), shell.as_deref())?;
     let terminal = Arc::new(terminal);
     state.set_terminal(Some(Arc::clone(&terminal))).await;
 

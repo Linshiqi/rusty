@@ -469,6 +469,19 @@ pub enum LogStream {
     Stderr,
 }
 
+/// What shell the terminal will start, and what choices exist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellInfo {
+    /// The program the next shell start will actually run.
+    pub active: String,
+    /// Whether the bundled (or PATH) Nushell is available.
+    pub nushell_installed: bool,
+    /// The stored preference: absent = auto (Nushell when present),
+    /// "system" = the OS shell, anything else = a custom program.
+    pub preference: Option<String>,
+}
+
 /// One line of output from a flash or monitor session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -141,6 +141,11 @@ pub struct WorkbenchState {
     /// newer rusty reaches everyone who has not overridden that action.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub keybinds: std::collections::BTreeMap<String, String>,
+    /// Terminal shell: absent = auto (the bundled Nushell when installed,
+    /// else the system shell); "system" = always the OS shell; anything
+    /// else = a program to run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_shell: Option<String>,
 }
 
 fn workbench_path() -> Option<PathBuf> {

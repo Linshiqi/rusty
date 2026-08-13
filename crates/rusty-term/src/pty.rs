@@ -84,7 +84,12 @@ impl Updates {
 
 impl Terminal {
     /// Start a shell in `cwd`.
-    pub fn spawn(cwd: Option<&Path>, cols: u16, rows: u16) -> Result<(Terminal, Updates)> {
+    pub fn spawn(
+        cwd: Option<&Path>,
+        cols: u16,
+        rows: u16,
+        shell: Option<&str>,
+    ) -> Result<(Terminal, Updates)> {
         let size = PtySize {
             rows,
             cols,
@@ -96,7 +101,8 @@ impl Terminal {
             .openpty(size)
             .map_err(|e| Error::Pty(e.to_string()))?;
 
-        let mut command = CommandBuilder::new(default_shell());
+        let mut command =
+            CommandBuilder::new(shell.map(str::to_string).unwrap_or_else(default_shell));
         if let Some(cwd) = cwd {
             command.cwd(cwd);
         }
@@ -457,7 +463,7 @@ fn colour_of(colour: vt100::Color) -> Colour {
 /// PowerShell before `cmd` on Windows because that is what the Rust toolchain's
 /// own instructions assume, and `$SHELL` on Unix because a user who changed it
 /// meant it.
-fn default_shell() -> String {
+pub fn default_shell() -> String {
     if cfg!(windows) {
         for candidate in ["pwsh.exe", "powershell.exe"] {
             if which(candidate) {

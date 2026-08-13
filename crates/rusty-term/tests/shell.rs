@@ -44,7 +44,7 @@ fn wait_for(terminal: &Terminal, needle: &str, within: Duration) -> bool {
 
 #[test]
 fn a_shell_starts_and_answers() {
-    let (terminal, _updates) = Terminal::spawn(None, 80, 24).expect("a pseudo-terminal");
+    let (terminal, _updates) = Terminal::spawn(None, 80, 24, None).expect("a pseudo-terminal");
 
     // A marker rather than a word the shell might print by itself: on Windows
     // the banner mentions "PowerShell", and matching that would pass without
@@ -65,7 +65,7 @@ fn a_shell_starts_and_answers() {
 
 #[test]
 fn resizing_reaches_the_emulator() {
-    let (terminal, _updates) = Terminal::spawn(None, 80, 24).expect("a pseudo-terminal");
+    let (terminal, _updates) = Terminal::spawn(None, 80, 24, None).expect("a pseudo-terminal");
 
     assert_eq!(terminal.screen().cols, 80);
     terminal.resize(120, 30).expect("resize");
@@ -81,7 +81,7 @@ fn resizing_reaches_the_emulator() {
 
 #[test]
 fn the_screen_reports_the_shell_exiting() {
-    let (terminal, _updates) = Terminal::spawn(None, 80, 24).expect("a pseudo-terminal");
+    let (terminal, _updates) = Terminal::spawn(None, 80, 24, None).expect("a pseudo-terminal");
     terminal.write(b"exit\r").expect("write to the shell");
 
     // Polled rather than waiting on an update. `Updates::wait` blocks with no

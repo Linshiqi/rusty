@@ -486,6 +486,8 @@ pub struct AppState {
     pub keybind_capture: RwSignal<Option<String>>,
     /// Whole-interface scale, browser-zoom style. 1.0 is native.
     pub ui_zoom: RwSignal<f64>,
+    /// What shell the terminal will start, from the backend.
+    pub shell_info: RwSignal<Option<rusty_embed::ShellInfo>>,
     pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
     /// Which divider is being dragged, if any. Held centrally so the window
@@ -618,6 +620,7 @@ impl AppState {
             keybinds: RwSignal::new(HashMap::new()),
             keybind_capture: RwSignal::new(None),
             ui_zoom: RwSignal::new(stored_ui_zoom()),
+            shell_info: RwSignal::new(None),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
             dragging: RwSignal::new(None),

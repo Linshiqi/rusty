@@ -217,6 +217,12 @@
     window_toggle_maximize: () => null,
     terminal_close: () => null,
     window_set_zoom: (a) => { document.documentElement.style.zoom = a.factor; return null; },
+    terminal_shell_info: () => ({
+      active: window.__mock.shellPref || "pwsh.exe",
+      nushellInstalled: false,
+      preference: window.__mock.shellPref || null,
+    }),
+    set_terminal_shell: (a) => { window.__mock.shellPref = a.value; return null; },
     keybinds: () => window.__mock.keybinds || {},
     set_keybind: (a) => {
       const m = (window.__mock.keybinds = window.__mock.keybinds || {});

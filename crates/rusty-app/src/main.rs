@@ -80,6 +80,8 @@ fn main() {
             terminal::terminal_resize,
             terminal::terminal_scroll,
             terminal::terminal_close,
+            terminal::terminal_shell_info,
+            terminal::set_terminal_shell,
             commands::feature_rows,
             commands::feature_impact,
             commands::ai_presets,
@@ -210,6 +212,8 @@ mod wire_names {
             cmd::terminal::RESIZE => terminal::terminal_resize,
             cmd::terminal::SCROLL => terminal::terminal_scroll,
             cmd::terminal::CLOSE => terminal::terminal_close,
+            cmd::terminal::SHELL_INFO => terminal::terminal_shell_info,
+            cmd::terminal::SET_SHELL => terminal::set_terminal_shell,
 
             cmd::features::ROWS => commands::feature_rows,
             cmd::features::IMPACT => commands::feature_impact,
