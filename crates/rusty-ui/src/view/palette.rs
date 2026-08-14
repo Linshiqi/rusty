@@ -60,6 +60,18 @@ pub fn defaults() -> Vec<Binding> {
             action: Action::RefreshProject,
         },
         Binding {
+            id: "nav.back".into(),
+            label: "Back".into(),
+            default: "Alt+ArrowLeft".into(),
+            action: Action::NavBack,
+        },
+        Binding {
+            id: "nav.forward".into(),
+            label: "Forward".into(),
+            default: "Alt+ArrowRight".into(),
+            action: Action::NavForward,
+        },
+        Binding {
             id: "search.project".into(),
             label: "Search in project".into(),
             default: "Ctrl+Shift+F".into(),
@@ -99,7 +111,13 @@ pub fn effective(state: AppState) -> Vec<(Binding, String)> {
 /// not a chord this system binds (unmodified keys, bare modifiers). Pure so
 /// the canonical form is pinned by tests.
 pub fn chord_of(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<String> {
-    if !ctrl {
+    // Alt on its own counts only for *named* keys — Alt+ArrowLeft is Back in
+    // every editor, while Alt+letter is how a menu mnemonic is reached and
+    // how AltGr types on layouts that need it. Binding those would swallow
+    // both. Everything else still requires Ctrl, which is what keeps plain
+    // typing out of the binding system entirely.
+    let alt_named = alt && key.chars().count() > 1;
+    if !ctrl && !alt_named {
         return None;
     }
     if matches!(key, "Control" | "Shift" | "Alt" | "Meta") {
@@ -111,7 +129,10 @@ pub fn chord_of(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<String>
         k if k.chars().count() == 1 => k.to_uppercase(),
         other => other.to_string(),
     };
-    let mut chord = String::from("Ctrl+");
+    let mut chord = String::new();
+    if ctrl {
+        chord.push_str("Ctrl+");
+    }
     if shift {
         chord.push_str("Shift+");
     }
@@ -327,3 +348,40 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
     }
 }
 
+
+#[cfg(test)]
+mod chord_tests {
+    use super::chord_of;
+
+    #[test]
+    fn alt_binds_named_keys_and_leaves_typing_alone() {
+        // Alt+arrow is Back and Forward in every editor.
+        assert_eq!(
+            chord_of(false, false, true, "ArrowLeft").as_deref(),
+            Some("Alt+ArrowLeft"),
+        );
+        // Alt+letter is a menu mnemonic, and on some layouts AltGr is how a
+        // character is typed at all. Binding either would swallow it.
+        assert_eq!(chord_of(false, false, true, "f"), None);
+        assert_eq!(chord_of(false, false, true, "3"), None);
+    }
+
+    #[test]
+    fn nothing_without_a_modifier_is_ever_a_chord() {
+        // The guard that keeps plain typing — and every Vim key — out of the
+        // binding system entirely.
+        assert_eq!(chord_of(false, false, false, "d"), None);
+        assert_eq!(chord_of(false, true, false, "D"), None);
+        assert_eq!(chord_of(false, false, false, "ArrowLeft"), None);
+    }
+
+    #[test]
+    fn ctrl_chords_read_the_way_people_write_them() {
+        assert_eq!(chord_of(true, false, false, "k").as_deref(), Some("Ctrl+K"));
+        assert_eq!(
+            chord_of(true, true, false, "F").as_deref(),
+            Some("Ctrl+Shift+F"),
+        );
+        assert_eq!(chord_of(true, false, false, "Control"), None);
+    }
+}

@@ -49,6 +49,9 @@ pub enum Action {
     CloseWindow,
     /// Modal editing on or off.
     ToggleVim,
+    /// Back and forward through the positions the caret has visited.
+    NavBack,
+    NavForward,
     /// Open a page in the desktop browser. `&'static str` so the action stays
     /// `Copy` and can sit in the palette beside every other one.
     OpenUrl(&'static str),
@@ -163,6 +166,8 @@ pub fn all(state: AppState) -> Vec<Command> {
         None,
     ));
     out.push(view(Action::ResetLayout, "Reset panel sizes", None));
+    out.push(view(Action::NavBack, "Back", chord(Action::NavBack)));
+    out.push(view(Action::NavForward, "Forward", chord(Action::NavForward)));
     out.push(view(Action::ToggleVim, "Vim keys in the editor", None));
 
     for theme in Theme::ALL {
@@ -272,6 +277,9 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 entry(Action::SetTheme(Theme::Dark), "Theme: Dark", None),
                 Item::Separator,
                 entry(Action::ResetLayout, "Reset panel sizes", None),
+                Item::Separator,
+                entry(Action::NavBack, "Back", chord(Action::NavBack)),
+                entry(Action::NavForward, "Forward", chord(Action::NavForward)),
                 Item::Separator,
                 entry(Action::ToggleVim, "Vim keys in the editor", None),
             ],
@@ -467,6 +475,8 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
+        Action::NavBack => controller::nav_back(state),
+        Action::NavForward => controller::nav_forward(state),
         Action::ToggleVim => {
             let on = !state.vim_on.get_untracked();
             controller::set_vim(state, on);

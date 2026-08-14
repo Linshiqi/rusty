@@ -3370,14 +3370,27 @@ fn vim_key(
                     keep_caret_in_view(area, state, scroller);
                 }
             }
-            // Named rather than silently ignored, the same way an unknown
-            // command is. A jump list is real state this editor does not keep
-            // yet, and inventing one that disagreed with the tab history
-            // would be worse than saying so.
-            Ask::Jump { .. } => {
-                state
-                    .vim
-                    .update(|vim| vim.rejected = Some("no jump list yet".into()));
+            // The editor's own navigation history, shared with the menu —
+            // not a second list that would disagree with it on the first
+            // jump. Vim's Ctrl+O and Alt+Left are the same walk.
+            Ask::Jump { back } => {
+                // A jump key with nowhere to go says so, the same way an
+                // unknown command does. Silence here is indistinguishable
+                // from a key that is not wired up at all — which is exactly
+                // what it was until now.
+                let possible = state
+                    .nav
+                    .with_untracked(|nav| if back { nav.can_go_back() } else { nav.can_go_forward() });
+                match (possible, back) {
+                    (true, true) => controller::nav_back(state),
+                    (true, false) => controller::nav_forward(state),
+                    (false, true) => state
+                        .vim
+                        .update(|vim| vim.rejected = Some("nowhere further back".into())),
+                    (false, false) => state
+                        .vim
+                        .update(|vim| vim.rejected = Some("nowhere further forward".into())),
+                }
             }
         }
     }

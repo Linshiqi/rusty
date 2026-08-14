@@ -1471,6 +1471,96 @@ fn run_search(state: AppState, generation: u64) {
     });
 }
 
+/// Where the caret is, for the navigation history to remember.
+///
+/// Read off the DOM rather than tracked in a signal: the caret moves on
+/// every keystroke and every click, and a signal updated that often would
+/// re-run half the editor's reactivity to record something only jumps ever
+/// read.
+fn here(state: AppState) -> Option<crate::state::NavPoint> {
+    use wasm_bindgen::JsCast;
+
+    let path = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))?;
+    let element = web_sys::window()?
+        .document()?
+        .get_element_by_id("editor-area")?
+        .dyn_into::<web_sys::HtmlTextAreaElement>()
+        .ok()?;
+    let units = element.selection_start().ok().flatten()? as usize;
+    let text = state.draft.get_untracked();
+
+    // UTF-16 units to line and column, the same conversion the editor makes
+    // at every other boundary.
+    let mut seen = 0usize;
+    let (mut line, mut col) = (0u32, 0u32);
+    for c in text.chars() {
+        if seen >= units {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+        seen += c.len_utf16();
+    }
+    Some(crate::state::NavPoint { path, line, col })
+}
+
+/// Note that we are leaving `here` for somewhere else.
+///
+/// Called by every jump the editor offers — a definition, a search hit, a
+/// problem row — so Back means the same thing whichever one you used. Vim's
+/// `Ctrl+O` and the menu read the one list.
+fn remember_jump(state: AppState, to: &rusty_lsp::Location) {
+    let Some(from) = here(state) else {
+        return;
+    };
+    let to = crate::state::NavPoint {
+        path: to.path.clone(),
+        line: to.line,
+        col: to.col,
+    };
+    state.nav.update(|nav| nav.jump(from, to));
+}
+
+/// Back and forward through the positions the caret has visited.
+///
+/// The navigation every editor has and this one did not: jumping to a
+/// definition had no way home at all, in Vim mode or out of it, which on a
+/// HAL that wraps four layers deep meant finding the file again by hand.
+pub fn nav_back(state: AppState) {
+    if let Some(point) = state.nav.try_update(|nav| nav.back()).flatten() {
+        travel(state, point);
+    }
+}
+
+pub fn nav_forward(state: AppState) {
+    if let Some(point) = state.nav.try_update(|nav| nav.forward()).flatten() {
+        travel(state, point);
+    }
+}
+
+/// Go to a remembered position without recording it — walking the history is
+/// not itself a jump, or Back would never reach the beginning.
+fn travel(state: AppState, point: crate::state::NavPoint) {
+    let current = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    if current.as_deref() != Some(point.path.as_str()) {
+        open_file(state, point.path.clone());
+    }
+    state.reveal.set(Some(rusty_lsp::Location {
+        path: point.path,
+        line: point.line,
+        col: point.col,
+        external: false,
+    }));
+}
+
 /// Open a file at an exact position — how a search hit or a problem row
 /// lands in the editor, through the same reveal goto-definition uses.
 pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
@@ -1486,12 +1576,14 @@ pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
     if current.as_deref() != Some(path.as_str()) {
         open_file(state, path.clone());
     }
-    state.reveal.set(Some(rusty_lsp::Location {
+    let target = rusty_lsp::Location {
         path,
         line,
         col,
         external: false,
-    }));
+    };
+    remember_jump(state, &target);
+    state.reveal.set(Some(target));
 }
 
 // ─── storage ─────────────────────────────────────────────────────────────────
@@ -3195,6 +3287,7 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
                     open_file(state, location.path.clone());
                 }
             }
+            remember_jump(state, &location);
             state.reveal.set(Some(location));
         }
     });

@@ -131,6 +131,82 @@ pub struct ToolRun {
     pub ok: Option<bool>,
 }
 
+/// One place the caret has been, for going back to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavPoint {
+    pub path: String,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// Where the editor has been, and where in that it currently is.
+///
+/// Browser semantics rather than Vim's own jumplist: one list of positions
+/// with a cursor into it, so Back and Forward are the same list read in two
+/// directions. Vim's `Ctrl+O`/`Ctrl+I` are one caller; the menu is another,
+/// and both must agree — two histories would disagree on the first jump.
+///
+/// In memory, not in a file: it describes this window's reading session, and
+/// losing it costs a shrug. That is exactly the test the storage rule asks.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NavHistory {
+    /// Oldest first. Always contains the current position at [`Self::at`]
+    /// once anything has been recorded.
+    pub entries: Vec<NavPoint>,
+    pub at: usize,
+}
+
+impl NavHistory {
+    /// How far back it is worth being able to go. Beyond this the oldest
+    /// entries are dropped, because a reading session is not a log.
+    const CAP: usize = 100;
+
+    /// Record a jump from one position to another.
+    ///
+    /// Truncates whatever was ahead, the way a browser does: once you go back
+    /// and then somewhere new, the branch you left is gone. Keeping it would
+    /// make Forward land somewhere the reader never chose.
+    pub fn jump(&mut self, from: NavPoint, to: NavPoint) {
+        if from == to {
+            return;
+        }
+        self.entries.truncate(self.at + 1);
+        if self.entries.last() != Some(&from) {
+            self.entries.push(from);
+        }
+        self.entries.push(to);
+        if self.entries.len() > Self::CAP {
+            let over = self.entries.len() - Self::CAP;
+            self.entries.drain(..over);
+        }
+        self.at = self.entries.len() - 1;
+    }
+
+    pub fn back(&mut self) -> Option<NavPoint> {
+        if self.at == 0 {
+            return None;
+        }
+        self.at -= 1;
+        self.entries.get(self.at).cloned()
+    }
+
+    pub fn forward(&mut self) -> Option<NavPoint> {
+        if self.at + 1 >= self.entries.len() {
+            return None;
+        }
+        self.at += 1;
+        self.entries.get(self.at).cloned()
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        self.at > 0
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        self.at + 1 < self.entries.len()
+    }
+}
+
 /// What the bottom dock is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DockTab {
@@ -476,6 +552,8 @@ pub struct AppState {
     pub parked: RwSignal<Vec<ParkedEditor>>,
     /// The active editor's undo/redo stacks.
     pub history: RwSignal<EditHistory>,
+    /// Where the caret has been. Shared by Vim's jump keys and the menu.
+    pub nav: RwSignal<NavHistory>,
     /// Modal editing: whether it is on, and where it currently is.
     ///
     /// The switch belongs in `workbench.toml` rather than here — a second
@@ -701,6 +779,7 @@ impl AppState {
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),
+            nav: RwSignal::new(NavHistory::default()),
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
             search_query: RwSignal::new(String::new()),
@@ -863,5 +942,90 @@ impl AppState {
     pub fn show_dock(&self, tab: DockTab) {
         self.dock_tab.set(tab);
         self.dock_open.set(true);
+    }
+}
+
+#[cfg(test)]
+mod nav_tests {
+    use super::*;
+
+    fn at(path: &str, line: u32) -> NavPoint {
+        NavPoint {
+            path: path.into(),
+            line,
+            col: 0,
+        }
+    }
+
+    #[test]
+    fn back_returns_where_the_jump_started() {
+        // The case the whole thing exists for: follow a definition three
+        // deep, then walk out the way you came.
+        let mut nav = NavHistory::default();
+        nav.jump(at("main.rs", 10), at("hal.rs", 200));
+        nav.jump(at("hal.rs", 200), at("gpio.rs", 40));
+
+        assert_eq!(nav.back(), Some(at("hal.rs", 200)));
+        assert_eq!(nav.back(), Some(at("main.rs", 10)));
+        assert_eq!(nav.back(), None, "and stops at the beginning");
+    }
+
+    #[test]
+    fn forward_only_retraces_what_back_undid() {
+        let mut nav = NavHistory::default();
+        nav.jump(at("main.rs", 10), at("hal.rs", 200));
+        nav.back();
+        assert_eq!(nav.forward(), Some(at("hal.rs", 200)));
+        assert_eq!(nav.forward(), None);
+    }
+
+    #[test]
+    fn a_new_jump_after_going_back_drops_the_branch() {
+        // Browser semantics. Keeping the abandoned branch would make Forward
+        // land somewhere the reader never chose to go.
+        let mut nav = NavHistory::default();
+        nav.jump(at("main.rs", 10), at("hal.rs", 200));
+        nav.back();
+        nav.jump(at("main.rs", 10), at("spi.rs", 5));
+
+        assert!(!nav.can_go_forward(), "the old forward branch is gone");
+        assert_eq!(nav.back(), Some(at("main.rs", 10)));
+    }
+
+    #[test]
+    fn jumping_to_where_you_already_are_records_nothing() {
+        // Clicking a problem on the line the caret is already on is not a
+        // jump, and recording it would make Back a no-op that looks broken.
+        let mut nav = NavHistory::default();
+        nav.jump(at("main.rs", 10), at("main.rs", 10));
+        assert!(nav.entries.is_empty());
+        assert!(!nav.can_go_back());
+    }
+
+    #[test]
+    fn the_same_origin_twice_is_recorded_once() {
+        // Two jumps out of one place should need one Back to get home, not
+        // two presses that appear to do nothing the first time.
+        let mut nav = NavHistory::default();
+        nav.jump(at("main.rs", 10), at("hal.rs", 200));
+        nav.back();
+        nav.jump(at("main.rs", 10), at("hal.rs", 300));
+        assert_eq!(nav.back(), Some(at("main.rs", 10)));
+        assert_eq!(nav.back(), None);
+    }
+
+    #[test]
+    fn the_list_is_capped_and_keeps_the_recent_end() {
+        let mut nav = NavHistory::default();
+        for line in 0..200 {
+            nav.jump(at("main.rs", line), at("main.rs", line + 1));
+        }
+        assert!(nav.entries.len() <= NavHistory::CAP);
+        assert_eq!(
+            nav.entries.last(),
+            Some(&at("main.rs", 200)),
+            "the newest position survives the cap",
+        );
+        assert_eq!(nav.at, nav.entries.len() - 1, "and stays pointed at it");
     }
 }
