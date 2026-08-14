@@ -1521,6 +1521,25 @@ fn Surface(document: Document) -> impl IntoView {
                             if event.is_composing() {
                                 return;
                             }
+                            // Modal editing gets the key first, and takes only
+                            // what it wants. Everything it passes through —
+                            // every chord but five, and the whole of insert
+                            // mode — carries on to the handling below and
+                            // then to the global bindings, which is why
+                            // Ctrl+S, Ctrl+K and the clipboard are unchanged
+                            // by turning Vim on.
+                            //
+                            // `stop_propagation` on the taken ones is the
+                            // half that matters: without it a `d` in normal
+                            // mode would also reach the window listener.
+                            if state.vim_on.get_untracked()
+                                && let Some(element) = area.get_untracked()
+                                && vim_key(state, &element, scroller, &event)
+                            {
+                                event.prevent_default();
+                                event.stop_propagation();
+                                return;
+                            }
                             // The actions popup owns its keys while it is up.
                             if state.actions.with_untracked(Option::is_some) {
                                 match event.key().as_str() {
@@ -3200,4 +3219,129 @@ mod tests {
         // "// 中文" = 5 utf16 units, +1 newline.
         assert_eq!(utf16_offset_of(text, 1, 3), 6 + 3);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Modal editing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A scalar index as the UTF-16 unit the textarea counts selections in.
+///
+/// The whole of `vim` works in Unicode scalars and converts here, exactly as
+/// the LSP client converts at its boundary. Skipping this would make every
+/// motion past a `中` land in the wrong place.
+fn units_of_scalar(text: &str, scalars: usize) -> u32 {
+    text.chars()
+        .take(scalars)
+        .map(|c| c.len_utf16())
+        .sum::<usize>() as u32
+}
+
+fn scalar_of_units(text: &str, units: usize) -> usize {
+    let mut seen = 0usize;
+    for (index, c) in text.chars().enumerate() {
+        if seen >= units {
+            return index;
+        }
+        seen += c.len_utf16();
+    }
+    text.chars().count()
+}
+
+/// Feed one key to the modal state machine, and carry out what it says.
+///
+/// Returns true when Vim took the key, which is the editor's cue to call
+/// `preventDefault` *and* `stopPropagation` — the second is what keeps the
+/// global bindings from also acting on a key Vim already used. Returning
+/// false is the path that leaves Ctrl+S, the palette and the clipboard
+/// exactly as they were.
+fn vim_key(
+    state: AppState,
+    area: &web_sys::HtmlTextAreaElement,
+    scroller: NodeRef<html::Div>,
+    event: &ev::KeyboardEvent,
+) -> bool {
+    use crate::vim::{Ask, Key};
+
+    let text = state.draft.get_untracked();
+    let units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
+    let cursor = scalar_of_units(&text, units);
+
+    let key = Key {
+        key: event.key(),
+        ctrl: event.ctrl_key() || event.meta_key(),
+        alt: event.alt_key(),
+    };
+    let step = state.vim.try_update(|vim| vim.feed(&key, &text, cursor));
+    let Some(step) = step else { return false };
+    if !step.handled {
+        return false;
+    }
+
+    // The undo unit closes *before* the change, so the snapshot taken is the
+    // buffer as it was — Vim undoes a whole command at once, and the editor's
+    // own coalescing is by time, which would split `ciwfoo<Esc>` into pieces.
+    if step.seal {
+        record_edit(state);
+        state.history.update(|history| history.last_push = 0.0);
+    }
+
+    let after = if let Some(next) = step.text.clone() {
+        echo_edit(state, &next);
+        state.draft.set(next.clone());
+        area.set_value(&next);
+        controller::schedule_pulse(state);
+        next
+    } else {
+        text
+    };
+
+    // The block cursor is a one-character selection, which is also exactly
+    // what visual mode needs — so normal mode and visual mode take the same
+    // path rather than two that can disagree.
+    match step.selection {
+        Some((from, to)) => {
+            let _ = area.set_selection_start(Some(units_of_scalar(&after, from)));
+            let _ = area.set_selection_end(Some(units_of_scalar(&after, to)));
+        }
+        None => {
+            let at = units_of_scalar(&after, step.cursor);
+            let _ = area.set_selection_start(Some(at));
+            let _ = area.set_selection_end(Some(at));
+        }
+    }
+
+    if let Some(ask) = step.ask {
+        match ask {
+            // The editor's own history, not a second undo stack that would
+            // disagree with Ctrl+Z about what the last change was.
+            Ask::Undo => apply_history(area, state, scroller, true),
+            Ask::Redo => apply_history(area, state, scroller, false),
+            Ask::Save => controller::save_file(state),
+            Ask::Close | Ask::SaveAndClose => {
+                if ask == Ask::SaveAndClose {
+                    controller::save_file(state);
+                }
+                if let Some(path) = state
+                    .document
+                    .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
+                {
+                    controller::close_tab(state, path);
+                }
+            }
+            // The find bar that already exists, rather than a second search
+            // that would drift from it.
+            Ask::Search { .. } => state.find_open.set(true),
+            Ask::SearchNext | Ask::SearchPrevious => state.find_open.set(true),
+            // Named rather than silently ignored, the same way an unknown
+            // command is. Both need the editor's own scroll and jump history,
+            // which phase one does not reach into.
+            Ask::Scroll { .. } | Ask::Jump { .. } => {
+                state
+                    .vim
+                    .update(|vim| vim.rejected = Some("not yet: scroll and jump".into()));
+            }
+        }
+    }
+    true
 }

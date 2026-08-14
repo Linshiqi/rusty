@@ -476,6 +476,14 @@ pub struct AppState {
     pub parked: RwSignal<Vec<ParkedEditor>>,
     /// The active editor's undo/redo stacks.
     pub history: RwSignal<EditHistory>,
+    /// Modal editing: whether it is on, and where it currently is.
+    ///
+    /// The switch belongs in `workbench.toml` rather than here — a second
+    /// window has to boot into the same mode — and this signal mirrors it.
+    /// The *mode* is session state: losing NORMAL on a reload costs a press
+    /// of Escape.
+    pub vim_on: RwSignal<bool>,
+    pub vim: RwSignal<crate::vim::Vim>,
     /// Project search. Kept here rather than in the panel so the results
     /// survive switching away and back.
     pub search_query: RwSignal<String>,
@@ -693,6 +701,8 @@ impl AppState {
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),
+            vim_on: RwSignal::new(false),
+            vim: RwSignal::new(crate::vim::Vim::default()),
             search_query: RwSignal::new(String::new()),
             search_case: RwSignal::new(false),
             search_word: RwSignal::new(false),

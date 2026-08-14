@@ -47,6 +47,8 @@ pub enum Action {
     /// Scaffold C interop, in whichever direction.
     ScaffoldC(&'static str),
     CloseWindow,
+    /// Modal editing on or off.
+    ToggleVim,
     /// Open a page in the desktop browser. `&'static str` so the action stays
     /// `Copy` and can sit in the palette beside every other one.
     OpenUrl(&'static str),
@@ -161,6 +163,7 @@ pub fn all(state: AppState) -> Vec<Command> {
         None,
     ));
     out.push(view(Action::ResetLayout, "Reset panel sizes", None));
+    out.push(view(Action::ToggleVim, "Vim keys in the editor", None));
 
     for theme in Theme::ALL {
         out.push(Command {
@@ -269,6 +272,8 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 entry(Action::SetTheme(Theme::Dark), "Theme: Dark", None),
                 Item::Separator,
                 entry(Action::ResetLayout, "Reset panel sizes", None),
+                Item::Separator,
+                entry(Action::ToggleVim, "Vim keys in the editor", None),
             ],
         },
         Item::Separator,
@@ -462,6 +467,12 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
+        Action::ToggleVim => {
+            // Back to normal mode on the way in, so turning it on never
+            // lands you in a mode you did not ask for.
+            state.vim.set(crate::vim::Vim::default());
+            state.vim_on.update(|on| *on = !*on);
+        }
         Action::SetTheme(theme) => theme::set(theme),
         Action::ScaffoldC(direction) => controller::scaffold_c_interop(state, direction),
         Action::ResetLayout => {

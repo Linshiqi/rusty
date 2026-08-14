@@ -778,6 +778,37 @@ fn StatusBar() -> impl IntoView {
                     })
             }}
 
+            // The mode, and the half-typed command beside it. A modal editor
+            // whose mode is invisible is one where every other keystroke is a
+            // guess — this is the first thing a Vim user's eye goes to.
+            {move || {
+                state
+                    .vim_on
+                    .get()
+                    .then(|| {
+                        let (label, hint) = state
+                            .vim
+                            .with(|vim| (vim.mode.label(), vim.hint()));
+                        let tone = match label {
+                            "INSERT" => Tone::Patina,
+                            "NORMAL" => Tone::Neutral,
+                            _ => Tone::Amber,
+                        };
+                        let text = if hint.is_empty() {
+                            label.to_string()
+                        } else {
+                            format!("{label}  {hint}")
+                        };
+                        view! {
+                            <Status
+                                text=text
+                                tone=tone
+                                title="Modal editing. Escape returns to normal mode."
+                            />
+                        }
+                    })
+            }}
+
             {move || {
                 let blocking = state.blocking_count();
                 let total = state.problems().len();
