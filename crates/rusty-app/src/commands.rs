@@ -482,6 +482,34 @@ pub async fn scaffold_c_interop(
     use rusty_embed::scaffold::Direction;
 
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
+
+    // Before anything is written. `scaffold` already refuses rather than lay
+    // half a scaffold over somebody's code; this is the same rule applied to
+    // the other precondition, which is not about the files at all: `cc` shells
+    // out to a cross compiler, and four correct new files whose build cannot
+    // find one is a worse answer than a refusal that names it.
+    let detected = rusty_embed::project::detect(&root)?;
+    if let Some(chip) = detected.chip.as_deref().and_then(rusty_embed::chip::by_id) {
+        match toolchain::c_compiler(chip.arch) {
+            Some((binary, install)) if rusty_embed::toolchain::on_path_pub(binary).is_none() => {
+                return Err(CommandError::new(format!(
+                    "This project builds for {}, so C in it is compiled by `{binary}`, and \
+                     that is not on PATH. Nothing has been written. Install it — {install} \
+                     — and the Toolchain panel will show it before you try again.",
+                    chip.name,
+                )));
+            }
+            None => {
+                return Err(CommandError::new(format!(
+                    "rusty does not know which C compiler a {} project uses, so it will \
+                     not scaffold C it cannot say how to build. Nothing has been written.",
+                    chip.arch.label(),
+                )));
+            }
+            _ => {}
+        }
+    }
+
     let direction = match direction.as_str() {
         "rust-calls-c" => Direction::RustCallsC,
         "c-calls-rust" => Direction::CCallsRust,

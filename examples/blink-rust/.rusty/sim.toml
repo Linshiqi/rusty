@@ -1,0 +1,23 @@
+# The board this example draws. One LED on the pin the firmware drives, and a
+# display for the text it prints — the pot and button are absent because this
+# example has no input.
+
+[board]
+chip = "esp32c3"
+x = 460.0
+y = 96.0
+
+[[led]]
+pin = 0
+color = "green"
+label = "GPIO0"
+x = 216.0
+y = 176.0
+
+[[display]]
+label = "DISPLAY"
+sda = 21
+scl = 22
+x = 760.0
+y = 176.0
+flip = true

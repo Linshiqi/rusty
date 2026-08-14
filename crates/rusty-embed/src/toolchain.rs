@@ -65,6 +65,43 @@ const TOOLS: &[(&str, &str, &str, bool)] = &[
     ),
 ];
 
+/// Whether a binary is on PATH — the same lookup the tool probe uses, so a
+/// caller cannot check for a tool under one rule and find it under another.
+pub fn on_path_pub(name: &str) -> Option<std::path::PathBuf> {
+    on_path(name)
+}
+
+/// The C compiler a project for this architecture needs, and how to get it.
+///
+/// Not in [`TOOLS`] because it is the one entry that depends on the open
+/// project: `cc` shells out to a *cross* compiler, and Xtensa's and RISC-V's
+/// are different binaries from different places. A single "is there a C
+/// compiler" answer would be true and useless.
+///
+/// The asymmetry is real and worth stating rather than smoothing over: espup
+/// installs the Xtensa one as part of the toolchain it exists to manage, and
+/// installs nothing for RISC-V, because upstream rustc already emits RISC-V
+/// and needs no help. So a RISC-V project that wants C has to fetch a
+/// toolchain nothing else asked it to.
+pub fn c_compiler(arch: crate::model::Arch) -> Option<(&'static str, &'static str)> {
+    match arch {
+        crate::model::Arch::Xtensa => Some((
+            "xtensa-esp-elf-gcc",
+            "espup install — the Xtensa toolchain it manages includes the C compiler",
+        )),
+        crate::model::Arch::RiscV => Some((
+            "riscv32-esp-elf-gcc",
+            "download riscv32-esp-elf from \
+             https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH \
+             — espup does not install it, because Rust needs no help emitting RISC-V",
+        )),
+        // A Cortex-M project's C compiler is `arm-none-eabi-gcc`, but rusty
+        // has not verified that path against a real project and will not
+        // claim it from memory.
+        crate::model::Arch::CortexM => None,
+    }
+}
+
 /// How to install one of the tools rusty drives.
 ///
 /// The table already knew this and only the toolchain panel was reading it, so
@@ -196,7 +233,7 @@ pub fn status() -> ToolchainStatus {
 
 /// Machine state plus what this project needs from it.
 pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
-    let status = status();
+    let mut status = status();
     let mut problems = Vec::new();
 
     let chip = project
@@ -204,6 +241,28 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         .and_then(chip::by_id);
 
     let needs_esp_toolchain = chip.as_ref().is_some_and(|c| c.needs_esp_toolchain());
+
+    // The C compiler, listed only once a chip says which one. It is reported
+    // whether or not this project speaks C: "can I add C to this" is a
+    // question people ask before they have, and answering it only after they
+    // try is the failure this panel exists to prevent.
+    if let Some((binary, install)) = chip.as_ref().and_then(|c| c_compiler(c.arch)) {
+        let path = on_path(binary);
+        status.tools.push(ToolStatus {
+            name: binary.to_string(),
+            purpose: format!(
+                "Compiles C into the build for {} — needed by `cc`, bindgen and \
+                 esp-idf-sys, and by nothing else",
+                chip.as_ref().map_or("this part", |c| c.name.as_str()),
+            ),
+            version: path.as_ref().and_then(|_| probe_version(binary)),
+            path: path.map(|found| found.display().to_string()),
+            install_command: install.to_string(),
+            // Only projects that actually speak C need it, and the detection
+            // that knows whether this one does lives in `project::detect`.
+            required: false,
+        });
+    }
 
     // The required target follows from chip + runtime; either being unknown
     // means there is nothing to check rather than something to complain about.
