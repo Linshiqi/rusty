@@ -1278,7 +1278,10 @@ fn Surface(document: Document) -> impl IntoView {
                             <div
                                 class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
                                 style=format!(
-                                    "{}; width: calc({digits}ch + 20px)",
+                                    // The dot's column, then the digits, then the
+                                    // padding — a width that only counted digits
+                                    // clipped the number the moment a dot appeared.
+                                    "{}; width: calc({digits}ch + 32px)",
                                     metrics.get(),
                                 )
                             >
@@ -1296,6 +1299,10 @@ fn Surface(document: Document) -> impl IntoView {
                                             })
                                         });
                                         view! {
+                                            // The dot sits *left of* the number, as every
+                                            // editor with a breakpoint margin puts it:
+                                            // replacing the number meant setting a
+                                            // breakpoint cost you the line you were on.
                                             <div
                                                 on:click=move |_| {
                                                     controller::debug_breakpoint(
@@ -1305,25 +1312,21 @@ fn Surface(document: Document) -> impl IntoView {
                                                     )
                                                 }
                                                 title="Click to set a breakpoint"
-                                                class=move || {
-                                                    if marked.get() {
-                                                        "cursor-pointer text-crimson"
-                                                    } else {
-                                                        // The dot appears faintly on hover, as
-                                                        // in every editor with a breakpoint
-                                                        // margin: a gutter that looks inert is
-                                                        // a gutter nobody clicks.
-                                                        "group cursor-pointer hover:text-crimson/60"
-                                                    }
-                                                }
+                                                class="group flex cursor-pointer items-center justify-end gap-1.5"
                                             >
-                                                {move || {
+                                                <span class=move || {
                                                     if marked.get() {
-                                                        "●".to_string()
+                                                        "text-crimson"
                                                     } else {
-                                                        n.to_string()
+                                                        // Faint under the pointer, invisible
+                                                        // otherwise: a margin that looks
+                                                        // inert is a margin nobody clicks.
+                                                        "text-transparent group-hover:text-crimson/50"
                                                     }
-                                                }}
+                                                }>
+                                                    "●"
+                                                </span>
+                                                <span>{n.to_string()}</span>
                                             </div>
                                         }
                                     })
