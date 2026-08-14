@@ -1,0 +1,36 @@
+# Three lamps on the pins the firmware drives, and a display for the text it
+# prints. The pot and button are absent: these examples take no input.
+
+[board]
+chip = "esp32c3"
+x = 460.0
+y = 96.0
+
+[[led]]
+pin = 0
+color = "red"
+label = "L0"
+x = 216.0
+y = 160.0
+
+[[led]]
+pin = 1
+color = "green"
+label = "L1"
+x = 216.0
+y = 192.0
+
+[[led]]
+pin = 3
+color = "blue"
+label = "L3"
+x = 216.0
+y = 224.0
+
+[[display]]
+label = "DISPLAY"
+sda = 21
+scl = 22
+x = 760.0
+y = 192.0
+flip = true
