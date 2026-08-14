@@ -171,6 +171,15 @@ pub fn storage_location() -> Option<rusty_embed::StorageLocation> {
     storage::location()
 }
 
+/// How much disk the data directory is using. Separate from `storage_location`
+/// because it walks the tree, and most callers only want the path.
+#[tauri::command]
+pub async fn storage_footprint() -> Answer<u64> {
+    tokio::task::spawn_blocking(storage::footprint)
+        .await
+        .map_err(|e| CommandError::new(format!("measuring the data directory panicked: {e}")))
+}
+
 /// Move the data directory. Copies, switches the pointer, leaves the original
 /// in place; with `take_existing` it adopts what the target already holds.
 #[tauri::command]

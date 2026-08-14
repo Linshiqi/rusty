@@ -16,6 +16,60 @@ use crate::{
     view::components::{CommandLine, Dot, Pill, Readout, SectionLabel, Tone},
 };
 
+/// What rusty downloaded itself, how much of the disk it is, and the way to
+/// put it somewhere else.
+///
+/// QEMU and the two esp-gdb builds are most of a data directory and none of
+/// that is visible from a folder nobody opens; the tools installed by cargo
+/// sit in `~/.cargo/bin` and are not rusty's to relocate, which is worth
+/// saying rather than implying.
+#[component]
+fn Downloads() -> impl IntoView {
+    // Owned here rather than in AppState: nothing else reads it, and a panel
+    // that only shows a fact does not need the fact to outlive it.
+    let location = RwSignal::new(None::<rusty_embed::StorageLocation>);
+    let bytes = RwSignal::new(None::<u64>);
+    Effect::new(move |first: Option<()>| {
+        if first.is_none() {
+            controller::load_storage_location(location);
+            controller::load_storage_footprint(bytes);
+        }
+    });
+
+    move || {
+        let location = location.get()?;
+        let size = bytes
+            .get()
+            .map(|bytes| format!(" · {}", crate::format::bytes(bytes)))
+            .unwrap_or_default();
+        Some(view! {
+            <div class="mx-4 mb-2 rounded-[8px] border border-line px-3 py-2.5">
+                <div class="flex items-baseline justify-between gap-3">
+                    <span class="text-callout text-label-2">
+                        "QEMU and the debuggers rusty downloads live here"{size}
+                    </span>
+                    <button
+                        type="button"
+                        on:click=move |_| {
+                            let crate::view::SettingsOpen(open) = expect_context();
+                            open.set(true);
+                        }
+                        class="shrink-0 rounded-[6px] px-2 py-0.5 text-footnote text-rust transition-colors hover:bg-sunken"
+                    >
+                        "Move…"
+                    </button>
+                </div>
+                <p class="mt-0.5 font-mono text-caption text-label-4 select-text">{location.path}</p>
+                <p class="mt-1 max-w-[70ch] text-caption leading-relaxed text-label-3">
+                    "Moving it copies everything to the new folder and leaves the originals \
+                     until you delete them. Tools installed by cargo are in ~/.cargo/bin and \
+                     stay there — that path is cargo's, not rusty's."
+                </p>
+            </div>
+        })
+    }
+}
+
 #[component]
 pub fn Toolchain() -> impl IntoView {
     let state = AppState::expect();
@@ -239,6 +293,12 @@ pub fn Toolchain() -> impl IntoView {
                         })
                         .collect_view()}
                 </div>
+
+                // Where the big ones live. The tools above come from two
+                // different places and only one of them is rusty's to move —
+                // saying which, with the number that decides it, beats a
+                // Settings page nobody visits until the disk is full.
+                <Downloads />
 
                 <SectionLabel label="Toolchains" />
                 <div class="px-4 pb-2">

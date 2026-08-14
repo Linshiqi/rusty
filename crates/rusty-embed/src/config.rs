@@ -123,6 +123,29 @@ pub fn relocate(new_dir: &Path, take_existing: bool) -> Result<RelocateReport> {
     })
 }
 
+/// How much disk the data directory is using.
+///
+/// Its own call rather than a field on [`location`]: this walks the tree, and
+/// `location` is asked for on paths that only want the path. Worth showing at
+/// all because the number is what decides whether to move it — QEMU and the
+/// two esp-gdb builds are most of it, and none of that is obvious from a
+/// directory nobody opens.
+pub fn footprint() -> u64 {
+    fn walk(dir: &Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .map(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => walk(&entry.path()),
+                _ => entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+            })
+            .sum()
+    }
+    data_dir().map(|dir| walk(&dir)).unwrap_or(0)
+}
+
 // ─── workbench state ─────────────────────────────────────────────────────────
 
 /// What the workbench remembers between runs. TOML in the data directory, so

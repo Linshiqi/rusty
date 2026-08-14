@@ -1330,6 +1330,14 @@ pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
 // ─── storage ─────────────────────────────────────────────────────────────────
 
 /// Where the data directory is, for the settings screen.
+pub fn load_storage_footprint(into: RwSignal<Option<u64>>) {
+    spawn_local(async move {
+        if let Ok(bytes) = ipc::get::<u64>(cmd::workbench::FOOTPRINT).await {
+            into.set(Some(bytes));
+        }
+    });
+}
+
 pub fn load_storage_location(into: RwSignal<Option<StorageLocation>>) {
     spawn_local(async move {
         if let Ok(found) =

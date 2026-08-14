@@ -27,6 +27,9 @@ pub mod workbench {
     pub const FORGET_RECENT: &str = "forget_recent";
     pub const STORAGE_LOCATION: &str = "storage_location";
     pub const RELOCATE: &str = "relocate_storage";
+    /// How much disk the data directory is using — what decides whether to
+    /// move it.
+    pub const FOOTPRINT: &str = "storage_footprint";
     pub const PROXY: &str = "proxy_setting";
     pub const SET_PROXY: &str = "set_proxy_setting";
     pub const KEYBINDS: &str = "keybinds";
