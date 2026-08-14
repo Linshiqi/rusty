@@ -296,6 +296,15 @@ pub struct Chip {
     pub probe_rs_target: Option<String>,
     /// Radios the part provides, for the wizard to explain what it is choosing.
     pub radios: Vec<String>,
+    /// Every GPIO the die actually has, ascending — transcribed from the
+    /// vendor's own device description rather than typed from a datasheet.
+    ///
+    /// Empty means rusty does not know, and the board view then draws no pin
+    /// rows rather than someone else's: it used to draw the classic 30-pin
+    /// ESP32 devkit for every part, so a C3 board showed GPIO36/39/34/35,
+    /// none of which exist on it.
+    #[serde(default)]
+    pub gpio: Vec<u32>,
     /// The crate a project selects this part through, when selecting it means
     /// putting [`Self::id`] in that crate's feature list — `esp-hal` for every
     /// Espressif part.

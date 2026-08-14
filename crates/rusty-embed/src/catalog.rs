@@ -262,6 +262,8 @@ struct ChipEntry {
     probe_rs_target: Option<String>,
     #[serde(default)]
     radios: Vec<String>,
+    #[serde(default)]
+    gpio: Vec<u32>,
     /// Optional, and its absence is a refusal rather than a gap: a chip with
     /// no `hal` is one rusty will not offer to switch a project to.
     #[serde(default)]
@@ -284,6 +286,7 @@ impl ChipEntry {
             flashers: self.flashers.into_iter().map(Into::into).collect(),
             probe_rs_target: self.probe_rs_target,
             radios: self.radios,
+            gpio: self.gpio,
             hal: self.hal,
         }
     }

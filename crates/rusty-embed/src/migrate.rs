@@ -528,6 +528,7 @@ mod tests {
             flashers: Vec::new(),
             probe_rs_target: None,
             radios: Vec::new(),
+            gpio: Vec::new(),
         }
     }
 

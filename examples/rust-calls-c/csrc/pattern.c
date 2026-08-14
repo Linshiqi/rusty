@@ -6,6 +6,10 @@
 static uint8_t index_;
 static int8_t  step_ = 1;
 
+int test(float a) {
+    return a > 0.0 ? 1 : 0;
+}
+
 uint8_t pattern_step(void) {
     uint8_t lit = (uint8_t)(1u << index_);
     if (index_ == 2 && step_ == 1) {

@@ -337,7 +337,6 @@ pub(super) enum MenuTarget {
 
 pub(super) const SNAP: f64 = 8.0;
 pub(super) const KIT_W: f64 = 150.0;
-pub(super) const KIT_H: f64 = 264.0;
 /// Pin-row pitch on the kit, and the wire-stub pitch on a part. Multiples of
 /// the base grid on purpose — KiCad's oldest rule is that pins live on the
 /// grid, because a snapped segment can only ever meet an anchor that is
@@ -347,8 +346,6 @@ pub(super) const KIT_H: f64 = 264.0;
 pub(super) const ROW_PITCH: f64 = 16.0;
 pub(super) const STUB_OFFSET: f64 = 16.0;
 pub(super) const SLOT_PITCH: f64 = 16.0;
-/// Pin rows per side of the schematic devkit.
-pub(super) const KIT_ROWS: usize = 15;
 /// "This pin is not wired to anything" — new parts start here, and
 /// disconnecting returns here. 255 is no GPIO on any supported chip.
 pub(super) const UNWIRED: u8 = 255;
@@ -363,75 +360,137 @@ pub(super) fn snap_to(value: f64, grid: f64) -> f64 {
     (value / grid).round() * grid
 }
 
-/// The classic 30-pin ESP32 devkit pinout, top to bottom, left then right.
-/// `None` rows (power, ground, EN) refuse wires — an LED soldered to GND on
+/// One row of the drawn part: its label, and the GPIO it carries.
+///
+/// `None` rows — power, ground, EN — refuse wires: an LED soldered to GND on
 /// both ends is a diagram nobody meant.
-pub(super) fn kit_rows() -> [(&'static str, Option<u8>); 30] {
-    [
-        ("EN", None),
-        ("36", Some(36)),
-        ("39", Some(39)),
-        ("34", Some(34)),
-        ("35", Some(35)),
-        ("32", Some(32)),
-        ("33", Some(33)),
-        ("25", Some(25)),
-        ("26", Some(26)),
-        ("27", Some(27)),
-        ("14", Some(14)),
-        ("12", Some(12)),
-        ("13", Some(13)),
-        ("GND", None),
-        ("VIN", None),
-        ("3V3", None),
-        ("GND", None),
-        ("15", Some(15)),
-        ("2", Some(2)),
-        ("4", Some(4)),
-        ("16", Some(16)),
-        ("17", Some(17)),
-        ("5", Some(5)),
-        ("18", Some(18)),
-        ("19", Some(19)),
-        ("21", Some(21)),
-        ("RX", Some(3)),
-        ("TX", Some(1)),
-        ("22", Some(22)),
-        ("23", Some(23)),
-    ]
+pub(super) type Row = (String, Option<u8>);
+
+/// The classic 30-pin ESP32 devkit pinout, top to bottom, left then right.
+///
+/// The one module whose *header order* rusty knows. That order is a property
+/// of the board, not the die, so it cannot be derived — and it used to be
+/// drawn for every chip, which is why an ESP32-C3 board showed GPIO36, 39, 34
+/// and 35, none of which the part has.
+const ESP32_DEVKIT: [(&str, Option<u8>); 30] = [
+    ("EN", None),
+    ("36", Some(36)),
+    ("39", Some(39)),
+    ("34", Some(34)),
+    ("35", Some(35)),
+    ("32", Some(32)),
+    ("33", Some(33)),
+    ("25", Some(25)),
+    ("26", Some(26)),
+    ("27", Some(27)),
+    ("14", Some(14)),
+    ("12", Some(12)),
+    ("13", Some(13)),
+    ("GND", None),
+    ("VIN", None),
+    ("3V3", None),
+    ("GND", None),
+    ("15", Some(15)),
+    ("2", Some(2)),
+    ("4", Some(4)),
+    ("16", Some(16)),
+    ("17", Some(17)),
+    ("5", Some(5)),
+    ("18", Some(18)),
+    ("19", Some(19)),
+    ("21", Some(21)),
+    ("RX", Some(3)),
+    ("TX", Some(1)),
+    ("22", Some(22)),
+    ("23", Some(23)),
+];
+
+/// The rows to draw for a part, given the GPIOs it actually has.
+///
+/// Two different drawings, and the difference is honest rather than
+/// cosmetic. For the ESP32 the answer is a *module*: a real 30-pin devkit
+/// whose header order somebody can match against the board on their desk.
+/// For everything else rusty knows the die's pins and not any module's
+/// header, so it draws a *chip* — the pins in numeric order, split down the
+/// middle, with the rails around them. Every row on screen is then a pin
+/// that exists, which is the whole of the bug this replaced.
+///
+/// An empty `gpio` means the catalogue does not say, and the part is drawn
+/// with rails only rather than with somebody else's pins.
+pub(super) fn kit_rows(chip: &str, gpio: &[u32]) -> Vec<Row> {
+    if chip == "esp32" {
+        return ESP32_DEVKIT
+            .iter()
+            .map(|(name, pin)| ((*name).to_string(), *pin))
+            .collect();
+    }
+
+    let half = gpio.len().div_ceil(2);
+    let mut rows: Vec<Row> = Vec::with_capacity(gpio.len() + 4);
+    rows.push(("EN".to_string(), None));
+    rows.extend(gpio[..half].iter().map(|p| (p.to_string(), Some(*p as u8))));
+    rows.push(("GND".to_string(), None));
+    // The right column starts here, so the rails sit at the top of each side
+    // the way they do on a module.
+    rows.push(("3V3".to_string(), None));
+    rows.extend(gpio[half..].iter().map(|p| (p.to_string(), Some(*p as u8))));
+    rows.push(("GND".to_string(), None));
+    rows
 }
 
-pub(super) fn row_of_gpio(pin: u8) -> Option<usize> {
-    kit_rows().iter().position(|(_, gpio)| *gpio == Some(pin))
+/// Which row carries a GPIO, if the part has it at all.
+///
+/// `None` for a pin the part does not have is the answer, not a gap: a wire
+/// to GPIO26 on a C3 has nowhere to land, and drawing it somewhere would be
+/// the confident wrong answer.
+pub(super) fn row_of_gpio(rows: &[Row], pin: u8) -> Option<usize> {
+    rows.iter().position(|(_, gpio)| *gpio == Some(pin))
+}
+
+/// How many rows go down the left side. The split is the same arithmetic the
+/// row builder used, kept in one place so a drawing and a hit-test cannot
+/// disagree about which side a row is on.
+pub(super) fn left_rows(rows: usize) -> usize {
+    rows.div_ceil(2)
 }
 
 /// World coordinates of a kit row's pin circle.
-pub(super) fn row_point(kit: (f64, f64), row: usize) -> (f64, f64) {
-    if row < KIT_ROWS {
+pub(super) fn row_point(kit: (f64, f64), rows: usize, row: usize) -> (f64, f64) {
+    let left = left_rows(rows);
+    if row < left {
         (kit.0 + 10.0, kit.1 + 16.0 + row as f64 * ROW_PITCH)
     } else {
         (
             kit.0 + KIT_W - 10.0,
-            kit.1 + 16.0 + (row - KIT_ROWS) as f64 * ROW_PITCH,
+            kit.1 + 16.0 + (row - left) as f64 * ROW_PITCH,
         )
     }
 }
 
+/// How tall the drawn part is for a given row count — the rails and pins
+/// decide it now, rather than a constant that only ever suited one module.
+pub(super) fn kit_height(rows: usize) -> f64 {
+    32.0 + left_rows(rows) as f64 * ROW_PITCH
+}
+
 /// Which kit row a world point lands on, if any.
-pub(super) fn row_under(kit: (f64, f64), point: (f64, f64)) -> Option<usize> {
+pub(super) fn row_under(kit: (f64, f64), rows: usize, point: (f64, f64)) -> Option<usize> {
     let (kx, ky) = kit;
     let (x, y) = point;
-    if y < ky + 9.0 || y > ky + 16.0 + KIT_ROWS as f64 * ROW_PITCH {
+    let left = left_rows(rows);
+    if y < ky + 9.0 || y > ky + 16.0 + left as f64 * ROW_PITCH {
         return None;
     }
     let row = (((y - ky - 16.0) / ROW_PITCH).round().max(0.0)) as usize;
-    if row >= KIT_ROWS {
+    if row >= left {
         return None;
     }
     if x >= kx - 8.0 && x <= kx + 30.0 {
         Some(row)
     } else if x >= kx + KIT_W - 30.0 && x <= kx + KIT_W + 8.0 {
-        Some(row + KIT_ROWS)
+        // The right column can be shorter than the left when the count is
+        // odd; a hit past its end is a miss, not the row below.
+        (row + left < rows).then_some(row + left)
     } else {
         None
     }
@@ -464,23 +523,29 @@ pub(super) fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
 /// The whole drawn path of one wire: the part's stub, the bends the user
 /// has placed, and the chip pin — orthogonal by construction, as every
 /// schematic wire is.
-pub(super) fn wire_path(part: &EditPart, slot: usize, kit: (f64, f64)) -> Option<Vec<(f64, f64)>> {
+pub(super) fn wire_path(
+    part: &EditPart,
+    slot: usize,
+    kit: (f64, f64),
+    rows: &[Row],
+) -> Option<Vec<(f64, f64)>> {
     let pin = part.pins[slot];
     if pin == UNWIRED {
         return None;
     }
-    let row = row_of_gpio(pin)?;
+    let row = row_of_gpio(rows, pin)?;
     let from = stub_point(part, slot);
-    let to = row_point(kit, row);
+    let to = row_point(kit, rows.len(), row);
 
     let mut points = vec![from];
     if part.waypoints[slot].is_empty() {
         // An untouched wire takes the tidy way round: out of the stub, along
         // a lane of its own, into the pin.
-        let lane = if row < KIT_ROWS {
+        let left = left_rows(rows.len());
+        let lane = if row < left {
             to.0 - 24.0 - (row as f64 * 8.0)
         } else {
-            to.0 + 24.0 + ((row - KIT_ROWS) as f64 * 8.0)
+            to.0 + 24.0 + ((row - left) as f64 * 8.0)
         };
         points.push((lane, from.1));
         points.push((lane, to.1));
@@ -639,20 +704,61 @@ mod tests {
         }
     }
 
+    /// ESP32's GPIO set, as the catalogue carries it.
+    fn esp32_gpio() -> Vec<u32> {
+        vec![
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            25, 26, 27, 32, 33, 34, 35, 36, 37, 38, 39,
+        ]
+    }
+
     #[test]
-    fn the_pin_map_is_the_real_devkit_and_power_rows_refuse_wires() {
-        assert_eq!(kit_rows().len(), 30);
-        assert_eq!(row_of_gpio(26), Some(8));
-        assert_eq!(row_of_gpio(23), Some(29));
+    fn the_esp32_keeps_its_real_devkit_header() {
+        let rows = kit_rows("esp32", &esp32_gpio());
+        assert_eq!(rows.len(), 30);
+        assert_eq!(row_of_gpio(&rows, 26), Some(8));
+        assert_eq!(row_of_gpio(&rows, 23), Some(29));
         // RX and TX carry GPIO numbers; EN, GND, VIN and 3V3 carry none.
-        assert_eq!(row_of_gpio(3), Some(26));
+        assert_eq!(row_of_gpio(&rows, 3), Some(26));
         for name in ["EN", "GND", "VIN", "3V3"] {
             assert!(
-                kit_rows().iter().all(|(n, gpio)| *n != name || gpio.is_none()),
+                rows.iter().all(|(n, gpio)| n != name || gpio.is_none()),
                 "{name} must not offer a GPIO",
             );
         }
-        assert_eq!(row_of_gpio(UNWIRED), None);
+        assert_eq!(row_of_gpio(&rows, UNWIRED), None);
+    }
+
+    /// The bug this replaced: every board was drawn as the 30-pin ESP32
+    /// devkit, so an ESP32-C3 showed GPIO36, 39, 34 and 35 — none of which
+    /// the part has — and a wire could be dropped on one.
+    #[test]
+    fn another_part_is_drawn_with_its_own_pins_and_no_others() {
+        let c3: Vec<u32> = (0..=21).collect();
+        let rows = kit_rows("esp32c3", &c3);
+
+        for absent in [26u8, 32, 33, 34, 35, 36, 39] {
+            assert_eq!(
+                row_of_gpio(&rows, absent),
+                None,
+                "GPIO{absent} is not on a C3 and must have no row to land on",
+            );
+        }
+        for present in [0u8, 9, 21] {
+            assert!(row_of_gpio(&rows, present).is_some(), "GPIO{present} is");
+        }
+        // Rails at the top of each side, pins between them.
+        assert_eq!(rows.len(), c3.len() + 4, "22 pins and four rails");
+        assert!(rows.iter().filter(|(_, gpio)| gpio.is_none()).count() == 4);
+    }
+
+    /// A part rusty has no pin list for is drawn with rails and nothing else,
+    /// rather than with somebody else's pins.
+    #[test]
+    fn an_unknown_part_offers_no_pins_at_all() {
+        let rows = kit_rows("mystery", &[]);
+        assert!(rows.iter().all(|(_, gpio)| gpio.is_none()));
+        assert_eq!(row_of_gpio(&rows, 0), None);
     }
 
     #[test]
@@ -678,12 +784,15 @@ mod tests {
     fn a_wire_runs_only_in_right_angles_and_ends_on_its_pin() {
         let part = led(60.0, 40.0, 26);
         let kit = (460.0, 40.0);
-        let path = wire_path(&part, 0, kit).expect("a wired pin has a path");
+        let path = wire_path(&part, 0, kit, &kit_rows("esp32", &esp32_gpio())).expect("a wired pin has a path");
 
         assert_eq!(path[0], stub_point(&part, 0), "starts at the stub");
         assert_eq!(
             *path.last().unwrap(),
-            row_point(kit, row_of_gpio(26).unwrap()),
+            {
+                let rows = kit_rows("esp32", &esp32_gpio());
+                row_point(kit, rows.len(), row_of_gpio(&rows, 26).unwrap())
+            },
             "ends on the pin",
         );
         for pair in path.windows(2) {
@@ -698,18 +807,18 @@ mod tests {
     #[test]
     fn an_unwired_pin_has_no_path_at_all() {
         let part = led(60.0, 40.0, UNWIRED);
-        assert!(wire_path(&part, 0, (460.0, 40.0)).is_none());
+        assert!(wire_path(&part, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_none());
         // A pin the chip does not have is refused rather than drawn to
         // nowhere — this is how a board file from another chip fails.
         let alien = led(60.0, 40.0, 99);
-        assert!(wire_path(&alien, 0, (460.0, 40.0)).is_none());
+        assert!(wire_path(&alien, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_none());
     }
 
     #[test]
     fn user_bends_survive_the_orthogonal_pass() {
         let mut part = led(60.0, 40.0, 26);
         part.waypoints[0] = vec![(200.0, 54.0), (200.0, 168.0)];
-        let path = wire_path(&part, 0, (460.0, 40.0)).expect("path");
+        let path = wire_path(&part, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).expect("path");
         assert!(path.contains(&(200.0, 54.0)));
         assert!(path.contains(&(200.0, 168.0)));
         // Idempotent: a path already square gains no extra corners.
@@ -719,15 +828,17 @@ mod tests {
     #[test]
     fn only_pin_rows_accept_a_dropped_wire() {
         let kit = (460.0, 40.0);
-        let row = row_of_gpio(26).expect("gpio 26");
-        let (px, py) = row_point(kit, row);
-        assert_eq!(row_under(kit, (px, py)), Some(row));
+        let rows = kit_rows("esp32", &esp32_gpio());
+        let n = rows.len();
+        let row = row_of_gpio(&rows, 26).expect("gpio 26");
+        let (px, py) = row_point(kit, n, row);
+        assert_eq!(row_under(kit, n, (px, py)), Some(row));
         // A few pixels off still lands, because a pin is a small target.
-        assert_eq!(row_under(kit, (px + 6.0, py + 3.0)), Some(row));
+        assert_eq!(row_under(kit, n, (px + 6.0, py + 3.0)), Some(row));
         // The middle of the board is not a pin.
-        assert_eq!(row_under(kit, (kit.0 + 75.0, py)), None);
+        assert_eq!(row_under(kit, n, (kit.0 + 75.0, py)), None);
         // Neither is empty sheet.
-        assert_eq!(row_under(kit, (kit.0 - 200.0, py)), None);
+        assert_eq!(row_under(kit, n, (kit.0 - 200.0, py)), None);
     }
 
     #[test]
@@ -793,8 +904,8 @@ mod tests {
             flip: false,
         };
         assert_eq!(display.kind.wires(), 2);
-        assert!(wire_path(&display, 0, (460.0, 40.0)).is_some(), "sda routes");
-        assert!(wire_path(&display, 1, (460.0, 40.0)).is_some(), "scl routes");
+        assert!(wire_path(&display, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_some(), "sda routes");
+        assert!(wire_path(&display, 1, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_some(), "scl routes");
     }
 
     #[test]
@@ -834,7 +945,8 @@ mod tests {
 
         // And the rendered route must have no U-turn: no two consecutive
         // segments on the same axis in opposite directions.
-        let route = wire_path(&part, 0, (560.0, 96.0)).expect("wired");
+        let route = wire_path(&part, 0, (560.0, 96.0), &kit_rows("esp32", &esp32_gpio()))
+            .expect("wired");
         for window in route.windows(3) {
             let (a, b, c) = (window[0], window[1], window[2]);
             let vertical = (a.0 - b.0).abs() < 0.01 && (b.0 - c.0).abs() < 0.01;
@@ -855,10 +967,16 @@ mod tests {
         assert_eq!(sx % SNAP, 0.0, "stub x on grid");
         assert_eq!(sy % SNAP, 0.0, "stub y on grid");
 
+        // Every layout, not just the devkit: an odd pin count puts one more
+        // row on the left, and a half-step there would put every anchor off
+        // the grid on that side only.
         let kit = (456.0, 40.0);
-        for row in 0..(2 * KIT_ROWS) {
-            let (_, py) = row_point(kit, row);
-            assert_eq!(py % SNAP, 0.0, "row {row} y on grid");
+        for gpio in [esp32_gpio(), (0..=21).collect(), (0..=20).collect()] {
+            let rows = kit_rows("other", &gpio);
+            for row in 0..rows.len() {
+                let (_, py) = row_point(kit, rows.len(), row);
+                assert_eq!(py % SNAP, 0.0, "row {row} y on grid");
+            }
         }
     }
 }

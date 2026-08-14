@@ -183,6 +183,24 @@ fn BoardEditor(
     let chip = board.chip.clone();
     let chip_label = board.chip.to_uppercase();
 
+    // The pin rows this part actually has. From the catalogue, so a chip
+    // added tomorrow draws its own pins rather than the ESP32 devkit's —
+    // which is what every board used to show, C3 boards included, labelled
+    // with GPIO36/39/34/35 that the part does not have.
+    let rows = {
+        let chip = chip.clone();
+        Memo::new(move |_| {
+            let gpio = state
+                .chips
+                .get()
+                .into_iter()
+                .find(|c| c.id == chip)
+                .map(|c| c.gpio)
+                .unwrap_or_default();
+            kit_rows(&chip, &gpio)
+        })
+    };
+
     let parts = RwSignal::new(parts_of(&board));
     let kit_pos = RwSignal::new((board.kit_x.unwrap_or(460.0), board.kit_y.unwrap_or(40.0)));
     let dirty = RwSignal::new(false);
@@ -331,7 +349,7 @@ fn BoardEditor(
         let rect = element.get_bounding_client_rect();
         let (kx, ky) = kit_pos.get_untracked();
         let mut min = (kx, ky);
-        let mut max = (kx + KIT_W, ky + KIT_H);
+        let mut max = (kx + KIT_W, ky + kit_height(rows.get_untracked().len()));
         for part in parts.get_untracked() {
             min.0 = min.0.min(part.x);
             min.1 = min.1.min(part.y);
@@ -835,8 +853,9 @@ fn BoardEditor(
                             }
                             Drag::Wire { .. } => {
                                 ghost.set(Some(world));
-                                let row = row_under(kit_pos.get_untracked(), world)
-                                    .filter(|r| kit_rows()[*r].1.is_some());
+                                let drawn = rows.get_untracked();
+                                let row = row_under(kit_pos.get_untracked(), drawn.len(), world)
+                                    .filter(|r| drawn.get(*r).is_some_and(|r| r.1.is_some()));
                                 hover_row.set(row);
                             }
                             Drag::Segment {
@@ -859,8 +878,8 @@ fn BoardEditor(
                                 let anchors = parts.with_untracked(|list| {
                                     let p = list.get(part)?;
                                     let stub = stub_point(p, slot);
-                                    let pin = row_of_gpio(p.pins[slot])
-                                        .map(|row| row_point(kit_pos.get_untracked(), row));
+                                    let pin = row_of_gpio(&rows.get_untracked(), p.pins[slot])
+                                        .map(|row| row_point(kit_pos.get_untracked(), rows.get_untracked().len(), row));
                                     Some((stub, pin))
                                 });
                                 if let Some((stub, pin)) = anchors {
@@ -903,10 +922,10 @@ fn BoardEditor(
                             parts.update(|list| {
                                 if let Some(p) = list.get_mut(part) {
                                     let pin = p.pins[slot];
-                                    if let Some(row) = row_of_gpio(pin) {
+                                    if let Some(row) = row_of_gpio(&rows.get_untracked(), pin) {
                                         let mut full = vec![stub_point(p, slot)];
                                         full.extend(p.waypoints[slot].iter().copied());
-                                        full.push(row_point(kit, row));
+                                        full.push(row_point(kit, rows.get_untracked().len(), row));
                                         let tidy = simplify_route(full);
                                         p.waypoints[slot] =
                                             tidy[1..tidy.len() - 1].to_vec();
@@ -926,12 +945,12 @@ fn BoardEditor(
                                         if p.waypoints[slot].is_empty() {
                                             continue;
                                         }
-                                        let Some(row) = row_of_gpio(p.pins[slot]) else {
+                                        let Some(row) = row_of_gpio(&rows.get_untracked(), p.pins[slot]) else {
                                             continue;
                                         };
                                         let mut full = vec![stub_point(p, slot)];
                                         full.extend(p.waypoints[slot].iter().copied());
-                                        full.push(row_point(kit, row));
+                                        full.push(row_point(kit, rows.get_untracked().len(), row));
                                         let tidy = simplify_route(full);
                                         p.waypoints[slot] =
                                             tidy[1..tidy.len() - 1].to_vec();
@@ -943,7 +962,7 @@ fn BoardEditor(
                             // Landing on a GPIO row wires the pin; anywhere
                             // else cancels. Wiring IS pin assignment.
                             if let Some(row) = hover_row.get_untracked()
-                                && let Some(gpio) = kit_rows()[row].1
+                                && let Some(gpio) = rows.get_untracked().get(row).and_then(|r| r.1)
                             {
                                 checkpoint();
                                 parts.update(|list| {
@@ -1012,6 +1031,12 @@ fn BoardEditor(
                         {move || {
                             let (kx, ky) = kit_pos.get();
                             let hovered = hover_row.get();
+                            // Drawn from the part's own pins: the height, the
+                            // split down the middle, and the labels all follow
+                            // from how many it has.
+                            let drawn = rows.get();
+                            let per_side = left_rows(drawn.len()).max(1);
+                            let kit_h = kit_height(drawn.len());
                             view! {
                                 <div
                                     on:pointerdown=move |event: ev::PointerEvent| {
@@ -1036,16 +1061,16 @@ fn BoardEditor(
                                 >
                                     <svg
                                         width=KIT_W
-                                        height=KIT_H
-                                        viewBox=format!("0 0 {KIT_W} {KIT_H}")
+                                        height=kit_h
+                                        viewBox=format!("0 0 {KIT_W} {kit_h}")
                                     >
-                                        <rect x="4" y="2" width=KIT_W - 8.0 height=KIT_H - 4.0 rx="10" fill="#1a1d23" stroke="#454b56" stroke-width="1.5" />
-                                        {kit_rows()
+                                        <rect x="4" y="2" width=KIT_W - 8.0 height=kit_h - 4.0 rx="10" fill="#1a1d23" stroke="#454b56" stroke-width="1.5" />
+                                        {drawn
                                             .into_iter()
                                             .enumerate()
                                             .map(|(row, (name, gpio))| {
-                                                let left = row < KIT_ROWS;
-                                                let y = 16 + (row % KIT_ROWS) as i32 * ROW_PITCH as i32;
+                                                let left = row < per_side;
+                                                let y = 16 + (row % per_side) as i32 * ROW_PITCH as i32;
                                                 let cx = if left { 10.0 } else { KIT_W - 10.0 };
                                                 let hot = hovered == Some(row);
                                                 let fill = if hot {
@@ -1075,7 +1100,7 @@ fn BoardEditor(
                                         <text x=KIT_W / 2.0 y="58" text-anchor="middle" font-family="ui-monospace" font-size="12" fill="#aab3c0">
                                             {chip_label.clone()}
                                         </text>
-                                        <rect x=KIT_W / 2.0 - 15.0 y=KIT_H - 22.0 width="30" height="14" rx="2" fill="#3a3e46" />
+                                        <rect x=KIT_W / 2.0 - 15.0 y=kit_h - 22.0 width="30" height="14" rx="2" fill="#3a3e46" />
                                     </svg>
                                 </div>
                             }
@@ -1423,7 +1448,7 @@ fn BoardEditor(
                                         .flat_map(|(part_index, part)| {
                                             (0..part.kind.wires())
                                                 .filter_map(|slot| {
-                                                    let points = wire_path(part, slot, kit)?;
+                                                    let points = wire_path(part, slot, kit, &rows.get_untracked())?;
                                                     let from = points[0];
                                                     let to = *points.last()?;
                                                     let is_picked =

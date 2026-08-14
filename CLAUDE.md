@@ -335,6 +335,17 @@ usty`) holds `location.toml`
   outrank the project's rust-toolchain.toml, so a spawned `cargo build`
   compiles an esp-pinned Xtensa project with stable and dies with "can't
   find crate for `core`". `process::spawn` strips the variable.
+- **The board view draws a module for the one module rusty knows, and a chip
+  for everything else.** `kit_rows` was the classic 30-pin ESP32 devkit for
+  every part, so a C3 board showed GPIO36/39/34/35 — pins it does not have,
+  and a wire could be dropped on one. Header order is a property of the
+  *board*, so it cannot be derived; the pin set is a property of the *die*, so
+  it can. ESP32 keeps its real header; everything else is drawn in numeric
+  order from `Chip::gpio`, transcribed into the catalogue from esp-hal's own
+  device description rather than typed from a datasheet. An empty list draws
+  rails only. The row count is now a value, not a constant, so `row_point`,
+  `row_under` and the wire router all take it — a drawing and a hit-test that
+  disagree about which side a row is on is the bug this shape prevents.
 - **A capability only some parts support belongs in the catalogue as an
   optional field whose absence refuses.** The chip switch shipped keyed off
   nothing but the target triple, so it happily offered esp32 → stm32f103 and
