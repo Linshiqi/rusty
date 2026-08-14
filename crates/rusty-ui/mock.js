@@ -187,7 +187,9 @@
       // Debug runs freeze the boot and say so; the frontend's hook on that
       // line is what starts the in-app debugger.
       if (a.debug) setTimeout(() => a.onLine.send({ stream: "stdout", text: "[rusty:debug] frozen at reset", level: null }), 40);
-      return new Promise(() => {});
+      // QEMU runs until something stops it, so this resolves only when
+      // something does — the Stop button, or the debugger going away.
+      return new Promise((resolve) => { window.__mock.simResolve = resolve; });
     },
     // One cargo-style warning so the Output panel's location links can be
     // exercised: the ` --> path:line:col` must render as a click-to-open.
@@ -275,7 +277,14 @@
       window.__mock.debugStarted?.onState.send({ ...window.__mock.stopped, frame: a.level });
       return null;
     },
-    debug_stop: () => null,
+    // Stopping the debugger ends the run it started, as the backend now does:
+    // the sim stream resolves, which is what puts the Play button back. A mock
+    // that only killed gdb modelled the orphaned-QEMU bug rather than the fix.
+    debug_stop: () => {
+      window.__mock.simResolve?.(0);
+      window.__mock.simResolve = null;
+      return null;
+    },
     check_update: () => ({
       current: "0.1.0", latest: "0.2.0", newer: true,
       url: "https://github.com/Linshiqi/rusty/releases/tag/v0.2.0", note: null,

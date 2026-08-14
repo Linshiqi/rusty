@@ -475,6 +475,11 @@ fn BoardEditor(
                             .into_any()
                     }
                 }}
+                // Pressing Debug lands you here, watching the board — so this
+                // is one of the two places that has to be able to continue,
+                // step and stop. Without it a session started from this panel
+                // could only be ended from the editor's.
+                <crate::view::transport::DebugTransport />
                 <button
                     type="button"
                     title="Save the board layout"

@@ -323,6 +323,13 @@ usty`) holds `location.toml`
   outrank the project's rust-toolchain.toml, so a spawned `cargo build`
   compiles an esp-pinned Xtensa project with stable and dies with "can't
   find crate for `core`". `process::spawn` strips the variable.
+- **One global flag cleared from a shared error path belongs to nobody.**
+  `track` wraps every controller call, and its failure branch cleared
+  `session_running` — so one unrelated error told a *running* simulation it
+  had ended, the Stop button vanished, and QEMU kept going with nothing in the
+  window able to reach it. Only the call that started the session may say it
+  ended: `track_session`. The same reasoning says a debug run's Stop must stop
+  what the Debug button started, since that button is what booted QEMU.
 - **A debugger reading a different build than the one running answers every
   question, fluently, about the wrong binary.** Debug runs build unoptimised
   (`--config profile.dev.opt-level=0`) into `target/<triple>/debug/`, but the

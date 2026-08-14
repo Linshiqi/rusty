@@ -20,6 +20,7 @@ pub mod panels;
 pub mod settings;
 pub mod split;
 pub mod terminal;
+pub mod transport;
 pub mod waves;
 
 use leptos::prelude::*;

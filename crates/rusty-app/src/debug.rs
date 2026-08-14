@@ -158,11 +158,24 @@ pub async fn debug_frame(level: u32, state: State<'_, AppState>) -> Result<(), C
         .map_err(|e| CommandError::new(e.to_string()))
 }
 
-/// End the session.
+/// End the session — and the run it was attached to.
+///
+/// The Debug button is what booted QEMU, frozen, with the gdbstub listening.
+/// Killing only gdb left that QEMU executing with no client and no owner: the
+/// board kept updating, the panel already said "nothing is being debugged",
+/// and the one control that could still have stopped it was on a different
+/// panel. One action started it, so one action ends it.
+///
+/// The recorded attach point is what says the run belongs to a debug session;
+/// a plain Run never sets it, and stopping a debugger it has none of does
+/// nothing to it.
 #[tauri::command]
 pub async fn debug_stop(state: State<'_, AppState>) -> Result<(), CommandError> {
     if let Some(debugger) = state.debugger().await {
         debugger.stop();
+    }
+    if state.attach().await.is_some() {
+        state.stop_session().await;
     }
     Ok(())
 }

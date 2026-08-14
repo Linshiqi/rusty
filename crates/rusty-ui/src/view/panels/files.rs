@@ -869,62 +869,7 @@ fn Surface(document: Document) -> impl IntoView {
             // While a session is live the toolbar is the debugger's: the
             // transport controls belong where the eye already is, not in a
             // panel the stopped line just navigated away from.
-            {move || {
-                let debug = state.debug.get()?;
-                let running = debug.running;
-                let step = move |action: &'static str, icon, title: &'static str| {
-                    view! {
-                        <button
-                            type="button"
-                            title=title
-                            disabled=running
-                            on:click=move |_| controller::debug_control(state, action)
-                            class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                        >
-                            <IconView icon=icon size=15 />
-                        </button>
-                    }
-                };
-                Some(view! {
-                    <span class="mx-1 h-5 w-px bg-line" />
-                    {if running {
-                        view! {
-                            <button
-                                type="button"
-                                title="Pause the target"
-                                on:click=move |_| controller::debug_control(state, "pause")
-                                class="grid size-7 place-items-center rounded-[6px] text-amber hover:bg-sunken"
-                            >
-                                <IconView icon=Icon::Pause size=15 />
-                            </button>
-                        }
-                            .into_any()
-                    } else {
-                        view! {
-                            <button
-                                type="button"
-                                title="Continue (F5)"
-                                on:click=move |_| controller::debug_control(state, "resume")
-                                class="grid size-7 place-items-center rounded-[6px] text-patina hover:bg-sunken"
-                            >
-                                <IconView icon=Icon::Play size=15 />
-                            </button>
-                        }
-                            .into_any()
-                    }}
-                    {step("over", Icon::StepOver, "Step over (F10)")}
-                    {step("into", Icon::StepInto, "Step into (F11)")}
-                    {step("out", Icon::StepOut, "Step out (Shift+F11)")}
-                    <button
-                        type="button"
-                        title="Stop debugging"
-                        on:click=move |_| controller::debug_stop(state)
-                        class="grid size-7 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
-                    >
-                        <IconView icon=Icon::Stop size=15 />
-                    </button>
-                })
-            }}
+            <crate::view::transport::DebugTransport />
             // Debug sits beside Run, because that is the pair: run it, or
             // run it and stop where you said. Hidden while a session is
             // live — the transport controls above are what it becomes.

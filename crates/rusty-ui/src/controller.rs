@@ -48,6 +48,35 @@ where
     F: std::future::Future<Output = Answer<T>> + 'static,
     T: 'static,
 {
+    tracked(state, future, apply, false);
+}
+
+/// [`track`] for a call that *started* the session: its failure is that
+/// session ending, so the Stop button and the terminal's prompt come back.
+///
+/// The distinction is load-bearing because `session_running` is one global
+/// flag, and `track` wraps *every* controller entry point. Clearing it on any
+/// failure meant one unrelated error — a register read refused because the
+/// debugger had stopped, a workspace query that could not answer — told a
+/// running simulation it had ended. Its Stop button vanished while QEMU kept
+/// going, leaving a process the window could no longer stop.
+fn track_session<F, T>(state: AppState, future: F, apply: impl FnOnce(T) + 'static)
+where
+    F: std::future::Future<Output = Answer<T>> + 'static,
+    T: 'static,
+{
+    tracked(state, future, apply, true);
+}
+
+fn tracked<F, T>(
+    state: AppState,
+    future: F,
+    apply: impl FnOnce(T) + 'static,
+    owns_session: bool,
+) where
+    F: std::future::Future<Output = Answer<T>> + 'static,
+    T: 'static,
+{
     state.in_flight.update(|n| *n += 1);
     spawn_local(async move {
         match future.await {
@@ -56,12 +85,12 @@ where
                 apply(value);
             }
             Err(e) => {
-                // A call that failed is a call that is no longer running. Only
-                // the success paths used to clear this, so a command that errored
-                // — a tool that is not installed, say — left the Stop button up
-                // and the terminal's prompt refusing to send, for the rest of the
-                // session. Harmless for the calls that never set it.
-                state.session_running.set(false);
+                if owns_session {
+                    // A session that failed to start is a session that is not
+                    // running — otherwise a tool that is not installed leaves
+                    // the Stop button up and the prompt refusing to send.
+                    state.session_running.set(false);
+                }
                 // The banner is transient — dismissed, or replaced by the next
                 // failure. The dock keeps it, so "what did that error say?" is
                 // answerable after the fact.
@@ -1571,7 +1600,7 @@ pub fn create_project(state: AppState, choice: WizardChoice) {
 
         let channel = stream_to_terminal(state);
         let args = Args { choice, directory };
-        track(
+        track_session(
             state,
             async move {
                 ipc::call_streaming::<_, String>(cmd::wizard::CREATE, &args, "onLine", &channel)
@@ -1732,7 +1761,7 @@ pub fn run_session(state: AppState, plan: CommandPlan, channel: &'static str) {
 
     let channel = stream_to_terminal(state);
     let args = Args { plan };
-    track(
+    track_session(
         state,
         async move {
             ipc::call_streaming::<_, Option<i32>>(cmd::flash::RUN, &args, "onLine", &channel).await
@@ -2095,7 +2124,7 @@ pub fn load_registers(state: AppState) {
 pub fn fetch_svd(state: AppState) {
     let channel = stream_to_terminal(state);
     state.show_dock(crate::state::DockTab::Output);
-    track(
+    track_session(
         state,
         async move {
             ipc::call_streaming::<_, ()>(cmd::debug::FETCH_SVD, &(), "onLine", &channel).await
@@ -2995,7 +3024,7 @@ fn run_command_then(state: AppState, line: String, after: impl FnOnce(Option<i32
 
     let channel = stream_to_terminal(state);
     let args = Args { program, args };
-    track(
+    track_session(
         state,
         async move {
             ipc::call_streaming::<_, Option<i32>>(cmd::terminal::RUN, &args, "onLine", &channel)
