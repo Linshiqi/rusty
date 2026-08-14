@@ -1883,6 +1883,13 @@ pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
                 for (file, line) in state.breakpoints.get_untracked() {
                     send_breakpoint(state, file, line, None);
                 }
+                // And then run. `-S` froze the CPU at the reset vector so
+                // the breakpoints could be placed before a single
+                // instruction executed; without this the session sits there
+                // for ever showing `?? 0x40000400`, which is what "the
+                // breakpoint never hits" looked like. The commands share
+                // one stdin, so the placements are already in front of it.
+                debug_control(state, "resume");
             }
             // Landing on the stopped line is the whole point of stopping.
             if !update.running

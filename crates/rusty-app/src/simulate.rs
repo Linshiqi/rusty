@@ -201,8 +201,8 @@ pub async fn run_simulation(
             armed.display = format!("{} -s -S -icount shift=auto,sleep=on", armed.display);
             let _ = on_line.send(LogLine {
                 stream: LogStream::Stdout,
-                text: "[rusty:debug] gdbstub on :1234, cpu frozen — attaching gdb in the \
-                       terminal"
+                text: "[rusty:debug] gdbstub on :1234, cpu frozen — attaching, then \
+                       running to your breakpoints"
                     .to_string(),
                 level: None,
             });
