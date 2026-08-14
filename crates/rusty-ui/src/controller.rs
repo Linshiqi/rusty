@@ -1864,6 +1864,8 @@ pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
     // session's late frames must not overwrite the one that replaced it.
     let epoch = state.debug_epoch.get_untracked() + 1;
     state.debug_epoch.set(epoch);
+    // Whether this session has been told about the standing breakpoints.
+    let placed = RwSignal::new(false);
     state.debug.set(Some(rusty_dbg::DebugState::default()));
     state.show_dock(crate::state::DockTab::Debug);
 
@@ -1873,6 +1875,15 @@ pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
             return;
         }
         if let Ok(update) = serde_wasm_bindgen::from_value::<rusty_dbg::DebugState>(value) {
+            // The standing list, once there is a session to place it in.
+            // Sending before attach would be refused: the backend has no
+            // debugger registered until gdb has answered.
+            if update.attached && !placed.get_untracked() {
+                placed.set(true);
+                for (file, line) in state.breakpoints.get_untracked() {
+                    send_breakpoint(state, file, line, None);
+                }
+            }
             // Landing on the stopped line is the whole point of stopping.
             if !update.running
                 && let Some(frame) = update.stack.first()
@@ -1905,17 +1916,28 @@ pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
 }
 
 /// Toggle a breakpoint. Lines are zero-based, as everywhere.
+///
+/// The list is the editor's and survives sessions; a live session is told
+/// about the change as it happens, and a session starting later is told
+/// the whole list.
 pub fn debug_breakpoint(state: AppState, file: String, line: u32) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        file: String,
-        line: u32,
-        remove: Option<u32>,
-    }
+    let existed = state.breakpoints.with_untracked(|list| {
+        list.iter().any(|(f, l)| f == &file && *l == line)
+    });
+    state.breakpoints.update(|list| {
+        if existed {
+            list.retain(|(f, l)| !(f == &file && *l == line));
+        } else {
+            list.push((file.clone(), line));
+        }
+    });
 
-    // Toggle: the gutter's one gesture both sets and clears, so the click
-    // has to know which it is doing.
-    let existing = state.debug.with_untracked(|debug| {
+    // Nothing to tell gdb about if gdb is not running — the list is the
+    // record, and it will be sent when a session starts.
+    if state.debug.with_untracked(Option::is_none) {
+        return;
+    }
+    let number = state.debug.with_untracked(|debug| {
         debug.as_ref().and_then(|debug| {
             debug
                 .breakpoints
@@ -1924,18 +1946,19 @@ pub fn debug_breakpoint(state: AppState, file: String, line: u32) {
                 .and_then(|b| b.number)
         })
     });
-    if existing.is_some() {
-        state.debug.update(|debug| {
-            if let Some(debug) = debug {
-                debug.breakpoints.retain(|b| !(b.file == file && b.line == line));
-            }
-        });
+    send_breakpoint(state, file, line, existed.then_some(number).flatten());
+}
+
+/// One breakpoint over the wire: placing when `remove` is absent, clearing
+/// by gdb's own number when it is.
+fn send_breakpoint(state: AppState, file: String, line: u32, remove: Option<u32>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        file: String,
+        line: u32,
+        remove: Option<u32>,
     }
-    let args = Args {
-        file,
-        line,
-        remove: existing,
-    };
+    let args = Args { file, line, remove };
     track(
         state,
         async move { ipc::call::<_, ()>(cmd::debug::BREAKPOINT, &args).await },

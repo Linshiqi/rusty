@@ -925,6 +925,27 @@ fn Surface(document: Document) -> impl IntoView {
                     </button>
                 })
             }}
+            // Debug sits beside Run, because that is the pair: run it, or
+            // run it and stop where you said. Hidden while a session is
+            // live — the transport controls above are what it becomes.
+            {move || {
+                state.debug.with(Option::is_none).then(|| {
+                    view! {
+                        <button
+                            type="button"
+                            title="Debug — boot frozen, stop at your breakpoints"
+                            disabled=move || running.get()
+                            on:click=move |_| {
+                                state.active_panel.set("simulate".to_string());
+                                controller::run_simulation(state, true);
+                            }
+                            class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+                        >
+                            <IconView icon=Icon::Bug size=15 />
+                        </button>
+                    }
+                })
+            }}
             // A play icon runs — switching panels without running is the
             // mismatch that got this button reported. It also switches, so
             // the board is on screen while the build streams to the dock.
@@ -1270,12 +1291,8 @@ fn Surface(document: Document) -> impl IntoView {
                                         let file = path_for_gutter.clone();
                                         let toggle = file.clone();
                                         let marked = Signal::derive(move || {
-                                            state.debug.with(|debug| {
-                                                debug.as_ref().is_some_and(|debug| {
-                                                    debug.breakpoints.iter().any(|b| {
-                                                        b.line == line && b.file == file
-                                                    })
-                                                })
+                                            state.breakpoints.with(|list| {
+                                                list.iter().any(|(f, l)| f == &file && *l == line)
                                             })
                                         });
                                         view! {
@@ -1287,11 +1304,16 @@ fn Surface(document: Document) -> impl IntoView {
                                                         line,
                                                     )
                                                 }
+                                                title="Click to set a breakpoint"
                                                 class=move || {
                                                     if marked.get() {
                                                         "cursor-pointer text-crimson"
                                                     } else {
-                                                        "cursor-pointer hover:text-label-3"
+                                                        // The dot appears faintly on hover, as
+                                                        // in every editor with a breakpoint
+                                                        // margin: a gutter that looks inert is
+                                                        // a gutter nobody clicks.
+                                                        "group cursor-pointer hover:text-crimson/60"
                                                     }
                                                 }
                                             >

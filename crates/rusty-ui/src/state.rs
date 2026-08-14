@@ -511,6 +511,15 @@ pub struct AppState {
     /// Which session's frames are current — the same generation guard the
     /// terminal needed, for the same reason.
     pub debug_epoch: RwSignal<u64>,
+    /// Breakpoints the user has set, as `(file, zero-based line)`.
+    ///
+    /// Editor state, not session state: every debugger lets you place
+    /// breakpoints before starting, and holding them inside `DebugState`
+    /// meant a click did nothing until a session existed — which is
+    /// backwards, since placing them is how you decide where to stop.
+    /// A starting session sends this list; gdb's answers come back in
+    /// `debug` and decorate these.
+    pub breakpoints: RwSignal<Vec<(String, u32)>>,
     /// The chip's peripherals, once an SVD has been read. `None` means not
     /// asked yet; `Some(None)` means asked and this machine has no file.
     pub registers: RwSignal<Option<Option<rusty_embed::RegisterMap>>>,
@@ -656,6 +665,7 @@ impl AppState {
             update_status: RwSignal::new(None),
             debug: RwSignal::new(None),
             debug_epoch: RwSignal::new(0),
+            breakpoints: RwSignal::new(Vec::new()),
             registers: RwSignal::new(None),
             peripheral: RwSignal::new(None),
             shell_choices: RwSignal::new(Vec::new()),
