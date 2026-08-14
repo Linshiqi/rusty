@@ -21,7 +21,9 @@ use rusty_term::Screen as TermScreen;
 
 use crate::{
     ipc::{self, Answer, cmd},
-    state::{AppState, EditHistory, LspStatus, ParkedEditor, ToolRun, carried_provider},
+    state::{
+        AppState, EditHistory, LspStatus, ParkedEditor, ToolRun, TraceClock, carried_provider,
+    },
 };
 
 /// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
@@ -68,12 +70,8 @@ where
     tracked(state, future, apply, true);
 }
 
-fn tracked<F, T>(
-    state: AppState,
-    future: F,
-    apply: impl FnOnce(T) + 'static,
-    owns_session: bool,
-) where
+fn tracked<F, T>(state: AppState, future: F, apply: impl FnOnce(T) + 'static, owns_session: bool)
+where
     F: std::future::Future<Output = Answer<T>> + 'static,
     T: 'static,
 {
@@ -158,8 +156,8 @@ pub fn open_recent(state: AppState, path: String, announce: bool) {
             Ok(result) => {
                 project_opened(state, result);
                 load_recents(state);
-    load_keybinds(state);
-    apply_ui_zoom(state);
+                load_keybinds(state);
+                apply_ui_zoom(state);
             }
             Err(error) => {
                 state.push_log(LogLine {
@@ -269,8 +267,9 @@ fn project_opened(state: AppState, result: OpenResult) {
             refresh_firmware(state);
             refresh_tree(state);
             start_lsp(state);
-            if let Some(root) =
-                state.project.with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
+            if let Some(root) = state
+                .project
+                .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
             {
                 restore_tabs(state, &root);
             }
@@ -645,10 +644,7 @@ pub fn request_semantic(state: AppState, path: String) {
 // ─── network ─────────────────────────────────────────────────────────────────
 
 /// What proxy is stored, and what detection currently sees.
-pub fn load_proxy_setting(
-    stored: RwSignal<Option<String>>,
-    detected: RwSignal<Option<String>>,
-) {
+pub fn load_proxy_setting(stored: RwSignal<Option<String>>, detected: RwSignal<Option<String>>) {
     spawn_local(async move {
         if let Ok(value) = ipc::get::<serde_json::Value>(cmd::workbench::PROXY).await {
             stored.set(value["stored"].as_str().map(str::to_string));
@@ -670,7 +666,10 @@ pub fn save_proxy_setting(
     }
     let args = Args { value };
     spawn_local(async move {
-        if ipc::call::<_, ()>(cmd::workbench::SET_PROXY, &args).await.is_ok() {
+        if ipc::call::<_, ()>(cmd::workbench::SET_PROXY, &args)
+            .await
+            .is_ok()
+        {
             saved.set(true);
             load_proxy_setting(stored, detected);
         }
@@ -731,6 +730,66 @@ pub fn delete_key(state: AppState, profile: String) {
     });
 }
 
+/// Forget what the last board said.
+///
+/// Every capture the protocol feeds, dropped together at the start of a run.
+/// Partially clearing it is worse than not clearing at all: a plot whose
+/// curves come from two different boots, on two different clocks, is read as
+/// one signal and is not one.
+fn clear_capture(state: AppState) {
+    state.sim_gpio.set(std::collections::HashMap::new());
+    state.sim_trace.set(crate::state::SimTrace::default());
+    state.sim_display.set(String::new());
+    state.plot.set(crate::state::Plot::default());
+    state.params.set(Vec::new());
+}
+
+/// One line from a board, wherever it came from.
+///
+/// The same firmware prints the same protocol whether it is running in QEMU,
+/// under `espflash monitor`, or on a port rusty holds open itself — so the
+/// reading of it lives in one place rather than being re-implemented per
+/// stream. It was per-stream once, and the consequence was that telemetry
+/// plotted in the simulator and vanished on real hardware.
+///
+/// Anything that is not protocol is log, unchanged.
+fn absorb(state: AppState, line: LogLine) {
+    if let Some(sample) = rusty_embed::protocol::parse_telemetry(&line.text) {
+        record_plot(state, sample);
+    } else if let Some(param) = rusty_embed::protocol::parse_param(&line.text) {
+        // Newest wins, by name: the firmware re-announces after a change, and
+        // what it says it took is the truth — a clamp is information, not a
+        // mistake to hide.
+        state.params.update(|params| {
+            match params.iter_mut().find(|known| known.name == param.name) {
+                Some(known) => *known = param,
+                None => params.push(param),
+            }
+        });
+    } else if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
+        state.sim_gpio.update(|gpio| {
+            for (pin, level) in &report.pins {
+                gpio.insert(*pin, *level);
+            }
+        });
+        record_trace(state, report);
+    } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
+        state.sim_display.set(text);
+    } else {
+        state.push_log(line);
+    }
+}
+
+/// The host's own clock in microseconds, for streams the firmware left
+/// unstamped. Shared by the pin trace and the plot so the two axes mean the
+/// same thing when both fall back to it.
+fn host_now_us() -> u64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| (p.now() * 1000.0) as u64)
+        .unwrap_or(0)
+}
+
 /// One gpio report into the waveform capture.
 ///
 /// The first report decides the clock: stamped reports run on the firmware's
@@ -738,16 +797,7 @@ pub fn delete_key(state: AppState, profile: String) {
 /// a trace that mixes time bases is a trace that lies. Capped so an hour of
 /// simulation cannot eat the tab.
 fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
-    use crate::state::TraceClock;
-
     const CAP: usize = 200_000;
-
-    let host_now_us = || -> u64 {
-        web_sys::window()
-            .and_then(|w| w.performance())
-            .map(|p| (p.now() * 1000.0) as u64)
-            .unwrap_or(0)
-    };
 
     state.sim_trace.update(|trace| {
         let clock = *trace.clock.get_or_insert(if report.at_us.is_some() {
@@ -760,9 +810,7 @@ fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
             // A late unstamped line in a firmware-clocked trace (or the
             // reverse) would corrupt the axis; reuse the last moment
             // instead, which keeps the event without inventing a time.
-            (TraceClock::Firmware, None) => {
-                trace.events.last().map(|(t, ..)| *t).unwrap_or(0)
-            }
+            (TraceClock::Firmware, None) => trace.events.last().map(|(t, ..)| *t).unwrap_or(0),
             (TraceClock::Host, _) => host_now_us(),
         };
         for (pin, level) in report.pins {
@@ -774,6 +822,119 @@ fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
             trace.truncated = true;
         }
     });
+}
+
+/// Fold one telemetry line into the rolling plot.
+///
+/// The same clock discipline the pin trace learned: whichever base the first
+/// sample arrived on decides the axis, and a later line in the other base
+/// reuses the last moment rather than inventing one. Mixing them silently is
+/// how a plot lies about *when*, which for a control loop is the only thing
+/// it is being read for.
+fn record_plot(state: AppState, sample: rusty_embed::protocol::Telemetry) {
+    /// Samples kept per channel. A 1 kHz loop fills this in twenty seconds,
+    /// which is the window a tuning change is judged in; older than that and
+    /// you re-run rather than scroll back.
+    const CAP: usize = 20_000;
+
+    state.plot.update(|plot| {
+        let clock = *plot.clock.get_or_insert(if sample.at_us.is_some() {
+            TraceClock::Firmware
+        } else {
+            TraceClock::Host
+        });
+        let at = match (clock, sample.at_us) {
+            (TraceClock::Firmware, Some(us)) => us,
+            (TraceClock::Firmware, None) => plot
+                .channels
+                .iter()
+                .filter_map(|(_, points)| points.last().map(|(t, _)| *t))
+                .max()
+                .unwrap_or(0),
+            (TraceClock::Host, _) => host_now_us(),
+        };
+        let mut dropped = false;
+        for (name, value) in sample.channels {
+            let points = plot.channel(&name);
+            points.push((at, value));
+            if points.len() > CAP {
+                let over = points.len() - CAP;
+                points.drain(..over);
+                dropped = true;
+            }
+        }
+        plot.truncated |= dropped;
+    });
+}
+
+/// Set a tunable on the running firmware, over the serial line it is already
+/// talking on.
+///
+/// No reflash: the whole point. The firmware answers with a `[rusty:param]`
+/// line carrying what it actually took, and that is what the panel then
+/// shows — so a value the firmware clamped reads as clamped rather than as
+/// the number that was typed.
+pub fn set_param(state: AppState, name: String, value: f32) {
+    sim_send(state, rusty_embed::protocol::set_param_line(&name, value));
+}
+
+/// Hold a serial port open in both directions, until it is closed.
+///
+/// The mode a control loop is tuned in. `espflash monitor` reads its keyboard
+/// through the console rather than through stdin, so a monitor rusty spawned
+/// can only listen — this opens the port itself, which is what makes a
+/// tunable writable, and gives up defmt decoding to do it.
+pub fn open_link(state: AppState, port: String, baud: u32) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        port: String,
+        baud: u32,
+    }
+
+    if state.session_running.get_untracked() {
+        return;
+    }
+    state.log_source.set("link");
+    clear_capture(state);
+
+    let channel = ipc::Channel::new();
+    let on_line =
+        Closure::wrap(Box::new(move |value: JsValue| {
+            match serde_wasm_bindgen::from_value::<LogLine>(value) {
+                Ok(line) => absorb(state, line),
+                Err(e) => state.push_log(LogLine {
+                    stream: LogStream::Stderr,
+                    text: format!("[rusty could not decode a line from the port: {e}]"),
+                    level: Some(LogLevel::Warn),
+                }),
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+    channel.set_onmessage(&on_line);
+    on_line.forget();
+
+    state.session_running.set(true);
+    state.link_port.set(Some(port.clone()));
+    state.show_dock(crate::state::DockTab::Plot);
+
+    let args = Args { port, baud };
+    track_session(
+        state,
+        async move {
+            ipc::call_streaming::<_, Option<i32>>(cmd::flash::LINK, &args, "onLine", &channel).await
+        },
+        move |_| {
+            state.link_port.set(None);
+            note_exit(state, None);
+        },
+    );
+}
+
+/// Close the link, which is the same stop every other session answers to.
+pub fn close_link(state: AppState) {
+    state.link_port.set(None);
+    stop_session(state);
 }
 
 /// Write the captured trace as VCD into the project's target directory,
@@ -826,7 +987,7 @@ pub fn build_project(state: AppState) {
             rationale: "the project's own toolchain builds the exact firmware a device \
                         would get"
                 .to_string(),
-                    warning: None,
+            warning: None,
         },
         "build",
     );
@@ -861,8 +1022,8 @@ pub fn upgrade_crate(state: AppState, name: String, version: String) {
         display: format!("cargo add {name}@{version}"),
         rationale: "updates Cargo.toml to the requested version and re-resolves the lockfile"
             .to_string(),
-                       warning: None,
-               };
+        warning: None,
+    };
     #[derive(serde::Serialize)]
     struct Args {
         plan: CommandPlan,
@@ -920,9 +1081,7 @@ pub fn run_simulation(state: AppState, debug: bool) {
         return;
     }
     state.log_source.set("simulate");
-    state.sim_gpio.set(std::collections::HashMap::new());
-    state.sim_trace.set(crate::state::SimTrace::default());
-    state.sim_display.set(String::new());
+    clear_capture(state);
 
     // Like stream_to_terminal, with one interception: the firmware's pin
     // reports drive the board view instead of scrolling the dock at 2Hz.
@@ -945,18 +1104,7 @@ pub fn run_simulation(state: AppState, debug: bool) {
                     debug_start(state, false);
                     return;
                 }
-                if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
-                    state.sim_gpio.update(|gpio| {
-                        for (pin, level) in &report.pins {
-                            gpio.insert(*pin, *level);
-                        }
-                    });
-                    record_trace(state, report);
-                } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
-                    state.sim_display.set(text);
-                } else {
-                    state.push_log(line);
-                }
+                absorb(state, line);
             }
             Err(e) => state.push_log(LogLine {
                 stream: LogStream::Stderr,
@@ -970,8 +1118,13 @@ pub fn run_simulation(state: AppState, debug: bool) {
     state.session_running.set(true);
     state.show_dock(crate::state::DockTab::Output);
     spawn_local(async move {
-        match ipc::call_streaming::<_, Option<i32>>(cmd::sim::RUN, &Args { debug }, "onLine", &channel)
-            .await
+        match ipc::call_streaming::<_, Option<i32>>(
+            cmd::sim::RUN,
+            &Args { debug },
+            "onLine",
+            &channel,
+        )
+        .await
         {
             Ok(code) => note_exit(state, code),
             Err(error) => {
@@ -1045,10 +1198,13 @@ pub fn install_sim_tool(state: AppState, name: String) {
     });
 }
 
-/// A button transition on the board view, into the firmware's UART.
+/// One line into the running firmware's UART.
+///
 /// Fire-and-forget: a press against a stopped board lands nowhere, which is
-/// what pressing a powered-off board does.
-pub fn sim_press(state: AppState, pin: u8, down: bool) {
+/// what pressing a powered-off board does. Every input the panels have —
+/// buttons, pots, tunables — is one of these, so the running check lives here
+/// rather than being re-remembered at each call site.
+fn sim_send(state: AppState, text: String) {
     #[derive(serde::Serialize)]
     struct Args {
         text: String,
@@ -1056,29 +1212,20 @@ pub fn sim_press(state: AppState, pin: u8, down: bool) {
     if !state.session_running.get_untracked() {
         return;
     }
-    let args = Args {
-        text: format!("B{pin}={}", if down { 1 } else { 0 }),
-    };
+    let args = Args { text };
     spawn_local(async move {
         let _ = ipc::call::<_, ()>(cmd::sim::SEND, &args).await;
     });
 }
 
+/// A button transition on the board view.
+pub fn sim_press(state: AppState, pin: u8, down: bool) {
+    sim_send(state, format!("B{pin}={}", if down { 1 } else { 0 }));
+}
+
 /// A potentiometer moved: `P<pin>=<0..255>` into the firmware's UART.
 pub fn sim_pot(state: AppState, pin: u8, value: u8) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        text: String,
-    }
-    if !state.session_running.get_untracked() {
-        return;
-    }
-    let args = Args {
-        text: format!("P{pin}={value}"),
-    };
-    spawn_local(async move {
-        let _ = ipc::call::<_, ()>(cmd::sim::SEND, &args).await;
-    });
+    sim_send(state, format!("P{pin}={value}"));
 }
 
 /// Persist the board editor's layout, then re-plan so the panel shows what
@@ -1211,13 +1358,11 @@ pub fn restore_tabs(state: AppState, root: &str) {
         root: root.to_string(),
     };
     spawn_local(async move {
-        let stored = ipc::call::<_, Option<rusty_embed::ProjectTabs>>(
-            cmd::workbench::PROJECT_TABS,
-            &args,
-        )
-        .await
-        .ok()
-        .flatten();
+        let stored =
+            ipc::call::<_, Option<rusty_embed::ProjectTabs>>(cmd::workbench::PROJECT_TABS, &args)
+                .await
+                .ok()
+                .flatten();
 
         let (tabs, active) = match (stored, carried) {
             // The file wins where it has an answer: it is the one that
@@ -1240,7 +1385,10 @@ pub fn restore_tabs(state: AppState, root: &str) {
         };
 
         // Open in strip order; the active one last, so it ends up on screen.
-        for path in tabs.iter().filter(|p| Some(p.as_str()) != active.as_deref()) {
+        for path in tabs
+            .iter()
+            .filter(|p| Some(p.as_str()) != active.as_deref())
+        {
             open_file(state, path.clone());
         }
         if let Some(active) = active {
@@ -1445,13 +1593,11 @@ pub fn set_provider(state: AppState, config: ProviderConfig) {
 /// so the next launch reads it from the file like everything else.
 pub fn load_provider(state: AppState) {
     spawn_local(async move {
-        let stored = ipc::call::<_, Option<rusty_embed::AssistantChoice>>(
-            cmd::workbench::ASSISTANT,
-            &(),
-        )
-        .await
-        .ok()
-        .flatten();
+        let stored =
+            ipc::call::<_, Option<rusty_embed::AssistantChoice>>(cmd::workbench::ASSISTANT, &())
+                .await
+                .ok()
+                .flatten();
         match stored.and_then(|choice| from_choice(&choice)) {
             Some(config) => state.ai_config.set(Some(config)),
             None => {
@@ -1557,7 +1703,9 @@ pub fn ask(state: AppState, question: String) {
         history: Vec<Message>,
     }
 
-    state.conversation.update(|c| c.push(Message::user(question)));
+    state
+        .conversation
+        .update(|c| c.push(Message::user(question)));
     state.ai_pending.set(String::new());
     state.ai_activity.set(Vec::new());
     state.ai_usage.set(None);
@@ -1606,13 +1754,9 @@ fn apply_event(state: AppState, event: AgentEvent) {
             output_tokens,
         }) => state.ai_usage.set(Some((input_tokens, output_tokens))),
         AgentEvent::ToolStarted { id, name, .. } => {
-            state.ai_activity.update(|runs| {
-                runs.push(ToolRun {
-                    id,
-                    name,
-                    ok: None,
-                })
-            });
+            state
+                .ai_activity
+                .update(|runs| runs.push(ToolRun { id, name, ok: None }));
         }
         AgentEvent::ToolFinished { id, ok, .. } => {
             state.ai_activity.update(|runs| {
@@ -1792,7 +1936,9 @@ pub fn plan_session(state: AppState, action: FlashAction) {
     // Whether to decode defmt is a property of the binary, not a preference:
     // asking espflash to decode a build without the string table produces
     // gibberish, and not asking on a build with one produces framing bytes.
-    let defmt = state.project.with(|p| p.as_ref().is_some_and(|p| p.uses_defmt));
+    let defmt = state
+        .project
+        .with(|p| p.as_ref().is_some_and(|p| p.uses_defmt));
 
     let args = Args {
         transport,
@@ -1821,7 +1967,11 @@ fn stream_to_terminal(state: AppState) -> ipc::Channel {
     let channel = ipc::Channel::new();
     let on_line = Closure::wrap(Box::new(move |value: JsValue| {
         match serde_wasm_bindgen::from_value::<LogLine>(value) {
-            Ok(line) => state.push_log(line),
+            // Through `absorb` rather than straight to the log: a board on the
+            // end of `espflash monitor` prints the same telemetry it prints in
+            // the simulator, and the plot should draw it. Writing back is what
+            // that mode cannot do, not reading.
+            Ok(line) => absorb(state, line),
             // A line that will not decode is still worth showing: it means the
             // wire type and the tool disagree, and silently dropping output is
             // the one thing a monitor must never do.
@@ -1945,9 +2095,7 @@ pub fn load_shell_choices(state: AppState) {
     }
     track(
         state,
-        async move {
-            ipc::get::<Vec<rusty_embed::ShellChoice>>(cmd::terminal::SHELLS).await
-        },
+        async move { ipc::get::<Vec<rusty_embed::ShellChoice>>(cmd::terminal::SHELLS).await },
         move |choices| state.shell_choices.set(choices),
     );
 }
@@ -1955,9 +2103,7 @@ pub fn load_shell_choices(state: AppState) {
 pub fn load_shell_info(state: AppState) {
     track(
         state,
-        async move {
-            ipc::call::<_, rusty_embed::ShellInfo>(cmd::terminal::SHELL_INFO, &()).await
-        },
+        async move { ipc::call::<_, rusty_embed::ShellInfo>(cmd::terminal::SHELL_INFO, &()).await },
         move |info| state.shell_info.set(Some(info)),
     );
 }
@@ -2135,10 +2281,7 @@ pub fn debug_start(state: AppState, hardware: bool) {
                 }
                 let (file, landed) = (placed.file.clone(), placed.line);
                 state.breakpoints.update(|list| {
-                    if let Some(entry) = list
-                        .iter_mut()
-                        .find(|(f, l)| f == &file && *l == asked)
-                    {
+                    if let Some(entry) = list.iter_mut().find(|(f, l)| f == &file && *l == asked) {
                         entry.1 = landed;
                     }
                 });
@@ -2156,7 +2299,8 @@ pub fn debug_start(state: AppState, hardware: bool) {
             if update.running {
                 stopped_at.set(None);
             } else if let Some(frame) = update.stack.first() {
-                let arrived = stopped_at.with_untracked(|last| last.as_deref() != Some(&frame.address));
+                let arrived =
+                    stopped_at.with_untracked(|last| last.as_deref() != Some(&frame.address));
                 if arrived {
                     stopped_at.set(Some(frame.address.clone()));
                     if let (Some(file), Some(line)) = (frame.file.clone(), frame.line) {
@@ -2190,9 +2334,9 @@ pub fn debug_start(state: AppState, hardware: bool) {
 /// about the change as it happens, and a session starting later is told
 /// the whole list.
 pub fn debug_breakpoint(state: AppState, file: String, line: u32) {
-    let existed = state.breakpoints.with_untracked(|list| {
-        list.iter().any(|(f, l)| f == &file && *l == line)
-    });
+    let existed = state
+        .breakpoints
+        .with_untracked(|list| list.iter().any(|(f, l)| f == &file && *l == line));
     state.breakpoints.update(|list| {
         if existed {
             list.retain(|(f, l)| !(f == &file && *l == line));
@@ -2284,9 +2428,7 @@ pub fn scaffold_c_interop(state: AppState, direction: &'static str) {
     let args = Args { direction };
     track(
         state,
-        async move {
-            ipc::call::<_, rusty_embed::ScaffoldReport>(cmd::wizard::C_INTEROP, &args).await
-        },
+        async move { ipc::call::<_, rusty_embed::ScaffoldReport>(cmd::wizard::C_INTEROP, &args).await },
         move |report| {
             state.show_dock(crate::state::DockTab::Output);
             for path in &report.written {
@@ -2313,9 +2455,7 @@ pub fn scaffold_c_interop(state: AppState, direction: &'static str) {
 pub fn load_registers(state: AppState) {
     track(
         state,
-        async move {
-            ipc::get::<Option<rusty_embed::RegisterMap>>(cmd::debug::REGISTERS).await
-        },
+        async move { ipc::get::<Option<rusty_embed::RegisterMap>>(cmd::debug::REGISTERS).await },
         move |map| state.registers.set(Some(map)),
     );
 }
@@ -2381,11 +2521,8 @@ pub fn load_keybinds(state: AppState) {
     track(
         state,
         async move {
-            ipc::call::<_, std::collections::HashMap<String, String>>(
-                cmd::workbench::KEYBINDS,
-                &(),
-            )
-            .await
+            ipc::call::<_, std::collections::HashMap<String, String>>(cmd::workbench::KEYBINDS, &())
+                .await
         },
         move |map| state.keybinds.set(map),
     );
@@ -2633,9 +2770,11 @@ pub fn close_tab(state: AppState, path: String) {
     let is_active = active.as_deref() == Some(path.as_str());
 
     let dirty = if is_active {
-        state
-            .document
-            .with_untracked(|d| d.as_ref().is_some_and(|d| !d.read_only && state.draft.with_untracked(|draft| draft != &d.text)))
+        state.document.with_untracked(|d| {
+            d.as_ref().is_some_and(|d| {
+                !d.read_only && state.draft.with_untracked(|draft| draft != &d.text)
+            })
+        })
     } else {
         state.parked.with_untracked(|parked| {
             parked
@@ -2664,7 +2803,9 @@ pub fn close_tab(state: AppState, path: String) {
         None
     };
     state.tabs.update(|tabs| tabs.retain(|t| t != &path));
-    state.parked.update(|parked| parked.retain(|e| e.document.path != path));
+    state
+        .parked
+        .update(|parked| parked.retain(|e| e.document.path != path));
 
     if is_active {
         clear_editor_transients(state);
@@ -2683,7 +2824,9 @@ pub fn close_tab(state: AppState, path: String) {
 /// the one before, else nothing.
 fn neighbour_after_close(tabs: &[String], closing: &str) -> Option<String> {
     let at = tabs.iter().position(|t| t == closing)?;
-    tabs.get(at + 1).or_else(|| at.checked_sub(1).and_then(|i| tabs.get(i))).cloned()
+    tabs.get(at + 1)
+        .or_else(|| at.checked_sub(1).and_then(|i| tabs.get(i)))
+        .cloned()
 }
 
 /// Open a dependency's source read-only — where goto-definition lands when the
@@ -2737,7 +2880,10 @@ pub fn save_file(state: AppState) {
         text: String,
     }
 
-    let Some(path) = state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone())) else {
+    let Some(path) = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
+    else {
         return;
     };
     let args = Args {
@@ -2780,8 +2926,7 @@ pub fn format_then_save(
     if document.read_only {
         return;
     }
-    let is_rust =
-        document.language.as_deref() == Some("rust") || document.path.ends_with(".rs");
+    let is_rust = document.language.as_deref() == Some("rust") || document.path.ends_with(".rs");
     if !is_rust {
         save_file(state);
         return;
@@ -2859,8 +3004,9 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
         LspEvent::Ready {} => {
             state.lsp_status.set(LspStatus::Ready);
             // A file opened before the server came up was never announced.
-            if let Some(path) =
-                state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
+            if let Some(path) = state
+                .document
+                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
             {
                 lsp_open_doc(path.clone(), state.draft.get_untracked());
                 request_semantic(state, path);
@@ -3024,7 +3170,9 @@ pub fn schedule_pulse(state: AppState) {
 }
 
 fn edit_pulse(state: AppState, generation: u64) {
-    let Some(path) = state.document.with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
+    let Some(path) = state
+        .document
+        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
     else {
         return;
     };
@@ -3112,9 +3260,10 @@ pub fn open_terminal(state: AppState, cols: u16, rows: u16) {
         // A shell that exited leaves its final screen up — it says "exited"
         // and any key starts a fresh one. Only a session that never produced
         // an exit (the error path) drops to the placeholder.
-        if state.terminal.with_untracked(|t| {
-            t.as_ref().is_none_or(|screen| screen.exited.is_none())
-        }) {
+        if state
+            .terminal
+            .with_untracked(|t| t.as_ref().is_none_or(|screen| screen.exited.is_none()))
+        {
             state.terminal.set(None);
         }
     });
@@ -3273,13 +3422,19 @@ mod tab_tests {
     #[test]
     fn the_next_tab_inherits_the_screen() {
         let strip = tabs(&["a.rs", "b.rs", "c.rs"]);
-        assert_eq!(neighbour_after_close(&strip, "b.rs").as_deref(), Some("c.rs"));
+        assert_eq!(
+            neighbour_after_close(&strip, "b.rs").as_deref(),
+            Some("c.rs")
+        );
     }
 
     #[test]
     fn the_last_tab_falls_back_to_the_previous() {
         let strip = tabs(&["a.rs", "b.rs"]);
-        assert_eq!(neighbour_after_close(&strip, "b.rs").as_deref(), Some("a.rs"));
+        assert_eq!(
+            neighbour_after_close(&strip, "b.rs").as_deref(),
+            Some("a.rs")
+        );
     }
 
     #[test]

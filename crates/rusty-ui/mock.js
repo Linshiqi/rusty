@@ -96,7 +96,7 @@
   // Tree paths are project-relative and /-separated, exactly as the real
   // tree.rs builds them — the paths are identities the reveal flow compares.
   const MAIN = "src/main.rs";
-  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [] };
+  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
 
   const handlers = {
     recent_projects: () => [ROOT],
@@ -200,6 +200,48 @@
       resolve(0);
     }),
     save_sim_trace: (a) => { window.__mock.traces.push(a.text); return "E:\mock\firmware\target\rusty-sim\trace.vcd"; },
+    // A board on the end of a port rusty holds open: it announces its
+    // tunables, streams telemetry, and — the part that matters — answers a
+    // write with what it took. A mock that swallowed writes would make the
+    // sliders look correct while proving nothing about the round trip.
+    serial_link: (a) => {
+      const m = window.__mock;
+      m.linkChannel = a.onLine;
+      m.params = { kp: 2, setpoint: 50 };
+      const say = (text) => a.onLine.send({ stream: "stdout", text, level: null });
+      say("[rusty:param] kp=2 0..20");
+      say("[rusty:param] setpoint=50 0..100");
+      let at = 0;
+      let measured = 0;
+      m.linkTimer = setInterval(() => {
+        at += 20000;
+        measured += (m.params.setpoint - measured) * 0.08 * m.params.kp;
+        say(`[rusty:tel@${at}] setpoint=${m.params.setpoint},measured=${measured.toFixed(2)}`);
+      }, 40);
+      return new Promise((resolve) => { m.linkResolve = resolve; });
+    },
+    sim_send: (a) => {
+      const m = window.__mock;
+      m.sent.push(a.text);
+      // The firmware's half of the contract: clamp, then re-announce.
+      const set = /^S([A-Za-z_][\w]*)=(-?[\d.]+)$/.exec(a.text || "");
+      if (set && m.linkChannel && set[1] in m.params) {
+        const bounds = set[1] === "kp" ? [0, 20] : [0, 100];
+        const took = Math.min(bounds[1], Math.max(bounds[0], parseFloat(set[2])));
+        m.params[set[1]] = took;
+        m.linkChannel.send({
+          stream: "stdout", level: null,
+          text: `[rusty:param] ${set[1]}=${took} ${bounds[0]}..${bounds[1]}`,
+        });
+      }
+      return null;
+    },
+    stop_flash: () => {
+      const m = window.__mock;
+      if (m.linkTimer) { clearInterval(m.linkTimer); m.linkTimer = null; }
+      if (m.linkResolve) { m.linkResolve(null); m.linkResolve = null; }
+      return null;
+    },
     toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
     serial_ports: () => [{ name: "COM3", bridge: "CP210x", boards: ["ESP32 DevKit"], likelyBoard: true, usb: null }],
     debug_probes: () => [],

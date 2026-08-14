@@ -43,6 +43,12 @@ pub enum Error {
     #[error("{chip} has no serial bootloader — flash it through a debug probe instead")]
     NoSerialBootloader { chip: String },
 
+    /// A port that would not open. Usually something else already has it: a
+    /// running monitor, another window, a terminal left attached. The OS says
+    /// "access denied", which reads like a driver fault, so name the cause.
+    #[error("{port} would not open ({message}) — a monitor or another program may already hold it")]
+    SerialPort { port: String, message: String },
+
     #[error("`{chip}` is not a part rusty knows about")]
     UnknownChip { chip: String },
 

@@ -7,14 +7,14 @@
 use leptos::prelude::*;
 
 use rusty_ai::{Message, Preset, ProviderConfig, ToolDef};
-use rusty_edit::{Document, Entry, Line};
-use rusty_lsp::{EditRange, FileDiagnostic};
-use rusty_term::Screen as TermScreen;
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
+use rusty_edit::{Document, Entry, Line};
 use rusty_embed::{
     Board, Chip, CommandPlan, EmbeddedProject, Explanation, Firmware, LogLine, MemoryReport, Probe,
     Problem, SerialPort, Severity, ToolchainReport, Transport, WizardChoice, WizardOption,
 };
+use rusty_lsp::{EditRange, FileDiagnostic};
+use rusty_term::Screen as TermScreen;
 
 use std::collections::HashMap;
 
@@ -29,6 +29,32 @@ use crate::ipc::IpcError;
 pub enum TraceClock {
     Firmware,
     Host,
+}
+
+/// Named numeric channels over time — the analog half of the trace.
+///
+/// Kept per channel rather than as rows of samples because that is how it is
+/// drawn and how it arrives: firmware prints whichever channels it has this
+/// loop, and a channel that starts appearing halfway through a flight is
+/// normal, not a schema change.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Plot {
+    /// Channel name → its samples, `(µs, value)`, oldest first.
+    pub channels: Vec<(String, Vec<(u64, f32)>)>,
+    pub clock: Option<TraceClock>,
+    /// True once the cap started dropping the oldest samples.
+    pub truncated: bool,
+}
+
+impl Plot {
+    /// The samples for a channel, creating it on first sight.
+    pub fn channel(&mut self, name: &str) -> &mut Vec<(u64, f32)> {
+        if let Some(index) = self.channels.iter().position(|(known, _)| known == name) {
+            return &mut self.channels[index].1;
+        }
+        self.channels.push((name.to_string(), Vec::new()));
+        &mut self.channels.last_mut().expect("just pushed").1
+    }
 }
 
 /// A captured pin trace: time-ordered `(µs, pin, level)`.
@@ -117,6 +143,9 @@ pub enum DockTab {
     Terminal,
     /// Pin waveforms captured from the running simulation.
     Waves,
+    /// Named numeric channels over time — what a control loop is doing, and
+    /// the tunables it exposes.
+    Plot,
     /// Serial ports and probes currently attached.
     Devices,
     /// Where the target is stopped: the call stack and what the variables
@@ -127,11 +156,12 @@ pub enum DockTab {
 }
 
 impl DockTab {
-    pub const ALL: [DockTab; 7] = [
+    pub const ALL: [DockTab; 8] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
         DockTab::Waves,
+        DockTab::Plot,
         DockTab::Debug,
         DockTab::Registers,
         DockTab::Devices,
@@ -143,6 +173,7 @@ impl DockTab {
             DockTab::Output => "Output",
             DockTab::Terminal => "Terminal",
             DockTab::Waves => "Waves",
+            DockTab::Plot => "Plot",
             DockTab::Devices => "Devices",
             DockTab::Debug => "Debug",
             DockTab::Registers => "Registers",
@@ -413,6 +444,18 @@ pub struct AppState {
     pub sim_display: RwSignal<String>,
     /// The waveform capture for the current simulation run.
     pub sim_trace: RwSignal<SimTrace>,
+    /// Named numeric channels the firmware is printing, for the Plot panel.
+    pub plot: RwSignal<Plot>,
+    /// Which channels are drawn. Empty means all of them — a firmware with
+    /// forty channels needs a filter, one with three does not.
+    pub plot_shown: RwSignal<Vec<String>>,
+    /// Tunables the firmware announced, newest value per name.
+    pub params: RwSignal<Vec<rusty_embed::protocol::Param>>,
+    /// The port rusty is holding open in both directions, if any. Distinct
+    /// from a session merely running: a spawned `espflash monitor` is a
+    /// session and cannot be written to, and a tunable that silently went
+    /// nowhere would read as firmware ignoring it.
+    pub link_port: RwSignal<Option<String>>,
     /// Pin levels the running firmware has reported, for the board view.
     pub sim_gpio: RwSignal<std::collections::HashMap<u8, bool>>,
     /// The simulation plan for the open project, when the panel asked.
@@ -634,6 +677,10 @@ impl AppState {
             assistant_open: RwSignal::new(false),
             sim_display: RwSignal::new(String::new()),
             sim_trace: RwSignal::new(SimTrace::default()),
+            plot: RwSignal::new(Plot::default()),
+            plot_shown: RwSignal::new(Vec::new()),
+            params: RwSignal::new(Vec::new()),
+            link_port: RwSignal::new(None),
             sim_gpio: RwSignal::new(std::collections::HashMap::new()),
             sim_plan: RwSignal::new(None),
             sim_install_failed: RwSignal::new(Vec::new()),

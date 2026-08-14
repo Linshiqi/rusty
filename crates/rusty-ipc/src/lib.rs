@@ -82,6 +82,9 @@ pub mod flash {
     pub const PLAN: &str = "plan_flash";
     pub const RUN: &str = "run_flash";
     pub const STOP: &str = "stop_flash";
+    /// Hold a serial port open in both directions, for tuning a running
+    /// board. Streams like [`RUN`] and never resolves until the link closes.
+    pub const LINK: &str = "serial_link";
 }
 
 /// Starting a new project.
@@ -159,6 +162,9 @@ pub mod sim {
     pub const PLAN: &str = "plan_simulation";
     pub const RUN: &str = "run_simulation";
     pub const SAVE_BOARD: &str = "save_sim_board";
+    /// A line into whatever session is running — QEMU's stdin, or a serial
+    /// port rusty holds open. Named for the simulator it was written for; it
+    /// is the only write path either has.
     pub const SEND: &str = "sim_send";
     pub const SAVE_TRACE: &str = "save_sim_trace";
     pub const INSTALL: &str = "install_sim_tool";

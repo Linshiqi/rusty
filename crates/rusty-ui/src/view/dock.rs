@@ -51,6 +51,9 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Waves => {
                             view! { <crate::view::waves::WavesTab /> }.into_any()
                         }
+                        DockTab::Plot => {
+                            view! { <crate::view::plot::Plot /> }.into_any()
+                        }
                         DockTab::Debug => view! { <DebugTab /> }.into_any(),
                         DockTab::Registers => view! { <RegistersTab /> }.into_any(),
                         DockTab::Devices => view! { <DevicesTab /> }.into_any(),
@@ -257,6 +260,10 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             DockTab::Output => (state.log.with(Vec::len), Tone::Neutral),
             DockTab::Terminal => (0, Tone::Neutral),
             DockTab::Waves => (0, Tone::Neutral),
+            // How many channels the firmware is currently talking about. The
+            // one number worth glancing at from another tab: it says whether
+            // the telemetry is arriving at all.
+            DockTab::Plot => (state.plot.with(|p| p.channels.len()), Tone::Neutral),
             DockTab::Devices => (0, Tone::Neutral),
             // The frame count while stopped: a badge that says how deep
             // the target is, without opening the tab.
@@ -283,8 +290,9 @@ fn DockCount(tab: DockTab) -> impl IntoView {
 }
 
 /// Every channel a line can carry. "all" is the view's word, not a tag.
-const CHANNELS: [&str; 8] =
-    ["all", "build", "flash", "monitor", "simulate", "commands", "tools", "app"];
+const CHANNELS: [&str; 9] = [
+    "all", "build", "flash", "monitor", "link", "simulate", "commands", "tools", "app",
+];
 
 /// True when the line passes the Output panel's filter box. Terms AND
 /// together; a `!` prefix excludes. Case-insensitive, as every log filter

@@ -131,6 +131,22 @@ microseconds — what the Waves panel and the VCD export time by) and
 `B14=1` and `P34=128` into it. `protocol.rs` owns the parsing, compiled
 unconditionally because the frontend reads the stream as it passes.
 
+The same line carries the Plot panel, which is what a control loop is
+developed against rather than a debugger — stopping a flight controller to
+read a variable means the craft falls. `[rusty:tel@1234] gyro_x=1.25,pid_p=-0.5`
+is a sample on arbitrary named channels; `[rusty:param] kp=2 0..20` announces
+a tunable with the range it accepts; `Skp=8.5` sets one and the firmware
+answers with the `[rusty:param]` line carrying what it actually **took**, so
+a clamp reads as a clamp. No slider is drawn without a range the firmware
+gave: a range the tool invented is how somebody sends a gain of 500 to a
+motor loop. `examples/pid-tune` is the worked end of it, proven in QEMU —
+`Ssetpoint=80` moved the plant, `Ssetpoint=500` came back as 100, and an
+unknown name changed nothing and said nothing.
+
+The reading of that protocol lives in *one* function (`controller::absorb`),
+because it was per-stream once and the consequence was telemetry that plotted
+in the simulator and vanished on hardware.
+
 Debugging rides the same boot: `-s -S` freezes the CPU with the gdbstub on
 :1234, and the terminal attaches the matching esp-gdb (`break main` lands in
 the user's source with full backtraces — proven against the real blinky
@@ -404,6 +420,15 @@ usty`) holds `location.toml`
 - **espflash `save-image` does not create parent directories** — a missing
   `target/rusty-sim/` fails as `os error 3`, which reads like a broken tool
   rather than a missing mkdir. `simulate::prepare` runs first.
+- **`espflash monitor` cannot be typed into by a program that spawned it.**
+  Its input comes from crossterm's `poll`/`read` — *console* events, not
+  stdin — so a monitor rusty launched with piped stdio is one-way however
+  correctly you write to its pipe, and the failure is silent: the write
+  succeeds, the board never hears it. That is why `serial::open` exists and
+  why the Plot panel's tunables are gated on `link_port` rather than on
+  "a session is running": a slider that silently does nothing reads as
+  firmware ignoring the change. The trade is explicit — rusty's own link is
+  plain text, and defmt decoding stays espflash's.
 - Child processes get `CREATE_NO_WINDOW` on Windows; the toolchain panel probes
   six tools on open and would otherwise flash six console windows.
 - **`NO_COLOR=1` breaks Trunk.** It maps the variable onto its `--no-color`

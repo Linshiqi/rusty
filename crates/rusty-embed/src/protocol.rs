@@ -68,25 +68,38 @@ pub fn to_vcd(events: &[(u64, u8, bool)]) -> String {
     let id_of = |index: usize| -> char { (b'!' + index as u8) as char };
 
     let mut out = String::new();
-    out.push_str("$version rusty simulator $end
-");
-    out.push_str("$timescale 1 us $end
-");
-    out.push_str("$scope module board $end
-");
+    out.push_str(
+        "$version rusty simulator $end
+",
+    );
+    out.push_str(
+        "$timescale 1 us $end
+",
+    );
+    out.push_str(
+        "$scope module board $end
+",
+    );
     for (index, pin) in pins.iter().enumerate() {
-        out.push_str(&format!("$var wire 1 {} GPIO{pin} $end
-", id_of(index)));
+        out.push_str(&format!(
+            "$var wire 1 {} GPIO{pin} $end
+",
+            id_of(index)
+        ));
     }
-    out.push_str("$upscope $end
+    out.push_str(
+        "$upscope $end
 $enddefinitions $end
-");
+",
+    );
 
     let mut last_stamp: Option<u64> = None;
     for (at, pin, level) in events {
         if last_stamp != Some(*at) {
-            out.push_str(&format!("#{at}
-"));
+            out.push_str(&format!(
+                "#{at}
+"
+            ));
             last_stamp = Some(*at);
         }
         let index = pins.iter().position(|p| p == pin).unwrap_or(0);
@@ -107,9 +120,167 @@ pub fn parse_display_report(line: &str) -> Option<String> {
     Some(rest.trim().to_string())
 }
 
+/// One `[rusty:tel]` line: named numeric channels at a moment.
+///
+/// The analog sibling of [`GpioReport`], and the reason the board view is not
+/// the whole story. A pin is on or off; a gyro rate, a PID term or a motor
+/// output is a number, and what you need to see is its *shape over time*.
+/// Firmware that prints one of these per control loop gets a rolling plot
+/// without a debugger, which is the only way to watch a loop that cannot be
+/// stopped — stopping a flight controller means the craft falls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Telemetry {
+    /// Microseconds on the firmware's clock, from `[rusty:tel@1234]`. The
+    /// same contract as the pin reports: `None` means the consumer must fall
+    /// back to arrival time and say so.
+    pub at_us: Option<u64>,
+    /// Channel name to value, in the order the firmware wrote them.
+    pub channels: Vec<(String, f32)>,
+}
+
+/// Parse `[rusty:tel] gyro_x=1.25,pid_p=-0.5` or the `@`-stamped form.
+///
+/// Channel names are whatever the firmware calls them — no registry, no
+/// declaration step. A plot of a channel nobody predicted is exactly the
+/// point: you add a `println!` and watch it, the way a `printf` is added
+/// today, except the result is a curve rather than a wall of numbers.
+///
+/// A value that does not parse drops that channel rather than the line: one
+/// `NaN`-printing sensor must not take the other eleven with it.
+pub fn parse_telemetry(line: &str) -> Option<Telemetry> {
+    let rest = line.trim().strip_prefix("[rusty:tel")?;
+    let (at_us, rest) = match rest.strip_prefix('@') {
+        Some(stamped) => {
+            let (stamp, tail) = stamped.split_once(']')?;
+            (Some(stamp.trim().parse::<u64>().ok()?), tail)
+        }
+        None => (None, rest.strip_prefix(']')?),
+    };
+
+    let channels: Vec<(String, f32)> = rest
+        .split(',')
+        .filter_map(|field| {
+            let (name, value) = field.split_once('=')?;
+            let name = name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some((name.to_string(), value.trim().parse::<f32>().ok()?))
+        })
+        .collect();
+    (!channels.is_empty()).then_some(Telemetry { at_us, channels })
+}
+
+/// A tunable the firmware exposes, as it announces itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub value: f32,
+    /// The range the firmware will accept, when it says. A slider needs
+    /// bounds, and bounds invented by the panel are how somebody sends a
+    /// gain of 500 to a motor loop.
+    pub min: Option<f32>,
+    pub max: Option<f32>,
+}
+
+/// Parse `[rusty:param] pid_roll_p=12.5 0..50` — value, and optionally the
+/// range the firmware accepts.
+///
+/// The firmware announces its own tunables, so the panel needs no config
+/// file and cannot drift from the binary that is actually running. Re-sending
+/// the line after a change is how the firmware confirms what it took, which
+/// is not always what was asked for: a clamp is information.
+pub fn parse_param(line: &str) -> Option<Param> {
+    let rest = line.trim().strip_prefix("[rusty:param]")?.trim();
+    let (name, tail) = rest.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut parts = tail.split_whitespace();
+    let value = parts.next()?.parse::<f32>().ok()?;
+    let (min, max) = match parts.next().and_then(|range| range.split_once("..")) {
+        Some((low, high)) => (low.trim().parse().ok(), high.trim().parse().ok()),
+        None => (None, None),
+    };
+    Some(Param {
+        name: name.to_string(),
+        value,
+        min,
+        max,
+    })
+}
+
+/// The line that sets a parameter, for writing into the firmware's serial
+/// input — `Spid_roll_p=12.5`.
+///
+/// One letter and a name, the shape `B14=1` and `P34=128` already use, so a
+/// firmware that reads one reads all three with the same three lines of
+/// parsing. Tuning without reflashing is the difference between a change
+/// costing thirty seconds and costing a build, a flash and a re-arm.
+pub fn set_param_line(name: &str, value: f32) -> String {
+    format!("S{name}={value}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telemetry_carries_named_channels_and_a_stamp() {
+        assert_eq!(
+            parse_telemetry("[rusty:tel@4210] gyro_x=1.25,gyro_y=-0.5"),
+            Some(Telemetry {
+                at_us: Some(4210),
+                channels: vec![("gyro_x".to_string(), 1.25), ("gyro_y".to_string(), -0.5),],
+            }),
+        );
+        // Unstamped is legal; the consumer then times by arrival and says so.
+        assert_eq!(
+            parse_telemetry("[rusty:tel] throttle=0.5").map(|t| t.at_us),
+            Some(None),
+        );
+        assert_eq!(parse_telemetry("[rusty:gpio] 4=1"), None);
+        assert_eq!(parse_telemetry("just a log line"), None);
+    }
+
+    /// One bad channel must not cost the others: a sensor printing `nan` in
+    /// the middle of twelve is the normal case, not the exception.
+    #[test]
+    fn an_unparseable_channel_drops_itself_and_nothing_else() {
+        let parsed = parse_telemetry("[rusty:tel] a=1.0,b=oops,c=3.0").expect("kept the line");
+        assert_eq!(
+            parsed.channels,
+            vec![("a".to_string(), 1.0), ("c".to_string(), 3.0)],
+        );
+        // But a line with nothing usable in it is not a sample.
+        assert_eq!(parse_telemetry("[rusty:tel] b=oops"), None);
+    }
+
+    #[test]
+    fn a_parameter_announces_its_value_and_optionally_its_range() {
+        assert_eq!(
+            parse_param("[rusty:param] pid_roll_p=12.5 0..50"),
+            Some(Param {
+                name: "pid_roll_p".to_string(),
+                value: 12.5,
+                min: Some(0.0),
+                max: Some(50.0),
+            }),
+        );
+        let bare = parse_param("[rusty:param] hover_throttle=0.42").expect("no range is legal");
+        assert_eq!((bare.min, bare.max), (None, None), "and invents none");
+        assert_eq!(parse_param("[rusty:param] broken"), None);
+    }
+
+    /// The write side is the same shape as the presses and knobs that came
+    /// before it, so firmware parses all three the same way.
+    #[test]
+    fn setting_a_parameter_uses_the_family_the_firmware_already_reads() {
+        assert_eq!(set_param_line("pid_roll_p", 12.5), "Spid_roll_p=12.5");
+        assert_eq!(set_param_line("rate", -1.0), "Srate=-1");
+    }
 
     #[test]
     fn gpio_reports_parse_and_reject_noise() {

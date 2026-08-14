@@ -56,9 +56,12 @@ impl Session {
     }
 
     pub fn stopper(&self) -> Stopper {
-        Stopper {
-            child: Arc::clone(&self.child),
-        }
+        let child = Arc::clone(&self.child);
+        Stopper::new(move || {
+            let mut child = child.lock().expect("session lock");
+            let _ = child.kill();
+            let _ = child.wait();
+        })
     }
 
     /// Wait for the process and return its exit code.
@@ -68,45 +71,62 @@ impl Session {
         let mut child = self.child.lock().expect("session lock");
         child.wait().ok().and_then(|status| status.code())
     }
-
 }
 
-/// Writes into a running session's stdin. Cloneable; dies with the child.
+/// Writes into whatever the running session listens on. Cloneable.
+///
+/// Boxed rather than typed to `ChildStdin` because the two things a board
+/// listens on are not the same type: QEMU's stdin, and a serial port rusty
+/// holds open itself. The panels that send — buttons, pots, tunables — should
+/// not have to know which is on the other end.
 #[derive(Clone)]
 pub struct Input {
-    stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    sink: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
 }
 
 impl Input {
+    /// Wrap anything writable. `None` is a session that listens to nothing,
+    /// which is not an error: a flash has no input.
+    pub fn new(sink: Option<Box<dyn std::io::Write + Send>>) -> Self {
+        Self {
+            sink: Arc::new(Mutex::new(sink)),
+        }
+    }
+
     /// Send one line. A dead or closed child is not an error worth surfacing
     /// — the press simply lands nowhere, like clicking a board that is off.
     pub fn send_line(&self, text: &str) {
         use std::io::Write;
-        if let Ok(mut guard) = self.stdin.lock()
+        if let Ok(mut guard) = self.sink.lock()
             && let Some(stdin) = guard.as_mut()
         {
             let _ = stdin.write_all(text.as_bytes());
-            let _ = stdin.write_all(b"
-");
+            let _ = stdin.write_all(b"\n");
             let _ = stdin.flush();
         }
     }
 }
 
 /// Ends a session from outside its reader loop.
+///
+/// A closure rather than a child handle: a serial link rusty holds itself has
+/// no process to kill, and the one thing every session has in common is that
+/// something outside it must be able to end it.
 #[derive(Clone)]
 pub struct Stopper {
-    child: Arc<Mutex<Child>>,
+    end: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Stopper {
+    pub fn new(end: impl Fn() + Send + Sync + 'static) -> Self {
+        Self { end: Arc::new(end) }
+    }
+
     /// A monitor session runs until the user leaves, so this is the normal way
     /// one ends, not an error path. Stopping an already-exited process is
     /// success — the caller wanted it stopped, and it is.
     pub fn stop(&self) {
-        let mut child = self.child.lock().expect("session lock");
-        let _ = child.kill();
-        let _ = child.wait();
+        (self.end)();
     }
 }
 
@@ -163,9 +183,12 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
     if let Some(stderr) = child.stderr.take() {
         pump(stderr, LogStream::Stderr, tx);
     }
-    let input = Input {
-        stdin: Arc::new(Mutex::new(child.stdin.take())),
-    };
+    let input = Input::new(
+        child
+            .stdin
+            .take()
+            .map(|stdin| Box::new(stdin) as Box<dyn std::io::Write + Send>),
+    );
 
     Ok(Session {
         child: Arc::new(Mutex::new(child)),
@@ -174,7 +197,12 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
     })
 }
 
-fn pump<R: std::io::Read + Send + 'static>(
+/// Read a stream into ordered [`LogLine`]s on its own thread.
+///
+/// Shared with [`crate::serial`]: a port and a pipe differ in how they end and
+/// in nothing else, and the carriage-return handling and level parsing below
+/// are wanted on both.
+pub(crate) fn pump<R: std::io::Read + Send + 'static>(
     reader: R,
     stream: LogStream,
     tx: mpsc::Sender<LogLine>,
@@ -195,7 +223,14 @@ fn pump<R: std::io::Read + Send + 'static>(
                         continue;
                     }
                     let level = parse_level(&text);
-                    if tx.send(LogLine { stream, text, level }).is_err() {
+                    if tx
+                        .send(LogLine {
+                            stream,
+                            text,
+                            level,
+                        })
+                        .is_err()
+                    {
                         // Receiver gone: the user closed the panel.
                         break;
                     }
@@ -259,7 +294,11 @@ fn parse_level(line: &str) -> Option<LogLevel> {
     }
 
     let first = trimmed.split_whitespace().next()?;
-    match first.trim_end_matches([':', '-']).to_ascii_uppercase().as_str() {
+    match first
+        .trim_end_matches([':', '-'])
+        .to_ascii_uppercase()
+        .as_str()
+    {
         "TRACE" => Some(LogLevel::Trace),
         "DEBUG" => Some(LogLevel::Debug),
         "INFO" => Some(LogLevel::Info),
@@ -269,11 +308,9 @@ fn parse_level(line: &str) -> Option<LogLevel> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn log_levels_are_parsed_from_all_three_formats_in_use() {
@@ -283,7 +320,10 @@ mod tests {
         assert_eq!(parse_level("WARN - low battery"), Some(LogLevel::Warn));
         assert_eq!(parse_level("ERROR: i2c nack"), Some(LogLevel::Error));
         // ESP-IDF's own format, which none of the above patterns match
-        assert_eq!(parse_level("I (1234) wifi: connected"), Some(LogLevel::Info));
+        assert_eq!(
+            parse_level("I (1234) wifi: connected"),
+            Some(LogLevel::Info)
+        );
         assert_eq!(parse_level("E (99) heap: no mem"), Some(LogLevel::Error));
         assert_eq!(parse_level("V (7) trace: tick"), Some(LogLevel::Trace));
 

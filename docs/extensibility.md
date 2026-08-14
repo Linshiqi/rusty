@@ -221,11 +221,27 @@ serial directions:
 |---|---|---|
 | `[rusty:gpio] 26=1,27=0` | firmware → board | pin levels; lamps, RGB mixes and 7-segment digits light from these |
 | `[rusty:disp] tick 42` | firmware → board | text for the display part; empty payload clears it |
+| `[rusty:tel@1234] gyro_x=1.25,pid_p=-0.5` | firmware → Plot | named numeric channels; the stamp is the firmware's own clock in µs |
+| `[rusty:param] kp=2 0..20` | firmware → Plot | "this is a tunable, this is what I hold, this is the range I take" |
 | `B14=1` / `B14=0` | board → firmware | button pressed / released |
 | `P34=200` | board → firmware | potentiometer moved, 0..255 |
+| `Skp=8.5` | Plot → firmware | set a tunable; the firmware answers with the `[rusty:param]` line above |
 
 The firmware side needs nothing but `println!` for the reports and a UART
-read loop for the commands — `E:/embeded/blinky` is the worked example.
-Richer behaviours (framebuffers, protocol decoders) grow on these same two
-directions. What does not exist yet, honestly: I2C/SPI decoding, analog
-waveform views, and Wokwi diagram import.
+read loop for the commands — `examples/pid-tune` is the worked example, and
+it is a whole tuning loop in 200 lines.
+
+Two rules the telemetry half keeps, both because breaking them makes a plot
+that lies rather than a plot that is empty. The panel draws **no slider
+without a range**, because a range the tool invented is how somebody sends a
+gain of 500 to a motor loop; and a set is answered with what the firmware
+*took*, so a clamped value reads as clamped rather than as the number that
+was typed.
+
+Writing back needs a port rusty holds open itself — the Plot panel's Connect
+does that. `espflash monitor` reads its keyboard through the console rather
+than through stdin, so a monitor rusty spawned can only listen; its telemetry
+still plots, and its tunables are read-only. Reading richer behaviours
+(framebuffers, protocol decoders) grows on these same directions. What does
+not exist yet, honestly: I2C/SPI decoding, analog waveform views, and Wokwi
+diagram import.

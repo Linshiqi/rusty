@@ -56,6 +56,42 @@ pub async fn stop_flash(state: State<'_, AppState>) -> Result<(), CommandError> 
     Ok(())
 }
 
+/// Hold a serial port open in both directions.
+///
+/// The difference from [`run_flash`] with `FlashAction::Monitor` is the return
+/// path: `espflash monitor` reads its keyboard through the console rather than
+/// through stdin, so nothing rusty spawns can talk back to the board. This
+/// opens the port itself, which is what makes a tunable writable — and costs
+/// defmt decoding, since that is espflash's.
+#[tauri::command]
+pub async fn serial_link(
+    port: String,
+    baud: u32,
+    on_line: Channel<LogLine>,
+    state: State<'_, AppState>,
+) -> Result<Option<i32>, CommandError> {
+    let link = rusty_embed::serial::open(&port, baud)?;
+    state.start_session(link.stopper()).await;
+    state.set_session_input(Some(link.input())).await;
+
+    // Same shape as a spawned tool: a blocking reader on its own thread, and
+    // a closed channel means the user left.
+    tokio::task::spawn_blocking(move || {
+        while let Some(line) = link.recv() {
+            if on_line.send(line).is_err() {
+                break;
+            }
+        }
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("serial link panicked: {e}")))?;
+
+    state.stop_session().await;
+    // No exit code: nothing exited. `None` is what the frontend already reads
+    // as "it finished without a status", which is exactly true here.
+    Ok(None)
+}
+
 /// Generate a project, streaming the generator's output.
 ///
 /// Actually creates it rather than handing the user a command to paste. Showing

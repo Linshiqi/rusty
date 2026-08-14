@@ -40,17 +40,19 @@ pub mod pins;
 #[cfg(feature = "backend")]
 pub mod process;
 #[cfg(feature = "backend")]
-pub mod simulate;
+pub mod project;
 #[cfg(feature = "backend")]
 pub mod scaffold;
 #[cfg(feature = "backend")]
+pub mod serial;
+#[cfg(feature = "backend")]
+pub mod simulate;
+#[cfg(feature = "backend")]
 pub mod svd;
 #[cfg(feature = "backend")]
-pub mod update;
-#[cfg(feature = "backend")]
-pub mod project;
-#[cfg(feature = "backend")]
 pub mod toolchain;
+#[cfg(feature = "backend")]
+pub mod update;
 #[cfg(feature = "backend")]
 pub mod wizard;
 

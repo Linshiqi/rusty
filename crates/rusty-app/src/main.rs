@@ -100,6 +100,7 @@ fn main() {
             debug::fetch_svd,
             flash::run_flash,
             flash::stop_flash,
+            flash::serial_link,
             flash::create_project,
             commands::scaffold_c_interop,
             flash::run_command,
@@ -250,6 +251,7 @@ mod wire_names {
             cmd::debug::FETCH_SVD => debug::fetch_svd,
             cmd::flash::RUN => flash::run_flash,
             cmd::flash::STOP => flash::stop_flash,
+            cmd::flash::LINK => flash::serial_link,
 
             cmd::wizard::OPTIONS => commands::wizard_options,
             cmd::wizard::EXPLAIN => commands::explain_choice,
