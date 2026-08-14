@@ -16,6 +16,10 @@ use crate::{
     view::panels,
 };
 
+/// Where users go. Named once, in `rusty_embed::model` — see [`rusty_embed::REPO`]
+/// for why it is not the repository the source is in.
+use rusty_embed::{REPO_ISSUES as ISSUES, REPO_RELEASES as RELEASES};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     ShowPanel(&'static str),
@@ -43,6 +47,9 @@ pub enum Action {
     /// Scaffold C interop, in whichever direction.
     ScaffoldC(&'static str),
     CloseWindow,
+    /// Open a page in the desktop browser. `&'static str` so the action stays
+    /// `Copy` and can sit in the palette beside every other one.
+    OpenUrl(&'static str),
 }
 
 /// The overlays an action might open.
@@ -107,14 +114,22 @@ pub fn all(state: AppState) -> Vec<Command> {
         shortcut,
     };
 
-    out.push(action(Action::OpenProject, "Open project…", chord(Action::OpenProject)));
+    out.push(action(
+        Action::OpenProject,
+        "Open project…",
+        chord(Action::OpenProject),
+    ));
     out.push(action(
         Action::RefreshProject,
         "Re-check project",
         chord(Action::RefreshProject),
     ));
     out.push(action(Action::RefreshToolchain, "Re-scan toolchain", None));
-    out.push(action(Action::ReloadCatalog, "Reload chips and boards", None));
+    out.push(action(
+        Action::ReloadCatalog,
+        "Reload chips and boards",
+        None,
+    ));
 
     let view = |action, title: &str, shortcut| Command {
         action,
@@ -123,12 +138,28 @@ pub fn all(state: AppState) -> Vec<Command> {
         shortcut,
     };
 
-    out.push(view(Action::ToggleDock, "Toggle the panel below", chord(Action::ToggleDock)));
-    out.push(view(Action::ShowDock(DockTab::Problems), "Show problems", None));
+    out.push(view(
+        Action::ToggleDock,
+        "Toggle the panel below",
+        chord(Action::ToggleDock),
+    ));
+    out.push(view(
+        Action::ShowDock(DockTab::Problems),
+        "Show problems",
+        None,
+    ));
     out.push(view(Action::ShowDock(DockTab::Output), "Show output", None));
-    out.push(view(Action::ShowDock(DockTab::Terminal), "Show terminal", None));
+    out.push(view(
+        Action::ShowDock(DockTab::Terminal),
+        "Show terminal",
+        None,
+    ));
     out.push(view(Action::ShowDock(DockTab::Waves), "Show waves", None));
-    out.push(view(Action::ShowDock(DockTab::Devices), "Show devices", None));
+    out.push(view(
+        Action::ShowDock(DockTab::Devices),
+        "Show devices",
+        None,
+    ));
     out.push(view(Action::ResetLayout, "Reset panel sizes", None));
 
     for theme in Theme::ALL {
@@ -174,7 +205,10 @@ pub enum Item {
     },
     /// A flyout, VSCode's Open Recent shape — the list stays out of the way
     /// until asked for.
-    Submenu { label: &'static str, items: Vec<Item> },
+    Submenu {
+        label: &'static str,
+        items: Vec<Item>,
+    },
     Separator,
 }
 
@@ -221,7 +255,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
     // wizard and the assistant have their own doors; listing them here made
     // the menu a pile.
     let mut view_items = vec![
-        entry(Action::OpenPalette, "Command palette…", chord(Action::OpenPalette)),
+        entry(
+            Action::OpenPalette,
+            "Command palette…",
+            chord(Action::OpenPalette),
+        ),
         Item::Separator,
         Item::Submenu {
             label: "Appearance",
@@ -259,7 +297,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             items: {
                 let mut items = vec![
                     entry(Action::ShowPanel("wizard"), "New project…", None),
-                    entry(Action::OpenProject, "Open project…", chord(Action::OpenProject)),
+                    entry(
+                        Action::OpenProject,
+                        "Open project…",
+                        chord(Action::OpenProject),
+                    ),
                 ];
                 let recents = state.recents.get_untracked();
                 if !recents.is_empty() {
@@ -278,7 +320,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 }
                 items.extend([
                     Item::Separator,
-                    entry(Action::OpenSettings, "Settings…", chord(Action::OpenSettings)),
+                    entry(
+                        Action::OpenSettings,
+                        "Settings…",
+                        chord(Action::OpenSettings),
+                    ),
                     Item::Separator,
                     entry(Action::CloseWindow, "Exit", None),
                 ]);
@@ -305,7 +351,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         Menu {
             title: "Project",
             items: vec![
-                project_entry(Action::RefreshProject, "Re-check project", chord(Action::RefreshProject)),
+                project_entry(
+                    Action::RefreshProject,
+                    "Re-check project",
+                    chord(Action::RefreshProject),
+                ),
                 entry(Action::RefreshToolchain, "Re-scan toolchain", None),
                 entry(Action::ReloadCatalog, "Reload chips and boards", None),
                 Item::Separator,
@@ -315,16 +365,8 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 Item::Submenu {
                     label: "Add C interop",
                     items: vec![
-                        project_entry(
-                            Action::ScaffoldC("rust-calls-c"),
-                            "Rust calls C…",
-                            None,
-                        ),
-                        project_entry(
-                            Action::ScaffoldC("c-calls-rust"),
-                            "C calls Rust…",
-                            None,
-                        ),
+                        project_entry(Action::ScaffoldC("rust-calls-c"), "Rust calls C…", None),
+                        project_entry(Action::ScaffoldC("c-calls-rust"), "C calls Rust…", None),
                     ],
                 },
             ],
@@ -338,7 +380,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             items: vec![
                 entry(Action::ScanDevices, "Re-scan ports and probes", None),
                 Item::Separator,
-                project_entry(Action::ShowDock(DockTab::Devices), "Flash and monitor…", None),
+                project_entry(
+                    Action::ShowDock(DockTab::Devices),
+                    "Flash and monitor…",
+                    None,
+                ),
                 Item::Separator,
                 project_entry(Action::ShowPanel("memory"), "Memory report", None),
             ],
@@ -348,6 +394,13 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             items: vec![
                 entry(Action::OpenSettings, "Keyboard shortcuts", None),
                 entry(Action::ShowPanel("assistant"), "Ask the assistant", None),
+                Item::Separator,
+                // Somewhere to send a bug. Without this the only route back
+                // from a user is the one they invent, and most people invent
+                // none — a workbench nobody can report a fault in gets
+                // reported as "it did not work" or not at all.
+                entry(Action::OpenUrl(ISSUES), "Report a problem…", None),
+                entry(Action::OpenUrl(RELEASES), "Downloads and releases", None),
             ],
         },
     ]
@@ -370,7 +423,10 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         }
         Action::OpenProject => controller::choose_project(state),
         Action::OpenRecent(index) => {
-            if let Some(path) = state.recents.with_untracked(|list| list.get(index).cloned()) {
+            if let Some(path) = state
+                .recents
+                .with_untracked(|list| list.get(index).cloned())
+            {
                 controller::open_recent(state, path, true);
             }
         }
@@ -405,6 +461,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::OpenPalette => chrome.palette_open.set(true),
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
+        Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
         Action::SetTheme(theme) => theme::set(theme),
         Action::ScaffoldC(direction) => controller::scaffold_c_interop(state, direction),
         Action::ResetLayout => {

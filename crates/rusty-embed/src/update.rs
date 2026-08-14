@@ -12,8 +12,8 @@
 
 use crate::model::UpdateStatus;
 
-/// The releases API for the repository this is built from.
-const LATEST: &str = "https://api.github.com/repos/Linshiqi/rusty/releases/latest";
+/// The releases API, from the one place that names the public repository.
+use crate::model::{RELEASES_API as LATEST, REPO};
 
 /// The running version, and the newest published one if it could be read.
 ///
@@ -85,7 +85,7 @@ fn parse_release(body: &str) -> Result<(String, String), String> {
     let url = value
         .get("html_url")
         .and_then(|v| v.as_str())
-        .unwrap_or("https://github.com/Linshiqi/rusty/releases/latest");
+        .unwrap_or(REPO);
     Ok((tag.trim_start_matches('v').to_string(), url.to_string()))
 }
 
@@ -128,7 +128,10 @@ mod tests {
         assert!(is_newer("0.10.0", "0.9.0"), "ten beats nine");
         assert!(is_newer("v1.0.0", "0.9.9"), "a leading v is not part of it");
         assert!(is_newer("0.2.1", "0.2.0"));
-        assert!(!is_newer("0.2.0", "0.2.0"), "the same version is not an update");
+        assert!(
+            !is_newer("0.2.0", "0.2.0"),
+            "the same version is not an update"
+        );
         assert!(!is_newer("0.1.0", "0.2.0"));
         assert!(
             !is_newer("0.2.0-rc1", "0.2.0"),

@@ -1,0 +1,51 @@
+name: Something went wrong
+description: A crash, a wrong answer, or a button that did nothing.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The source repository is private, so nobody here can look at your
+        stack trace and guess. The fields below are the ones that make a
+        report actionable — the version and the chip especially.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Title bar, or `rusty-cli --version`.
+      placeholder: 0.1.3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Desktop
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+
+  - type: input
+    id: chip
+    attributes:
+      label: Chip and board
+      description: Leave blank if it happened with no project open.
+      placeholder: ESP32-C3, DevKitM-1
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: The Output panel
+      description: >
+        If a command failed, its output is the useful part. Right-click the
+        Output panel → Copy. Check it for paths you would rather not post.
+      render: text

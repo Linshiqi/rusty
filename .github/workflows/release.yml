@@ -160,6 +160,13 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      # Into `source/`, because `assets/` is the upload set and everything in
+      # it is attached to the release — a repository checked out beside it
+      # would ship the private source as a release asset.
+      - uses: actions/checkout@v4
+        with:
+          path: source
+
       - uses: actions/download-artifact@v4
         with:
           path: assets
@@ -183,7 +190,41 @@ jobs:
               }
               json.dump(feed, open("assets/latest.json", "w"), indent=2)
 
+      # The body users read. Taken from CHANGELOG.md, never generated.
+      #
+      # `generate_release_notes: true` builds the body from the commits
+      # between tags — and those commits are in a *private* repository whose
+      # messages describe internals in detail. Publishing them into a public
+      # release would put the whole history where the source deliberately is
+      # not. Anything users should read is written for them by hand.
+      - name: The section of CHANGELOG.md for this tag
+        shell: python
+        run: |
+          import os, re
+          tag = os.environ["GITHUB_REF_NAME"]
+          try:
+              text = open("source/CHANGELOG.md", encoding="utf-8").read()
+          except FileNotFoundError:
+              text = ""
+          # Everything under `## <tag>` up to the next `## `.
+          found = re.search(
+              rf"^## +{re.escape(tag)}\b(.*?)(?=^## |\Z)", text, re.S | re.M
+          )
+          body = (found.group(1).strip() if found else
+                  "Installers for Windows, macOS and Linux are attached below.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"body<<EOF\n{body}\nEOF\n")
+        id: notes
+
+      # Published to the public repository, not this one. The source stays
+      # private; downloads and issue reports need somewhere anybody can
+      # reach. GITHUB_TOKEN is scoped to this repository alone, so crossing
+      # over needs a token with `contents: write` on the target — a
+      # fine-grained PAT stored as RELEASES_TOKEN.
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          repository: Linshiqi/rusty-releases
+          token: ${{ secrets.RELEASES_TOKEN }}
+          generate_release_notes: false
+          body: ${{ steps.notes.outputs.body }}
           files: assets/*

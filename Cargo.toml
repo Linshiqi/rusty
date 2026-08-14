@@ -11,7 +11,8 @@ version = "0.1.3"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/rusty-workbench/rusty"
+# Where users go: downloads and issues. The source repository is private.
+repository = "https://github.com/Linshiqi/rusty-releases"
 authors = ["rusty contributors"]
 
 [workspace.lints.rust]
