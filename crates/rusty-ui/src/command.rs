@@ -468,10 +468,8 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
         Action::ToggleVim => {
-            // Back to normal mode on the way in, so turning it on never
-            // lands you in a mode you did not ask for.
-            state.vim.set(crate::vim::Vim::default());
-            state.vim_on.update(|on| *on = !*on);
+            let on = !state.vim_on.get_untracked();
+            controller::set_vim(state, on);
         }
         Action::SetTheme(theme) => theme::set(theme),
         Action::ScaffoldC(direction) => controller::scaffold_c_interop(state, direction),

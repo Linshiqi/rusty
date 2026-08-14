@@ -1384,7 +1384,15 @@ fn Surface(document: Document) -> impl IntoView {
                         autocapitalize="off"
                         autocomplete="off"
                         disabled=read_only
-                        class="absolute inset-0 m-0 resize-none overflow-hidden border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre text-transparent caret-rust outline-none"
+                        class=move || {
+                            let base = "absolute inset-0 m-0 resize-none overflow-hidden                                         border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre                                         text-transparent caret-rust outline-none";
+                            // Normal mode only. Visual mode keeps the ordinary
+                            // selection tint, because there the selection is a
+                            // range the user chose rather than the cursor.
+                            let block = state.vim_on.get()
+                                && state.vim.with(|vim| vim.mode == crate::vim::Mode::Normal);
+                            if block { format!("{base} vim-block") } else { base.to_string() }
+                        }
                         style=move || metrics.get()
                         prop:value=move || state.draft.get()
                         on:contextmenu=move |event: ev::MouseEvent| {

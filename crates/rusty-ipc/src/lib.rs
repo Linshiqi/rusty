@@ -40,6 +40,10 @@ pub mod workbench {
     pub const ASSISTANT: &str = "assistant_choice";
     pub const SET_ASSISTANT: &str = "set_assistant_choice";
     pub const SET_KEYBIND: &str = "set_keybind";
+    /// Modal editing on or off, remembered across launches and shared by
+    /// every window.
+    pub const VIM: &str = "vim_enabled";
+    pub const SET_VIM: &str = "set_vim";
     pub const UPDATE: &str = "check_update";
     pub const OPEN_URL: &str = "open_url";
 }

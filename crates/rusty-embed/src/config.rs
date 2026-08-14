@@ -164,6 +164,14 @@ pub struct WorkbenchState {
     /// newer rusty reaches everyone who has not overridden that action.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub keybinds: std::collections::BTreeMap<String, String>,
+    /// Modal editing in the editor.
+    ///
+    /// A file rather than the WebView's storage by this project's own rule: a
+    /// second window boots the same frontend, and someone who edits in Vim
+    /// keys wants both windows in the same mode. Landing in the wrong one is
+    /// not a shrug — the next twenty keystrokes do something else entirely.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vim: bool,
     /// Terminal shell: absent = auto (the bundled Nushell when installed,
     /// else the system shell); "system" = always the OS shell; anything
     /// else = a program to run.

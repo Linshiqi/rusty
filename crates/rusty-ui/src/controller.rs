@@ -436,6 +436,11 @@ pub fn restore(state: AppState) {
         return;
     }
 
+    // Before anything else, because it decides what the keyboard means. Not
+    // tied to opening a project: someone who edits in Vim keys wants them in
+    // the window that is already open, and in the next one.
+    load_vim(state);
+
     // Neither the catalogue nor the machine's toolchain depends on a project,
     // so both load unconditionally. Sequencing them after the project probe
     // would mean one failed probe leaving those panels empty for the whole
@@ -2531,6 +2536,36 @@ pub fn open_url(state: AppState, url: String) {
 }
 
 /// The stored shortcut overrides.
+/// Read the modal-editing switch at startup.
+///
+/// From the file, not the WebView's storage: a second window boots the same
+/// frontend, and landing in the wrong mode is not a shrug — the next twenty
+/// keystrokes do something else entirely.
+pub fn load_vim(state: AppState) {
+    track(
+        state,
+        async move { ipc::call::<_, bool>(cmd::workbench::VIM, &()).await },
+        move |on| state.vim_on.set(on),
+    );
+}
+
+/// Turn it on or off, and remember.
+pub fn set_vim(state: AppState, enabled: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        enabled: bool,
+    }
+    // Back to normal mode either way, so switching never leaves the editor
+    // in a mode nobody asked for.
+    state.vim.set(crate::vim::Vim::default());
+    state.vim_on.set(enabled);
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::SET_VIM, &Args { enabled }).await },
+        move |()| {},
+    );
+}
+
 pub fn load_keybinds(state: AppState) {
     track(
         state,

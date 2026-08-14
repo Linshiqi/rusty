@@ -363,6 +363,10 @@
       if (a.chord) m[a.id] = a.chord; else delete m[a.id];
       return null;
     },
+    // Stateful like the file is: turning Vim on and reloading must come back
+    // on, which is the whole reason the switch is not localStorage.
+    vim_enabled: () => window.__mock.vim === true,
+    set_vim: (a) => { window.__mock.vim = a.enabled; return null; },
     create_entry: (a) => { window.__mock.created.push(a); return null; },
     open_editor_window: (a) => { window.__mock.detached = a.path; return null; },
   };

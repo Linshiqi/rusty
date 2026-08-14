@@ -51,6 +51,7 @@
 
   /* Selection in a sidebar is a filled rounded rect on macOS, not a rule. */
   --selection: rgb(189 74 31 / 0.13);
+  --vim-block: rgb(189 74 31 / 0.42);
   --focus: rgb(189 74 31 / 0.45);
 
   /* The 16 ANSI colours the terminal paints with. Themed rather than fixed:
@@ -103,6 +104,7 @@
     --slate-fill: rgb(107 163 214 / 0.15);
 
     --selection: rgb(228 112 63 / 0.18);
+    --vim-block: rgb(228 112 63 / 0.5);
     --focus: rgb(228 112 63 / 0.5);
 
     /* The ANSI-and-syntax palette must flip with the surfaces. This block
@@ -155,6 +157,7 @@
   --slate: #3d6a93;
   --slate-fill: rgb(61 106 147 / 0.11);
   --selection: rgb(189 74 31 / 0.13);
+  --vim-block: rgb(189 74 31 / 0.42);
   --focus: rgb(189 74 31 / 0.45);
 
   /* The mirror of the bug the dark media block had: choosing Light on a
@@ -202,6 +205,7 @@
   --slate: #6ba3d6;
   --slate-fill: rgb(107 163 214 / 0.15);
   --selection: rgb(228 112 63 / 0.18);
+  --vim-block: rgb(228 112 63 / 0.5);
   --focus: rgb(228 112 63 / 0.5);
 
   --term-0: #2a2724;
@@ -389,4 +393,23 @@ body {
 .diag-hint {
   text-decoration: underline dotted var(--slate);
   text-underline-offset: 3px;
+}
+
+/* Modal editing's block cursor.
+ *
+ * Normal mode selects the character the cursor is on, so the selection *is*
+ * the cursor and no extra element is needed — which also means normal mode
+ * and visual mode cannot disagree about where it is.
+ *
+ * Translucent rather than solid: the textarea's own glyphs are transparent
+ * by design and the visible text is the `<pre>` underneath, so an opaque
+ * block would hide the very character it points at. The native caret goes,
+ * because a thin line beside a block reads as two cursors.
+ */
+.vim-block {
+  caret-color: transparent;
+}
+
+.vim-block::selection {
+  background: var(--vim-block);
 }

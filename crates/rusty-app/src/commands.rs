@@ -108,6 +108,21 @@ pub async fn keybinds() -> Answer<std::collections::BTreeMap<String, String>> {
     Ok(storage::workbench().keybinds)
 }
 
+/// Whether modal editing is on. Read at startup by every window.
+#[tauri::command]
+pub async fn vim_enabled() -> Answer<bool> {
+    Ok(storage::workbench().vim)
+}
+
+/// Turn modal editing on or off, for good and for every window.
+#[tauri::command]
+pub async fn set_vim(enabled: bool) -> Answer<()> {
+    let mut state = storage::workbench();
+    state.vim = enabled;
+    storage::save_workbench(&state).map_err(CommandError::from)?;
+    Ok(())
+}
+
 /// Override one shortcut, or clear the override (chord = null) so the
 /// built-in default applies again.
 #[tauri::command]
