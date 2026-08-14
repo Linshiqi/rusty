@@ -169,6 +169,8 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
                     "\"{}\" \"{elf}\" -ex \"target remote :1234\"",
                     gdb.display(),
                 ),
+                elf: elf.clone(),
+                port: 1234,
             }),
             None,
         ),

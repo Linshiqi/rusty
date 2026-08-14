@@ -178,11 +178,17 @@
         buttons: [], rgbs: [], sevens: [], displays: [], pots: [],
       },
       parts: [],
-      debug: { gdbCommand: "echo mock-gdb" },
+      debug: { gdbCommand: "echo mock-gdb", elf: "target/x/blinky", port: 1234 },
       debugTool: null,
     }),
     save_sim_board: (a) => { window.__mock.savedBoard = a.board; return null; },
-    run_simulation: (a) => { window.__mock.simChannel = a.onLine; return new Promise(() => {}); },
+    run_simulation: (a) => {
+      window.__mock.simChannel = a.onLine;
+      // Debug runs freeze the boot and say so; the frontend's hook on that
+      // line is what starts the in-app debugger.
+      if (a.debug) setTimeout(() => a.onLine.send({ stream: "stdout", text: "[rusty:debug] frozen at reset", level: null }), 40);
+      return new Promise(() => {});
+    },
     // One cargo-style warning so the Output panel's location links can be
     // exercised: the ` --> path:line:col` must render as a click-to-open.
     run_command: (a) => new Promise((resolve) => {
@@ -222,6 +228,31 @@
       { label: "PowerShell 7", value: "pwsh.exe" },
       { label: "Git Bash", value: "bash.exe" },
     ],
+    // A debug session: attach, then a stop at main.rs line 68 (zero-based
+    // 67) with a stack and locals — the shape the panel has to draw.
+    debug_start: (a) => {
+      const stopped = {
+        running: false, attached: true, reason: "breakpoint", frame: 0,
+        stack: [
+          { level: 0, function: "blinky::main", file: "src/main.rs", line: 67, address: "0x400d1a2c" },
+          { level: 1, function: "core::ops::function::FnOnce", file: null, line: null, address: "0x40080f10" },
+        ],
+        variables: [
+          { name: "tick", value: "42", kind: "u32", handle: null, children: 0 },
+          { name: "pot", value: "128", kind: "u8", handle: null, children: 0 },
+        ],
+        breakpoints: [{ number: 1, file: "src/main.rs", line: 67, verified: true, reason: null, enabled: true }],
+        error: null, exited: null,
+      };
+      a.onState.send({ ...stopped, running: true, stack: [], variables: [] });
+      setTimeout(() => a.onState.send(stopped), 60);
+      window.__mock.debugStarted = a;
+      return new Promise(() => {});
+    },
+    debug_breakpoint: (a) => { (window.__mock.breakpoints = window.__mock.breakpoints || []).push(a); return null; },
+    debug_control: (a) => { (window.__mock.control = window.__mock.control || []).push(a.action); return null; },
+    debug_frame: (a) => { window.__mock.frame = a.level; return null; },
+    debug_stop: () => null,
     check_update: () => ({
       current: "0.1.0", latest: "0.2.0", newer: true,
       url: "https://github.com/Linshiqi/rusty/releases/tag/v0.2.0", note: null,

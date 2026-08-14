@@ -866,6 +866,65 @@ fn Surface(document: Document) -> impl IntoView {
             >
                 <IconView icon=Icon::Flash size=15 />
             </button>
+            // While a session is live the toolbar is the debugger's: the
+            // transport controls belong where the eye already is, not in a
+            // panel the stopped line just navigated away from.
+            {move || {
+                let debug = state.debug.get()?;
+                let running = debug.running;
+                let step = move |action: &'static str, icon, title: &'static str| {
+                    view! {
+                        <button
+                            type="button"
+                            title=title
+                            disabled=running
+                            on:click=move |_| controller::debug_control(state, action)
+                            class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                        >
+                            <IconView icon=icon size=15 />
+                        </button>
+                    }
+                };
+                Some(view! {
+                    <span class="mx-1 h-5 w-px bg-line" />
+                    {if running {
+                        view! {
+                            <button
+                                type="button"
+                                title="Pause the target"
+                                on:click=move |_| controller::debug_control(state, "pause")
+                                class="grid size-7 place-items-center rounded-[6px] text-amber hover:bg-sunken"
+                            >
+                                <IconView icon=Icon::Pause size=15 />
+                            </button>
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <button
+                                type="button"
+                                title="Continue (F5)"
+                                on:click=move |_| controller::debug_control(state, "resume")
+                                class="grid size-7 place-items-center rounded-[6px] text-patina hover:bg-sunken"
+                            >
+                                <IconView icon=Icon::Play size=15 />
+                            </button>
+                        }
+                            .into_any()
+                    }}
+                    {step("over", Icon::StepOver, "Step over (F10)")}
+                    {step("into", Icon::StepInto, "Step into (F11)")}
+                    {step("out", Icon::StepOut, "Step out (Shift+F11)")}
+                    <button
+                        type="button"
+                        title="Stop debugging"
+                        on:click=move |_| controller::debug_stop(state)
+                        class="grid size-7 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
+                    >
+                        <IconView icon=Icon::Stop size=15 />
+                    </button>
+                })
+            }}
             // A play icon runs — switching panels without running is the
             // mismatch that got this button reported. It also switches, so
             // the board is on screen while the build streams to the dock.
@@ -1185,6 +1244,7 @@ fn Surface(document: Document) -> impl IntoView {
                 // Line numbers scroll with the text rather than floating, so a
                 // long file's numbers stay beside their lines.
                 {
+                    let path_for_gutter = path.clone();
                     move || {
                         let count = state.highlighted.with(Vec::len).max(1);
                         // Tailwind's border-box made a bare `width: 5ch` mean
@@ -1201,8 +1261,50 @@ fn Surface(document: Document) -> impl IntoView {
                                     metrics.get(),
                                 )
                             >
+                                // Each number is a breakpoint target, as in
+                                // every debugger since the first one with a
+                                // mouse: click the margin, get a breakpoint.
                                 {(1..=count)
-                                    .map(|n| view! { <div>{n.to_string()}</div> })
+                                    .map(|n| {
+                                        let line = (n - 1) as u32;
+                                        let file = path_for_gutter.clone();
+                                        let toggle = file.clone();
+                                        let marked = Signal::derive(move || {
+                                            state.debug.with(|debug| {
+                                                debug.as_ref().is_some_and(|debug| {
+                                                    debug.breakpoints.iter().any(|b| {
+                                                        b.line == line && b.file == file
+                                                    })
+                                                })
+                                            })
+                                        });
+                                        view! {
+                                            <div
+                                                on:click=move |_| {
+                                                    controller::debug_breakpoint(
+                                                        state,
+                                                        toggle.clone(),
+                                                        line,
+                                                    )
+                                                }
+                                                class=move || {
+                                                    if marked.get() {
+                                                        "cursor-pointer text-crimson"
+                                                    } else {
+                                                        "cursor-pointer hover:text-label-3"
+                                                    }
+                                                }
+                                            >
+                                                {move || {
+                                                    if marked.get() {
+                                                        "●".to_string()
+                                                    } else {
+                                                        n.to_string()
+                                                    }
+                                                }}
+                                            </div>
+                                        }
+                                    })
                                     .collect_view()}
                             </div>
                         }
@@ -1665,6 +1767,32 @@ fn Surface(document: Document) -> impl IntoView {
                             }
                         }}
                     />
+
+                    // Where the target is stopped. Drawn under the text like
+                    // a find match rather than as a border, so it survives
+                    // the caret and the selection sitting on the same line.
+                    {
+                        let path = path.clone();
+                        move || {
+                            let debug = state.debug.get()?;
+                            if debug.running {
+                                return None;
+                            }
+                            let frame = debug.stack.get(debug.frame as usize)?;
+                            if frame.file.as_deref() != Some(path.as_str()) {
+                                return None;
+                            }
+                            let line = frame.line?;
+                            let y = 8.0 + f64::from(line) * LINE_HEIGHT * zoom.get();
+                            let height = LINE_HEIGHT * zoom.get();
+                            Some(view! {
+                                <div
+                                    class="pointer-events-none absolute left-0 w-full bg-amber-fill"
+                                    style=format!("top: {y}px; height: {height}px")
+                                />
+                            })
+                        }
+                    }
 
                     // What the server said about the token the mouse settled
                     // on. Interactive: long documentation scrolls inside it,

@@ -119,14 +119,18 @@ pub enum DockTab {
     Waves,
     /// Serial ports and probes currently attached.
     Devices,
+    /// Where the target is stopped: the call stack and what the variables
+    /// hold there.
+    Debug,
 }
 
 impl DockTab {
-    pub const ALL: [DockTab; 5] = [
+    pub const ALL: [DockTab; 6] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
         DockTab::Waves,
+        DockTab::Debug,
         DockTab::Devices,
     ];
 
@@ -137,6 +141,7 @@ impl DockTab {
             DockTab::Terminal => "Terminal",
             DockTab::Waves => "Waves",
             DockTab::Devices => "Devices",
+            DockTab::Debug => "Debug",
         }
     }
 }
@@ -495,6 +500,13 @@ pub struct AppState {
     pub shell_info: RwSignal<Option<rusty_embed::ShellInfo>>,
     /// The last update check's answer. `None` while one is in flight.
     pub update_status: RwSignal<Option<rusty_embed::UpdateStatus>>,
+    /// The live debug session's state, or `None` when nothing is being
+    /// debugged. Everything the gutter, the toolbar and the Debug panel
+    /// draw comes from this one value.
+    pub debug: RwSignal<Option<rusty_dbg::DebugState>>,
+    /// Which session's frames are current — the same generation guard the
+    /// terminal needed, for the same reason.
+    pub debug_epoch: RwSignal<u64>,
     /// What the shell picker offers: the built-in plus every shell the
     /// backend actually found on this machine.
     pub shell_choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
@@ -633,6 +645,8 @@ impl AppState {
             terminal_epoch: RwSignal::new(0),
             shell_info: RwSignal::new(None),
             update_status: RwSignal::new(None),
+            debug: RwSignal::new(None),
+            debug_epoch: RwSignal::new(0),
             shell_choices: RwSignal::new(Vec::new()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),

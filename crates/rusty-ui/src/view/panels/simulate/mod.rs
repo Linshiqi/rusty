@@ -1785,6 +1785,28 @@ fn BoardEditor(
                                         })
                                     />
                                     <MenuSeparator />
+                                    {state
+                                        .sim_plan
+                                        .with_untracked(|plan| {
+                                            plan.as_ref()
+                                                .and_then(|p| p.debug.as_ref())
+                                                .map(|d| d.gdb_command.clone())
+                                        })
+                                        .map(|command| {
+                                            view! {
+                                                <MenuItem
+                                                    label="Open gdb in the terminal"
+                                                    on_select=Callback::new(move |_| {
+                                                        controller::attach_debugger_terminal(
+                                                            state,
+                                                            command.clone(),
+                                                        );
+                                                        menu.set(None);
+                                                    })
+                                                />
+                                                <MenuSeparator />
+                                            }
+                                        })}
                                     <MenuItem
                                         label="Fit to contents"
                                         shortcut="F"

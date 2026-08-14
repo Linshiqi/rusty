@@ -905,13 +905,17 @@ pub fn run_simulation(state: AppState, debug: bool) {
                 // REPL is theirs from there.
                 if line.text.starts_with("[rusty:debug]") {
                     state.push_log(line);
-                    if let Some(command) = state
-                        .sim_plan
-                        .with_untracked(|p| {
-                            p.as_ref().and_then(|p| p.debug.as_ref().map(|d| d.gdb_command.clone()))
+                    // QEMU is frozen with its gdbstub listening. Attach the
+                    // in-app debugger: breakpoints in the gutter, the stack
+                    // in the dock. gdb's own REPL is still a terminal away
+                    // for anything the panel does not model.
+                    if let Some((elf, port)) = state.sim_plan.with_untracked(|plan| {
+                        plan.as_ref().and_then(|plan| {
+                            plan.debug.as_ref().map(|d| (d.elf.clone(), d.port))
                         })
+                    }) && !elf.is_empty()
                     {
-                        attach_debugger(state, command);
+                        debug_start(state, port, false, elf);
                     }
                     return;
                 }
@@ -1080,7 +1084,10 @@ pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSi
 ///
 /// The shell does the launching, so the user sees exactly what ran and owns
 /// the REPL afterwards — break, step, print are theirs, not wrapped.
-fn attach_debugger(state: AppState, command: String) {
+/// Open gdb's own REPL in the terminal — the escape hatch for anything the
+/// debug panel does not model (raw registers, `x/16x`, a scripted `commands`
+/// block). The in-app session owns the ordinary path.
+pub fn attach_debugger_terminal(state: AppState, command: String) {
     state.show_dock(crate::state::DockTab::Terminal);
     // `terminal` holds the shell's latest frame; None means no shell yet.
     if state.terminal.with_untracked(Option::is_none) {
@@ -1837,6 +1844,140 @@ pub fn set_terminal_shell(state: AppState, value: Option<String>) {
             load_shell_info(state);
         },
     );
+}
+
+// ─── debugging ───────────────────────────────────────────────────────────────
+
+/// Attach the debugger to a target that is already listening, and keep the
+/// panel's state fed until the session ends.
+pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        port: u16,
+        hardware: bool,
+        elf: String,
+    }
+
+    // Generations, exactly as the terminal needed them: a replaced
+    // session's late frames must not overwrite the one that replaced it.
+    let epoch = state.debug_epoch.get_untracked() + 1;
+    state.debug_epoch.set(epoch);
+    state.debug.set(Some(rusty_dbg::DebugState::default()));
+    state.show_dock(crate::state::DockTab::Debug);
+
+    let channel = ipc::Channel::new();
+    let on_state = Closure::wrap(Box::new(move |value: JsValue| {
+        if state.debug_epoch.get_untracked() != epoch {
+            return;
+        }
+        if let Ok(update) = serde_wasm_bindgen::from_value::<rusty_dbg::DebugState>(value) {
+            // Landing on the stopped line is the whole point of stopping.
+            if !update.running
+                && let Some(frame) = update.stack.first()
+                && let (Some(file), Some(line)) = (frame.file.clone(), frame.line)
+            {
+                open_at(state, file, line, 0);
+            }
+            state.debug.set(Some(update));
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    channel.set_onmessage(&on_state);
+    on_state.forget();
+
+    let args = Args {
+        port,
+        hardware,
+        elf,
+    };
+    spawn_local(async move {
+        let outcome =
+            ipc::call_streaming::<_, ()>(cmd::debug::START, &args, "onState", &channel).await;
+        if state.debug_epoch.get_untracked() != epoch {
+            return;
+        }
+        if let Err(error) = outcome {
+            state.error.set(Some(error));
+        }
+        state.debug.set(None);
+    });
+}
+
+/// Toggle a breakpoint. Lines are zero-based, as everywhere.
+pub fn debug_breakpoint(state: AppState, file: String, line: u32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        file: String,
+        line: u32,
+        remove: Option<u32>,
+    }
+
+    // Toggle: the gutter's one gesture both sets and clears, so the click
+    // has to know which it is doing.
+    let existing = state.debug.with_untracked(|debug| {
+        debug.as_ref().and_then(|debug| {
+            debug
+                .breakpoints
+                .iter()
+                .find(|b| b.file == file && b.line == line)
+                .and_then(|b| b.number)
+        })
+    });
+    if existing.is_some() {
+        state.debug.update(|debug| {
+            if let Some(debug) = debug {
+                debug.breakpoints.retain(|b| !(b.file == file && b.line == line));
+            }
+        });
+    }
+    let args = Args {
+        file,
+        line,
+        remove: existing,
+    };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::debug::BREAKPOINT, &args).await },
+        move |()| {},
+    );
+}
+
+/// Resume, pause, or step.
+pub fn debug_control(state: AppState, action: &'static str) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        action: &'static str,
+    }
+    let args = Args { action };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::debug::CONTROL, &args).await },
+        move |()| {},
+    );
+}
+
+/// Select a stack frame and read its variables.
+pub fn debug_frame(state: AppState, level: u32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        level: u32,
+    }
+    let args = Args { level };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::debug::FRAME, &args).await },
+        move |()| {},
+    );
+}
+
+/// End the session.
+pub fn debug_stop(state: AppState) {
+    state.debug_epoch.update(|epoch| *epoch += 1);
+    state.debug.set(None);
+    spawn_local(async move {
+        let _ = ipc::get::<serde_json::Value>(cmd::debug::STOP).await;
+    });
 }
 
 /// Ask GitHub whether there is a newer rusty.

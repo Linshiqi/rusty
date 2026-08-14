@@ -50,6 +50,7 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Waves => {
                             view! { <crate::view::waves::WavesTab /> }.into_any()
                         }
+                        DockTab::Debug => view! { <DebugTab /> }.into_any(),
                         DockTab::Devices => view! { <DevicesTab /> }.into_any(),
                     }}
                 </div>
@@ -255,6 +256,14 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             DockTab::Terminal => (0, Tone::Neutral),
             DockTab::Waves => (0, Tone::Neutral),
             DockTab::Devices => (0, Tone::Neutral),
+            // The frame count while stopped: a badge that says how deep
+            // the target is, without opening the tab.
+            DockTab::Debug => (
+                state.debug.with(|d| {
+                    d.as_ref().filter(|d| !d.running).map_or(0, |d| d.stack.len())
+                }),
+                Tone::Rust,
+            ),
         };
 
         (count > 0).then(|| {
@@ -837,5 +846,120 @@ fn DevicesTab() -> impl IntoView {
                 },
             )
         }}
+    }
+}
+
+/// Where the target is stopped: the call stack, and what the selected
+/// frame's variables hold.
+///
+/// Two columns rather than two panels: a frame and its variables are read
+/// together — "what called this, and with what" is one question.
+#[component]
+fn DebugTab() -> impl IntoView {
+    let state = AppState::expect();
+
+    move || {
+        let Some(debug) = state.debug.get() else {
+            return view! {
+                <p class="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-callout text-label-2">
+                    "Nothing is being debugged. The Simulate panel's Debug button boots                      the firmware frozen and attaches here."
+                </p>
+            }
+            .into_any();
+        };
+        if debug.running {
+            return view! {
+                <p class="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-callout text-label-2">
+                    "Running — pause or hit a breakpoint to read the stack."
+                </p>
+            }
+            .into_any();
+        }
+
+        let frame = debug.frame;
+        view! {
+            <div class="flex min-h-0 flex-1">
+                <div class="w-[46%] min-w-0 overflow-y-auto border-r border-line">
+                    <div class="px-4 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                        "Call stack"
+                    </div>
+                    {debug
+                        .stack
+                        .into_iter()
+                        .map(|entry| {
+                            let selected = entry.level == frame;
+                            let level = entry.level;
+                            let place = match (&entry.file, entry.line) {
+                                (Some(file), Some(line)) => format!("{file}:{}", line + 1),
+                                // A frame with no source is listed with its
+                                // address rather than hidden: an interrupt
+                                // vector between two of your functions is
+                                // the answer sometimes.
+                                _ => entry.address.clone(),
+                            };
+                            let jump = entry.file.clone().zip(entry.line);
+                            view! {
+                                <button
+                                    type="button"
+                                    on:click=move |_| {
+                                        controller::debug_frame(state, level);
+                                        if let Some((file, line)) = jump.clone() {
+                                            controller::open_at(state, file, line, 0);
+                                        }
+                                    }
+                                    class=move || {
+                                        let base = "flex w-full items-baseline gap-2 px-4 py-1                                                     text-left transition-colors";
+                                        if selected {
+                                            format!("{base} bg-selection text-rust")
+                                        } else {
+                                            format!("{base} text-label-2 hover:bg-sunken")
+                                        }
+                                    }
+                                >
+                                    <span class="w-[2ch] shrink-0 font-mono text-caption text-label-4">
+                                        {entry.level.to_string()}
+                                    </span>
+                                    <span class="shrink-0 font-mono text-footnote">
+                                        {entry.function}
+                                    </span>
+                                    <span class="min-w-0 truncate font-mono text-caption text-label-3">
+                                        {place}
+                                    </span>
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+                <div class="min-w-0 flex-1 overflow-y-auto">
+                    <div class="px-4 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                        "Variables"
+                    </div>
+                    {debug
+                        .variables
+                        .into_iter()
+                        .map(|variable| {
+                            view! {
+                                <div class="flex items-baseline gap-2 px-4 py-1 font-mono text-footnote">
+                                    <span class="shrink-0 text-label">{variable.name}</span>
+                                    {variable
+                                        .kind
+                                        .map(|kind| {
+                                            view! {
+                                                <span class="shrink-0 text-caption text-label-4">
+                                                    {kind}
+                                                </span>
+                                            }
+                                        })}
+                                    <span class="min-w-0 flex-1 truncate text-label-2 select-text">
+                                        {variable.value}
+                                    </span>
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+            </div>
+        }
+        .into_any()
     }
 }

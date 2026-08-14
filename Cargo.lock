@@ -5367,6 +5367,7 @@ dependencies = [
  "leptos",
  "rusty-ai",
  "rusty-core",
+ "rusty-dbg",
  "rusty-edit",
  "rusty-embed",
  "rusty-ipc",

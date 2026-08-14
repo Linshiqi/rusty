@@ -30,6 +30,10 @@ pub enum Icon {
     Grid,
     Refresh,
     Chevron,
+    StepOver,
+    StepInto,
+    StepOut,
+    Pause,
 }
 
 impl Icon {
@@ -68,6 +72,14 @@ impl Icon {
             Icon::Grid => "M3.5 3.5h13v13h-13zM3.5 7.8h13M3.5 12.2h13M7.8 3.5v13M12.2 3.5v13",
             // Circular arrows.
             Icon::Refresh => "M16.5 8A6.6 6.6 0 0 0 4.4 6.1M3.5 3v3.5H7M3.5 12a6.6 6.6 0 0 0 12.1 1.9M16.5 17v-3.5H13",
+            // An arc hopping over a dot — step over the call on this line.
+            Icon::StepOver => "M4.5 8.5a5.5 5.5 0 0 1 11 0M15.5 8.5V5M15.5 8.5H12M10 14.5a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0",
+            // An arrow diving into the dot — step into the call.
+            Icon::StepInto => "M10 3v7.5M6.8 7.6 10 10.8l3.2-3.2M11.6 15a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0",
+            // An arrow leaving upward — step out of this frame.
+            Icon::StepOut => "M10 10.5V3M6.8 6.2 10 3l3.2 3.2M11.6 15a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0",
+            // Two bars.
+            Icon::Pause => "M7 4.5v11M13 4.5v11",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

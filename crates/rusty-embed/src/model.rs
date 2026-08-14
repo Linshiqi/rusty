@@ -751,7 +751,19 @@ pub struct SimBoard {
 pub struct SimDebug {
     /// The full command line to type into the terminal: gdb, the ELF, and
     /// `target remote` — composed here so the frontend never builds paths.
+    /// Kept for the terminal path, which is still the way to reach gdb's
+    /// own REPL for anything the panel does not model.
     pub gdb_command: String,
+    /// The image with the symbols in it — what the in-app debugger loads.
+    #[serde(default)]
+    pub elf: String,
+    /// Where QEMU's gdbstub listens.
+    #[serde(default = "gdbstub_port")]
+    pub port: u16,
+}
+
+fn gdbstub_port() -> u16 {
+    1234
 }
 
 /// How this project would be simulated, or exactly why it cannot be.
