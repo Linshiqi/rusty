@@ -203,6 +203,29 @@ pub async fn board_catalogue(state: State<'_, AppState>) -> Answer<Vec<Board>> {
     Ok(state.catalog().await.boards().to_vec())
 }
 
+/// The part's pins, and which of them this project's source names.
+///
+/// Absent capabilities are reported inside the answer rather than as an
+/// error: the claims are worth showing on their own, and a panel that went
+/// blank because a device description was missing would be a panel nobody
+/// trusts the next time either.
+#[tauri::command]
+pub async fn pin_report(
+    state: State<'_, AppState>,
+) -> Result<Option<rusty_embed::PinReport>, CommandError> {
+    let Some(root) = state.root().await else {
+        return Ok(None);
+    };
+    let Some(chip) = state.chip().await else {
+        return Ok(None);
+    };
+    Ok(Some(
+        tokio::task::spawn_blocking(move || rusty_embed::pins::report(&root, &chip))
+            .await
+            .map_err(|e| CommandError::new(format!("reading the pin map panicked: {e}")))?,
+    ))
+}
+
 /// What switching this project to another chip would change.
 ///
 /// Both chips are resolved from the catalogue rather than taken on trust: a

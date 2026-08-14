@@ -36,6 +36,8 @@ pub mod memory;
 #[cfg(feature = "backend")]
 pub mod migrate;
 #[cfg(feature = "backend")]
+pub mod pins;
+#[cfg(feature = "backend")]
 pub mod process;
 #[cfg(feature = "backend")]
 pub mod simulate;

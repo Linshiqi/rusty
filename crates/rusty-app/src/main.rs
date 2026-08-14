@@ -36,6 +36,7 @@ fn main() {
             commands::crate_report,
             commands::chip_catalogue,
             commands::board_catalogue,
+            commands::pin_report,
             commands::plan_migration,
             commands::apply_migration,
             commands::catalog_problems,
@@ -180,6 +181,7 @@ mod wire_names {
 
             cmd::catalog::CHIPS => commands::chip_catalogue,
             cmd::catalog::BOARDS => commands::board_catalogue,
+            cmd::pins::REPORT => commands::pin_report,
             cmd::migrate::PLAN => commands::plan_migration,
             cmd::migrate::APPLY => commands::apply_migration,
             cmd::catalog::PROBLEMS => commands::catalog_problems,

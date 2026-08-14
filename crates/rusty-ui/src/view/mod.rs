@@ -16,6 +16,7 @@ pub mod loclink;
 pub mod markdown;
 pub mod menu;
 pub mod palette;
+pub mod pinmap;
 pub mod panels;
 pub mod settings;
 pub mod split;
@@ -192,13 +193,27 @@ pub fn App() -> impl IntoView {
                     // window, as Xcode's debug area does: the sidebar is
                     // navigation and stays whole, the output belongs to the
                     // thing being worked on.
-                    <div class="flex min-h-0 flex-1 flex-col">
+                    <div class="relative flex min-h-0 flex-1 flex-col">
                         {move || {
                             if settings_open.get() {
                                 view! { <settings::Settings /> }.into_any()
                             } else {
                                 view! { <Stage /> }.into_any()
                             }
+                        }}
+                        // Over the editor's corner, and only there: the pin
+                        // map answers a question you have while reading code.
+                        // `pointer-events-none` on the layer so the corner it
+                        // does not fill still belongs to the editor.
+                        {move || {
+                            (!settings_open.get() && state.active_panel.get() == "files")
+                                .then(|| {
+                                    view! {
+                                        <div class="pointer-events-none absolute inset-0">
+                                            <pinmap::PinMap />
+                                        </div>
+                                    }
+                                })
                         }}
                     </div>
                     <dock::Dock />

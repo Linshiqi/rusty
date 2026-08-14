@@ -42,6 +42,11 @@ pub mod catalog {
     pub const PROBLEMS: &str = "catalog_problems";
 }
 
+/// The part's pins, and what the source says about them.
+pub mod pins {
+    pub const REPORT: &str = "pin_report";
+}
+
 /// Moving a project from one chip to another.
 pub mod migrate {
     pub const PLAN: &str = "plan_migration";

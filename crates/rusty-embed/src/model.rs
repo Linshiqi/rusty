@@ -134,6 +134,62 @@ impl Runtime {
     }
 }
 
+/// The part's pins, and what the project's own source says about them.
+///
+/// Two independent halves on purpose. The claims come from the source text and
+/// are always available; the capabilities come from the HAL's own device
+/// description and are available only when it can be found. A pin map that
+/// showed one as if it were the other would be the confident wrong answer this
+/// workbench is written against, so [`Self::source`] says which is which.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinReport {
+    pub chip: String,
+    /// Every pin the part has, in numeric order. Empty when the device
+    /// description could not be read — [`Self::note`] then says why, and the
+    /// claims below are still worth showing.
+    pub pins: Vec<PinInfo>,
+    /// Where the capabilities came from, for a user who wants to check them.
+    pub source: Option<String>,
+    /// Why there are no capabilities, in terms the caller can act on.
+    pub note: Option<String>,
+    /// Pins the source names that the part does not have. After a chip switch
+    /// this is the whole of the work left, so it is not buried in `pins`.
+    pub unknown: Vec<PinClaim>,
+}
+
+/// One pin, as the vendor describes it and as the project uses it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinInfo {
+    pub gpio: u32,
+    /// No output driver at all — ESP32's 34..39. Assigning an LED here
+    /// compiles and does nothing.
+    pub input_only: bool,
+    /// `ADC1_CH4`, `DAC1`, `TOUCH7` — what an analog use needs.
+    pub analog: Vec<String>,
+    /// What the pin is wired to on essentially every module, from its
+    /// function at mux level 0: the SPI flash, the USB pair, the console.
+    /// Using one of these is a board that stops booting, not a compile error.
+    pub reserved: Option<String>,
+    /// Where the project's own source names this pin.
+    pub claims: Vec<PinClaim>,
+}
+
+/// One place the source text names a pin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinClaim {
+    pub gpio: u32,
+    /// Project-relative, `/`-separated.
+    pub file: String,
+    /// Zero-based, like every line number that crosses this boundary.
+    pub line: u32,
+    /// The line itself, trimmed — enough to recognise the site without
+    /// opening it.
+    pub text: String,
+}
+
 /// What switching a project from one chip to another would change.
 ///
 /// The plan crosses the wire and comes back to be applied, so what runs is

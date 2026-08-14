@@ -1916,6 +1916,15 @@ pub fn watch_reattach(state: AppState) {
 
 // ─── chips ───────────────────────────────────────────────────────────────────
 
+/// The part's pins and what the source names, for the editor's pin map.
+pub fn load_pin_report(state: AppState) {
+    track(
+        state,
+        ipc::get::<Option<rusty_embed::PinReport>>(cmd::pins::REPORT),
+        move |report| state.pins.set(report),
+    );
+}
+
 /// What switching this project to another chip would change.
 pub fn plan_migration(state: AppState, chip: String, into: RwSignal<Option<Migration>>) {
     #[derive(serde::Serialize)]

@@ -299,6 +299,8 @@ pub struct AppState {
     pub workspace: RwSignal<Option<WorkspaceReport>>,
     pub toolchain: RwSignal<Option<ToolchainReport>>,
     pub chips: RwSignal<Vec<Chip>>,
+    /// The part's pins and what the source names, for the editor's pin map.
+    pub pins: RwSignal<Option<rusty_embed::PinReport>>,
     pub boards: RwSignal<Vec<Board>>,
 
     /// Binaries this project has built, newest first.
@@ -593,6 +595,7 @@ impl AppState {
             workspace: RwSignal::new(None),
             toolchain: RwSignal::new(None),
             chips: RwSignal::new(Vec::new()),
+            pins: RwSignal::new(None),
             boards: RwSignal::new(Vec::new()),
             firmware: RwSignal::new(Vec::new()),
             selected_firmware: RwSignal::new(None),
