@@ -36,6 +36,11 @@ pub fn install(state: AppState) {
                     .clamp(min, max);
                 state.dock_height.set(height);
             }
+            Divider::DebugStack => {
+                let width = (from_size + (event.client_x() as f64 - from_pointer))
+                    .clamp(min, max);
+                state.debug_width.set(width);
+            }
         }
     });
 
@@ -46,6 +51,7 @@ pub fn install(state: AppState) {
             let value = match divider {
                 Divider::Tree => state.tree_width.get_untracked(),
                 Divider::Dock => state.dock_height.get_untracked(),
+                Divider::DebugStack => state.debug_width.get_untracked(),
             };
             remember_size(divider, value);
             state.dragging.set(None);
@@ -62,7 +68,7 @@ pub fn install(state: AppState) {
 #[component]
 pub fn Handle(divider: Divider) -> impl IntoView {
     let state = AppState::expect();
-    let vertical = divider == Divider::Tree;
+    let vertical = matches!(divider, Divider::Tree | Divider::DebugStack);
 
     let geometry = if vertical {
         "w-px cursor-col-resize before:-left-[3px] before:top-0 before:h-full before:w-[7px]"
@@ -84,6 +90,9 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                     }
                     Divider::Dock => {
                         (event.client_y() as f64, state.dock_height.get_untracked())
+                    }
+                    Divider::DebugStack => {
+                        (event.client_x() as f64, state.debug_width.get_untracked())
                     }
                 };
                 state.drag_from.set((pointer, size));

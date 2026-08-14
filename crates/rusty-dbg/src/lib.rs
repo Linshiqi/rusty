@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod mi;
 pub mod model;
+pub mod pretty;
 
 pub use model::*;
 

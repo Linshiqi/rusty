@@ -157,6 +157,10 @@ pub enum Divider {
     Tree,
     /// Between the panel and the dock. Vertical drag.
     Dock,
+    /// Between the debugger's call stack and its variables. Horizontal drag —
+    /// which side needs the room depends entirely on what you are looking at,
+    /// so neither split can be the right one for everybody.
+    DebugStack,
 }
 
 impl Divider {
@@ -167,6 +171,7 @@ impl Divider {
         match self {
             Divider::Tree => (160.0, 440.0),
             Divider::Dock => (80.0, 600.0),
+            Divider::DebugStack => (140.0, 900.0),
         }
     }
 
@@ -174,6 +179,7 @@ impl Divider {
         match self {
             Divider::Tree => "rusty.layout.tree",
             Divider::Dock => "rusty.layout.dock",
+            Divider::DebugStack => "rusty.layout.debug",
         }
     }
 }
@@ -530,6 +536,8 @@ pub struct AppState {
     pub shell_choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
     pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
+    /// How much of the Debug tab the call stack gets.
+    pub debug_width: RwSignal<f64>,
     /// Which divider is being dragged, if any. Held centrally so the window
     /// listeners are set up once rather than per handle.
     pub dragging: RwSignal<Option<Divider>>,
@@ -671,6 +679,7 @@ impl AppState {
             shell_choices: RwSignal::new(Vec::new()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
+            debug_width: RwSignal::new(stored_size(Divider::DebugStack, 420.0)),
             dragging: RwSignal::new(None),
             drag_from: RwSignal::new((0.0, 0.0)),
             dock_open: RwSignal::new(true),

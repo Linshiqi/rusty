@@ -1865,6 +1865,8 @@ pub fn debug_start(state: AppState, hardware: bool) {
     state.debug_epoch.set(epoch);
     // Whether this session has been told about the standing breakpoints.
     let placed = RwSignal::new(false);
+    // Frame 0's address at the last stop the editor was moved to.
+    let stopped_at = RwSignal::new(None::<String>);
     state.debug.set(Some(rusty_dbg::DebugState::default()));
     state.show_dock(crate::state::DockTab::Debug);
 
@@ -1912,12 +1914,25 @@ pub fn debug_start(state: AppState, hardware: bool) {
                 });
             }
 
-            // Landing on the stopped line is the whole point of stopping.
-            if !update.running
-                && let Some(frame) = update.stack.first()
-                && let (Some(file), Some(line)) = (frame.file.clone(), frame.line)
-            {
-                open_at(state, file, line, 0);
+            // Landing on the stopped line is the whole point of stopping —
+            // but only when it has *newly* stopped. Every update carries the
+            // whole stack, so revealing on each one dragged the editor back
+            // to frame 0 a microtask after any click that asked for somewhere
+            // else: placing a second breakpoint threw you back to the first,
+            // and selecting an outer frame looked like it did nothing at all.
+            //
+            // Cleared while running, so stopping twice in the same place —
+            // a breakpoint in a loop — still reveals.
+            if update.running {
+                stopped_at.set(None);
+            } else if let Some(frame) = update.stack.first() {
+                let arrived = stopped_at.with_untracked(|last| last.as_deref() != Some(&frame.address));
+                if arrived {
+                    stopped_at.set(Some(frame.address.clone()));
+                    if let (Some(file), Some(line)) = (frame.file.clone(), frame.line) {
+                        open_at(state, file, line, 0);
+                    }
+                }
             }
             state.debug.set(Some(update));
         }

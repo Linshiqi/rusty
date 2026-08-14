@@ -228,30 +228,53 @@
       { label: "PowerShell 7", value: "pwsh.exe" },
       { label: "Git Bash", value: "bash.exe" },
     ],
-    // A debug session: attach, then a stop at main.rs line 68 (zero-based
-    // 67) with a stack and locals — the shape the panel has to draw.
+    // A debug session, shaped like a real one: two frames that both have
+    // source (clicking the outer one must navigate), and one local whose
+    // value is a HAL handle's entire type structure — the row that has to
+    // stay readable.
     debug_start: (a) => {
       const stopped = {
         running: false, attached: true, reason: "breakpoint", frame: 0,
+        // Both lines exist in the mock's own main.rs, or the reveal clamps to
+        // the end of the file and every navigation assertion reads the same
+        // number whatever it was asked for.
         stack: [
-          { level: 0, function: "blinky::main", file: "src/main.rs", line: 67, address: "0x400d1a2c" },
-          { level: 1, function: "core::ops::function::FnOnce", file: null, line: null, address: "0x40080f10" },
+          { level: 0, function: "blinky::__xtensa_lx_rt_main", file: "src/bin/main.rs", line: 39, address: "0x400d1a2c" },
+          { level: 1, function: "blinky::__xtensa_lx_rt_main_trampoline", file: "src/bin/main.rs", line: 11, address: "0x40080f10" },
         ],
         variables: [
           { name: "tick", value: "42", kind: "u32", handle: null, children: 0 },
           { name: "pot", value: "128", kind: "u8", handle: null, children: 0 },
+          {
+            name: "rx", kind: "esp_hal::uart::UartRx<esp_hal::Blocking>", handle: null, children: 0,
+            value: "{uart: esp_hal::uart::AnyUart (esp_hal::uart::any::Inner::Uart0(esp_hal::peripherals::UART0 {_marker: core::marker::PhantomData<*const ()>})), phantom: core::marker::PhantomData<esp_hal::Blocking>, guard: esp_hal::system::PeripheralGuard {peripheral: esp_hal::system::Peripheral::Uart0}}",
+          },
         ],
-        breakpoints: [{ number: 1, file: "src/main.rs", line: 67, verified: true, reason: null, enabled: true }],
+        breakpoints: [{ number: 1, file: "src/bin/main.rs", line: 39, verified: true, reason: null, enabled: true }],
+        memory: [],
         error: null, exited: null,
       };
       a.onState.send({ ...stopped, running: true, stack: [], variables: [] });
       setTimeout(() => a.onState.send(stopped), 60);
       window.__mock.debugStarted = a;
+      window.__mock.stopped = stopped;
       return new Promise(() => {});
     },
-    debug_breakpoint: (a) => { (window.__mock.breakpoints = window.__mock.breakpoints || []).push(a); return null; },
+    // Both of these push a fresh state in the real session — gdb answers
+    // `-break-insert` and `-stack-select-frame` by relisting frames and
+    // variables. Without that here, the panel looks correct in the mock
+    // while every such update drags the editor back to frame 0 in the app.
+    debug_breakpoint: (a) => {
+      (window.__mock.breakpoints = window.__mock.breakpoints || []).push(a);
+      window.__mock.debugStarted?.onState.send(window.__mock.stopped);
+      return null;
+    },
     debug_control: (a) => { (window.__mock.control = window.__mock.control || []).push(a.action); return null; },
-    debug_frame: (a) => { window.__mock.frame = a.level; return null; },
+    debug_frame: (a) => {
+      window.__mock.frame = a.level;
+      window.__mock.debugStarted?.onState.send({ ...window.__mock.stopped, frame: a.level });
+      return null;
+    },
     debug_stop: () => null,
     check_update: () => ({
       current: "0.1.0", latest: "0.2.0", newer: true,
