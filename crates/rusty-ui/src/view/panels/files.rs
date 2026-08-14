@@ -3341,13 +3341,43 @@ fn vim_key(
             // that would drift from it.
             Ask::Search { .. } => state.find_open.set(true),
             Ask::SearchNext | Ask::SearchPrevious => state.find_open.set(true),
+            // Half a screen, which only the editor knows the height of — the
+            // reason this is a request rather than a motion. The cursor moves
+            // with the view, because Vim's Ctrl+D moves both and a scroll
+            // that left the cursor behind would put the next `j` off-screen.
+            Ask::Scroll { down } => {
+                let lines = scroller
+                    .get_untracked()
+                    .map(|element| {
+                        let height = f64::from(element.client_height());
+                        let line = (LINE_HEIGHT * state.editor_zoom.get_untracked()).max(1.0);
+                        ((height / line) / 2.0).round().max(1.0) as usize
+                    })
+                    .unwrap_or(10);
+                let motion = if down {
+                    crate::vim::motion::Motion::Down
+                } else {
+                    crate::vim::motion::Motion::Up
+                };
+                if let Some(span) =
+                    crate::vim::motion::apply(motion, &after, step.cursor, lines, &None)
+                {
+                    let at = units_of_scalar(&after, span.cursor);
+                    let _ = area.set_selection_start(Some(at));
+                    let _ = area.set_selection_end(Some(
+                        at + u32::from(after.chars().nth(span.cursor).is_some()),
+                    ));
+                    keep_caret_in_view(area, state, scroller);
+                }
+            }
             // Named rather than silently ignored, the same way an unknown
-            // command is. Both need the editor's own scroll and jump history,
-            // which phase one does not reach into.
-            Ask::Scroll { .. } | Ask::Jump { .. } => {
+            // command is. A jump list is real state this editor does not keep
+            // yet, and inventing one that disagreed with the tab history
+            // would be worse than saying so.
+            Ask::Jump { .. } => {
                 state
                     .vim
-                    .update(|vim| vim.rejected = Some("not yet: scroll and jump".into()));
+                    .update(|vim| vim.rejected = Some("no jump list yet".into()));
             }
         }
     }

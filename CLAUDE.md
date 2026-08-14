@@ -171,6 +171,47 @@ demand — never bundled, because a vendor file is a hundred thousand lines of
 XML nobody wants in a git repository by accident. Code extensions go through MCP. UI contributions are
 declarative — extensions never ship markup or styles.
 
+## Modal editing
+
+Vim keys in the editor, off by default, switched on from View. `vim/` is a
+pure state machine — `(keys, text, cursor) -> Step`, no DOM — under 45 tests
+that name the property a Vim user would notice missing. The editor reads
+`Step` and does only the three things a browser forces on it: set `value`,
+set the selection, `preventDefault`.
+
+**The precedence is the whole design, and it is what makes it liveable.**
+Normal and visual mode own *unmodified* keys; no global binding uses one, so
+the overlap is almost nothing. Chords stay with the editor and the globals
+except five — `Ctrl+R`, `Ctrl+O/I`, `Ctrl+D/U` — so Ctrl+S, Ctrl+K and
+Ctrl+A are untouched. Insert mode claims only Escape, which is why
+completion, quick fixes and every learned shortcut keep working the moment
+you type. `Step::handled` false is that path; `stop_propagation` on the taken
+ones is what stops a `d` in normal mode also reaching the window listener.
+
+- **The block cursor *is* the selection.** Normal mode selects the character
+  under the cursor, so styling that selection is the cursor — no second
+  element, and no way for the two to disagree about where they are.
+  Translucent, because the textarea's glyphs are transparent by design and an
+  opaque block hides the character it points at.
+- **Indices are Unicode scalars**, converted to UTF-16 at the DOM boundary
+  exactly as the LSP client converts at its own. A `中` in the buffer must not
+  shift every motion after it.
+- **`Span` carries two numbers on purpose.** `e` puts the cursor *on* the
+  word's last character and `de` deletes *through* it; a motion returning one
+  number gets one of the two wrong. Bare motions use `cursor`, operators use
+  `start..end` — and using `end` for both was the first bug, visible as the
+  cursor landing one past every word.
+- **What it does not know, it names**, in the status line beside the mode. A
+  key that vanishes teaches people the editor is broken. `Ctrl+O`'s jump list
+  says so today rather than pretending.
+- **The switch is `workbench.toml`.** A second window must boot into the same
+  mode — landing in the wrong one is not a shrug, it is twenty keystrokes
+  doing something else. It loads in `restore`, not in a project-reopen branch:
+  put there first, it was written and never read.
+- Undo granularity is Vim's, not the editor's. `Step::seal` closes the unit
+  at a command boundary, so `ciwfoo<Esc>` undoes in one press instead of one
+  keystroke at a time.
+
 ## UI conventions
 
 Chrome actions are icon buttons with a `title` tooltip — flat like VSCode's,
