@@ -36,6 +36,35 @@ const INK: [&str; 8] = [
 /// colour it had in the legend.
 type Drawn = (usize, String, Vec<(u64, f32)>);
 
+/// A channel's smallest drawn swing, as a fraction of its own magnitude.
+///
+/// Pure autoscale is wrong here and the real board proved it: a loop settled
+/// at 88.0 ± 0.5 has a 1% ripple, and scaling that to the full height drew a
+/// converged controller as maximum-amplitude static. "Has it settled?" is the
+/// single question this panel exists to answer, so a small wobble must *look*
+/// small. Five percent: a ripple under a twentieth of the signal is drawn
+/// within a twentieth of the height, and anything larger scales normally.
+const FLOOR: f32 = 0.05;
+
+/// The value range a channel is drawn against, and its midpoint behaviour.
+///
+/// Returns a band that always has width, so the caller never divides by zero
+/// and a constant lands in the middle of the plot rather than on its floor —
+/// a setpoint pinned to the bottom edge reads as "at minimum", which is a
+/// different claim from "not changing".
+fn band(points: &[(u64, f32)]) -> (f32, f32) {
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
+    for (_, value) in points {
+        low = low.min(*value);
+        high = high.max(*value);
+    }
+    let middle = (low + high) / 2.0;
+    let swing = high - low;
+    let floor = (middle.abs().max(swing) * FLOOR).max(f32::EPSILON);
+    let span = if swing < floor { floor } else { swing };
+    (middle - span / 2.0, middle + span / 2.0)
+}
+
 #[component]
 pub fn Plot() -> impl IntoView {
     // Two columns, always. The right one carries Connect, so folding the
@@ -134,18 +163,8 @@ fn Curves(drawn: Vec<Drawn>, clock: Option<TraceClock>, truncated: bool) -> impl
                         if points.len() < 2 {
                             return view! { <g /> }.into_any();
                         }
-                        // Autoscale per channel. A flat signal gets a band
-                        // rather than a division by zero.
-                        let (mut low, mut high) = (f32::MAX, f32::MIN);
-                        for (_, value) in &points {
-                            low = low.min(*value);
-                            high = high.max(*value);
-                        }
-                        let span = if (high - low).abs() < f32::EPSILON {
-                            1.0
-                        } else {
-                            high - low
-                        };
+                        let (low, high) = band(&points);
+                        let span = high - low;
                         let last = points.len() - 1;
                         let path: String = points
                             .iter()
@@ -206,14 +225,30 @@ fn Legend(channels: Vec<String>) -> impl IntoView {
                     let ink = INK[index % INK.len()];
                     let pick = name.clone();
                     let label = name.clone();
+                    // Value, then how far it moved across the drawn window.
+                    // The curve's *height* cannot say that — every channel is
+                    // scaled to fit — so without this number a 1% ripple and
+                    // a 50% swing look identical, which is the whole question
+                    // when you are asking whether a loop has settled.
                     let latest = move || {
                         state.plot.with(|plot| {
-                            plot.channels
+                            let Some((_, points)) = plot
+                                .channels
                                 .iter()
                                 .find(|(known, _)| *known == name)
-                                .and_then(|(_, points)| points.last())
-                                .map(|(_, value)| format!("{value:.3}"))
-                                .unwrap_or_default()
+                            else {
+                                return String::new();
+                            };
+                            let tail = &points[points.len().saturating_sub(WINDOW)..];
+                            let Some((_, last)) = tail.last() else {
+                                return String::new();
+                            };
+                            let (mut low, mut high) = (f32::MAX, f32::MIN);
+                            for (_, value) in tail {
+                                low = low.min(*value);
+                                high = high.max(*value);
+                            }
+                            format!("{last:.3}  ±{:.3}", (high - low) / 2.0)
                         })
                     };
                     let dim = {
@@ -451,5 +486,65 @@ fn Tunables() -> impl IntoView {
                     .collect_view()}
             </div>
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug the real board found: a loop settled at 88.0 ± 0.5 was scaled
+    /// to the full height and drew a converged controller as maximum-amplitude
+    /// static. A ripple that small must occupy a small share of the plot.
+    #[test]
+    fn a_small_ripple_on_a_large_signal_is_drawn_small() {
+        let settled: Vec<(u64, f32)> = (0..20)
+            .map(|at| (at, if at % 2 == 0 { 87.5 } else { 88.5 }))
+            .collect();
+        let (low, high) = band(&settled);
+        let share = 1.0 / (high - low);
+        assert!(
+            share < 0.3,
+            "a 1.0 ripple on an 88.0 signal filled {:.0}% of the height",
+            share * 100.0
+        );
+        // Still centred on the data, not shoved to an edge.
+        assert!(low < 87.5 && high > 88.5);
+    }
+
+    /// A swing worth looking at keeps the whole plot. The floor is a floor,
+    /// not a ceiling — clamping a real oscillation would hide the thing the
+    /// panel exists to show.
+    #[test]
+    fn a_real_swing_still_uses_the_full_height() {
+        let ringing: Vec<(u64, f32)> = (0..20)
+            .map(|at| (at, if at % 2 == 0 { 20.0 } else { 100.0 }))
+            .collect();
+        let (low, high) = band(&ringing);
+        assert_eq!((low, high), (20.0, 100.0));
+    }
+
+    /// A constant lands in the middle. On the floor it reads as "at minimum",
+    /// which is a different claim from "not changing" — and a setpoint nobody
+    /// has touched is the most common constant there is.
+    #[test]
+    fn a_constant_is_centred_rather_than_on_the_floor() {
+        let flat: Vec<(u64, f32)> = (0..10).map(|at| (at, 90.0)).collect();
+        let (low, high) = band(&flat);
+        assert!(high > low, "a constant must still have a band to divide by");
+        let middle = (low + high) / 2.0;
+        assert!((middle - 90.0).abs() < 1e-3, "centred on {middle}, not 90");
+    }
+
+    /// A channel sitting at zero has no magnitude to take a fraction of, and
+    /// `0.0 / 0.0` would put every point at NaN — which SVG renders as a
+    /// silently missing curve rather than an error.
+    #[test]
+    fn a_constant_zero_channel_still_divides() {
+        let zeros: Vec<(u64, f32)> = (0..10).map(|at| (at, 0.0)).collect();
+        let (low, high) = band(&zeros);
+        assert!(high > low);
+        let y = (0.0 - low) / (high - low);
+        assert!(y.is_finite(), "a zero channel produced {y}");
     }
 }

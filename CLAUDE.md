@@ -434,6 +434,22 @@ usty`) holds `location.toml`
   every panel that connects later, which is nearly all of them; re-announce
   on a timer. `tune_probe` is the check: it opens the port both ways and says
   which of these is happening.
+- **Pure autoscale draws a settled loop as static.** The Plot panel scaled
+  each channel to its own min…max, so a controller holding 88.0 ± 0.5 — a 1%
+  ripple — filled the full height with alternating full-scale noise, and four
+  channels of it made the panel a wall of stripes. "Has it settled?" is the
+  only question a tuning plot is read for, so the scale has a floor at 5% of
+  the channel's own magnitude (`band` in `plot.rs`, with tests), a constant is
+  centred rather than parked on the axis, and the legend carries `±swing` so
+  the *height* never has to be trusted on its own. Found by connecting the
+  real IDE to the real board; every earlier check had read the numbers rather
+  than looked at the picture.
+- **A streaming call cannot report success, so its optimistic state must be
+  given back on failure.** `open_link` set `link_port` before calling, because
+  `serial_link` never resolves while the link is up — and when the port was
+  refused, the panel kept showing "Disconnect" with live sliders over a port
+  it did not have. The error banner was correct and the panel contradicted it.
+  Any claim staked before an await needs an explicit release in the error arm.
 - **A re-announcement is not an answer.** `tune_probe`'s first version
   watched for any `[rusty:param]` line after a write and reported the
   periodic one as confirmation — it printed "clamped from 80" about a board

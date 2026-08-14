@@ -922,7 +922,21 @@ pub fn open_link(state: AppState, port: String, baud: u32) {
     track_session(
         state,
         async move {
-            ipc::call_streaming::<_, Option<i32>>(cmd::flash::LINK, &args, "onLine", &channel).await
+            let answer =
+                ipc::call_streaming::<_, Option<i32>>(cmd::flash::LINK, &args, "onLine", &channel)
+                    .await;
+            // The claim has to be given back when the port refuses to open.
+            // It is made up front because a streaming call never resolves
+            // while it is working, so success is not an event — but leaving
+            // it set after a refusal left the panel showing Disconnect and
+            // live sliders over a port it did not have, which is the exact
+            // failure `link_port` exists to prevent. Seen for real: the port
+            // was still held by an earlier session, the error banner said so
+            // correctly, and the panel claimed the link anyway.
+            if answer.is_err() {
+                state.link_port.set(None);
+            }
+            answer
         },
         move |_| {
             state.link_port.set(None);
