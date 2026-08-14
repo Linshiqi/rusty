@@ -30,7 +30,7 @@ pub async fn install_sim_tool(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    if name.starts_with("qemu-system-") || name.ends_with("-gdb") {
+    if name.starts_with("qemu-system-") || name.ends_with("-gdb") || name.ends_with("-gcc") {
         return install_archive(&name, on_line, state).await;
     }
     let steps = simulate::install_steps(&name).map_err(CommandError::new)?;
@@ -104,7 +104,9 @@ async fn install_archive(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let plan = if name.ends_with("-gdb") {
+    let plan = if name.ends_with("-gcc") {
+        simulate::gcc_download(name).map_err(CommandError::new)?
+    } else if name.ends_with("-gdb") {
         simulate::gdb_download(name).map_err(CommandError::new)?
     } else {
         simulate::qemu_download(name).map_err(CommandError::new)?

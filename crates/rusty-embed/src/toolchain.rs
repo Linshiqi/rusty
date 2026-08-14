@@ -261,10 +261,11 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             version: path.as_ref().and_then(|_| probe_version(binary)),
             path: path.map(|found| found.display().to_string()),
             install_command: install.to_string(),
-            // No automatic install yet: it is a toolchain archive from a
-            // GitHub release, the same shape as QEMU and the debuggers, and
-            // rusty will not ship a download URL it has not checked.
-            installable: false,
+            // The RISC-V one downloads like QEMU and the debuggers do, on
+            // the platform whose asset has been checked. The Xtensa one is
+            // espup's to install, and clicking Install on *this* row could
+            // not say so — its own row can.
+            installable: binary == "riscv32-esp-elf-gcc" && cfg!(windows),
             // Only projects that actually speak C need it, and the detection
             // that knows whether this one does lives in `project::detect`.
             required: false,

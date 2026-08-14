@@ -319,6 +319,67 @@ pub fn gdb_download(tool: &str) -> std::result::Result<QemuDownload, String> {
     })
 }
 
+/// The C cross compiler for a RISC-V ESP part, from Espressif's crosstool-NG
+/// releases — the same archive-and-unpack shape as QEMU and the debuggers.
+///
+/// espup installs the Xtensa compiler as part of the toolchain it manages and
+/// installs nothing for RISC-V, because rustc needs no help emitting RISC-V.
+/// So this is the one C toolchain a user has to fetch on purpose, and making
+/// them do it by hand is the half-answer this workbench exists to avoid.
+///
+/// The asset name was checked rather than assumed: `riscv32-esp-elf-gcc` and
+/// `-{tag}-` spellings both 404, and only this one answers 200.
+pub fn gcc_download(tool: &str) -> std::result::Result<QemuDownload, String> {
+    if tool != "riscv32-esp-elf-gcc" {
+        return Err(format!("{tool} is not a C toolchain this installer knows"));
+    }
+    if !cfg!(windows) {
+        return Err(format!(
+            "one-click install only knows the Windows build so far — download \
+             riscv32-esp-elf from \
+             https://github.com/espressif/crosstool-NG/releases/tag/{GCC_RELEASE} and put \
+             its bin/ on PATH"
+        ));
+    }
+    let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
+        return Err("the data directory could not be resolved".to_string());
+    };
+    std::fs::create_dir_all(&tools)
+        .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
+
+    let asset = format!("riscv32-esp-elf-{GCC_VERSION}-x86_64-w64-mingw32.zip");
+    let archive = tools.join("riscv32-esp-elf.zip");
+    let urls = vec![
+        format!(
+            "https://github.com/espressif/crosstool-NG/releases/download/{GCC_RELEASE}/{asset}"
+        ),
+        format!(
+            "https://dl.espressif.com/github_assets/espressif/crosstool-NG/releases/download/{GCC_RELEASE}/{asset}"
+        ),
+    ];
+    let archive_text = archive.to_string_lossy().into_owned();
+    let tools_text = tools.to_string_lossy().into_owned();
+    let extract = CommandPlan {
+        program: "C:\\Windows\\System32\\tar.exe".to_string(),
+        args: vec![
+            "-xf".to_string(),
+            archive_text.clone(),
+            "-C".to_string(),
+            tools_text.clone(),
+        ],
+        display: format!("tar -xf {archive_text} -C {tools_text}"),
+        rationale: "unpacks the RISC-V C toolchain into the data directory's tools/, \
+                    which moves with it when the directory is relocated"
+            .to_string(),
+        warning: None,
+    };
+    Ok(QemuDownload {
+        archive,
+        urls,
+        extract,
+    })
+}
+
 /// The board `.rusty/sim.toml` describes, if the project carries one.
 ///
 /// The file format is its own struct, converted to the wire model — the
@@ -554,6 +615,13 @@ pub fn user_parts(root: &Path) -> Vec<PartDef> {
 /// The esp-gdb release the installer pulls — like QEMU, pinned to the build
 /// this pipeline is proven against rather than discovered at run time.
 const GDB_RELEASE: &str = "esp-gdb-v14.2_20240403";
+
+/// The crosstool-NG release the RISC-V C toolchain comes from. Pinned rather
+/// than resolved at runtime, like the gdb and QEMU versions beside it: a
+/// download that silently changes under people is not a fixed point anybody
+/// can debug against.
+const GCC_RELEASE: &str = "esp-16.1.0_20260609";
+const GCC_VERSION: &str = "16.1.0_20260609";
 const GDB_VERSION: &str = "14.2_20240403";
 
 /// The QEMU release every install pulls — the version this pipeline is
