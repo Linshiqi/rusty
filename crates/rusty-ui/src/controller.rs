@@ -21,7 +21,7 @@ use rusty_term::Screen as TermScreen;
 
 use crate::{
     ipc::{self, Answer, cmd},
-    state::{AppState, EditHistory, LspStatus, ParkedEditor, ToolRun, remember_provider},
+    state::{AppState, EditHistory, LspStatus, ParkedEditor, ToolRun, carried_provider},
 };
 
 /// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
@@ -442,6 +442,7 @@ pub fn restore(state: AppState) {
     // would mean one failed probe leaving those panels empty for the whole
     // session, with nothing on screen to say why.
     load_catalog(state);
+    load_provider(state);
     refresh_toolchain(state);
 
     load_recents(state);
@@ -1167,10 +1168,18 @@ pub fn remember_tabs(state: AppState) {
         .document
         .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
     let tabs = state.tabs.get_untracked();
-    let record = serde_json::json!({ "tabs": tabs, "active": active });
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item(&tabs_key(&root), &record.to_string());
+    #[derive(serde::Serialize)]
+    struct Args {
+        root: String,
+        tabs: Vec<String>,
+        active: Option<String>,
     }
+    let args = Args { root, tabs, active };
+    // Fire and forget: a tab strip that failed to save is not worth a banner
+    // over the edit the user was making when it happened.
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::workbench::RECORD_TABS, &args).await;
+    });
 }
 
 /// Reopen the tabs the project had last time. Missing files fail their open
@@ -1181,33 +1190,63 @@ pub fn restore_tabs(state: AppState, root: &str) {
     if state.detached.with_untracked(Option::is_some) {
         return;
     }
-    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
-        return;
-    };
-    let Ok(Some(raw)) = storage.get_item(&tabs_key(root)) else {
-        return;
-    };
-    let Ok(record) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return;
-    };
-    let tabs: Vec<String> = record["tabs"]
-        .as_array()
-        .map(|list| {
-            list.iter()
-                .filter_map(|v| v.as_str())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    let active = record["active"].as_str().map(str::to_string);
+    // Anything this window still has from before the strip became a file.
+    // Read once, handed over, and deleted — so an upgrade does not cost
+    // somebody the tabs they had open, and the key does not linger to be
+    // read again by a later version that no longer understands it.
+    let carried = web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|storage| {
+            let key = tabs_key(root);
+            let raw = storage.get_item(&key).ok().flatten()?;
+            let _ = storage.remove_item(&key);
+            serde_json::from_str::<serde_json::Value>(&raw).ok()
+        });
 
-    // Open in strip order; the active one last, so it ends up on screen.
-    for path in tabs.iter().filter(|p| Some(p.as_str()) != active.as_deref()) {
-        open_file(state, path.clone());
+    #[derive(serde::Serialize)]
+    struct Args {
+        root: String,
     }
-    if let Some(active) = active {
-        open_file(state, active);
-    }
+    let args = Args {
+        root: root.to_string(),
+    };
+    spawn_local(async move {
+        let stored = ipc::call::<_, Option<rusty_embed::ProjectTabs>>(
+            cmd::workbench::PROJECT_TABS,
+            &args,
+        )
+        .await
+        .ok()
+        .flatten();
+
+        let (tabs, active) = match (stored, carried) {
+            // The file wins where it has an answer: it is the one that
+            // survives a reinstall, and a stale WebView copy would undo the
+            // last session every time.
+            (Some(stored), _) => (stored.tabs, stored.active),
+            (None, Some(old)) => (
+                old["tabs"]
+                    .as_array()
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                old["active"].as_str().map(str::to_string),
+            ),
+            (None, None) => return,
+        };
+
+        // Open in strip order; the active one last, so it ends up on screen.
+        for path in tabs.iter().filter(|p| Some(p.as_str()) != active.as_deref()) {
+            open_file(state, path.clone());
+        }
+        if let Some(active) = active {
+            open_file(state, active);
+        }
+    });
 }
 
 // ─── project search ─────────────────────────────────────────────────────────────
@@ -1380,8 +1419,69 @@ pub fn load_assistant(state: AppState) {
 
 /// Save the provider profile. The key is handled separately and never comes back.
 pub fn set_provider(state: AppState, config: ProviderConfig) {
-    remember_provider(&config);
+    #[derive(serde::Serialize)]
+    struct Args {
+        choice: rusty_embed::AssistantChoice,
+    }
+    let args = Args {
+        choice: to_choice(&config),
+    };
     state.ai_config.set(Some(config));
+    spawn_local(async move {
+        let _ = ipc::call::<_, ()>(cmd::workbench::SET_ASSISTANT, &args).await;
+    });
+}
+
+/// The profile last chosen, from the file — falling back to whatever this
+/// window still holds from before it was one, which is then written through
+/// so the next launch reads it from the file like everything else.
+pub fn load_provider(state: AppState) {
+    spawn_local(async move {
+        let stored = ipc::call::<_, Option<rusty_embed::AssistantChoice>>(
+            cmd::workbench::ASSISTANT,
+            &(),
+        )
+        .await
+        .ok()
+        .flatten();
+        match stored.and_then(|choice| from_choice(&choice)) {
+            Some(config) => state.ai_config.set(Some(config)),
+            None => {
+                if let Some(config) = carried_provider() {
+                    set_provider(state, config);
+                }
+            }
+        }
+    });
+}
+
+/// The file's shape and the frontend's are separate types on purpose — the
+/// same rule that keeps the chip catalogue's file format out of `model`.
+fn to_choice(config: &ProviderConfig) -> rusty_embed::AssistantChoice {
+    rusty_embed::AssistantChoice {
+        profile: config.profile.clone(),
+        kind: serde_json::to_value(config.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default(),
+        base_url: config.base_url.clone(),
+        model: config.model.clone(),
+        max_tokens: Some(config.max_tokens),
+        temperature: config.temperature,
+        supports_tools: Some(config.supports_tools),
+    }
+}
+
+fn from_choice(choice: &rusty_embed::AssistantChoice) -> Option<ProviderConfig> {
+    Some(ProviderConfig {
+        profile: choice.profile.clone(),
+        kind: serde_json::from_value(serde_json::Value::String(choice.kind.clone())).ok()?,
+        base_url: choice.base_url.clone(),
+        model: choice.model.clone(),
+        max_tokens: choice.max_tokens.unwrap_or(4096),
+        temperature: choice.temperature,
+        supports_tools: choice.supports_tools.unwrap_or(true),
+    })
 }
 
 /// File an API key in the OS credential store.

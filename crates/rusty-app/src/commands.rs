@@ -203,6 +203,53 @@ pub async fn board_catalogue(state: State<'_, AppState>) -> Answer<Vec<Board>> {
     Ok(state.catalog().await.boards().to_vec())
 }
 
+/// Remember a project's open editors.
+#[tauri::command]
+pub async fn record_tabs(
+    root: String,
+    tabs: Vec<String>,
+    active: Option<String>,
+) -> Result<(), CommandError> {
+    tokio::task::spawn_blocking(move || rusty_embed::config::record_tabs(&root, tabs, active))
+        .await
+        .map_err(|e| CommandError::new(format!("saving the tab strip panicked: {e}")))
+}
+
+/// What a project had open last time.
+#[tauri::command]
+pub async fn project_tabs(
+    root: String,
+) -> Result<Option<rusty_embed::ProjectTabs>, CommandError> {
+    tokio::task::spawn_blocking(move || rusty_embed::config::tabs_for(&root))
+        .await
+        .map_err(|e| CommandError::new(format!("reading the tab strip panicked: {e}")))
+}
+
+/// The assistant profile last chosen, and setting it.
+///
+/// Never the key: that lives in the OS credential store and is fetched by the
+/// backend at the moment of the request, so it never enters the window.
+#[tauri::command]
+pub async fn assistant_choice() -> Result<Option<rusty_embed::AssistantChoice>, CommandError>
+{
+    tokio::task::spawn_blocking(|| rusty_embed::config::workbench().assistant)
+        .await
+        .map_err(|e| CommandError::new(format!("reading the assistant profile panicked: {e}")))
+}
+
+#[tauri::command]
+pub async fn set_assistant_choice(
+    choice: rusty_embed::AssistantChoice,
+) -> Result<(), CommandError> {
+    tokio::task::spawn_blocking(move || {
+        let mut state = rusty_embed::config::workbench();
+        state.assistant = Some(choice);
+        let _ = rusty_embed::config::save_workbench(&state);
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("saving the assistant profile panicked: {e}")))
+}
+
 /// The part's pins, and which of them this project's source names.
 ///
 /// Absent capabilities are reported inside the answer rather than as an

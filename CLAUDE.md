@@ -183,8 +183,20 @@ usty`) holds `location.toml`
 - Per-project, team-shared things live in the project's `.rusty/`, where they
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
-- Theme, divider positions, the editor's text zoom and the interface scale
-  are localStorage, and that is all that is.
+- Theme, divider positions, the editor's text zoom, the interface scale and
+  the pin map's collapsed state are localStorage, and that is all that is.
+  **Audit that claim when you add one** — it had already drifted twice. The
+  assistant profile failed the rule (a second window boots the same frontend,
+  and the backend reads it at request time) and so did the per-project tab
+  strip, which additionally kept one key per project ever opened, never
+  pruned, keyed on the path *as typed* so another spelling of the same
+  directory silently had no tabs. Both are `workbench.toml` now, where
+  `recent_projects` already had the same-directory matching and the cap.
+  The WebView's storage is not the user's browser — clearing Chrome does not
+  touch it — but nor is it carried by relocating the data directory, which is
+  the whole cloud-sync story, and it is not backed up, readable or diffable.
+  Moving anything out of it needs a read-once-and-delete migration **in the
+  same commit**, or the upgrade is the thing that loses the data.
 
 ## Testing conventions
 

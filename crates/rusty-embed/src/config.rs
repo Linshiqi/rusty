@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Error, Result},
-    model::{RelocateReport, StorageLocation},
+    model::{AssistantChoice, ProjectTabs, RelocateReport, StorageLocation},
 };
 
 /// The fixed anchor. Everything else is reachable from here.
@@ -146,6 +146,69 @@ pub struct WorkbenchState {
     /// else = a program to run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_shell: Option<String>,
+    /// The assistant profile last chosen — never the key, which lives in the
+    /// OS credential store and never enters the window at all.
+    ///
+    /// A file rather than the WebView's storage because a second window boots
+    /// the same frontend and the backend reads it at the moment of a request:
+    /// by this project's own rule, anything the backend or another window
+    /// could care about is a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<AssistantChoice>,
+    /// Editor tabs per project, newest project first — what reopens when a
+    /// project is opened again.
+    ///
+    /// Here rather than in the project's `.rusty/` because which files *you*
+    /// have open is not your team's business and has no place in a diff, and
+    /// here rather than in the WebView because it is the one piece of this
+    /// that is genuinely missed when it vanishes. Capped, for the reason
+    /// `recent_projects` is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_tabs: Vec<ProjectTabs>,
+}
+
+/// How many projects keep their tab strip. Beyond this the oldest is dropped:
+/// a list that grows forever is a file that eventually nobody can read, and
+/// the tabs of a project untouched for fifty projects are not missed.
+const TABS_KEPT: usize = 40;
+
+/// Remember a project's open editors, replacing whatever that project had.
+pub fn record_tabs(root: &str, tabs: Vec<String>, active: Option<String>) {
+    let mut state = workbench();
+    push_tabs(&mut state.open_tabs, root, tabs, active);
+    let _ = save_workbench(&state);
+}
+
+/// The list discipline, separate from storage so it is testable — the same
+/// shape `push_recent` has, and for the same reason.
+fn push_tabs(
+    list: &mut Vec<ProjectTabs>,
+    root: &str,
+    tabs: Vec<String>,
+    active: Option<String>,
+) {
+    list.retain(|known| !same_dir(Path::new(&known.root), Path::new(root)));
+    list.insert(
+        0,
+        ProjectTabs {
+            root: root.to_string(),
+            tabs,
+            active,
+        },
+    );
+    list.truncate(TABS_KEPT);
+}
+
+/// What a project had open last time, if anything.
+///
+/// Matched by [`same_dir`], so `E:\x` finds what `E:/x` saved — the trap the
+/// WebView copy fell into, where a different spelling of the same directory
+/// silently had no tabs.
+pub fn tabs_for(root: &str) -> Option<ProjectTabs> {
+    workbench()
+        .open_tabs
+        .into_iter()
+        .find(|known| same_dir(Path::new(&known.root), Path::new(root)))
 }
 
 fn workbench_path() -> Option<PathBuf> {
@@ -311,6 +374,32 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two properties the WebView's storage did not have: a different
+    /// spelling of the same directory finds its tabs, and the list cannot
+    /// grow without bound.
+    #[test]
+    fn tabs_are_kept_per_directory_and_the_list_is_capped() {
+        let mut list = Vec::new();
+        push_tabs(&mut list, "E:/work/blinky", vec!["src/main.rs".into()], None);
+
+        // The trap the WebView copy fell into: it keyed on the path as typed,
+        // so opening the same project by another spelling silently had no
+        // tabs. `recent_projects` learned this already; this shares the fix.
+        push_tabs(&mut list, "E:\\work\\blinky", vec!["src/lib.rs".into()], None);
+        assert_eq!(list.len(), 1, "a different spelling is the same project");
+        assert_eq!(list[0].tabs, vec!["src/lib.rs".to_string()], "and it replaces");
+
+        for n in 0..TABS_KEPT + 5 {
+            push_tabs(&mut list, &format!("E:/p{n}"), vec!["a.rs".into()], None);
+        }
+        assert_eq!(
+            list.len(),
+            TABS_KEPT,
+            "one key per project ever opened is what this replaced",
+        );
+        assert_eq!(list[0].root, format!("E:/p{}", TABS_KEPT + 4), "newest first");
+    }
 
     #[test]
     fn relocation_copies_and_switches_without_touching_the_original() {

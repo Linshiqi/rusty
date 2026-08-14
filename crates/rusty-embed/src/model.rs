@@ -134,6 +134,38 @@ impl Runtime {
     }
 }
 
+/// The assistant profile, as the file records it.
+///
+/// A separate type from `rusty_ai::ProviderConfig` on purpose — the same rule
+/// that keeps `catalog.rs` from serialising `model` types. This is a contract
+/// with a file somebody may edit; that one is a contract with the frontend,
+/// and coupling them means a refactor rewriting everybody's workbench.toml.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssistantChoice {
+    pub profile: String,
+    pub kind: String,
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub supports_tools: Option<bool>,
+}
+
+/// One project's open editors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTabs {
+    /// The project root as the user spelled it when it was recorded. Matching
+    /// is by [`same_dir`], so a different spelling of the same directory finds
+    /// it — the trap `recent_projects` already learned.
+    pub root: String,
+    pub tabs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+}
+
 /// The part's pins, and what the project's own source says about them.
 ///
 /// Two independent halves on purpose. The claims come from the source text and

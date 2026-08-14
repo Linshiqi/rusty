@@ -261,24 +261,17 @@ pub fn remember_size(divider: Divider, value: f64) {
 
 const PROVIDER_KEY: &str = "rusty.assistant.provider";
 
-/// The provider profile from last time.
+/// Whatever this window still holds from before the profile became a file.
 ///
-/// Safe to keep in the browser's storage because it holds no secret — the key
-/// itself lives in the OS credential store and is fetched by the backend at the
-/// moment of the request, so it never enters this window at all.
-fn stored_provider() -> Option<ProviderConfig> {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item(PROVIDER_KEY).ok().flatten())
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-}
-
-pub fn remember_provider(config: &ProviderConfig) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
-        && let Ok(raw) = serde_json::to_string(config)
-    {
-        let _ = storage.set_item(PROVIDER_KEY, &raw);
-    }
+/// Read once and deleted, so an upgrade does not cost somebody their model
+/// choice and the key does not linger to be misread later. It never held a
+/// secret — the key itself lives in the OS credential store and is fetched by
+/// the backend at the moment of the request, so it never enters this window.
+pub fn carried_provider() -> Option<ProviderConfig> {
+    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten())?;
+    let raw = storage.get_item(PROVIDER_KEY).ok().flatten()?;
+    let _ = storage.remove_item(PROVIDER_KEY);
+    serde_json::from_str(&raw).ok()
 }
 
 /// How many lines of device output to keep.
@@ -611,7 +604,10 @@ impl AppState {
             wizard_choice: RwSignal::new(None),
             wizard_explanations: RwSignal::new(Vec::new()),
             wizard_plan: RwSignal::new(None),
-            ai_config: RwSignal::new(stored_provider()),
+            // Loaded from workbench.toml by the controller on boot;
+            // `carried_provider` hands over anything this window still holds
+            // from before it was a file.
+            ai_config: RwSignal::new(None),
             ai_presets: RwSignal::new(Vec::new()),
             ai_tools: RwSignal::new(Vec::new()),
             conversation: RwSignal::new(Vec::new()),

@@ -30,6 +30,12 @@ pub mod workbench {
     pub const PROXY: &str = "proxy_setting";
     pub const SET_PROXY: &str = "set_proxy_setting";
     pub const KEYBINDS: &str = "keybinds";
+    /// Editor tabs per project, and the assistant profile — both moved out of
+    /// the WebView's storage, which no data-directory relocation carries.
+    pub const RECORD_TABS: &str = "record_tabs";
+    pub const PROJECT_TABS: &str = "project_tabs";
+    pub const ASSISTANT: &str = "assistant_choice";
+    pub const SET_ASSISTANT: &str = "set_assistant_choice";
     pub const SET_KEYBIND: &str = "set_keybind";
     pub const UPDATE: &str = "check_update";
     pub const OPEN_URL: &str = "open_url";
