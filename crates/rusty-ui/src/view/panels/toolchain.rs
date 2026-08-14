@@ -143,6 +143,20 @@ pub fn Toolchain() -> impl IntoView {
                                         <p class="mt-0.5 max-w-[70ch] text-callout text-label-2">
                                             {tool.purpose.clone()}
                                         </p>
+                                        // Where it actually is. Answers the two
+                                        // questions every one of these raises —
+                                        // which copy is being used, and which
+                                        // disk it is filling.
+                                        {tool
+                                            .path
+                                            .clone()
+                                            .map(|path| {
+                                                view! {
+                                                    <p class="mt-0.5 truncate font-mono text-caption text-label-4 select-text">
+                                                        {path}
+                                                    </p>
+                                                }
+                                            })}
                                         {(!present)
                                             .then(|| {
                                                 let command = tool.install_command.clone();

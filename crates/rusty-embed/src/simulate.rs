@@ -1128,7 +1128,9 @@ fn exe(name: &str) -> String {
     }
 }
 
-fn on_path(name: &str) -> Option<PathBuf> {
+/// The first match for a binary on PATH. Shared with `toolchain`, which
+/// asks the same question about the same binaries.
+pub(crate) fn on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(exe(name));

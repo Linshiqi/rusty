@@ -9,6 +9,7 @@
 
 use std::process::Command;
 
+use crate::simulate::on_path;
 use crate::{
     chip,
     model::{
@@ -174,12 +175,19 @@ pub fn status() -> ToolchainStatus {
         installed_targets: list_installed_targets(),
         tools: TOOLS
             .iter()
-            .map(|(name, purpose, install, required)| ToolStatus {
-                name: (*name).to_string(),
-                purpose: (*purpose).to_string(),
-                version: probe_version(name),
-                install_command: (*install).to_string(),
-                required: *required,
+            .map(|(name, purpose, install, required)| {
+                // Presence decides; the version is asked for only once the
+                // binary is known to exist, so a tool that has no `--version`
+                // is still installed and one that is absent costs no spawn.
+                let path = on_path(name);
+                ToolStatus {
+                    name: (*name).to_string(),
+                    purpose: (*purpose).to_string(),
+                    version: path.as_ref().and_then(|_| probe_version(name)),
+                    path: path.map(|found| found.display().to_string()),
+                    install_command: (*install).to_string(),
+                    required: *required,
+                }
             })
             .collect(),
         has_esp_toolchain,

@@ -1245,7 +1245,14 @@ pub struct ToolStatus {
     /// What it is for, shown when it is missing so the user can decide whether
     /// they need it at all.
     pub purpose: String,
+    /// What `<tool> --version` said, when it says anything. Decoration, not
+    /// evidence: `ldproxy` is a linker shim with no CLI at all and panics on
+    /// the flag, and treating that as "not installed" is what it used to do.
     pub version: Option<String>,
+    /// Where the binary actually is. `None` is what "not installed" means,
+    /// and showing it answers the question every one of these raises — which
+    /// copy is being used, and on which disk it sits.
+    pub path: Option<String>,
     /// How to install it, if absent.
     pub install_command: String,
     /// False when this tool is only needed for some projects.
@@ -1253,8 +1260,9 @@ pub struct ToolStatus {
 }
 
 impl ToolStatus {
+    /// Presence on PATH, not a successful `--version`.
     pub fn is_installed(&self) -> bool {
-        self.version.is_some()
+        self.path.is_some()
     }
 }
 
