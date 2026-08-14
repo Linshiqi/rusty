@@ -499,6 +499,17 @@ usty`) holds `location.toml`
   no error anywhere in the frontend, because the denial happens on the Rust
   side of the IPC. `allow-internal-toggle-maximize` is the matching permission
   for double-clicking the title bar.
+- **`createUpdaterArtifacts` needs `plugins.updater` to exist, and fails
+  *after* the app has built.** Adding the signing secrets flips the release
+  workflow onto `--config '{"bundle":{"createUpdaterArtifacts":true}}'`, and
+  the bundler then reads `plugins.updater` for the public key. With no such
+  section it stops with "plugins > updater doesn't exist" — after "Built
+  application at …", so the log looks like a successful build that failed at
+  the end. The section carries the public half of whatever is in
+  `TAURI_SIGNING_PRIVATE_KEY`; a mismatched pair builds fine and only fails
+  later, when an update will not verify. Note that the *plugin* is not a
+  dependency: the config alone is what the bundler wants, and
+  `update::check` still only checks and links.
 - **`tauri.conf.json` rejects unknown fields**, so a `"//comment"` key fails the
   build with "unknown configuration field" and a misleading suggestion to update
   your Tauri crates. Explain the config here instead.

@@ -7,7 +7,7 @@ log stays in the private repository where it belongs.
 
 One `## v<version>` heading per release, newest first.
 
-## v0.1.3
+## v0.1.4
 
 The first public build. An embedded Rust workbench for ESP32: it knows which
 chip a project is for, what fits in flash, what is on the serial port, and it
