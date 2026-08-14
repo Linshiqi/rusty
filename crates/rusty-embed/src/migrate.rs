@@ -257,11 +257,44 @@ pub fn plan(root: &Path, from: &Chip, to: &Chip) -> Migration {
             to.arch.label(),
         ));
     }
-    migration.notes.push(
-        "rustflags in .cargo/config.toml are left as they are — they are the project's \
-         choice, not the chip's."
-            .to_string(),
-    );
+    // Not "left as they are because they are the project's choice", which is
+    // what this used to say and was wrong twice over. A flag like
+    // `-nostartfiles` is not a preference: it is an instruction to a compiler
+    // *driver*, and whether one is in the chain is a property of the
+    // toolchain the chip demands. Measured on the demo project, this switch
+    // produced two link failures in a row that named neither the chip nor the
+    // file the flag came from.
+    let flags = driver_flags(root);
+    if flags.is_empty() {
+        migration.notes.push(
+            "rustflags in .cargo/config.toml are left as they are, and this project sets \
+             no linker arguments that depend on which toolchain links."
+                .to_string(),
+        );
+    } else {
+        let crossing_off_gcc = from.toolchain == ToolchainRequirement::EspXtensa
+            && to.toolchain != ToolchainRequirement::EspXtensa;
+        let consequence = if crossing_off_gcc {
+            format!(
+                "{} links through gcc, which accepts these; {} links with rust-lld \
+                 directly, which rejects them outright — `unknown argument`, naming \
+                 neither the chip nor the file. Expect to remove or translate them.",
+                from.name, to.name,
+            )
+        } else {
+            "Whether they are still understood depends on what links for the new \
+             target, so they are worth reading before the first build."
+                .to_string()
+        };
+        migration.notes.push(format!(
+            "{} linker argument{} here are written for a compiler driver rather than a \
+             linker — {}. {consequence} They are not changed: what should replace one is \
+             a question about your build, not about the chip.",
+            flags.len(),
+            if flags.len() == 1 { "" } else { "s" },
+            flags.join(", "),
+        ));
+    }
 
     migration
 }
@@ -343,6 +376,47 @@ fn boundaries<'a>(text: &'a str, word: &'a str) -> impl Iterator<Item = usize> +
         };
         (!joined(before) && !joined(after)).then_some(at)
     })
+}
+
+/// Linker arguments that only a compiler *driver* understands, as
+/// `file:line flag`.
+///
+/// The two places a project sets them, because both bit on one switch:
+/// `rustflags` in `.cargo/config.toml`, and `cargo:rustc-link-arg` in
+/// `build.rs`. Only the second is generated code somebody may never have
+/// read, which is exactly why it needs naming.
+///
+/// The patterns are the ones that are driver conventions by definition —
+/// `-Wl,` *means* "hand this through a driver to the linker", and the
+/// `-no…`/`-specs=` family tells a driver what not to link. Nothing here
+/// claims to know what a given target's linker accepts; it says these were
+/// written for a chain that has a driver in it.
+fn driver_flags(root: &Path) -> Vec<String> {
+    const PATTERNS: [&str; 5] = [
+        "-Wl,",
+        "-nostartfiles",
+        "-nostdlib",
+        "-nodefaultlibs",
+        "-specs=",
+    ];
+
+    let mut found = Vec::new();
+    for name in [".cargo/config.toml", "build.rs"] {
+        let Ok(text) = std::fs::read_to_string(root.join(name)) else {
+            continue;
+        };
+        for (number, line) in text.lines().enumerate() {
+            // A line that only mentions one in prose is not a setting. Both
+            // real forms quote it, so the quote is the anchor.
+            if !line.contains('"') {
+                continue;
+            }
+            if let Some(pattern) = PATTERNS.iter().find(|pattern| line.contains(**pattern)) {
+                found.push(format!("{name}:{} {pattern}", number + 1));
+            }
+        }
+    }
+    found
 }
 
 /// Every `peripherals.GPIOn` in the project's own sources, as `file:line`.
@@ -592,6 +666,55 @@ mod tests {
         assert!(config.contains("build-std = [\"core\"]"), "{config}");
         let toolchain = std::fs::read_to_string(dir.path().join("rust-toolchain.toml")).unwrap();
         assert!(toolchain.contains("channel = \"esp\""), "{toolchain}");
+    }
+
+    /// Written from the two link failures the demo project hit in a row after
+    /// a switch whose plan had said rustflags were "the project's choice".
+    /// They were not: both are driver conventions, one of them lives in
+    /// generated `build.rs` nobody reads, and neither error names the chip.
+    #[test]
+    fn linker_arguments_written_for_a_driver_are_named_and_not_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        project(dir.path());
+        std::fs::write(
+            dir.path().join(".cargo/config.toml"),
+            "[build]\n\
+             rustflags = [\n  \"-C\", \"link-arg=-nostartfiles\",\n]\n\
+             target = \"xtensa-esp32-none-elf\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("build.rs"),
+            "fn main() {\n\
+             \x20   println!(\"cargo:rustc-link-arg=-Tlinkall.x\");\n\
+             \x20   println!(\"cargo:rustc-link-arg=-Wl,--error-handling-script={}\", exe);\n\
+             }\n",
+        )
+        .unwrap();
+
+        let migration = plan(dir.path(), &esp32(), &esp32c3());
+        let note = migration
+            .notes
+            .iter()
+            .find(|note| note.contains("compiler driver"))
+            .expect("the flags are named");
+
+        assert!(note.contains(".cargo/config.toml:3 -nostartfiles"), "{note}");
+        assert!(
+            note.contains("build.rs:3 -Wl,"),
+            "including the one in generated build.rs, which is the half nobody reads: {note}",
+        );
+        assert!(
+            !note.contains("-Tlinkall.x"),
+            "and not the linker script, which rust-lld takes: {note}",
+        );
+        // Direction matters: leaving gcc behind is the one that breaks, and
+        // saying so beats "worth checking" when it is known.
+        assert!(note.contains("rust-lld"), "{note}");
+        assert!(
+            migration.files.iter().all(|file| file.path != "build.rs"),
+            "naming them is the whole job — what should replace one is not rusty's call",
+        );
     }
 
     /// The refusal that matters most, because the alternative looks like it

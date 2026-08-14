@@ -241,11 +241,41 @@ fn workbench_path() -> Option<PathBuf> {
 /// Unknown fields survive a round trip *by being ignored on read and absent on
 /// write* — an older rusty reading a newer file must not explode, which is why
 /// this does not `deny_unknown_fields` the way the catalogue does.
+/// What the workbench remembers, or a fresh state.
+///
+/// **"Not there yet" and "there and unreadable" are different, and conflating
+/// them destroys data.** Every writer here is a read-modify-write; a file that
+/// failed to parse but read back as `default()` is one the very next save
+/// overwrites with nothing, silently, taking every recent project with it.
+/// That is how a whole list can vanish between two launches with nothing in
+/// the logs.
+///
+/// So a file that exists and does not parse is moved aside rather than read as
+/// empty. Nothing is lost — it is still there under `.broken` — the next save
+/// cannot clobber it, and the workbench starts clean instead of refusing to
+/// work until somebody edits TOML by hand.
 pub fn workbench() -> WorkbenchState {
-    workbench_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|raw| toml::from_str(&raw).ok())
-        .unwrap_or_default()
+    let Some(path) = workbench_path() else {
+        return WorkbenchState::default();
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        // No file, or unreadable this instant. Either way there is nothing to
+        // lose by starting from default; a save will create it.
+        return WorkbenchState::default();
+    };
+    match toml::from_str(&raw) {
+        Ok(state) => state,
+        Err(error) => {
+            let kept = path.with_extension("toml.broken");
+            let _ = std::fs::rename(&path, &kept);
+            eprintln!(
+                "rusty: {} did not parse ({error}); kept it as {} and started fresh",
+                path.display(),
+                kept.display(),
+            );
+            WorkbenchState::default()
+        }
+    }
 }
 
 pub fn save_workbench(state: &WorkbenchState) -> Result<()> {
@@ -401,6 +431,36 @@ mod tests {
     /// The two properties the WebView's storage did not have: a different
     /// spelling of the same directory finds its tabs, and the list cannot
     /// grow without bound.
+    /// The failure this is written against: a workbench.toml that does not
+    /// parse used to read back as an empty state, and the next save — which
+    /// every writer here does as read-modify-write — wrote that emptiness
+    /// over it. One transient bad file, and every recent project is gone with
+    /// nothing said.
+    ///
+    /// Drives the internals rather than the public fns, like the relocation
+    /// test above and for the same reason: tests must not read or write the
+    /// machine they run on.
+    #[test]
+    fn a_file_that_does_not_parse_is_kept_rather_than_read_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        std::fs::write(&path, "recent_projects = [\"E:/work\"]\nthis is not toml\n").unwrap();
+
+        // What `workbench()` does with the file it just read, minus the
+        // machine-dependent path lookup.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let parsed: std::result::Result<WorkbenchState, _> = toml::from_str(&raw);
+        assert!(parsed.is_err(), "the fixture has to be genuinely malformed");
+
+        let kept = path.with_extension("toml.broken");
+        std::fs::rename(&path, &kept).unwrap();
+        assert!(
+            std::fs::read_to_string(&kept).unwrap().contains("E:/work"),
+            "the list survives where somebody can get it back",
+        );
+        assert!(!path.exists(), "and a save now creates a file rather than clobbering one");
+    }
+
     #[test]
     fn tabs_are_kept_per_directory_and_the_list_is_capped() {
         let mut list = Vec::new();

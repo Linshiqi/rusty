@@ -360,6 +360,16 @@ usty`) holds `location.toml`
   parse-and-reserialise — `esp32` in `features` and in `--chip esp32` move
   while `xtensa-esp32-none-elf` and `esp32c3` do not, and comments, ordering
   and version specs survive byte-for-byte.
+- **A read that degrades to `default()` in front of a read-modify-write is a
+  data-loss bug, not a fallback.** `workbench()` returned an empty state for a
+  `workbench.toml` that failed to parse, and every writer — recents, tabs,
+  keybinds, proxy — reads, changes and writes the whole file back. One
+  unparseable file, and the next save wrote that emptiness over it: the recent
+  projects list vanished between two launches with nothing in the logs. "Not
+  there yet" and "there and unreadable" have to be different answers. A file
+  that does not parse is now moved to `.broken` and named on stderr, so
+  nothing is lost, the next save creates rather than clobbers, and the app
+  starts clean instead of needing somebody to edit TOML by hand.
 - **One global flag cleared from a shared error path belongs to nobody.**
   `track` wraps every controller call, and its failure branch cleared
   `session_running` — so one unrelated error told a *running* simulation it
