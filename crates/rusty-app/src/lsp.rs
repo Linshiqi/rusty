@@ -33,23 +33,24 @@ pub async fn lsp_start(
     let hint = tokio::task::spawn_blocking({
         let root = root.clone();
         move || {
-            rusty_embed::project::detect(&root).ok().and_then(|project| {
-                project.configured_target.or_else(|| {
-                    project
-                        .chip
-                        .and_then(|id| rusty_embed::chip::by_id(&id))
-                        .map(|chip| chip.bare_metal_target)
+            rusty_embed::project::detect(&root)
+                .ok()
+                .and_then(|project| {
+                    project.configured_target.or_else(|| {
+                        project
+                            .chip
+                            .and_then(|id| rusty_embed::chip::by_id(&id))
+                            .map(|chip| chip.bare_metal_target)
+                    })
                 })
-            })
         }
     })
     .await
     .unwrap_or(None);
 
-    let spawned =
-        tokio::task::spawn_blocking(move || LspClient::spawn(&root, hint.as_deref()))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))?;
+    let spawned = tokio::task::spawn_blocking(move || LspClient::spawn(&root, hint.as_deref()))
+        .await
+        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))?;
 
     let (client, events) = match spawned {
         Ok(pair) => pair,
@@ -129,9 +130,11 @@ pub async fn lsp_complete(
     let Some(client) = state.lsp().await else {
         return Ok(Vec::new());
     };
-    Ok(tokio::task::spawn_blocking(move || client.completion(&path, line, col))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
+    Ok(
+        tokio::task::spawn_blocking(move || client.completion(&path, line, col))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
 }
 
 #[tauri::command]
@@ -144,9 +147,11 @@ pub async fn lsp_hover(
     let Some(client) = state.lsp().await else {
         return Ok(None);
     };
-    Ok(tokio::task::spawn_blocking(move || client.hover(&path, line, col))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
+    Ok(
+        tokio::task::spawn_blocking(move || client.hover(&path, line, col))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
 }
 
 /// Quick fixes and refactorings at the caret, edits pre-resolved.
@@ -177,9 +182,11 @@ pub async fn lsp_semantic(
     let Some(client) = state.lsp().await else {
         return Ok(Vec::new());
     };
-    Ok(tokio::task::spawn_blocking(move || client.semantic_tokens(&path))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
+    Ok(
+        tokio::task::spawn_blocking(move || client.semantic_tokens(&path))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
 }
 
 /// The signature of the call the caret is inside, for parameter hints.

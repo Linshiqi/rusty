@@ -49,4 +49,3 @@ pub fn window_close(window: Window) -> Result<(), CommandError> {
     // intervene — an unsaved wizard, or a flash in progress.
     window.close().map_err(fail)
 }
-

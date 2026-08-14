@@ -80,9 +80,7 @@ pub async fn project_status(state: State<'_, AppState>) -> Answer<EmbeddedProjec
 /// Slow by nature (one index request per crate), so it only runs when the
 /// Crates panel asks.
 #[tauri::command]
-pub async fn crate_report(
-    state: State<'_, AppState>,
-) -> Answer<Vec<rusty_core::CrateRow>> {
+pub async fn crate_report(state: State<'_, AppState>) -> Answer<Vec<rusty_core::CrateRow>> {
     let workspace = state
         .workspace()
         .await
@@ -250,10 +248,7 @@ pub async fn firmware_list(state: State<'_, AppState>) -> Answer<Vec<Firmware>> 
 /// Passing the path explicitly also records it, so the assistant's
 /// `memory_report` tool can reach the same binary the panel is showing.
 #[tauri::command]
-pub async fn memory_report(
-    elf_path: String,
-    state: State<'_, AppState>,
-) -> Answer<MemoryReport> {
+pub async fn memory_report(elf_path: String, state: State<'_, AppState>) -> Answer<MemoryReport> {
     let path = PathBuf::from(&elf_path);
     let chip_id = match state.root().await {
         Some(root) => project::detect(&root).ok().and_then(|p| p.chip),
@@ -317,12 +312,12 @@ pub async fn plan_flash(
     state: State<'_, AppState>,
 ) -> Answer<CommandPlan> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    let chip_id = project::detect(&root)?
-        .chip
-        .ok_or_else(|| CommandError::new(
+    let chip_id = project::detect(&root)?.chip.ok_or_else(|| {
+        CommandError::new(
             "The target chip is unknown, so rusty cannot choose a flashing command. \
              Fix the problems listed in the Project panel first.",
-        ))?;
+        )
+    })?;
 
     // What is plausibly on the other end, before the plan is offered. The
     // device row already knows the port names boards; the plan knowing it
@@ -377,12 +372,11 @@ pub async fn scaffold_c_interop(
             )));
         }
     };
-    let scaffold = tokio::task::spawn_blocking(move || {
-        rusty_embed::scaffold::c_interop(&root, direction)
-    })
-    .await
-    .map_err(|e| CommandError::new(format!("scaffolding panicked: {e}")))?
-    .map_err(|e| CommandError::new(e.to_string()))?;
+    let scaffold =
+        tokio::task::spawn_blocking(move || rusty_embed::scaffold::c_interop(&root, direction))
+            .await
+            .map_err(|e| CommandError::new(format!("scaffolding panicked: {e}")))?
+            .map_err(|e| CommandError::new(e.to_string()))?;
 
     Ok(rusty_embed::ScaffoldReport {
         written: scaffold.written,

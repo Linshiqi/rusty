@@ -27,10 +27,7 @@ pub async fn create_entry(
 /// the editor by a `detach` query parameter. Asking twice focuses the
 /// window that already exists instead of stacking a second copy.
 #[tauri::command]
-pub async fn open_editor_window(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<(), CommandError> {
+pub async fn open_editor_window(path: String, app: tauri::AppHandle) -> Result<(), CommandError> {
     use tauri::Manager;
 
     // FNV-1a over the path: stable, short, and two files cannot collide in
@@ -85,9 +82,11 @@ pub async fn open_external(
     state: State<'_, AppState>,
 ) -> Result<Document, CommandError> {
     let files = state.files();
-    Ok(tokio::task::spawn_blocking(move || files.open_external(&path))
-        .await
-        .map_err(|e| CommandError::new(format!("opening panicked: {e}")))??)
+    Ok(
+        tokio::task::spawn_blocking(move || files.open_external(&path))
+            .await
+            .map_err(|e| CommandError::new(format!("opening panicked: {e}")))??,
+    )
 }
 
 /// Re-highlight an unsaved buffer.

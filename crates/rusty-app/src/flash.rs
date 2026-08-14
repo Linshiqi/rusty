@@ -90,16 +90,17 @@ pub async fn create_project(
     // needs an answer rather than a diagnosis. The tool table already knows how
     // to install every tool rusty drives; saying "not found" without it leaves
     // the user to search for a crate name.
-    let session = process::spawn(&plan, Some(&parent)).map_err(|e| {
-        match toolchain::install_command(&plan.program) {
-            Some(install) => CommandError::new(format!(
-                "`{}` is not installed, so there is nothing to generate the project with. \
+    let session =
+        process::spawn(&plan, Some(&parent)).map_err(|e| {
+            match toolchain::install_command(&plan.program) {
+                Some(install) => CommandError::new(format!(
+                    "`{}` is not installed, so there is nothing to generate the project with. \
                  Install it with `{install}` — you can run that in the terminal below.",
-                plan.program,
-            )),
-            None => CommandError::from(e),
-        }
-    })?;
+                    plan.program,
+                )),
+                None => CommandError::from(e),
+            }
+        })?;
     state.start_session(session.stopper()).await;
 
     let code = tokio::task::spawn_blocking(move || {

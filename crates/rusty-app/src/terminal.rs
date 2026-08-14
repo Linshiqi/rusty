@@ -31,11 +31,18 @@ const COALESCE: Duration = Duration::from_millis(8);
 /// time an exec takes, and reads the same on every OS. `None` means "let
 /// rusty-term pick the system default".
 fn resolved_shell() -> Option<Vec<String>> {
-    match storage::workbench().terminal_shell.as_deref().map(str::trim) {
+    match storage::workbench()
+        .terminal_shell
+        .as_deref()
+        .map(str::trim)
+    {
         Some("system") => None,
         Some(custom) if !custom.is_empty() => Some(vec![custom.to_string()]),
         _ => std::env::current_exe().ok().map(|exe| {
-            vec![exe.to_string_lossy().into_owned(), "--builtin-shell".to_string()]
+            vec![
+                exe.to_string_lossy().into_owned(),
+                "--builtin-shell".to_string(),
+            ]
         }),
     }
 }
@@ -50,10 +57,7 @@ pub async fn terminal_shell_info() -> Result<rusty_embed::ShellInfo, CommandErro
         Some(argv) => argv.into_iter().next().unwrap_or_default(),
         None => rusty_term::default_shell(),
     };
-    Ok(rusty_embed::ShellInfo {
-        active,
-        preference,
-    })
+    Ok(rusty_embed::ShellInfo { active, preference })
 }
 
 /// Store the shell preference: null/"auto" = prefer the bundled Nushell,
@@ -118,9 +122,12 @@ pub async fn terminal_shells() -> Result<Vec<rusty_embed::ShellChoice>, CommandE
             }
         }
     } else {
-        for (label, program) in
-            [("bash", "bash"), ("zsh", "zsh"), ("fish", "fish"), ("Nushell", "nu")]
-        {
+        for (label, program) in [
+            ("bash", "bash"),
+            ("zsh", "zsh"),
+            ("fish", "fish"),
+            ("Nushell", "nu"),
+        ] {
             if let Some(path) = find_on_path(program) {
                 push(label, path);
             }
@@ -187,7 +194,10 @@ pub async fn terminal_open(
 
 /// Send keystrokes.
 #[tauri::command]
-pub async fn terminal_write(bytes: Vec<u8>, state: State<'_, AppState>) -> Result<(), CommandError> {
+pub async fn terminal_write(
+    bytes: Vec<u8>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
     let terminal = state.terminal().await.ok_or_else(|| {
         CommandError::new("No terminal is open, so there is nothing to type into.")
     })?;
@@ -211,7 +221,10 @@ pub async fn terminal_resize(
 
 /// Move the view through scrollback. Positive scrolls back.
 #[tauri::command]
-pub async fn terminal_scroll(delta: i32, state: State<'_, AppState>) -> Result<Screen, CommandError> {
+pub async fn terminal_scroll(
+    delta: i32,
+    state: State<'_, AppState>,
+) -> Result<Screen, CommandError> {
     let terminal = state
         .terminal()
         .await
