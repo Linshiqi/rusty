@@ -1255,6 +1255,11 @@ pub struct ToolStatus {
     pub path: Option<String>,
     /// How to install it, if absent.
     pub install_command: String,
+    /// Whether rusty can install it itself. False means the panel offers no
+    /// button: one that always fails is worse than the instructions it hides,
+    /// which is the rule the chip picker already follows.
+    #[serde(default)]
+    pub installable: bool,
     /// False when this tool is only needed for some projects.
     pub required: bool,
 }

@@ -214,10 +214,12 @@ pub fn Toolchain() -> impl IntoView {
                                         {(!present)
                                             .then(|| {
                                                 let command = tool.install_command.clone();
-                                                // rustup's "install command" is a URL — it
-                                                // is the installer everything else rides
-                                                // on, so it stays a pointer, not a button.
-                                                if command.starts_with("http") {
+                                                // No recipe, no button. One that always
+                                                // fails is worse than the instructions it
+                                                // sits on top of — the same rule the chip
+                                                // picker follows for a part behind another
+                                                // HAL.
+                                                if command.starts_with("http") || !tool.installable {
                                                     return view! {
                                                         <div class="mt-1.5 font-mono text-footnote text-slate select-text">
                                                             {command}

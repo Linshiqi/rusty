@@ -223,6 +223,9 @@ pub fn status() -> ToolchainStatus {
                     version: path.as_ref().and_then(|_| probe_version(name)),
                     path: path.map(|found| found.display().to_string()),
                     install_command: (*install).to_string(),
+                    // One table drives probing and installing, so this cannot
+                    // claim a recipe that install_steps does not have.
+                    installable: install_steps(name).is_ok(),
                     required: *required,
                 }
             })
@@ -258,6 +261,10 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             version: path.as_ref().and_then(|_| probe_version(binary)),
             path: path.map(|found| found.display().to_string()),
             install_command: install.to_string(),
+            // No automatic install yet: it is a toolchain archive from a
+            // GitHub release, the same shape as QEMU and the debuggers, and
+            // rusty will not ship a download URL it has not checked.
+            installable: false,
             // Only projects that actually speak C need it, and the detection
             // that knows whether this one does lives in `project::detect`.
             required: false,
