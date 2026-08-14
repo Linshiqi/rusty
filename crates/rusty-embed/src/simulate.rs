@@ -1198,6 +1198,44 @@ fn exe(name: &str) -> String {
 
 /// The first match for a binary on PATH. Shared with `toolchain`, which
 /// asks the same question about the same binaries.
+/// A binary rusty may have downloaded itself, or one the machine already had.
+///
+/// `tools/<family>/bin/` first, then PATH — the order `find_gdb` and
+/// `find_qemu` have always used, made available to everything else that
+/// probes. Without it, a tool rusty installed on request reports as absent
+/// and the panel keeps offering to install it again.
+pub fn find_tool(name: &str) -> Option<PathBuf> {
+    if let Some(tools) = config::data_dir().map(|d| d.join("tools")) {
+        for family in ["riscv32-esp-elf", "xtensa-esp-elf"] {
+            let bundled = tools.join(family).join("bin").join(exe(name));
+            if bundled.is_file() {
+                return Some(bundled);
+            }
+        }
+    }
+    on_path(name)
+}
+
+/// Every `bin/` under rusty's tools directory, for putting on a child's PATH.
+///
+/// `cc` invokes the cross compiler *by name*, so a compiler rusty unpacked
+/// into its own directory is one cargo cannot find however correctly the
+/// panel reports it. Handing the directories to the child is what closes
+/// that gap without touching the user's environment.
+pub fn tool_bin_dirs() -> Vec<PathBuf> {
+    let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&tools) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path().join("bin"))
+        .filter(|bin| bin.is_dir())
+        .collect()
+}
+
 pub(crate) fn on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

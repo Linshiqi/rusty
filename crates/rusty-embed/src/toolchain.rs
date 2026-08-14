@@ -9,7 +9,7 @@
 
 use std::process::Command;
 
-use crate::simulate::on_path;
+use crate::simulate::find_tool as on_path;
 use crate::{
     chip,
     model::{

@@ -128,6 +128,24 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
         // esp-pinned Xtensa project with stable, which dies with "can't
         // find crate for core". The project's own pin must decide.
         .env_remove("RUSTUP_TOOLCHAIN");
+
+    // Anything rusty downloaded, on the child's PATH. `cc` invokes the cross
+    // compiler *by name*, so a toolchain rusty unpacked into its own
+    // directory is one `cargo build` cannot find however correctly the panel
+    // reports it — the user installs it with one click and the build still
+    // fails. Appended, not prepended: a compiler the user put on PATH
+    // themselves is the one they meant.
+    let bins = crate::simulate::tool_bin_dirs();
+    if !bins.is_empty()
+        && let Some(existing) = std::env::var_os("PATH")
+    {
+        let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&existing).collect();
+        paths.extend(bins);
+        if let Ok(joined) = std::env::join_paths(paths) {
+            command.env("PATH", joined);
+        }
+    }
+
     if let Some(dir) = working_dir {
         command.current_dir(dir);
     }
