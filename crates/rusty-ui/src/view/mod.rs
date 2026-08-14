@@ -515,7 +515,11 @@ fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
                             // Full-screen catcher, so clicking anywhere else
                             // closes it — the behaviour every menu in here has.
                             <div class="fixed inset-0 z-40" on:click=dismiss />
-                            <div class="absolute bottom-full left-0 z-50 mb-px max-h-[70vh] w-[30rem] overflow-y-auto rounded-t-[8px] border border-line bg-raised py-1.5 shadow-lg">
+                            // Sized to what is in it, capped so a migration's
+                            // notes wrap instead of running off. A fixed width
+                            // wide enough for the plan left two short rows
+                            // sitting in an otherwise empty box.
+                            <div class="absolute bottom-full left-0 z-50 mb-px max-h-[70vh] w-max max-w-[34rem] min-w-[14rem] overflow-y-auto rounded-t-[8px] border border-line bg-raised py-1.5 shadow-lg">
                                 {row(
                                     "target",
                                     target.clone(),

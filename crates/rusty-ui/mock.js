@@ -214,7 +214,11 @@
         : "espflash flash --monitor target/xtensa-esp32-none-elf/release/blinky",
       rationale: "mock: espflash speaks the ROM bootloader on this transport",
     }),
-    chip_catalogue: () => [],
+    chip_catalogue: () => [
+      { id: "esp32", name: "ESP32", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 520000, flashBytes: null, bareMetalTarget: "xtensa-esp32-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [] },
+      { id: "esp32c3", name: "ESP32-C3", vendor: "espressif", arch: "riscV", cores: 1, sramBytes: 400000, flashBytes: null, bareMetalTarget: "riscv32imc-unknown-none-elf", stdTarget: null, toolchain: "stock", flashers: [], probeRsTarget: null, radios: [] },
+      { id: "esp32s3", name: "ESP32-S3", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 512000, flashBytes: null, bareMetalTarget: "xtensa-esp32s3-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [] },
+    ],
     board_catalogue: () => [],
     catalog_problems: () => [],
     wizard_options: () => [],
@@ -280,6 +284,22 @@
     // Stopping the debugger ends the run it started, as the backend now does:
     // the sim stream resolves, which is what puts the Play button back. A mock
     // that only killed gdb modelled the orphaned-QEMU bug rather than the fix.
+    // A chip switch, with the shape the popover has to lay out: a few files
+    // and the notes, which are long — they are what decides the width.
+    plan_migration: (a) => ({
+      from: "esp32", to: a.chip,
+      files: [
+        { path: ".cargo/config.toml", edits: [{ before: "xtensa-esp32-none-elf", after: "riscv32imc-unknown-none-elf" }, { before: "esp32", after: a.chip }] },
+        { path: "rust-toolchain.toml", edits: [{ before: "channel = \"esp\"", after: "channel = \"stable\"" }] },
+        { path: "Cargo.toml", edits: [{ before: "esp32", after: a.chip }] },
+      ],
+      notes: [
+        "Pins and peripherals in your source are not touched. ESP32 and ESP32-C3 do not have the same GPIOs, and only your code knows what each one should become — build after switching and the compiler names every site.",
+        "This also changes architecture, Xtensa to RISC-V: anything written in assembly, and any interrupt or critical-section code that assumes one of them, needs reading.",
+      ],
+      blocker: null,
+    }),
+    apply_migration: () => [".cargo/config.toml", "rust-toolchain.toml", "Cargo.toml"],
     debug_stop: () => {
       window.__mock.simResolve?.(0);
       window.__mock.simResolve = null;

@@ -178,12 +178,43 @@ pub fn plan(root: &Path, from: &Chip, to: &Chip) -> Migration {
         });
     }
 
-    migration.notes.push(format!(
-        "Pins and peripherals in your source are not touched. {} and {} do not have the \
-         same GPIOs, and only your code knows what each one should become — build after \
-         switching and the compiler names every site.",
-        from.name, to.name,
-    ));
+    // Naming the sites beats promising the compiler will. Both are true, but
+    // one of them is visible before deciding.
+    let pins = pin_sites(root);
+    if pins.is_empty() {
+        migration.notes.push(format!(
+            "Pins and peripherals in your source are not touched — {} and {} do not have \
+             the same GPIOs, and only your code knows what each one should become.",
+            from.name, to.name,
+        ));
+    } else {
+        let shown: Vec<String> = pins.iter().take(8).cloned().collect();
+        let more = pins.len().saturating_sub(shown.len());
+        migration.notes.push(format!(
+            "{} place{} name a pin and none of them is changed — {}{}. {} and {} do not \
+             have the same GPIOs, and only your code knows what each one should become.",
+            pins.len(),
+            if pins.len() == 1 { "" } else { "s" },
+            shown.join(", "),
+            if more > 0 {
+                format!(", and {more} more")
+            } else {
+                String::new()
+            },
+            from.name,
+            to.name,
+        ));
+        // rustc offers `GPIO26` → `GPIO2` here, and it is offering the
+        // closest *name*, not a pin. Taking three of those suggestions puts
+        // three outputs on one pin, and on the C3 that one is a strapping
+        // pin — a build that compiles and a board that does nothing.
+        migration.notes.push(
+            "The compiler's \"a field with a similar name exists\" suggestions are name \
+             similarity, not a pin mapping: accepting them silently moves several signals \
+             onto the same pin. Pick from what the part actually has."
+                .to_string(),
+        );
+    }
     if from.arch != to.arch {
         migration.notes.push(format!(
             "This also changes architecture, {} to {}: anything written in assembly, and \
@@ -281,6 +312,50 @@ fn boundaries<'a>(text: &'a str, word: &'a str) -> impl Iterator<Item = usize> +
     })
 }
 
+/// Every `peripherals.GPIOn` in the project's own sources, as `file:line`.
+///
+/// Text, not a parse: this is looking for the places a human has to make a
+/// decision, and a regex-shaped answer that is occasionally generous costs
+/// nothing, while missing one costs a build error nobody was warned about.
+fn pin_sites(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                for (number, line) in text.lines().enumerate() {
+                    for (at, _) in line.match_indices("GPIO") {
+                        let digits: String = line[at + 4..]
+                            .chars()
+                            .take_while(char::is_ascii_digit)
+                            .collect();
+                        if !digits.is_empty() {
+                            found.push(format!("{name}:{} GPIO{digits}", number + 1));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    walk(&root.join("src"), root, &mut found);
+    found
+}
+
 /// The text to cut to be rid of `build-std` — the line, and the `[unstable]`
 /// header with it when nothing else lives under it.
 ///
@@ -376,6 +451,16 @@ mod tests {
              # the chip feature picks the part\n\
              esp-hal = { version = \"~1.1.0\", features = [\"esp32\", \"unstable\"] }\n\
              esp-println = { version = \"0.15\", features = [\"esp32\"] }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src/bin")).unwrap();
+        std::fs::write(
+            dir.join("src/bin/main.rs"),
+            "fn main() {\n\
+             \x20   // a comment\n\
+             \x20   let led = Output::new(peripherals.GPIO26, Level::High);\n\
+             \x20   let other = Output::new(peripherals.GPIO32, Level::Low);\n\
+             }\n",
         )
         .unwrap();
     }
@@ -510,6 +595,22 @@ mod tests {
         assert!(
             migration.notes.iter().any(|n| n.contains("GPIO")),
             "pins are named as out of scope: {:?}",
+            migration.notes,
+        );
+        // The report that prompted this: four pin errors after a switch that
+        // had said only "the compiler names every site". True, and knowable
+        // beforehand.
+        assert!(
+            migration
+                .notes
+                .iter()
+                .any(|n| n.contains("src/bin/main.rs:3 GPIO26")),
+            "and the sites are named before the switch, not after: {:?}",
+            migration.notes,
+        );
+        assert!(
+            migration.notes.iter().any(|n| n.contains("similar name")),
+            "with the warning that rustc's suggestion is not a pin mapping: {:?}",
             migration.notes,
         );
         assert!(
