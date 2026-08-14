@@ -70,7 +70,10 @@ pub async fn install_sim_tool(
 /// The captured waveform, written where the build artefacts already live.
 /// Returns the absolute path so the dock can name it.
 #[tauri::command]
-pub async fn save_sim_trace(text: String, state: State<'_, AppState>) -> Result<String, CommandError> {
+pub async fn save_sim_trace(
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     let dir = root.join("target/rusty-sim");
     std::fs::create_dir_all(&dir)
@@ -166,9 +169,10 @@ pub async fn run_simulation(
     let plan = simulate::plan(&detected, debug);
 
     if !plan.supported {
-        return Err(CommandError::new(plan.reason.unwrap_or_else(|| {
-            "this project cannot be simulated".to_string()
-        })));
+        return Err(CommandError::new(
+            plan.reason
+                .unwrap_or_else(|| "this project cannot be simulated".to_string()),
+        ));
     }
     if !plan.missing.is_empty() {
         let mut lines = vec!["simulation needs tools that are not installed:".to_string()];
@@ -178,8 +182,39 @@ pub async fn run_simulation(
         return Err(CommandError::new(lines.join("\n")));
     }
 
+    // A debug run freezes the CPU at reset so breakpoints can be placed before
+    // the first instruction. With no gdb to place them, that freeze is
+    // permanent: a blank board, a live QEMU, and nothing anywhere saying why.
+    // Refuse while there is still something useful to say.
+    if debug && plan.debug.is_none() {
+        let how = plan.debug_tool.as_ref().map_or_else(
+            || "none is installed".to_string(),
+            |tool| format!("{} is not installed — {}", tool.name, tool.install),
+        );
+        return Err(CommandError::new(format!(
+            "Debugging needs a gdb that matches this chip, and {how}. Run without \
+             the debugger, or install it from the Simulate panel's tools card.",
+        )));
+    }
+
     simulate::prepare(&root)
         .map_err(|e| CommandError::new(format!("could not create target/rusty-sim: {e}")))?;
+
+    // Where a debugger may attach — and, crucially, *which ELF it must read*.
+    // Only a debug run arms a gdbstub, and only this run knows whether it
+    // built the optimised binary or the unoptimised one, so recording it
+    // anywhere else is a second copy of the decision waiting to disagree.
+    state
+        .set_attach(match (debug, plan.debug.as_ref()) {
+            (true, Some(target)) => Some(crate::state::Attach {
+                elf: target.elf.clone(),
+                port: target.port,
+            }),
+            // A plain Run arms no gdbstub, and must not leave a stale target
+            // behind for a later attach to find.
+            _ => None,
+        })
+        .await;
 
     let mut last_code = None;
     let total = plan.steps.len();
@@ -237,5 +272,7 @@ pub async fn run_simulation(
     }
 
     state.stop_session().await;
+    // QEMU has exited; there is no longer anything to attach to.
+    state.set_attach(None).await;
     Ok(last_code)
 }

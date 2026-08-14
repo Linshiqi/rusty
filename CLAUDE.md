@@ -323,6 +323,19 @@ usty`) holds `location.toml`
   outrank the project's rust-toolchain.toml, so a spawned `cargo build`
   compiles an esp-pinned Xtensa project with stable and dies with "can't
   find crate for `core`". `process::spawn` strips the variable.
+- **A debugger reading a different build than the one running answers every
+  question, fluently, about the wrong binary.** Debug runs build unoptimised
+  (`--config profile.dev.opt-level=0`) into `target/<triple>/debug/`, but the
+  frontend took gdb's ELF path from its cached `plan_simulation` result — and
+  that call passes `debug: false`, so gdb read the *release* ELF while QEMU
+  booted the unoptimised image. Symptoms, none of which point at the cause: the
+  breakpoint is reported six lines below where it was set (the release line
+  table), it never hits (the address means nothing in the running image), and
+  the Debug panel sits on "Running" for ever. Only the run that built the image
+  may say what the debugger reads; `run_simulation` records it (`state::Attach`)
+  and `debug_start` has no `elf` parameter to get wrong. When something has one
+  right answer and two computations of it, delete a computation — a test can
+  only catch the drift after someone reintroduces it.
 - **espflash `save-image` does not create parent directories** — a missing
   `target/rusty-sim/` fails as `os error 3`, which reads like a broken tool
   rather than a missing mkdir. `simulate::prepare` runs first.

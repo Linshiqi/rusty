@@ -908,15 +908,11 @@ pub fn run_simulation(state: AppState, debug: bool) {
                     // QEMU is frozen with its gdbstub listening. Attach the
                     // in-app debugger: breakpoints in the gutter, the stack
                     // in the dock. gdb's own REPL is still a terminal away
-                    // for anything the panel does not model.
-                    if let Some((elf, port)) = state.sim_plan.with_untracked(|plan| {
-                        plan.as_ref().and_then(|plan| {
-                            plan.debug.as_ref().map(|d| (d.elf.clone(), d.port))
-                        })
-                    }) && !elf.is_empty()
-                    {
-                        debug_start(state, port, false, elf);
-                    }
+                    // for anything the panel does not model. The run that
+                    // armed it knows which ELF it booted and on which port —
+                    // reading that from the panel's cached plan attached gdb
+                    // to the release binary while the unoptimised one ran.
+                    debug_start(state, false);
                     return;
                 }
                 if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
@@ -1850,14 +1846,17 @@ pub fn set_terminal_shell(state: AppState, value: Option<String>) {
 
 /// Attach the debugger to a target that is already listening, and keep the
 /// panel's state fed until the session ends.
-pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
+///
+/// Which binary and which port are the backend's to know. This used to pass
+/// them up out of the cached simulation plan — a plan built for a *release*
+/// run — so a debug run booted the unoptimised image while gdb read the
+/// optimised one and no breakpoint could ever hit.
+pub fn debug_start(state: AppState, hardware: bool) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
     #[derive(serde::Serialize)]
     struct Args {
-        port: u16,
         hardware: bool,
-        elf: String,
     }
 
     // Generations, exactly as the terminal needed them: a replaced
@@ -1926,11 +1925,7 @@ pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
     channel.set_onmessage(&on_state);
     on_state.forget();
 
-    let args = Args {
-        port,
-        hardware,
-        elf,
-    };
+    let args = Args { hardware };
     spawn_local(async move {
         let outcome =
             ipc::call_streaming::<_, ()>(cmd::debug::START, &args, "onState", &channel).await;

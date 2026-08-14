@@ -26,6 +26,8 @@ pub struct AppState {
     /// The running session's stdin, when it has one worth writing — the
     /// simulator's board input path. Cleared with the session.
     session_input: Mutex<Option<rusty_embed::process::Input>>,
+    /// Where a debugger should attach, recorded by the run that armed it.
+    attach: Mutex<Option<Attach>>,
     /// Chips and boards, after layering in the user's and the project's files.
     ///
     /// Held here rather than rebuilt per call so every surface — the port list,
@@ -49,6 +51,23 @@ pub struct AppState {
     /// project's target directory open, and a server answering questions about
     /// a workspace nobody is looking at is pure cost.
     lsp: Mutex<Option<Arc<rusty_lsp::LspClient>>>,
+}
+
+/// What a debug session must attach to, as decided by the run that started it.
+///
+/// gdb has to read *the ELF that produced the image now running*. This used to
+/// be passed up from the frontend, out of the simulation plan it had cached —
+/// and that plan was made for a release run. So a debug run booted the
+/// unoptimised image while gdb read the optimised binary: every line number
+/// came from a different compilation, the breakpoint slid to the next line with
+/// code, and its address matched nothing that was executing. One computation,
+/// one consumer, and the two cannot drift.
+#[derive(Debug, Clone)]
+pub struct Attach {
+    /// The ELF, relative to the project root — where gdb is started.
+    pub elf: String,
+    /// The port the target is listening on.
+    pub port: u16,
 }
 
 #[derive(Default, Clone)]
@@ -193,6 +212,17 @@ impl AppState {
         self.session_input.lock().await.clone()
     }
 
+    /// Record where the debugger should attach. Set by the run that built the
+    /// image and armed the target, because that run is the only thing that
+    /// knows which binary is now executing.
+    pub async fn set_attach(&self, attach: Option<Attach>) {
+        *self.attach.lock().await = attach;
+    }
+
+    pub async fn attach(&self) -> Option<Attach> {
+        self.attach.lock().await.clone()
+    }
+
     pub async fn start_session(&self, stopper: rusty_embed::process::Stopper) {
         let previous = self.session.lock().await.replace(stopper);
         if let Some(previous) = previous {
@@ -277,7 +307,10 @@ mod tests {
         // …and only then does the old one finish and clean up.
         state.release_terminal(&first).await;
 
-        let held = state.terminal().await.expect("the new session is still open");
+        let held = state
+            .terminal()
+            .await
+            .expect("the new session is still open");
         assert!(
             Arc::ptr_eq(&held, &second),
             "the outgoing session cleared the slot its successor owns",

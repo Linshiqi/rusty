@@ -1197,8 +1197,25 @@ mod tests {
             debug.steps[1].display,
         );
         assert!(
+            release.steps[1].display.contains("/release/"),
+            "while a release run images its own: {}",
+            release.steps[1].display,
+        );
+        // The two plans name *different* binaries. That is the whole reason
+        // only the run that armed the target may say which one gdb reads:
+        // pointing the debugger at the release ELF while the unoptimised
+        // image ran reported the breakpoint six lines down and never hit it,
+        // with nothing anywhere saying the two were different builds.
+        //
+        // `is_some_and` rather than `expect` because a machine with no esp
+        // gdb installed has no debug target to name, and CI is one.
+        assert!(
             debug.debug.is_some_and(|d| d.elf.contains("/debug/")),
             "as does the debugger",
+        );
+        assert!(
+            release.debug.is_some_and(|d| d.elf.contains("/release/")),
+            "each reading the build it belongs to",
         );
     }
 

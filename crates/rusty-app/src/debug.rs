@@ -21,15 +21,27 @@ use crate::{error::CommandError, state::AppState};
 /// The target — QEMU frozen at reset, or probe-rs serving hardware — is
 /// started by whoever asked for the debug run; this attaches to it. Two
 /// things starting QEMU would be two QEMUs.
+///
+/// Which ELF and which port come from that run, not from here and not from
+/// the frontend: it built the image, so it is the only thing that knows what
+/// is executing.
 #[tauri::command]
 pub async fn debug_start(
-    port: u16,
     hardware: bool,
-    elf: String,
     on_state: Channel<DebugState>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    // Refusing beats attaching to whatever happens to be built. gdb reading a
+    // different compilation from the one executing is the worst kind of wrong:
+    // it answers every question, fluently, about another binary.
+    let attach = state.attach().await.ok_or_else(|| {
+        CommandError::new(
+            "Nothing is waiting for a debugger. Start the run with Debug rather \
+             than Run — it builds unoptimised, freezes the target at reset, and \
+             hands the debugger the exact binary it booted.",
+        )
+    })?;
     let project = tokio::task::spawn_blocking({
         let root = root.clone();
         move || rusty_embed::project::detect(&root)
@@ -49,11 +61,11 @@ pub async fn debug_start(
 
     let launch = Launch {
         gdb,
-        elf: std::path::PathBuf::from(elf),
+        elf: std::path::PathBuf::from(attach.elf),
         target: if hardware {
-            Target::Probe { port }
+            Target::Probe { port: attach.port }
         } else {
-            Target::Qemu { port }
+            Target::Qemu { port: attach.port }
         },
         root,
     };
