@@ -323,6 +323,20 @@ usty`) holds `location.toml`
   outrank the project's rust-toolchain.toml, so a spawned `cargo build`
   compiles an esp-pinned Xtensa project with stable and dies with "can't
   find crate for `core`". `process::spawn` strips the variable.
+- **Switching a project's chip is mechanical except for pins, and the split is
+  the whole design.** Four things bind a project to a part — the target triple
+  and `--chip` in `.cargo/config.toml`, `build-std` (mandatory on Xtensa, a
+  flag stable cargo refuses everywhere else), the channel in
+  `rust-toolchain.toml`, and the chip feature on every `esp-*` dependency —
+  and all four are rewriteable. `GPIO26` on a part with no GPIO26 is not:
+  only the author knows what it should become. So `migrate.rs` changes the
+  four, states in the plan that it changed nothing else, and lets the compiler
+  name every site. Measured on the demo project: esp32 → esp32c3 built the
+  entire dependency tree for RISC-V and stopped on exactly four errors, all of
+  them pins. The edits are **word-bounded textual substitutions**, never a
+  parse-and-reserialise — `esp32` in `features` and in `--chip esp32` move
+  while `xtensa-esp32-none-elf` and `esp32c3` do not, and comments, ordering
+  and version specs survive byte-for-byte.
 - **One global flag cleared from a shared error path belongs to nobody.**
   `track` wraps every controller call, and its failure branch cleared
   `session_running` — so one unrelated error told a *running* simulation it

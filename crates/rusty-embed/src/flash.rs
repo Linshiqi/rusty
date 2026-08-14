@@ -64,8 +64,15 @@ pub fn chip_mismatch(project_chip: &str, candidates: &[String]) -> Option<String
         return None;
     }
     let seen = candidates.join(" or ");
+    // Naming the way out matters more than naming the fault: the old wording
+    // sent people off to recreate a project, which is not what this costs.
+    // Switching the chip rewrites the target, the toolchain and the crate
+    // features; only code that names a pin has to be looked at.
     Some(format!(
-        "This project builds for {project_chip}, but the device on this port          looks like {seen}. Flashing will fail when the bootloader reports a          different chip. Open or create a {seen} project, or pick another port.",
+        "This project builds for {project_chip}, but the device on this port \
+         looks like {seen}. Flashing will fail when the bootloader reports a \
+         different chip. Switch this project's chip from the status bar — \
+         click `chip {project_chip}` — or pick another port.",
     ))
 }
 

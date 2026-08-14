@@ -65,6 +65,36 @@ pub async fn open_editor_window(path: String, app: tauri::AppHandle) -> Result<(
     Ok(())
 }
 
+/// Send a detached editor's file back to the main window and close it.
+///
+/// The way back from a torn-off editor, which otherwise only had a close
+/// button — the file went out and could not come home, so the tab had to be
+/// reopened by hand. Dragging a window back the way VSCode does needs native
+/// drop targets between windows; this is the same destination by a button.
+///
+/// The main window is told by event rather than by command because it is the
+/// receiver, not the caller: nothing in it asked for this.
+#[tauri::command]
+pub async fn reattach_editor_window(
+    path: String,
+    window: tauri::Window,
+    app: tauri::AppHandle,
+) -> Result<(), CommandError> {
+    use tauri::{Emitter, Manager};
+
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| CommandError::new("The main window is gone, so there is nowhere to \
+                                          put this file back."))?;
+    main.emit("rusty://reattach", path)
+        .map_err(|error| CommandError::new(format!("could not hand the file over: {error}")))?;
+    let _ = main.set_focus();
+    // Only after the hand-off: closing first would leave the file nowhere if
+    // the emit failed.
+    let _ = window.close();
+    Ok(())
+}
+
 /// One file, highlighted.
 #[tauri::command]
 pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Document, CommandError> {

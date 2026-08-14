@@ -36,6 +36,8 @@ fn main() {
             commands::crate_report,
             commands::chip_catalogue,
             commands::board_catalogue,
+            commands::plan_migration,
+            commands::apply_migration,
             commands::catalog_problems,
             commands::toolchain_report,
             commands::firmware_list,
@@ -54,6 +56,7 @@ fn main() {
             files::save_file,
             files::create_entry,
             files::open_editor_window,
+            files::reattach_editor_window,
             files::highlight_text,
             files::open_external,
             files::format_text,
@@ -177,6 +180,8 @@ mod wire_names {
 
             cmd::catalog::CHIPS => commands::chip_catalogue,
             cmd::catalog::BOARDS => commands::board_catalogue,
+            cmd::migrate::PLAN => commands::plan_migration,
+            cmd::migrate::APPLY => commands::apply_migration,
             cmd::catalog::PROBLEMS => commands::catalog_problems,
 
             cmd::toolchain::REPORT => commands::toolchain_report,
@@ -196,6 +201,7 @@ mod wire_names {
             cmd::files::SAVE => files::save_file,
             cmd::files::CREATE => files::create_entry,
             cmd::files::DETACH => files::open_editor_window,
+            cmd::files::REATTACH => files::reattach_editor_window,
             cmd::files::HIGHLIGHT => files::highlight_text,
             cmd::files::OPEN_EXTERNAL => files::open_external,
             cmd::files::FORMAT => files::format_text,

@@ -203,6 +203,46 @@ pub async fn board_catalogue(state: State<'_, AppState>) -> Answer<Vec<Board>> {
     Ok(state.catalog().await.boards().to_vec())
 }
 
+/// What switching this project to another chip would change.
+///
+/// Both chips are resolved from the catalogue rather than taken on trust: a
+/// target triple and a toolchain requirement are the two things this must not
+/// get wrong, and the catalogue is where they are stated.
+#[tauri::command]
+pub async fn plan_migration(
+    chip: String,
+    state: State<'_, AppState>,
+) -> Result<rusty_embed::Migration, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let catalog = state.catalog().await;
+    let detected = rusty_embed::project::detect(&root)?;
+    let current = detected.chip.ok_or_else(|| {
+        CommandError::new(
+            "rusty cannot tell which chip this project builds for, so it cannot tell what \
+             a switch would change. Set the target in .cargo/config.toml first.",
+        )
+    })?;
+    let find = |id: &str| {
+        catalog
+            .chips()
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+            .ok_or_else(|| CommandError::new(format!("{id} is not in the chip catalogue.")))
+    };
+    Ok(rusty_embed::migrate::plan(&root, &find(&current)?, &find(&chip)?))
+}
+
+/// Carry out a migration and report the files written.
+#[tauri::command]
+pub async fn apply_migration(
+    plan: rusty_embed::Migration,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    rusty_embed::migrate::apply(&root, &plan).map_err(CommandError::new)
+}
+
 /// Catalogue files that failed to load.
 ///
 /// Surfaced rather than swallowed: a user who wrote a board file and cannot

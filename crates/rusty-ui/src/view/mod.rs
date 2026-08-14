@@ -105,6 +105,7 @@ pub fn App() -> impl IntoView {
     // frame, and closing it is closing it.
     if let Some(path) = state.detached.get_untracked() {
         let opened = RwSignal::new(false);
+        let home = path.clone();
         Effect::new(move |_| {
             if state.has_project() && !opened.get_untracked() {
                 opened.set(true);
@@ -113,6 +114,24 @@ pub fn App() -> impl IntoView {
         });
         return view! {
             <div class="flex h-full flex-col bg-content text-label">
+                // The way back. VSCode drags an editor into the main window;
+                // that needs native drop targets between OS windows, so this
+                // is the same destination by a button — and a torn-off file
+                // that can only be closed is a file with no way home.
+                //
+                // Labelled rather than an icon: it is the only control in a
+                // window with no other chrome, and "how do I get back" is
+                // exactly the question it has to answer at a glance.
+                <div class="flex h-8 flex-none items-center justify-end border-b border-line px-2">
+                    <button
+                        type="button"
+                        title="Close this window and reopen the file in the main one"
+                        on:click=move |_| controller::reattach(state, home.clone())
+                        class="flex h-[26px] items-center gap-1.5 rounded-[6px] px-2.5 text-footnote text-label-2 transition-colors hover:bg-sunken hover:text-label"
+                    >
+                        "↩ Back to the main window"
+                    </button>
+                </div>
                 <div class="flex min-h-0 flex-1 flex-col">
                     {panels::files_view()}
                 </div>
@@ -127,6 +146,9 @@ pub fn App() -> impl IntoView {
         palette_open,
     };
     palette::install(state, chrome);
+    // Only the shell listens for a file coming home; a detached window has no
+    // business reopening one.
+    controller::watch_reattach(state);
 
     view! {
         <div class="flex h-full flex-col bg-content text-label">
@@ -443,6 +465,218 @@ fn Status(
     }
 }
 
+/// What this project is built for: the chip in the bar, the rest on click.
+///
+/// The popover opens upwards because the bar is the last row on screen — a
+/// menu that renders below it is a menu nobody sees.
+#[component]
+fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
+    let open = RwSignal::new(false);
+    // The proposed switch, once one has been planned. Held here rather than
+    // applied on click: what a chip switch touches is exactly what somebody
+    // needs to read before it happens.
+    let proposal = RwSignal::new(None::<rusty_embed::Migration>);
+    let picking = RwSignal::new(false);
+    let current = chip.clone();
+    let row = |label: &'static str, value: String, note: &'static str| {
+        view! {
+            <div class="flex flex-col gap-0.5 px-3 py-1.5">
+                <div class="flex items-baseline gap-2">
+                    <span class="w-[4.5rem] shrink-0 text-label-3">{label}</span>
+                    <span class="min-w-0 break-all text-label select-text">{value}</span>
+                </div>
+                <span class="pl-[calc(4.5rem+0.5rem)] text-caption text-label-4">{note}</span>
+            </div>
+        }
+    };
+
+    view! {
+        <div class="relative h-full">
+            <button
+                type="button"
+                title="What this project builds for — click for the target and toolchain"
+                on:click=move |_| open.update(|it| *it = !*it)
+                class="flex h-full items-center gap-1.5 border-r border-line px-3 transition-colors hover:bg-sunken hover:text-label"
+            >
+                <span class="text-label-3">"chip"</span>
+                {chip}
+                <span class="text-label-4">"▴"</span>
+            </button>
+            {move || {
+                open.get()
+                    .then(|| {
+                        let dismiss = move |_| {
+                            open.set(false);
+                            picking.set(false);
+                            proposal.set(None);
+                        };
+                        let current = current.clone();
+                        view! {
+                            // Full-screen catcher, so clicking anywhere else
+                            // closes it — the behaviour every menu in here has.
+                            <div class="fixed inset-0 z-40" on:click=dismiss />
+                            <div class="absolute bottom-full left-0 z-50 mb-px max-h-[70vh] w-[30rem] overflow-y-auto rounded-t-[8px] border border-line bg-raised py-1.5 shadow-lg">
+                                {row(
+                                    "target",
+                                    target.clone(),
+                                    "target triple, from .cargo/config.toml",
+                                )}
+                                {row(
+                                    "toolchain",
+                                    toolchain.clone(),
+                                    "channel, from rust-toolchain.toml",
+                                )}
+                                <div class="my-1 h-px bg-line" />
+                                <SwitchChip current=current picking=picking proposal=proposal />
+                            </div>
+                        }
+                    })
+            }}
+        </div>
+    }
+}
+
+/// Moving the project to another chip, in three steps that are all reversible
+/// until the last one: pick, read what it would do, apply.
+///
+/// The offer lives beside the chip because that is the fact it changes. The
+/// answer to "must I recreate the project" is no for the configuration and
+/// yes for anything naming a pin, and the plan says which is which rather
+/// than implying it did everything.
+#[component]
+fn SwitchChip(
+    current: String,
+    picking: RwSignal<bool>,
+    proposal: RwSignal<Option<rusty_embed::Migration>>,
+) -> impl IntoView {
+    let state = AppState::expect();
+
+    view! {
+        {move || {
+            if let Some(plan) = proposal.get() {
+                let blocker = plan.blocker.clone();
+                let heading = format!("{} → {}", plan.from, plan.to);
+                let files = plan.files.clone();
+                let notes = plan.notes.clone();
+                let runnable = plan.clone();
+                return view! {
+                    <div class="px-3 py-1.5">
+                        <div class="mb-1.5 font-mono text-footnote text-label">{heading}</div>
+                        {blocker
+                            .clone()
+                            .map(|why| {
+                                view! {
+                                    <p class="rounded-[6px] bg-amber-fill px-2.5 py-2 text-caption leading-relaxed text-amber select-text">
+                                        {why}
+                                    </p>
+                                }
+                            })}
+                        {(blocker.is_none())
+                            .then(|| {
+                                view! {
+                                    <div class="mb-1.5 flex flex-col gap-0.5">
+                                        {files
+                                            .into_iter()
+                                            .map(|file| {
+                                                let count = file.edits.len();
+                                                view! {
+                                                    <div class="flex items-baseline justify-between gap-2 font-mono text-caption">
+                                                        <span class="text-label-2">{file.path}</span>
+                                                        <span class="shrink-0 text-label-4">
+                                                            {format!(
+                                                                "{count} change{}",
+                                                                if count == 1 { "" } else { "s" },
+                                                            )}
+                                                        </span>
+                                                    </div>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </div>
+                                    <ul class="mb-2 flex flex-col gap-1">
+                                        {notes
+                                            .into_iter()
+                                            .map(|note| {
+                                                view! {
+                                                    <li class="text-caption leading-relaxed text-label-3 select-text">
+                                                        "— "{note}
+                                                    </li>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </ul>
+                                    <div class="flex gap-2">
+                                        <button
+                                            type="button"
+                                            on:click=move |_| {
+                                                controller::apply_migration(
+                                                    state,
+                                                    runnable.clone(),
+                                                    proposal,
+                                                )
+                                            }
+                                            class="rounded-[6px] bg-rust px-2.5 py-1 text-caption text-window transition-opacity hover:opacity-90"
+                                        >
+                                            "Switch"
+                                        </button>
+                                        <button
+                                            type="button"
+                                            on:click=move |_| proposal.set(None)
+                                            class="rounded-[6px] px-2.5 py-1 text-caption text-label-2 transition-colors hover:bg-sunken hover:text-label"
+                                        >
+                                            "Cancel"
+                                        </button>
+                                    </div>
+                                }
+                            })}
+                    </div>
+                }
+                    .into_any();
+            }
+            if !picking.get() {
+                return view! {
+                    <button
+                        type="button"
+                        on:click=move |_| picking.set(true)
+                        class="flex w-full items-center px-3 py-1.5 text-left text-footnote text-label-2 transition-colors hover:bg-sunken hover:text-label"
+                    >
+                        "Switch this project to another chip…"
+                    </button>
+                }
+                    .into_any();
+            }
+            let current = current.clone();
+            view! {
+                <div class="max-h-56 overflow-y-auto py-0.5">
+                    {state
+                        .chips
+                        .get()
+                        .into_iter()
+                        .filter(|chip| chip.id != current)
+                        .map(|chip| {
+                            let id = chip.id.clone();
+                            let detail = format!("{} · {}", chip.arch.label(), chip.bare_metal_target);
+                            view! {
+                                <button
+                                    type="button"
+                                    on:click=move |_| {
+                                        controller::plan_migration(state, id.clone(), proposal)
+                                    }
+                                    class="flex w-full flex-col items-start px-3 py-1 text-left transition-colors hover:bg-sunken"
+                                >
+                                    <span class="font-mono text-footnote text-label">{chip.name}</span>
+                                    <span class="font-mono text-caption text-label-4">{detail}</span>
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+            }
+                .into_any()
+        }}
+    }
+}
+
 /// The facts you check without looking away from what you are doing.
 ///
 /// A status bar that only says "idle" is a decoration. This one carries the
@@ -536,22 +770,18 @@ fn StatusBar() -> impl IntoView {
                             .configured_toolchain
                             .clone()
                             .unwrap_or_else(|| "unpinned".into());
-                        // Labelled inline, not only by tooltip: three bare
-                        // values reading "esp32 · xtensa-esp32-none-elf · esp"
-                        // are a riddle, and nobody hovers a status bar to solve
-                        // one.
+                        // One chip, not three. The three values answer one
+                        // question — what is this project built for — and the
+                        // chip is the part of the answer anyone reads at a
+                        // glance; the triple and the channel are what you look
+                        // up when something is wrong, which is a click away.
+                        //
+                        // They were still labelled inline when they sat in the
+                        // bar, because three bare values reading "esp32 ·
+                        // xtensa-esp32-none-elf · esp" are a riddle. Inside the
+                        // popover there is room to label them properly.
                         view! {
-                            <Status label="chip" text=chip title="Detected chip" />
-                            <Status
-                                label="target"
-                                text=target
-                                title="Target triple from .cargo/config.toml"
-                            />
-                            <Status
-                                label="toolchain"
-                                text=toolchain
-                                title="Toolchain from rust-toolchain.toml"
-                            />
+                            <BuiltFor chip=chip target=target toolchain=toolchain />
                         }
                     })
             }}

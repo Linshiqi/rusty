@@ -42,6 +42,12 @@ pub mod catalog {
     pub const PROBLEMS: &str = "catalog_problems";
 }
 
+/// Moving a project from one chip to another.
+pub mod migrate {
+    pub const PLAN: &str = "plan_migration";
+    pub const APPLY: &str = "apply_migration";
+}
+
 pub mod toolchain {
     pub const REPORT: &str = "toolchain_report";
 }
@@ -95,6 +101,8 @@ pub mod files {
     pub const SAVE: &str = "save_file";
     pub const CREATE: &str = "create_entry";
     pub const DETACH: &str = "open_editor_window";
+    /// Bring a detached editor's file back into the main window.
+    pub const REATTACH: &str = "reattach_editor_window";
     pub const HIGHLIGHT: &str = "highlight_text";
     pub const OPEN_EXTERNAL: &str = "open_external";
     pub const FORMAT: &str = "format_text";

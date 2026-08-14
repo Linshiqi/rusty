@@ -10,8 +10,8 @@ use leptos::task::spawn_local;
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, WorkspaceReport};
 use rusty_embed::{
     Board, Chip, CommandPlan, EmbeddedProject, Explanation, Firmware, FlashAction, LogLevel,
-    LogLine, LogStream, MemoryReport, Probe, RelocateReport, SerialPort, StorageLocation,
-    ToolchainReport, Transport, WizardChoice, WizardOption,
+    LogLine, LogStream, MemoryReport, Migration, Probe, RelocateReport, SerialPort,
+    StorageLocation, ToolchainReport, Transport, WizardChoice, WizardOption,
 };
 
 use rusty_ai::{AgentEvent, ChatEvent, Message, Preset, ProviderConfig, ToolDef};
@@ -1867,6 +1867,90 @@ pub fn set_terminal_shell(state: AppState, value: Option<String>) {
         move |()| {
             close_terminal(state);
             load_shell_info(state);
+        },
+    );
+}
+
+// ─── detached windows ────────────────────────────────────────────────────────
+
+/// Hand this window's file back to the shell and close.
+pub fn reattach(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+    let args = Args { path };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::files::REATTACH, &args).await },
+        |()| {},
+    );
+}
+
+/// Reopen a file a detached window is handing back.
+///
+/// Installed by the shell only: a detached window is one file's editor, and
+/// reopening somebody else's tab is exactly the project-wide behaviour it is
+/// supposed to stay out of.
+pub fn watch_reattach(state: AppState) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
+    #[derive(serde::Deserialize)]
+    struct Event {
+        payload: String,
+    }
+
+    let handler = Closure::wrap(Box::new(move |event: JsValue| {
+        if let Ok(event) = serde_wasm_bindgen::from_value::<Event>(event) {
+            open_file(state, event.payload);
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    // Taken before forgetting, because the handle is what `listen` needs and
+    // the closure has to outlive this task either way.
+    let js = handler.as_ref().clone();
+    handler.forget();
+    spawn_local(async move {
+        let _ = ipc::listen("rusty://reattach", js).await;
+    });
+}
+
+// ─── chips ───────────────────────────────────────────────────────────────────
+
+/// What switching this project to another chip would change.
+pub fn plan_migration(state: AppState, chip: String, into: RwSignal<Option<Migration>>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        chip: String,
+    }
+    let args = Args { chip };
+    track(
+        state,
+        async move { ipc::call::<_, Migration>(cmd::migrate::PLAN, &args).await },
+        move |plan| into.set(Some(plan)),
+    );
+}
+
+/// Carry one out, then re-read the project: the chip, the target and the
+/// toolchain the status bar shows have all just changed.
+pub fn apply_migration(state: AppState, plan: Migration, into: RwSignal<Option<Migration>>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        plan: Migration,
+    }
+    let args = Args { plan };
+    track(
+        state,
+        async move { ipc::call::<_, Vec<String>>(cmd::migrate::APPLY, &args).await },
+        move |written| {
+            into.set(None);
+            for path in written {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("— switched {path}"),
+                    level: None,
+                });
+            }
+            refresh_project(state);
         },
     );
 }

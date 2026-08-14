@@ -134,6 +134,41 @@ impl Runtime {
     }
 }
 
+/// What switching a project from one chip to another would change.
+///
+/// The plan crosses the wire and comes back to be applied, so what runs is
+/// exactly what the user was shown — the same contract the flash plans have.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Migration {
+    pub from: String,
+    pub to: String,
+    /// Files that would be edited, in the order they would be written.
+    pub files: Vec<FileChange>,
+    /// What this deliberately does not do. Never empty for a plan that can
+    /// run: a chip switch that said nothing about pins would be exactly the
+    /// plausible-looking answer that costs somebody an afternoon.
+    pub notes: Vec<String>,
+    /// Why it will not run at all, when it will not.
+    pub blocker: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChange {
+    /// Project-relative, `/`-separated.
+    pub path: String,
+    pub edits: Vec<Edit>,
+}
+
+/// One substitution. An empty `before` appends; an empty `after` deletes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Edit {
+    pub before: String,
+    pub after: String,
+}
+
 /// A supported microcontroller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
