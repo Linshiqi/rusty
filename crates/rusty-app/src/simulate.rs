@@ -20,7 +20,7 @@ pub async fn save_sim_board(
 pub async fn plan_simulation(state: State<'_, AppState>) -> Result<SimPlan, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     let detected = project::detect(&root)?;
-    Ok(simulate::plan(&detected))
+    Ok(simulate::plan(&detected, false))
 }
 
 /// Install one missing tool, streaming every line — the panel's one-click.
@@ -163,7 +163,7 @@ pub async fn run_simulation(
 ) -> Result<Option<i32>, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     let detected = project::detect(&root)?;
-    let plan = simulate::plan(&detected);
+    let plan = simulate::plan(&detected, debug);
 
     if !plan.supported {
         return Err(CommandError::new(plan.reason.unwrap_or_else(|| {

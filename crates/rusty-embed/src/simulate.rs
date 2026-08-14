@@ -34,7 +34,15 @@ const MACHINES: &[(&str, &str)] = &[
 ];
 
 /// Everything needed to simulate `project`, or exactly why not.
-pub fn plan(project: &EmbeddedProject) -> SimPlan {
+/// How this project would be simulated.
+///
+/// `debug` changes the build, not just the QEMU flags: a release build has
+/// no code on many lines, so gdb moves a breakpoint to the next line that
+/// does, and the margin ends up marking a line execution never reaches.
+/// Debug runs build unoptimised — measured at 284 KB against release's
+/// 85 KB on the demo project, which is 7% of a 4 MB flash and the right
+/// trade when the point is to stop where you clicked.
+pub fn plan(project: &EmbeddedProject, debug: bool) -> SimPlan {
     let Some(chip) = project.chip.as_deref() else {
         return SimPlan {
             supported: false,
@@ -112,17 +120,41 @@ pub fn plan(project: &EmbeddedProject) -> SimPlan {
         };
     };
     let binary = package_name(Path::new(&project.root)).unwrap_or_else(|| "app".to_string());
-    let elf = format!("target/{target}/release/{binary}");
+    // Cargo's own directory names, and the profile the build below asks
+    // for — one decision, spelled once.
+    let profile = if debug { "debug" } else { "release" };
+    let elf = format!("target/{target}/{profile}/{binary}");
     let image = "target/rusty-sim/flash.bin".to_string();
 
-    let build = CommandPlan {
-        program: "cargo".to_string(),
-        args: vec!["build".to_string(), "--release".to_string()],
-        display: "cargo build --release".to_string(),
-        rationale: "the project's own toolchain builds the exact firmware a device would get"
-            .to_string(),
-                        warning: None,
-                };
+    // `--config` rather than an edit: the project's own `[profile.dev]`
+    // usually sets `opt-level = "s"` — esp-generate's template does, saying
+    // the default debug profile is too slow for the hardware — so dropping
+    // `--release` alone still optimises, and breakpoints still move.
+    // Overriding on the command line leaves their manifest alone and shows
+    // in the dock exactly what ran.
+    let build = if debug {
+        CommandPlan {
+            program: "cargo".to_string(),
+            args: vec![
+                "build".to_string(),
+                "--config".to_string(),
+                "profile.dev.opt-level=0".to_string(),
+            ],
+            display: "cargo build --config profile.dev.opt-level=0".to_string(),
+            rationale: "unoptimised, so a breakpoint stops on the line you set it on                         rather than the next one the optimiser left standing"
+                .to_string(),
+            warning: None,
+        }
+    } else {
+        CommandPlan {
+            program: "cargo".to_string(),
+            args: vec!["build".to_string(), "--release".to_string()],
+            display: "cargo build --release".to_string(),
+            rationale: "the project's own toolchain builds the exact firmware a device would get"
+                .to_string(),
+            warning: None,
+        }
+    };
     let mut image_args = vec![
         "save-image".to_string(),
         "--chip".to_string(),

@@ -285,6 +285,15 @@ usty`) holds `location.toml`
   and set `ENABLE_VIRTUAL_TERMINAL_INPUT` itself (termios raw on Unix) —
   and flip processed input back on around child commands, or Ctrl+C stops
   interrupting them.
+- **A debug run needs a different build, not just different QEMU flags.**
+  A release build has no code on many lines, so gdb moves a breakpoint to
+  the next line that does and the margin ends up marking a line execution
+  never reaches. Dropping `--release` is not enough either: esp-generate's
+  template sets `[profile.dev] opt-level = "s"`, so the dev profile is
+  optimised too. Debug runs pass `--config profile.dev.opt-level=0`, which
+  leaves the user's manifest alone and shows in the dock. Measured on the
+  demo project: 284 KB against release's 85 KB — 7% of a 4 MB flash, and
+  the breakpoint lands on the line that was clicked.
 - **A terminal session must own its slot by identity, and close before it
   reopens.** Two races produced the same symptom — a blank terminal after
   switching shells — and each alone was enough. First, the frontend cleared

@@ -17,7 +17,7 @@ fn main() {
     let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
 
     let project = rusty_embed::project::detect(&root).expect("detect");
-    let plan = rusty_embed::simulate::plan(&project);
+    let plan = rusty_embed::simulate::plan(&project, false);
     println!("supported: {}", plan.supported);
     if let Some(reason) = &plan.reason {
         println!("reason: {reason}");
