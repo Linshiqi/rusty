@@ -1,3 +1,13 @@
+[tools]
+# Pinned, and it has to be. `style/input.css` opens with `@import
+# "tailwindcss"` — v4 syntax that v3 cannot parse — while Trunk's own default
+# is still 3.3.5. This machine happened to have a v4 binary on PATH, which
+# Trunk prefers over downloading, so every local build worked and the first
+# CI build failed on all three runners with a bare "exit status: 1" from a
+# tailwind nobody had chosen. A toolchain version that comes from whatever is
+# on PATH is not a version.
+tailwindcss = "4.3.0"
+
 [build]
 target = "./index.html"
 # Release builds optimise the wasm for size: 20 languages of strings and a full

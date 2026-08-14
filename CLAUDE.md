@@ -476,6 +476,15 @@ usty`) holds `location.toml`
   compile error in the frontend and is not — the next rebuild after the lock
   frees succeeds on identical source. Check the serve log's timestamps before
   believing a build failure the browser console reports.
+- **A tool version that comes from whatever is on PATH is not a version.**
+  `style/input.css` opens with `@import "tailwindcss"` — v4 syntax — and
+  Trunk 0.21's *default* tailwind is still 3.3.5, which cannot parse it. This
+  machine happened to have a v4 binary on PATH, which Trunk prefers over
+  downloading, so every local build passed and the first CI build failed on
+  all three runners with a bare `exit status: 1` from a tailwind nobody had
+  chosen. Pinned in `Trunk.toml`'s `[tools]`. Reproduce a CI-only build
+  failure by taking the tool off PATH — Trunk then downloads what the pin
+  says, which is exactly the runner's situation.
 - **Trunk only ships assets it was told about.** A bare `<script src="x.js">`
   leaves `x.js` out of `dist/`, and the dev server answers the request with
   `index.html`, so the failure is `Unexpected token '<'` rather than a 404.
