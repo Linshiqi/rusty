@@ -1170,6 +1170,38 @@ fn package_name(root: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A debug run is a different build, not just different QEMU flags.
+    ///
+    /// Dropping `--release` would not be enough: esp-generate's template
+    /// sets `[profile.dev] opt-level = "s"`, so the dev profile optimises
+    /// too and breakpoints still move off the line they were set on.
+    #[test]
+    fn a_debug_run_builds_unoptimised_and_takes_that_elf() {
+        let target = Some("riscv32imc-unknown-none-elf");
+        let release = plan(&project(Some("esp32c3"), target), false);
+        let debug = plan(&project(Some("esp32c3"), target), true);
+
+        assert!(
+            release.steps[0].display.contains("--release"),
+            "the ordinary run builds what a device would get: {}",
+            release.steps[0].display,
+        );
+        assert!(
+            debug.steps[0].display.contains("profile.dev.opt-level=0"),
+            "the debug run overrides the profile on the command line rather              than editing anybody's manifest: {}",
+            debug.steps[0].display,
+        );
+        assert!(
+            debug.steps[1].display.contains("/debug/"),
+            "and images the ELF that build produced: {}",
+            debug.steps[1].display,
+        );
+        assert!(
+            debug.debug.is_some_and(|d| d.elf.contains("/debug/")),
+            "as does the debugger",
+        );
+    }
+
     fn project(chip: Option<&str>, target: Option<&str>) -> EmbeddedProject {
         EmbeddedProject {
             root: ".".to_string(),
@@ -1390,7 +1422,7 @@ mod tests {
 
     #[test]
     fn an_unmodelled_chip_is_refused_with_the_supported_list() {
-        let plan = plan(&project(Some("esp32c6"), Some("riscv32imac-unknown-none-elf")));
+        let plan = plan(&project(Some("esp32c6"), Some("riscv32imac-unknown-none-elf")), false);
         assert!(!plan.supported);
         let reason = plan.reason.expect("names the problem");
         assert!(reason.contains("esp32c6"), "{reason}");
@@ -1399,7 +1431,7 @@ mod tests {
 
     #[test]
     fn a_supported_chip_plans_three_inspectable_steps() {
-        let sim = plan(&project(Some("esp32c3"), Some("riscv32imc-unknown-none-elf")));
+        let sim = plan(&project(Some("esp32c3"), Some("riscv32imc-unknown-none-elf")), false);
         assert!(sim.supported, "{:?}", sim.reason);
         assert_eq!(sim.steps.len(), 3);
         assert_eq!(sim.steps[0].display, "cargo build --release");
@@ -1411,8 +1443,8 @@ mod tests {
 
     #[test]
     fn no_chip_and_no_target_refuse_rather_than_guess() {
-        assert!(!plan(&project(None, None)).supported);
-        let sim = plan(&project(Some("esp32c3"), None));
+        assert!(!plan(&project(None, None), false).supported);
+        let sim = plan(&project(Some("esp32c3"), None), false);
         assert!(!sim.supported);
         assert!(sim.reason.expect("says why").contains(".cargo/config.toml"));
     }
