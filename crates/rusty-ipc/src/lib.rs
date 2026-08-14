@@ -120,6 +120,9 @@ pub mod debug {
     pub const CONTROL: &str = "debug_control";
     pub const FRAME: &str = "debug_frame";
     pub const STOP: &str = "debug_stop";
+    pub const READ: &str = "debug_read_memory";
+    pub const REGISTERS: &str = "register_map";
+    pub const FETCH_SVD: &str = "fetch_svd";
 }
 
 /// The workspace's direct dependencies against crates.io.

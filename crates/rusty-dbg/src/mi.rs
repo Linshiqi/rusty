@@ -189,7 +189,13 @@ fn parse_value(input: &str) -> Option<(Value, &str)> {
             while !rest.starts_with(']') {
                 // A list's elements are values — except gdb also emits
                 // `[name=value,…]`, a list of fields wearing list brackets.
-                if let Some((key, value, tail)) = parse_field(rest) {
+                //
+                // Only a bare name can start a field. Trying `parse_field`
+                // on `{begin="0x…"}` finds the `=` *inside* the braces and
+                // silently invents a field called `{begin` — a mis-parse
+                // that reads as "no memory came back" three layers away.
+                let is_field = !rest.starts_with(['{', '[', '"']);
+                if let Some((key, value, tail)) = is_field.then(|| parse_field(rest)).flatten() {
                     items.push(Value::Tuple(alloc::vec![(key, value)]));
                     rest = tail.strip_prefix(',').unwrap_or(tail);
                 } else {
@@ -293,6 +299,24 @@ mod tests {
             frames[1].get("frame").and_then(|f| f.field("level")),
             Some("1"),
         );
+    }
+
+    /// A list of bare tuples, which is how `-data-read-memory-bytes`
+    /// answers. The elements start with `{`, and treating them as
+    /// `name=value` finds the `=` inside the braces — inventing a field
+    /// called `{begin` and losing the read.
+    #[test]
+    fn a_list_of_tuples_is_not_a_list_of_fields() {
+        let Some(Record::Result { fields, .. }) = parse(
+            r#"^done,memory=[{begin="0x3ff44004",end="0x3ff44008",contents="0400000f"}]"#,
+        ) else {
+            panic!("not a result");
+        };
+        let value = Value::Tuple(fields);
+        let items = value.get("memory").expect("a memory list").items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].field("begin"), Some("0x3ff44004"));
+        assert_eq!(items[0].field("contents"), Some("0400000f"));
     }
 
     #[test]

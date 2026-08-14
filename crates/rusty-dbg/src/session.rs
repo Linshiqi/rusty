@@ -19,7 +19,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use crate::mi::{self, Record, Value};
-use crate::model::{Breakpoint, DebugState, StackFrame, StopReason, Variable};
+use crate::model::{Breakpoint, DebugState, MemoryRead, StackFrame, StopReason, Variable};
 
 /// What gdb connects to.
 #[derive(Debug, Clone, Copy)]
@@ -190,6 +190,13 @@ impl Debugger {
         self.send("-stack-list-variables --all-values")
     }
 
+    /// Read a span of target memory — a peripheral's register block, for
+    /// the register view. Only while stopped: gdb refuses otherwise, and
+    /// a half-read block would decode into fiction.
+    pub fn read_memory(&self, address: u64, bytes: u32) -> Result<()> {
+        self.send(&format!("-data-read-memory-bytes 0x{address:x} {bytes}"))
+    }
+
     /// Evaluate an expression in the selected frame — the watch panel, and
     /// what a hover over a name in the editor will ask.
     pub fn evaluate(&self, expression: &str) -> Result<()> {
@@ -306,6 +313,14 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
                             .collect();
                         changed = true;
                     }
+                    if let Some(memory) = value.get("memory") {
+                        state.memory = memory
+                            .items()
+                            .iter()
+                            .filter_map(memory_of)
+                            .collect();
+                        changed = true;
+                    }
                     if let Some(variables) = value.get("variables") {
                         state.variables = variables
                             .items()
@@ -369,6 +384,26 @@ fn frame_of(frame: &Value, root: &Path) -> Option<StackFrame> {
             .map(|line| line.saturating_sub(1)),
         address: frame.field("addr").unwrap_or_default().to_string(),
     })
+}
+
+/// `{begin="0x3ff44004",contents="0400000f"}` — hex pairs, little-endian
+/// as the target holds them.
+fn memory_of(item: &Value) -> Option<MemoryRead> {
+    // The element may be the tuple itself or a `memory={…}` field wearing
+    // list brackets, depending on gdb's mood about `-data-read-memory-bytes`.
+    let tuple = item.get("memory").unwrap_or(item);
+    let begin = tuple.field("begin")?;
+    let begin = u64::from_str_radix(begin.trim_start_matches("0x"), 16).ok()?;
+    let contents = tuple.field("contents")?;
+    let data = contents
+        .as_bytes()
+        .chunks(2)
+        .filter_map(|pair| {
+            let text = std::str::from_utf8(pair).ok()?;
+            u8::from_str_radix(text, 16).ok()
+        })
+        .collect();
+    Some(MemoryRead { begin, data })
 }
 
 fn variable_of(item: &Value) -> Option<Variable> {
@@ -520,6 +555,24 @@ mod tests {
         apply(&mut state, &mi::parse("*running,thread-id=\"all\"").unwrap(), &root());
         assert!(state.stack.is_empty(), "a stack read mid-flight is a lie");
         assert!(state.variables.is_empty());
+    }
+
+    #[test]
+    fn a_memory_read_decodes_to_the_bytes_the_target_holds() {
+        let mut state = DebugState::default();
+        let record = mi::parse(
+            r#"^done,memory=[{begin="0x3ff44004",offset="0x00000000",end="0x3ff44008",contents="0400000f"}]"#,
+        )
+        .unwrap();
+        assert!(apply(&mut state, &record, &root()));
+
+        let read = &state.memory[0];
+        assert_eq!(read.begin, 0x3FF4_4004);
+        assert_eq!(
+            read.data,
+            vec![0x04, 0x00, 0x00, 0x0F],
+            "hex pairs decode in order; the little-endian assembly is the              panel's job, not the transport's",
+        );
     }
 
     #[test]

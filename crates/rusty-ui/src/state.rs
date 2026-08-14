@@ -122,15 +122,18 @@ pub enum DockTab {
     /// Where the target is stopped: the call stack and what the variables
     /// hold there.
     Debug,
+    /// The chip's peripherals, as the target holds them right now.
+    Registers,
 }
 
 impl DockTab {
-    pub const ALL: [DockTab; 6] = [
+    pub const ALL: [DockTab; 7] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
         DockTab::Waves,
         DockTab::Debug,
+        DockTab::Registers,
         DockTab::Devices,
     ];
 
@@ -142,6 +145,7 @@ impl DockTab {
             DockTab::Waves => "Waves",
             DockTab::Devices => "Devices",
             DockTab::Debug => "Debug",
+            DockTab::Registers => "Registers",
         }
     }
 }
@@ -507,6 +511,11 @@ pub struct AppState {
     /// Which session's frames are current — the same generation guard the
     /// terminal needed, for the same reason.
     pub debug_epoch: RwSignal<u64>,
+    /// The chip's peripherals, once an SVD has been read. `None` means not
+    /// asked yet; `Some(None)` means asked and this machine has no file.
+    pub registers: RwSignal<Option<Option<rusty_embed::RegisterMap>>>,
+    /// Which peripheral the register view is showing.
+    pub peripheral: RwSignal<Option<String>>,
     /// What the shell picker offers: the built-in plus every shell the
     /// backend actually found on this machine.
     pub shell_choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
@@ -647,6 +656,8 @@ impl AppState {
             update_status: RwSignal::new(None),
             debug: RwSignal::new(None),
             debug_epoch: RwSignal::new(0),
+            registers: RwSignal::new(None),
+            peripheral: RwSignal::new(None),
             shell_choices: RwSignal::new(Vec::new()),
             tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
             dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),

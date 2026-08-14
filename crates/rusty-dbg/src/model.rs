@@ -75,6 +75,19 @@ pub enum StopReason {
     Other,
 }
 
+/// One span of target memory, as read.
+///
+/// A register view asks for a peripheral's whole block in one request
+/// rather than a round trip per register: thirty round trips per stop over
+/// a gdbstub is what makes a register panel feel broken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRead {
+    pub begin: u64,
+    /// Little-endian bytes, exactly as the target holds them.
+    pub data: Vec<u8>,
+}
+
 /// Where a session is, as one value the frontend can render.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -96,4 +109,8 @@ pub struct DebugState {
     pub error: Option<String>,
     /// Set when the session ended, with the target's status if it had one.
     pub exited: Option<i32>,
+    /// The last spans read. Replaced rather than accumulated: a register
+    /// view wants what the target holds *now*, and keeping history would
+    /// mean showing a value from before the last step.
+    pub memory: Vec<MemoryRead>,
 }

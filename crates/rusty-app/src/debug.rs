@@ -154,3 +154,66 @@ pub async fn debug_stop(state: State<'_, AppState>) -> Result<(), CommandError> 
     }
     Ok(())
 }
+
+/// Read a span of target memory — a peripheral's register block.
+#[tauri::command]
+pub async fn debug_read_memory(
+    address: u64,
+    bytes: u32,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let debugger = state
+        .debugger()
+        .await
+        .ok_or_else(|| CommandError::new("No debug session is running."))?;
+    debugger
+        .read_memory(address, bytes)
+        .map_err(|e| CommandError::new(e.to_string()))
+}
+
+/// The chip's peripherals, from whichever SVD this machine has.
+///
+/// Absent is not an error: a chip with no SVD is a register view that
+/// cannot open, and the panel says which file it wants and offers to fetch
+/// it. Guessing register addresses would be the worst possible answer.
+#[tauri::command]
+pub async fn register_map(
+    state: State<'_, AppState>,
+) -> Result<Option<rusty_embed::RegisterMap>, CommandError> {
+    let root = state.root().await;
+    let Some(chip) = state.chip().await else {
+        return Ok(None);
+    };
+    tokio::task::spawn_blocking(move || {
+        let path = rusty_embed::svd::find(&chip, root.as_deref())?;
+        let xml = std::fs::read_to_string(path).ok()?;
+        Some(rusty_embed::svd::parse(&xml))
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("reading the SVD panicked: {e}")))
+}
+
+/// Fetch the chip's SVD, streaming progress like every other download.
+#[tauri::command]
+pub async fn fetch_svd(
+    on_line: Channel<rusty_embed::LogLine>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let chip = state
+        .chip()
+        .await
+        .ok_or_else(|| CommandError::new("The chip is unknown, so rusty cannot pick an SVD."))?;
+    tokio::task::spawn_blocking(move || {
+        rusty_embed::svd::fetch(&chip, |line| {
+            let _ = on_line.send(rusty_embed::LogLine {
+                stream: rusty_embed::LogStream::Stdout,
+                text: line,
+                level: None,
+            });
+        })
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("the SVD download panicked: {e}")))?
+    .map(|_| ())
+    .map_err(CommandError::new)
+}

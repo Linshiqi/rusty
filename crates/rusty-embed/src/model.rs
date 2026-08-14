@@ -451,6 +451,66 @@ pub enum FlashAction {
 /// and shown to the user verbatim before it runs. Embedded developers reach for
 /// the terminal constantly; hiding the command behind a button is how a tool
 /// becomes something to work around rather than with.
+/// A chip's peripherals, as a register view needs them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterMap {
+    pub peripherals: Vec<Peripheral>,
+    /// How many peripherals or registers the parse could not place —
+    /// `derivedFrom` inheritance, mostly. Shown rather than hidden: a panel
+    /// silently missing GPIO2 is a panel that lies about the chip.
+    pub dropped: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Peripheral {
+    pub name: String,
+    pub description: String,
+    pub base: u64,
+    pub registers: Vec<Register>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Register {
+    pub name: String,
+    pub description: String,
+    /// From the peripheral's base.
+    pub offset: u32,
+    pub bits: u32,
+    /// False for write-only registers — reading one can wedge the
+    /// peripheral, so the panel must not offer to.
+    pub readable: bool,
+    pub fields: Vec<RegisterField>,
+}
+
+/// Registers default to readable and 32 bits: most SVDs say neither, and
+/// a register the panel refuses to read because a file omitted `access` is
+/// a register the user cannot see.
+impl Default for Register {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            offset: 0,
+            bits: 32,
+            readable: true,
+            fields: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterField {
+    pub name: String,
+    pub description: String,
+    /// Bit position of the field's least significant bit.
+    pub offset: u32,
+    pub width: u32,
+}
+
 /// What an update check found.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

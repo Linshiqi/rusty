@@ -38,6 +38,8 @@ pub mod process;
 #[cfg(feature = "backend")]
 pub mod simulate;
 #[cfg(feature = "backend")]
+pub mod svd;
+#[cfg(feature = "backend")]
 pub mod update;
 #[cfg(feature = "backend")]
 pub mod project;

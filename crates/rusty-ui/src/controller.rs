@@ -1980,6 +1980,50 @@ pub fn debug_stop(state: AppState) {
     });
 }
 
+/// Read the chip's SVD, if this machine has one.
+pub fn load_registers(state: AppState) {
+    track(
+        state,
+        async move {
+            ipc::get::<Option<rusty_embed::RegisterMap>>(cmd::debug::REGISTERS).await
+        },
+        move |map| state.registers.set(Some(map)),
+    );
+}
+
+/// Fetch the chip's SVD, then read it. The download's progress goes to the
+/// dock like every other download's.
+pub fn fetch_svd(state: AppState) {
+    let channel = stream_to_terminal(state);
+    state.show_dock(crate::state::DockTab::Output);
+    track(
+        state,
+        async move {
+            ipc::call_streaming::<_, ()>(cmd::debug::FETCH_SVD, &(), "onLine", &channel).await
+        },
+        move |()| load_registers(state),
+    );
+}
+
+/// Read a peripheral's register block from the target — one request for the
+/// whole span rather than a round trip per register.
+pub fn read_peripheral(state: AppState, base: u64, bytes: u32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        address: u64,
+        bytes: u32,
+    }
+    let args = Args {
+        address: base,
+        bytes,
+    };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::debug::READ, &args).await },
+        move |()| {},
+    );
+}
+
 /// Ask GitHub whether there is a newer rusty.
 pub fn check_update(state: AppState) {
     state.update_status.set(None);

@@ -104,6 +104,13 @@ impl AppState {
         self.inner.lock().await.root.clone()
     }
 
+    /// The open project's chip, when detection found one — what picks an
+    /// SVD, and what a register view is about.
+    pub async fn chip(&self) -> Option<String> {
+        let root = self.root().await?;
+        rusty_embed::project::detect(&root).ok()?.chip
+    }
+
     pub async fn debugger(&self) -> Option<Arc<rusty_dbg::Debugger>> {
         self.debugger.lock().await.clone()
     }

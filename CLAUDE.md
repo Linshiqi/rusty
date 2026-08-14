@@ -149,7 +149,10 @@ exist, which is why `.rusty/parts/*.toml` can add one.
 
 See `docs/extensibility.md`. Chips and boards are TOML in three layers
 (built-in < user config < `<project>/.rusty/`); simulator parts are TOML in
-`<project>/.rusty/parts/`. Code extensions go through MCP. UI contributions are
+`<project>/.rusty/parts/`; a chip's register description is the vendor's own
+SVD, found in `<project>/.rusty/svd/` or the data directory and fetched on
+demand — never bundled, because a vendor file is a hundred thousand lines of
+XML nobody wants in a git repository by accident. Code extensions go through MCP. UI contributions are
 declarative — extensions never ship markup or styles.
 
 ## UI conventions

@@ -5318,6 +5318,7 @@ name = "rusty-embed"
 version = "0.1.0"
 dependencies = [
  "object",
+ "quick-xml",
  "rustc-demangle",
  "serde",
  "serde_json",
