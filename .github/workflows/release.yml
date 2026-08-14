@@ -45,13 +45,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Tauri's own list, plus the two this workbench adds. Named explicitly
+      # even where a runner image happens to ship them: a dependency that
+      # comes from whatever the image includes is a dependency nobody chose,
+      # and an apt package already present costs a line and no time.
+      #
+      # libudev-dev: `serialport` enumerates ports through udev on Linux, and
+      #   it is what carries the USB identity — the VID/PID rusty matches
+      #   against the board catalogue to say "Espressif native USB" rather
+      #   than "some COM port". Turning serialport's `libudev` feature off
+      #   would build without it and silently lose that.
+      # libdbus-1-dev: `libdbus-sys`, via tao, defaults to pkg-config.
       - name: Linux system libraries (webkit2gtk and friends)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl \
             wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev libudev-dev libdbus-1-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
