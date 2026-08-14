@@ -40,6 +40,8 @@ pub enum Action {
     OpenSettings,
     SetTheme(Theme),
     ResetLayout,
+    /// Scaffold C interop, in whichever direction.
+    ScaffoldC(&'static str),
     CloseWindow,
 }
 
@@ -306,6 +308,25 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 project_entry(Action::RefreshProject, "Re-check project", chord(Action::RefreshProject)),
                 entry(Action::RefreshToolchain, "Re-scan toolchain", None),
                 entry(Action::ReloadCatalog, "Reload chips and boards", None),
+                Item::Separator,
+                // The two directions people actually need, named as
+                // directions rather than as tool names: nobody thinks
+                // "I need cc", they think "I have this C driver".
+                Item::Submenu {
+                    label: "Add C interop",
+                    items: vec![
+                        project_entry(
+                            Action::ScaffoldC("rust-calls-c"),
+                            "Rust calls C…",
+                            None,
+                        ),
+                        project_entry(
+                            Action::ScaffoldC("c-calls-rust"),
+                            "C calls Rust…",
+                            None,
+                        ),
+                    ],
+                },
             ],
         },
         Menu {
@@ -385,6 +406,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::SetTheme(theme) => theme::set(theme),
+        Action::ScaffoldC(direction) => controller::scaffold_c_interop(state, direction),
         Action::ResetLayout => {
             state.tree_width.set(240.0);
             state.dock_height.set(196.0);

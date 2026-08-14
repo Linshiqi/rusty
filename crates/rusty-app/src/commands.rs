@@ -356,6 +356,41 @@ pub async fn plan_flash(
     Ok(plan)
 }
 
+/// Write the C-interop scaffolding, in whichever direction.
+///
+/// Returns what it wrote and what still has to run, so the panel can say so
+/// rather than leaving somebody to discover a build.rs they did not expect.
+#[tauri::command]
+pub async fn scaffold_c_interop(
+    direction: String,
+    state: State<'_, AppState>,
+) -> Answer<rusty_embed::ScaffoldReport> {
+    use rusty_embed::scaffold::Direction;
+
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let direction = match direction.as_str() {
+        "rust-calls-c" => Direction::RustCallsC,
+        "c-calls-rust" => Direction::CCallsRust,
+        other => {
+            return Err(CommandError::new(format!(
+                "{other} is not a direction rusty can scaffold",
+            )));
+        }
+    };
+    let scaffold = tokio::task::spawn_blocking(move || {
+        rusty_embed::scaffold::c_interop(&root, direction)
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("scaffolding panicked: {e}")))?
+    .map_err(|e| CommandError::new(e.to_string()))?;
+
+    Ok(rusty_embed::ScaffoldReport {
+        written: scaffold.written,
+        command: scaffold.command,
+        next: scaffold.next,
+    })
+}
+
 /// Is there a newer rusty? Blocking work — ureq is synchronous — so it
 /// goes to a blocking thread rather than stalling the async runtime for as
 /// long as a proxy takes to time out.

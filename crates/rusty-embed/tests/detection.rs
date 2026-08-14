@@ -285,3 +285,79 @@ fn a_directory_without_a_manifest_is_an_error_not_an_empty_result() {
     let err = project::detect(dir.path()).unwrap_err().to_string();
     assert!(err.contains("Cargo.toml"), "{err}");
 }
+
+/// A project that meets C is named as such, with the file that proves each
+/// claim — and a pure-Rust one says nothing at all rather than showing an
+/// empty heading.
+#[test]
+fn c_interop_is_reported_with_its_evidence() {
+    let dir = project_dir(&[
+        (
+            "Cargo.toml",
+            r#"
+[package]
+name = "bridge"
+version = "0.1.0"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+esp-hal = { version = "0.23", features = ["esp32c3"] }
+
+[build-dependencies]
+cc = "1"
+bindgen = "0.70"
+"#,
+        ),
+        ("src/lib.rs", "#![no_std]
+"),
+        ("csrc/driver.c", "int driver_init(void) { return 0; }
+"),
+        ("csrc/driver.h", "int driver_init(void);
+"),
+    ]);
+    let project = detect(dir.path());
+    let interop = &project.c_interop;
+
+    assert!(!interop.is_empty());
+    assert!(
+        interop.via.iter().any(|v| v.starts_with("cc —")),
+        "cc compiles the C in build.rs: {:?}",
+        interop.via,
+    );
+    assert!(
+        interop.via.iter().any(|v| v.starts_with("bindgen —")),
+        "bindgen binds its headers: {:?}",
+        interop.via,
+    );
+    assert!(
+        interop.exports_to_c,
+        "a staticlib is a crate C links against, which is the other direction",
+    );
+    assert_eq!(interop.sources, 2, "both csrc files counted");
+    assert!(
+        interop.evidence.iter().any(|e| e == "csrc/"),
+        "every claim names the file that proves it: {:?}",
+        interop.evidence,
+    );
+
+    let plain = project_dir(&[
+        (
+            "Cargo.toml",
+            "[package]
+name = \"plain\"
+version = \"0.1.0\"
+
+[dependencies]
+esp-hal = \"0.23\"
+",
+        ),
+        ("src/main.rs", "fn main() {}
+"),
+    ]);
+    assert!(
+        detect(plain.path()).c_interop.is_empty(),
+        "a pure-Rust project claims no C interop",
+    );
+}

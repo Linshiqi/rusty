@@ -1980,6 +1980,43 @@ pub fn debug_stop(state: AppState) {
     });
 }
 
+/// Write the C-interop scaffolding, then say what landed and run the one
+/// command it needs. The written files go to the dock, because a workbench
+/// that creates four files without naming them is a workbench you stop
+/// trusting with your project.
+pub fn scaffold_c_interop(state: AppState, direction: &'static str) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        direction: &'static str,
+    }
+    let args = Args { direction };
+    track(
+        state,
+        async move {
+            ipc::call::<_, rusty_embed::ScaffoldReport>(cmd::wizard::C_INTEROP, &args).await
+        },
+        move |report| {
+            state.show_dock(crate::state::DockTab::Output);
+            for path in &report.written {
+                state.push_log(rusty_embed::LogLine {
+                    stream: rusty_embed::LogStream::Stdout,
+                    text: format!("wrote {path}"),
+                    level: None,
+                });
+            }
+            state.push_log(rusty_embed::LogLine {
+                stream: rusty_embed::LogStream::Stdout,
+                text: format!("next: {}", report.next),
+                level: None,
+            });
+            refresh_tree(state);
+            if let Some(command) = report.command {
+                run_session(state, command, "build");
+            }
+        },
+    );
+}
+
 /// Read the chip's SVD, if this machine has one.
 pub fn load_registers(state: AppState) {
     track(

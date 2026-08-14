@@ -1151,6 +1151,7 @@ mod tests {
             uses_embassy: false,
             evidence: Vec::new(),
             problems: Vec::new(),
+                    c_interop: Default::default(),
         }
     }
 

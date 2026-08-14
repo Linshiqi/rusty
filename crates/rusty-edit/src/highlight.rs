@@ -26,9 +26,17 @@ const MAX_LINES: usize = 5_000;
 /// matched — a plain-text file is shown unstyled rather than guessed at.
 pub fn lines(syntaxes: &SyntaxSet, path: &str, text: &str) -> (Vec<Line>, Option<String>, bool) {
     let extension = path.rsplit('.').next().unwrap_or_default();
-    let syntax = syntaxes
-        .find_syntax_by_extension(extension)
-        .or_else(|| syntaxes.find_syntax_by_name(extension));
+    // syntect hands `.h` to Objective-C, which claims the extension. In a
+    // firmware project a header is C — the vendor SDK's, or the one
+    // cbindgen just wrote — and Objective-C's grammar colours it wrong in
+    // ways that read as a broken highlighter.
+    let syntax = if extension == "h" {
+        syntaxes.find_syntax_by_name("C")
+    } else {
+        None
+    }
+    .or_else(|| syntaxes.find_syntax_by_extension(extension))
+    .or_else(|| syntaxes.find_syntax_by_name(extension));
 
     let truncated = text.lines().count() > MAX_LINES;
     let source = text.lines().take(MAX_LINES);
@@ -262,6 +270,22 @@ fn token_for(scope: Scope) -> Option<Token> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A header in a firmware project is C. syntect gives `.h` to
+    /// Objective-C, whose grammar colours `struct` and `#define` wrongly —
+    /// which reads as a broken highlighter, not as a misfiled grammar.
+    #[test]
+    fn a_header_is_c_not_objective_c() {
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        let (_, language, _) = lines(
+            &syntaxes,
+            "include/blinky.h",
+            "#define LED 26
+void blinky_tick(void);
+",
+        );
+        assert_eq!(language.as_deref(), Some("C"));
+    }
 
     fn tokens(path: &str, source: &str) -> Vec<(String, Token)> {
         let syntaxes = SyntaxSet::load_defaults_newlines();

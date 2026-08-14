@@ -422,6 +422,28 @@ usty`) holds `location.toml`
   at the end of the statement. Bind the struct, then move it into an `async`
   block.
 
+## Meeting C
+
+Embedded Rust does not live alone: vendor SDKs are C, `esp-idf-sys` wraps a C
+framework, and teams migrate by putting a Rust module inside C firmware. So
+the workbench knows about C without becoming a C IDE.
+
+- **Detection reports, never guesses.** `project::detect` fills `c_interop`
+  with what it found — `cc`, `bindgen`, `esp-idf-sys`, a `staticlib`
+  crate-type, C sources in the project — and each claim carries the file
+  that proves it.
+- **Scaffolding refuses before it writes.** `scaffold::c_interop` writes both
+  directions (Rust calls C, C calls Rust) and stops on the first path that
+  exists: half a scaffold over somebody's code cannot be undone by an error
+  message. It does not edit `Cargo.toml` either — `cargo add cc --build` is
+  the official path, visible in the dock like every other command.
+- **`.h` is C here.** syntect gives the extension to Objective-C, whose
+  grammar colours a firmware header wrongly in ways that read as a broken
+  highlighter.
+- **C/C++ project types are out of scope.** That is ESP-IDF's and
+  STM32CubeIDE's job, and doing it badly would cost the thing this workbench
+  is actually good at.
+
 ## After every feature: review before moving on
 
 Not a release ritual — a step in finishing the feature.

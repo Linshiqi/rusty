@@ -55,6 +55,8 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         .map(|(name, purpose)| format!("{name} — {purpose}"))
         .collect();
 
+    let c_interop = detect_c_interop(root, &manifest, &deps);
+
     let uses_defmt = deps.iter().any(|d| d == "defmt");
     let uses_embassy = deps.iter().any(|d| d.starts_with("embassy-"));
 
@@ -100,6 +102,7 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         frameworks,
         uses_defmt,
         uses_embassy,
+        c_interop,
         evidence,
         problems: Vec::new(),
     };
@@ -397,4 +400,75 @@ fn read_toolchain_channel(root: &Path, evidence: &mut Vec<String>) -> Result<Opt
         return Ok(None);
     }
     Ok(None)
+}
+
+/// What C this project already meets, and the file that proves each claim.
+///
+/// The interesting cases are all real: a vendor SDK wrapped by `esp-idf-sys`,
+/// a driver compiled by `cc` in build.rs, a `staticlib` that C firmware
+/// links against. Naming them is what lets the rest of the workbench stop
+/// pretending a project is pure Rust when it is not.
+fn detect_c_interop(
+    root: &Path,
+    manifest: &toml::map::Map<String, toml::Value>,
+    deps: &[String],
+) -> crate::model::CInterop {
+    let mut interop = crate::model::CInterop::default();
+
+    const KNOWN: &[(&str, &str)] = &[
+        ("cc", "C sources compiled into the crate by build.rs"),
+        ("cmake", "a CMake project built by build.rs"),
+        ("bindgen", "C headers turned into Rust declarations at build time"),
+        ("cbindgen", "a C header generated from this crate's public API"),
+        ("esp-idf-sys", "the ESP-IDF — a C framework — wrapped for Rust"),
+    ];
+    for (name, purpose) in KNOWN {
+        if deps.iter().any(|d| d == name) {
+            interop.via.push(format!("{name} — {purpose}"));
+            interop.evidence.push("Cargo.toml".to_string());
+        }
+    }
+
+    // A crate C can link against says so in its manifest.
+    if let Some(kinds) = manifest
+        .get("lib")
+        .and_then(|lib| lib.get("crate-type"))
+        .and_then(toml::Value::as_array)
+    {
+        let exports = kinds.iter().filter_map(toml::Value::as_str).any(|kind| {
+            kind == "staticlib" || kind == "cdylib"
+        });
+        if exports {
+            interop.exports_to_c = true;
+            interop.evidence.push("Cargo.toml [lib] crate-type".to_string());
+        }
+    }
+
+    // C carried in the project. Shallow on purpose: a vendored SDK under
+    // target/ or a registry checkout is not this project's C, and walking
+    // into them would count tens of thousands of files to say so.
+    for directory in ["src", "csrc", "c_src", "include", "components"] {
+        let path = root.join(directory);
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        let count = entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| matches!(e, "c" | "h" | "cc" | "cpp" | "hpp"))
+            })
+            .count() as u32;
+        if count > 0 {
+            interop.sources += count;
+            interop.evidence.push(format!("{directory}/"));
+        }
+    }
+
+    interop.evidence.sort();
+    interop.evidence.dedup();
+    interop
 }

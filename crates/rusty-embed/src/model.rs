@@ -296,6 +296,9 @@ pub struct EmbeddedProject {
     pub uses_defmt: bool,
     /// Whether `embassy-executor` is present.
     pub uses_embassy: bool,
+    /// What C this project already speaks, if any.
+    #[serde(default)]
+    pub c_interop: CInterop,
     /// Files that informed the detection, relative to the root.
     pub evidence: Vec<String>,
     /// Things that will stop a build, in the order worth fixing them.
@@ -451,6 +454,45 @@ pub enum FlashAction {
 /// and shown to the user verbatim before it runs. Embedded developers reach for
 /// the terminal constantly; hiding the command behind a button is how a tool
 /// becomes something to work around rather than with.
+/// What a scaffolding run wrote, on the wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaffoldReport {
+    pub written: Vec<String>,
+    /// The dependency to add, as a command the user watches run.
+    pub command: Option<CommandPlan>,
+    /// The step scaffolding cannot do for you, in one sentence.
+    pub next: String,
+}
+
+/// How a Rust firmware project meets C.
+///
+/// Reported, not guessed: every entry names the file that proves it. A
+/// workbench that says "this project uses bindgen" without being able to
+/// point at the line is a workbench that will eventually be wrong about it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CInterop {
+    /// Crates that pull a C toolchain into the build, each with what it
+    /// does — `cc`, `bindgen`, `esp-idf-sys`.
+    pub via: Vec<String>,
+    /// C and C++ sources carried in the project itself.
+    pub sources: u32,
+    /// True when the crate is built as a library C can link against —
+    /// `staticlib` or `cdylib` in the manifest.
+    pub exports_to_c: bool,
+    /// The files that prove the above.
+    pub evidence: Vec<String>,
+}
+
+impl CInterop {
+    /// Whether anything at all was found — the panel shows nothing rather
+    /// than an empty heading for a pure-Rust project.
+    pub fn is_empty(&self) -> bool {
+        self.via.is_empty() && self.sources == 0 && !self.exports_to_c
+    }
+}
+
 /// A chip's peripherals, as a register view needs them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

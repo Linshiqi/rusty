@@ -70,6 +70,8 @@ pub mod wizard {
     pub const EXPLAIN: &str = "explain_choice";
     pub const PLAN: &str = "plan_new_project";
     pub const CREATE: &str = "create_project";
+    /// Scaffold C interop into the open project, either direction.
+    pub const C_INTEROP: &str = "scaffold_c_interop";
 }
 
 /// The terminal: a real shell behind a pseudo-terminal, plus the one-shot
