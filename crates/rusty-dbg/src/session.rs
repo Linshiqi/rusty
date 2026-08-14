@@ -375,7 +375,7 @@ fn frame_of(frame: &Value, root: &Path) -> Option<StackFrame> {
         file: frame
             .field("fullname")
             .map(|full| relative(full, root))
-            .or_else(|| frame.field("file").map(str::to_string)),
+            .or_else(|| frame.field("file").map(normalise)),
         // gdb counts lines from one; everything this side of the boundary
         // counts from zero.
         line: frame
@@ -422,7 +422,7 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
     let file = bkpt
         .field("fullname")
         .map(|full| relative(full, root))
-        .or_else(|| bkpt.field("file").map(str::to_string))
+        .or_else(|| bkpt.field("file").map(normalise))
         .unwrap_or_default();
     let line = bkpt
         .field("line")
@@ -449,17 +449,22 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
     }
 }
 
+/// One spelling of a separator.
+///
+/// gdb mixes them within a single field — `src\bin/main.rs` came back from
+/// a real session — and a path that differs from the editor's by one
+/// backslash is a breakpoint that never lights up.
+fn normalise(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 /// gdb reports absolute paths; the editor and the gutter speak
 /// project-relative, `/`-separated ones. One spelling per file, or a
 /// breakpoint set in the editor never matches the one gdb reports back.
 fn relative(full: &str, root: &Path) -> String {
     let path = Path::new(full);
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    normalise(&relative.to_string_lossy())
 }
 
 #[cfg(test)]
@@ -503,6 +508,24 @@ mod tests {
             frame.line,
             Some(67),
             "gdb's one-based line 68 is line 67 on this side of the boundary",
+        );
+    }
+
+    /// Real gdb output, captured from a live esp32 session: one field,
+    /// both separators. A path that differs from the editor's by a single
+    /// backslash is a breakpoint that never lights up.
+    #[test]
+    fn mixed_separators_come_back_as_one_spelling() {
+        let mut state = DebugState::default();
+        let stop = mi::parse(
+            r#"*stopped,reason="breakpoint-hit",bkptno="1",frame={addr="0x400d121f",func="blinky::__xtensa_lx_rt_main",file="src\\bin/main.rs",line="75"},thread-id="1""#,
+        )
+        .unwrap();
+        apply(&mut state, &stop, &root());
+        assert_eq!(
+            state.stack[0].file.as_deref(),
+            Some("src/bin/main.rs"),
+            "without a fullname to strip, the file field is still normalised",
         );
     }
 

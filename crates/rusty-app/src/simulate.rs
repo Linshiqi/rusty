@@ -210,26 +210,6 @@ pub async fn run_simulation(
         } else {
             step.clone()
         };
-        let step = if debug && step.program.contains("qemu-system") {
-            // Frozen at the first instruction with the gdbstub listening —
-            // and a deterministic virtual clock, because a debugger that
-            // perturbs timing hides the bugs people came to see.
-            let mut armed = step.clone();
-            for flag in ["-s", "-S", "-icount", "shift=auto,sleep=on"] {
-                armed.args.push(flag.to_string());
-            }
-            armed.display = format!("{} -s -S -icount shift=auto,sleep=on", armed.display);
-            let _ = on_line.send(LogLine {
-                stream: LogStream::Stdout,
-                text: "[rusty:debug] gdbstub on :1234, cpu frozen — attaching gdb in the \
-                       terminal"
-                    .to_string(),
-                level: None,
-            });
-            armed
-        } else {
-            step.clone()
-        };
         let session = process::spawn(&step, Some(root.as_path()))?;
         state.start_session(session.stopper()).await;
         // The boot step is QEMU; its stdin is the board's input path.
