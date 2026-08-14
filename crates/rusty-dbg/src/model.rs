@@ -22,7 +22,16 @@ pub struct Breakpoint {
     pub file: String,
     /// Zero-based, like every other line number that crosses this boundary.
     /// gdb counts from one; the conversion happens at the edge.
+    ///
+    /// Where the breakpoint actually *is*, which is not always where it was
+    /// asked for: an optimised build has no code on many lines, and gdb
+    /// moves the breakpoint to the next line that does.
     pub line: u32,
+    /// The line the user clicked, when gdb reported one — so the margin can
+    /// move its dot to where execution will really stop instead of leaving
+    /// it on a line the compiler deleted.
+    #[serde(default)]
+    pub requested: Option<u32>,
     /// False when gdb refused it — no code at that line, usually. The
     /// gutter draws it hollow and the reason says why.
     pub verified: bool,

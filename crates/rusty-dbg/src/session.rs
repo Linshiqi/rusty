@@ -72,10 +72,30 @@ impl Events {
     }
 }
 
-pub struct Debugger {
-    child: Mutex<Child>,
+/// The write half of the session, shared with the reader.
+///
+/// A stop is a question the session answers for itself — "what is the
+/// stack, what do the locals hold" — so the thread that notices the stop
+/// has to be able to ask. Leaving that to the UI meant one round trip per
+/// stop and, until something asked, a call stack one frame deep.
+struct Wire {
     stdin: Mutex<Option<ChildStdin>>,
     token: AtomicU32,
+}
+
+impl Wire {
+    fn send(&self, command: &str) -> Result<()> {
+        let token = self.token.fetch_add(1, Ordering::Relaxed);
+        let mut slot = self.stdin.lock().expect("stdin");
+        let stdin = slot.as_mut().ok_or(Error::Closed)?;
+        writeln!(stdin, "{token}{command}").map_err(|_| Error::Closed)?;
+        stdin.flush().map_err(|_| Error::Closed)
+    }
+}
+
+pub struct Debugger {
+    child: Mutex<Child>,
+    wire: Arc<Wire>,
     state: Arc<Mutex<DebugState>>,
 }
 
@@ -115,16 +135,21 @@ impl Debugger {
         let state = Arc::new(Mutex::new(DebugState::default()));
         let (sender, receiver) = channel();
 
+        let wire = Arc::new(Wire {
+            stdin: Mutex::new(stdin),
+            token: AtomicU32::new(1),
+        });
+
         {
             let state = Arc::clone(&state);
+            let wire = Arc::clone(&wire);
             let root = launch.root.clone();
-            std::thread::spawn(move || pump(stdout, state, sender, root));
+            std::thread::spawn(move || pump(stdout, state, wire, sender, root));
         }
 
         let debugger = Self {
             child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
-            token: AtomicU32::new(1),
+            wire,
             state,
         };
 
@@ -212,11 +237,7 @@ impl Debugger {
     }
 
     fn send(&self, command: &str) -> Result<()> {
-        let token = self.token.fetch_add(1, Ordering::Relaxed);
-        let mut slot = self.stdin.lock().expect("stdin");
-        let stdin = slot.as_mut().ok_or(Error::Closed)?;
-        writeln!(stdin, "{token}{command}").map_err(|_| Error::Closed)?;
-        stdin.flush().map_err(|_| Error::Closed)
+        self.wire.send(command)
     }
 }
 
@@ -225,6 +246,7 @@ impl Debugger {
 fn pump(
     stdout: std::process::ChildStdout,
     state: Arc<Mutex<DebugState>>,
+    wire: Arc<Wire>,
     sender: Sender<DebugState>,
     root: PathBuf,
 ) {
@@ -233,6 +255,17 @@ fn pump(
         let Some(record) = mi::parse(&line) else {
             continue;
         };
+        // A stop is only half an answer: it names one frame. The rest of
+        // the stack and the frame's variables are separate questions, and
+        // asking them here means a panel that is complete the moment it
+        // appears rather than one round trip later.
+        if let Record::Exec { class, fields } = &record
+            && class == "stopped"
+            && Value::Tuple(fields.clone()).field("reason") != Some("exited-normally")
+        {
+            let _ = wire.send("-stack-list-frames");
+            let _ = wire.send("-stack-list-variables --all-values");
+        }
         let changed = {
             let mut state = state.lock().expect("state");
             apply(&mut state, &record, &root)
@@ -429,10 +462,19 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
         .and_then(|l| l.parse::<u32>().ok())
         .map(|line| line.saturating_sub(1))
         .unwrap_or(0);
+    // `original-location` is `path:line` as the request was written —
+    // gdb's own record of what was asked for.
+    let requested = bkpt
+        .field("original-location")
+        .and_then(|location| location.rsplit_once(':'))
+        .and_then(|(_, line)| line.parse::<u32>().ok())
+        .map(|line| line.saturating_sub(1));
+
     let entry = Breakpoint {
         number,
         file,
         line,
+        requested,
         // gdb answering at all means it placed it — a refusal comes back
         // as `^error`, which lands in `state.error`.
         verified: true,
@@ -554,6 +596,28 @@ mod tests {
             "the same number updates in place rather than piling up",
         );
         assert_eq!(state.breakpoints[0].line, 69);
+    }
+
+    /// Real gdb output from an optimised esp32 build: line 69 was asked
+    /// for, line 75 is where code exists. The margin needs both — the dot
+    /// belongs where execution will stop, and knowing which request it
+    /// answers is what lets the old dot move rather than multiply.
+    #[test]
+    fn a_moved_breakpoint_remembers_what_was_asked_for() {
+        let mut state = DebugState::default();
+        let placed = mi::parse(
+            r#"^done,bkpt={number="1",type="breakpoint",enabled="y",file="src/bin/main.rs",line="75",original-location="src/bin/main.rs:69"}"#,
+        )
+        .unwrap();
+        apply(&mut state, &placed, &root());
+
+        let breakpoint = &state.breakpoints[0];
+        assert_eq!(breakpoint.line, 74, "where it landed, zero-based");
+        assert_eq!(
+            breakpoint.requested,
+            Some(68),
+            "and where it was asked for, so the margin can move its dot",
+        );
     }
 
     #[test]

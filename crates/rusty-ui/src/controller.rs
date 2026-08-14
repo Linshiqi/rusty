@@ -1891,6 +1891,28 @@ pub fn debug_start(state: AppState, port: u16, hardware: bool, elf: String) {
                 // one stdin, so the placements are already in front of it.
                 debug_control(state, "resume");
             }
+            // gdb moves a breakpoint to the next line that has code —
+            // an optimised build has none on many lines. The dot follows
+            // it, as VSCode's does: it must mark where execution will
+            // actually stop, not the line the compiler deleted.
+            for placed in &update.breakpoints {
+                let Some(asked) = placed.requested else {
+                    continue;
+                };
+                if asked == placed.line {
+                    continue;
+                }
+                let (file, landed) = (placed.file.clone(), placed.line);
+                state.breakpoints.update(|list| {
+                    if let Some(entry) = list
+                        .iter_mut()
+                        .find(|(f, l)| f == &file && *l == asked)
+                    {
+                        entry.1 = landed;
+                    }
+                });
+            }
+
             // Landing on the stopped line is the whole point of stopping.
             if !update.running
                 && let Some(frame) = update.stack.first()
