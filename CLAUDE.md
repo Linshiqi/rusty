@@ -420,6 +420,26 @@ usty`) holds `location.toml`
 - **espflash `save-image` does not create parent directories** — a missing
   `target/rusty-sim/` fails as `os error 3`, which reads like a broken tool
   rather than a missing mkdir. `simulate::prepare` runs first.
+- **Three ways a tunable firmware works in QEMU and is deaf on the real
+  part**, all found by flashing `examples/pid-tune` to a C3 and finding that
+  output arrived while every set vanished. First, `Uart::new` leaves every
+  pin **unconnected** — QEMU's UART model bypasses the GPIO matrix, so a
+  driver without `.with_rx(GPIO20)` reads perfectly in the simulator and
+  reads nothing on silicon, with no error anywhere. Second, `esp-println`'s
+  default `auto` backend decides **at runtime**: it reads the USB-Serial-JTAG
+  start-of-frame flag and prints over native USB when a host is there, UART0
+  otherwise — so on a C3 the console is whichever socket the cable is in, and
+  firmware that reads only one of them talks back on some cables and not
+  others. Read both. Third, tunables announced only at boot are invisible to
+  every panel that connects later, which is nearly all of them; re-announce
+  on a timer. `tune_probe` is the check: it opens the port both ways and says
+  which of these is happening.
+- **A re-announcement is not an answer.** `tune_probe`'s first version
+  watched for any `[rusty:param]` line after a write and reported the
+  periodic one as confirmation — it printed "clamped from 80" about a board
+  that had heard nothing at all. Only a *change* from the pre-write value is
+  evidence, and a set to the value already held proves nothing either way and
+  now says so.
 - **`espflash monitor` cannot be typed into by a program that spawned it.**
   Its input comes from crossterm's `poll`/`read` — *console* events, not
   stdin — so a monitor rusty launched with piped stdio is one-way however

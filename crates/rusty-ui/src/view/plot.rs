@@ -393,7 +393,10 @@ fn Tunables() -> impl IntoView {
                                 "None announced. Firmware prints "
                                 <span class="font-mono">"[rusty:param] name=value min..max"</span>
                                 " and it appears here — no config file, so the panel cannot \
-                                 drift from the binary that is running."
+                                 drift from the binary that is running. Print it on a timer \
+                                 rather than only at boot: this panel usually connects to a \
+                                 board that has been flying for a while, and would otherwise \
+                                 never hear the announcement."
                             </p>
                         }
                     })}

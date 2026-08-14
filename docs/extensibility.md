@@ -238,6 +238,24 @@ gain of 500 to a motor loop; and a set is answered with what the firmware
 *took*, so a clamped value reads as clamped rather than as the number that
 was typed.
 
+Three things the firmware side has to get right, none of which the simulator
+will tell you about — all three were found by flashing `pid-tune` to a real
+C3 and watching output arrive while every set vanished:
+
+- **Announce on a timer, not only at boot.** A panel almost always connects
+  to a board that is already running, and a boot-only announcement means it
+  shows no tunables at all, for ever.
+- **Read every console the chip has.** `esp-println` picks its output at
+  runtime — native USB if a host is on it, UART0 otherwise — so on a C3 the
+  console is whichever socket the cable is in. Reading only one means the
+  firmware talks back on some cables and not others.
+- **Connect the RX pin.** `Uart::new` leaves pins unconnected and QEMU
+  bypasses the GPIO matrix, so a missing `.with_rx()` reads fine in the
+  simulator and reads nothing on silicon.
+
+`cargo run -p rusty-embed --example tune_probe -- COM7 setpoint=80` checks
+all three against a board without opening the window.
+
 Writing back needs a port rusty holds open itself — the Plot panel's Connect
 does that. `espflash monitor` reads its keyboard through the console rather
 than through stdin, so a monitor rusty spawned can only listen; its telemetry
