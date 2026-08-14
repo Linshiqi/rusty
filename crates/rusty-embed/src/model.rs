@@ -208,6 +208,22 @@ pub struct Chip {
     pub probe_rs_target: Option<String>,
     /// Radios the part provides, for the wizard to explain what it is choosing.
     pub radios: Vec<String>,
+    /// The crate a project selects this part through, when selecting it means
+    /// putting [`Self::id`] in that crate's feature list — `esp-hal` for every
+    /// Espressif part.
+    ///
+    /// This is what makes switching chips mechanical, and its absence is what
+    /// makes it impossible: two parts behind one HAL differ by a feature name,
+    /// a target triple and a toolchain, all of which are rewriteable. Two
+    /// parts behind *different* HALs differ by every API the firmware calls.
+    ///
+    /// `None` means rusty does not know how a project names this part, so it
+    /// refuses to migrate to or from it rather than rewriting four files into
+    /// a project that cannot build. A chip added to the catalogue is therefore
+    /// safe by default: it works everywhere else and offers no switch until
+    /// someone states this.
+    #[serde(default)]
+    pub hal: Option<String>,
 }
 
 impl Chip {

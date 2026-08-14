@@ -323,6 +323,17 @@ usty`) holds `location.toml`
   outrank the project's rust-toolchain.toml, so a spawned `cargo build`
   compiles an esp-pinned Xtensa project with stable and dies with "can't
   find crate for `core`". `process::spawn` strips the variable.
+- **A capability only some parts support belongs in the catalogue as an
+  optional field whose absence refuses.** The chip switch shipped keyed off
+  nothing but the target triple, so it happily offered esp32 → stm32f103 and
+  produced `espflash --chip stm32f103` and an `esp-hal` feature that does not
+  exist — a complete-looking plan that cannot build, from a `Chip` the code
+  never asked the right question about. The right question is data: `hal`
+  names the crate a project selects the part through and asserts the chip id
+  *is* its feature name. Espressif entries carry it, the STM32 entries
+  deliberately do not, and a part added tomorrow gets no migration until
+  somebody states how a project names it. A `match` on chip id in code is the
+  version of this that silently does the wrong thing for the next part.
 - **Switching a project's chip is mechanical except for pins, and the split is
   the whole design.** Four things bind a project to a part — the target triple
   and `--chip` in `.cargo/config.toml`, `build-std` (mandatory on Xtensa, a

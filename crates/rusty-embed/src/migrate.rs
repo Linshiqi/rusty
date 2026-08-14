@@ -40,6 +40,39 @@ pub fn plan(root: &Path, from: &Chip, to: &Chip) -> Migration {
         return migration;
     }
 
+    // The one question that decides whether any of this is honest. Two parts
+    // behind one HAL differ by a feature name, a triple and a toolchain, all
+    // of which are text. Two parts behind different HALs differ by every API
+    // the firmware calls, and rewriting the four files would produce
+    // `espflash --chip stm32f103` and `esp-hal = { features = ["stm32f103"] }`
+    // — a plan that looks complete and cannot build.
+    match (from.hal.as_deref(), to.hal.as_deref()) {
+        (Some(one), Some(other)) if one == other => {}
+        (Some(one), Some(other)) => {
+            migration.blocker = Some(format!(
+                "{} is a {one} part and {} is a {other} part. That is not a setting to \
+                 change — it is a different HAL, so every call your firmware makes to it \
+                 differs too. Create a project for {} and move your logic across; the \
+                 wizard is in the sidebar.",
+                from.name, to.name, to.name,
+            ));
+        }
+        (one, other) => {
+            let unknown = if one.is_none() { from } else { to };
+            migration.blocker = Some(format!(
+                "rusty does not know how a project selects {}, so it will not guess at \
+                 what to rewrite. Chips carry a `hal` in the catalogue when a project \
+                 names them by putting the chip id in that crate's feature list; without \
+                 it, create a project for {} instead.",
+                unknown.name, to.name,
+            ));
+            let _ = other;
+        }
+    }
+    if migration.blocker.is_some() {
+        return migration;
+    }
+
     // `.cargo/config.toml` is the one file that must exist and must name the
     // old triple. Without it there is nothing to be sure of, and a guess here
     // produces a project that builds for the wrong part in silence.
@@ -398,7 +431,12 @@ mod tests {
     use crate::model::{Arch, Vendor};
 
     fn chip(id: &str, target: &str, xtensa: bool) -> Chip {
+        chip_with(id, target, xtensa, Some("esp-hal"))
+    }
+
+    fn chip_with(id: &str, target: &str, xtensa: bool, hal: Option<&str>) -> Chip {
         Chip {
+            hal: hal.map(str::to_string),
             id: id.to_string(),
             name: id.to_uppercase(),
             vendor: Vendor::Espressif,
@@ -554,6 +592,39 @@ mod tests {
         assert!(config.contains("build-std = [\"core\"]"), "{config}");
         let toolchain = std::fs::read_to_string(dir.path().join("rust-toolchain.toml")).unwrap();
         assert!(toolchain.contains("channel = \"esp\""), "{toolchain}");
+    }
+
+    /// The refusal that matters most, because the alternative looks like it
+    /// worked. Rewriting the four files for a part behind another HAL yields
+    /// `espflash --chip stm32f103` and an esp-hal feature that does not exist
+    /// — a complete-looking plan that cannot build, which is exactly the
+    /// plausible wrong answer this workbench is written against.
+    #[test]
+    fn a_part_behind_another_hal_is_refused_rather_than_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        project(dir.path());
+
+        let stm = chip_with("stm32f103", "thumbv7m-none-eabi", false, Some("stm32f1xx-hal"));
+        let migration = plan(dir.path(), &esp32(), &stm);
+        let blocker = migration.blocker.expect("refused");
+        assert!(
+            blocker.contains("esp-hal") && blocker.contains("stm32f1xx-hal"),
+            "the refusal names both HALs rather than saying 'unsupported': {blocker}",
+        );
+        assert!(migration.files.is_empty(), "and nothing is proposed");
+
+        // A chip whose catalogue entry states no `hal` is one rusty does not
+        // know how to name in a manifest. Adding a part is therefore safe by
+        // default: it works everywhere else and offers no switch until
+        // somebody says how a project selects it.
+        let unknown = chip_with("mystery", "thumbv7m-none-eabi", false, None);
+        let migration = plan(dir.path(), &esp32(), &unknown);
+        assert!(
+            migration
+                .blocker
+                .is_some_and(|b| b.contains("does not know how a project selects")),
+            "an unstated hal refuses too",
+        );
     }
 
     /// Refuse rather than guess: with nothing stating the current target,

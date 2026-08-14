@@ -45,6 +45,36 @@ The payoff beyond extensibility: a board record carries USB vendor and product
 ids, so a plugged-in device is *named* rather than guessed at — "Seeed XIAO
 ESP32C3 on COM3" instead of "COM3 (CP210x)".
 
+#### A chip entry says what a capability needs, so silence is a refusal
+
+Two of a chip's fields are optional, and their absence is the answer rather
+than a gap:
+
+| Field | Absent means |
+|---|---|
+| `probe_rs_target` | rusty will not guess a probe-rs name; it tells the user to run `probe-rs chip list` |
+| `hal` | rusty will not offer to switch a project to or from this part |
+
+`hal` names the crate a project selects the part through, **and asserts that
+selecting it means putting this chip's `id` in that crate's feature list**.
+That is exactly how esp-hal works, so every Espressif entry carries
+`hal = "esp-hal"` and switching between any two of them is mechanical: a
+feature name, a target triple, a toolchain channel, `build-std`.
+
+It is not how the STM32 HALs work — `stm32f1xx-hal` wants `stm32f103c8`, a full
+part number the die alone does not determine, and F103 and F411 are different
+crates besides. So those entries carry no `hal`, and the chip switch refuses
+with the reason rather than rewriting four files into a project that cannot
+build. Adding a part to the catalogue is therefore **safe by default**: it
+works everywhere else in the workbench immediately, and offers a migration only
+once somebody states how a project names it.
+
+This is the general shape to copy when adding a capability that only some parts
+can support: put the precondition in the data as an optional field, let its
+absence refuse, and say why in the refusal. The alternative — a `match` on chip
+id in the code — is a capability that silently does the wrong thing for the
+next part somebody adds.
+
 ### What this does not change
 
 Code extensions still go through MCP, UI contributions are still declarative,

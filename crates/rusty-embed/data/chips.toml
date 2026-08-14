@@ -25,6 +25,7 @@ toolchain = "esp-xtensa"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32"
 radios = ["Wi-Fi 4", "Bluetooth Classic", "BLE"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32s2"
@@ -39,6 +40,7 @@ toolchain = "esp-xtensa"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32s2"
 radios = ["Wi-Fi 4", "USB OTG"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32s3"
@@ -53,6 +55,7 @@ toolchain = "esp-xtensa"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32s3"
 radios = ["Wi-Fi 4", "BLE 5", "USB OTG"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32c2"
@@ -67,6 +70,7 @@ toolchain = "stock"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32c2"
 radios = ["Wi-Fi 4", "BLE 5"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32c3"
@@ -81,6 +85,7 @@ toolchain = "stock"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32c3"
 radios = ["Wi-Fi 4", "BLE 5"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32c6"
@@ -95,6 +100,7 @@ toolchain = "stock"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32c6"
 radios = ["Wi-Fi 6", "BLE 5", "802.15.4 (Thread/Zigbee)"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32h2"
@@ -109,6 +115,7 @@ toolchain = "stock"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32h2"
 radios = ["BLE 5", "802.15.4 (Thread/Zigbee)"]
+hal = "esp-hal"
 
 [[chip]]
 id = "esp32p4"
@@ -122,6 +129,7 @@ toolchain = "stock"
 flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32p4"
 radios = ["no radio"]
+hal = "esp-hal"
 
 # ── ST: a seam, not coverage ─────────────────────────────────────────────────
 #
@@ -133,6 +141,14 @@ radios = ["no radio"]
 # package and flash size, which the die alone does not determine. Guessing one
 # produces a plausible name with the wrong memory map, so rusty asks the user to
 # run `probe-rs chip list` instead.
+#
+# So is `hal`, for a sharper reason. It means "a project selects this part by
+# putting this chip's `id` in that crate's feature list", which is exactly how
+# esp-hal works and is not how the STM32 HALs work: stm32f1xx-hal wants
+# `stm32f103c8`, a full part number the die does not determine, and F103 and
+# F411 are different crates besides. Leaving it out is what makes rusty refuse
+# to switch a project to these rather than rewriting four files into something
+# that cannot build.
 
 [[chip]]
 id = "stm32f103"

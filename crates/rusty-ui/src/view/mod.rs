@@ -650,6 +650,15 @@ fn SwitchChip(
                     .into_any();
             }
             let current = current.clone();
+            // Which HAL this project's part sits behind. A switch is only
+            // mechanical within one, so the list says which rows are a switch
+            // and which are a new project — before the click, not after it.
+            let ours = state
+                .chips
+                .get()
+                .into_iter()
+                .find(|chip| chip.id == current)
+                .and_then(|chip| chip.hal);
             view! {
                 <div class="max-h-56 overflow-y-auto py-0.5">
                     {state
@@ -659,17 +668,34 @@ fn SwitchChip(
                         .filter(|chip| chip.id != current)
                         .map(|chip| {
                             let id = chip.id.clone();
-                            let detail = format!("{} · {}", chip.arch.label(), chip.bare_metal_target);
+                            let same_hal = chip.hal.is_some() && chip.hal == ours;
+                            let detail = if same_hal {
+                                format!("{} · {}", chip.arch.label(), chip.bare_metal_target)
+                            } else {
+                                format!(
+                                    "{} · different HAL — a new project, not a switch",
+                                    chip.arch.label(),
+                                )
+                            };
+                            let tone = if same_hal { "text-label-4" } else { "text-amber" };
                             view! {
                                 <button
                                     type="button"
+                                    disabled=!same_hal
+                                    title=if same_hal {
+                                        String::new()
+                                    } else {
+                                        "Every call your firmware makes to the HAL differs. \
+                                         The wizard creates a project for this part."
+                                            .to_string()
+                                    }
                                     on:click=move |_| {
                                         controller::plan_migration(state, id.clone(), proposal)
                                     }
-                                    class="flex w-full flex-col items-start px-3 py-1 text-left transition-colors hover:bg-sunken"
+                                    class="flex w-full flex-col items-start px-3 py-1 text-left transition-colors hover:bg-sunken disabled:pointer-events-none disabled:opacity-55"
                                 >
                                     <span class="font-mono text-footnote text-label">{chip.name}</span>
-                                    <span class="font-mono text-caption text-label-4">{detail}</span>
+                                    <span class=format!("font-mono text-caption {tone}")>{detail}</span>
                                 </button>
                             }
                         })
