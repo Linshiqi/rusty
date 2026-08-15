@@ -316,18 +316,23 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 entry(Action::SetTheme(Theme::Dark), "Theme: Dark", None),
                 Item::Separator,
                 entry(Action::ResetLayout, "Reset panel sizes", None),
-                Item::Separator,
-                entry_when(Requires::NavBack, Action::NavBack, "Back", chord(Action::NavBack)),
-                entry_when(
-                    Requires::NavForward,
-                    Action::NavForward,
-                    "Forward",
-                    chord(Action::NavForward),
-                ),
-                Item::Separator,
-                entry(Action::ToggleVim, "Vim keys in the editor", None),
             ],
         },
+        Item::Separator,
+        // Above Appearance, not inside it. Both of these were folded into
+        // that submenu at first, where nobody found them — a modal editing
+        // switch is not a *look*, and navigation certainly is not. The
+        // symptom was exactly what you would expect: "I cannot turn Vim on",
+        // from someone looking in every reasonable place.
+        entry_when(Requires::NavBack, Action::NavBack, "Back", chord(Action::NavBack)),
+        entry_when(
+            Requires::NavForward,
+            Action::NavForward,
+            "Forward",
+            chord(Action::NavForward),
+        ),
+        Item::Separator,
+        entry(Action::ToggleVim, "Vim keys in the editor", None),
         Item::Separator,
     ];
     for panel in panels::all().into_iter().filter(|p| !p.hidden) {
