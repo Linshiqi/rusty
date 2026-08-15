@@ -3356,9 +3356,9 @@ fn vim_key(
         text
     };
 
-    // The block cursor is a one-character selection, which is also exactly
-    // what visual mode needs — so normal mode and visual mode take the same
-    // path rather than two that can disagree.
+    // Visual mode selects a range; normal mode's cursor is the caret, drawn
+    // as a block by `caret-shape`. Both take this one path rather than two
+    // that can disagree about where the cursor is.
     match step.selection {
         Some((from, to)) => {
             let _ = area.set_selection_start(Some(units_of_scalar(&after, from)));
@@ -3370,6 +3370,16 @@ fn vim_key(
             let _ = area.set_selection_end(Some(at));
         }
     }
+
+    // Follow the caret, always. The typing path has done this from the start;
+    // this one only did it for `Ctrl+D`, so every *other* way of leaving the
+    // visible region moved the cursor somewhere the reader could not see —
+    // `G`, `gg`, `}`, `%`, `n`, `*`, and `j` at the bottom edge. One call
+    // covers all of them, which is why it belongs here rather than in each.
+    //
+    // Before the asks below: `zz` and its friends reposition deliberately,
+    // and must have the last word.
+    keep_caret_in_view(area, state, scroller);
 
     if let Some(ask) = step.ask {
         match ask {
