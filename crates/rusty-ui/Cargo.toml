@@ -3,7 +3,7 @@ name = "rusty-ui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
@@ -11,14 +11,14 @@ authors.workspace = true
 console_error_panic_hook = "0.1.7"
 js-sys = "0.3.104"
 leptos = { version = "0.8.20", features = ["csr"] }
-rusty-ai = { version = "0.1.0", path = "../rusty-ai", default-features = false }
-rusty-core = { version = "0.1.0", path = "../rusty-core", default-features = false }
-rusty-edit = { version = "0.1.0", path = "../rusty-edit", default-features = false }
-rusty-embed = { version = "0.1.0", path = "../rusty-embed", default-features = false }
-rusty-ipc = { version = "0.1.0", path = "../rusty-ipc" }
-rusty-lsp = { version = "0.1.0", path = "../rusty-lsp", default-features = false }
-rusty-dbg = { version = "0.1.0", path = "../rusty-dbg", default-features = false }
-rusty-term = { version = "0.1.0", path = "../rusty-term", default-features = false }
+rusty-ai = { path = "../rusty-ai", default-features = false }
+rusty-core = { path = "../rusty-core", default-features = false }
+rusty-edit = { path = "../rusty-edit", default-features = false }
+rusty-embed = { path = "../rusty-embed", default-features = false }
+rusty-ipc = { path = "../rusty-ipc" }
+rusty-lsp = { path = "../rusty-lsp", default-features = false }
+rusty-dbg = { path = "../rusty-dbg", default-features = false }
+rusty-term = { path = "../rusty-term", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"
 serde_json = "1.0.151"

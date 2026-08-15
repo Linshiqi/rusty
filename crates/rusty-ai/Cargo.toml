@@ -3,7 +3,7 @@ name = "rusty-ai"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
@@ -22,8 +22,8 @@ reqwest = { version = "0.13.4", features = ["json", "stream", "gzip"], optional 
 thiserror = { version = "2.0.20", optional = true }
 tokio = { version = "1.53.1", features = ["rt", "macros", "sync"], optional = true }
 
-rusty-core = { version = "0.1.0", path = "../rusty-core", default-features = false, optional = true }
-rusty-embed = { version = "0.1.0", path = "../rusty-embed", default-features = false, optional = true }
+rusty-core = { path = "../rusty-core", default-features = false, optional = true }
+rusty-embed = { path = "../rusty-embed", default-features = false, optional = true }
 
 [features]
 default = ["backend"]

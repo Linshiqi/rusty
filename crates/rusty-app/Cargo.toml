@@ -3,19 +3,19 @@ name = "rusty-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-rusty-ai = { version = "0.1.0", path = "../rusty-ai" }
-rusty-core = { version = "0.1.0", path = "../rusty-core" }
-rusty-edit = { version = "0.1.0", path = "../rusty-edit" }
-rusty-embed = { version = "0.1.0", path = "../rusty-embed" }
-rusty-ipc = { version = "0.1.0", path = "../rusty-ipc" }
-rusty-lsp = { version = "0.1.0", path = "../rusty-lsp" }
-rusty-dbg = { version = "0.1.0", path = "../rusty-dbg" }
-rusty-term = { version = "0.1.0", path = "../rusty-term" }
+rusty-ai = { path = "../rusty-ai" }
+rusty-core = { path = "../rusty-core" }
+rusty-edit = { path = "../rusty-edit" }
+rusty-embed = { path = "../rusty-embed" }
+rusty-ipc = { path = "../rusty-ipc" }
+rusty-lsp = { path = "../rusty-lsp" }
+rusty-dbg = { path = "../rusty-dbg" }
+rusty-term = { path = "../rusty-term" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tauri = { version = "2.11.5", features = [] }

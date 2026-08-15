@@ -7,11 +7,26 @@ log stays in the private repository where it belongs.
 
 One `## v<version>` heading per release, newest first.
 
-## v0.1.4
+## v0.2.0
 
-The first public build. An embedded Rust workbench for ESP32: it knows which
-chip a project is for, what fits in flash, what is on the serial port, and it
-runs firmware without hardware.
+The first public build, and the first with the source published. An embedded
+Rust workbench for ESP32: it knows which chip a project is for, what fits in
+flash, what is on the serial port, and it runs firmware without hardware.
+
+**New since the last build**
+
+- **Vim keys**, off by default, switched on in Settings > Editor. Modes,
+  motions, operators, text objects, visual mode and `.`, with the mode in the
+  status bar. Ctrl+S, Ctrl+A, Ctrl+C and the rest are untouched, and insert
+  mode behaves exactly as it does with this off.
+- **A way back.** Jumping to a definition had none: Back and Forward now walk
+  the positions the caret has visited, from the View menu, `Alt+←/→`, or
+  Vim's `Ctrl+O`/`Ctrl+I`.
+- **Live telemetry and tuning.** The Plot panel draws named channels from a
+  running board and changes gains **without a reflash**, over the serial line
+  the firmware is already printing to.
+- **Completion while you type a name**, not only after a dot.
+- **Hovering a squiggle** answers what is wrong with it, not what type it is.
 
 **Editing** — files, syntax highlighting, and rust-analyzer behind it for
 completion, diagnostics, hover, go-to-definition, signature help and quick

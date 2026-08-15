@@ -116,10 +116,30 @@ fn main() -> ! {
     println!("pid-tune: a first-order plant under PID, tunable while it runs");
 
     let mut tunables = [
-        Tunable { name: "kp", value: 2.0, min: 0.0, max: 20.0 },
-        Tunable { name: "ki", value: 0.5, min: 0.0, max: 10.0 },
-        Tunable { name: "kd", value: 0.05, min: 0.0, max: 5.0 },
-        Tunable { name: "setpoint", value: 50.0, min: 0.0, max: 100.0 },
+        Tunable {
+            name: "kp",
+            value: 2.0,
+            min: 0.0,
+            max: 20.0,
+        },
+        Tunable {
+            name: "ki",
+            value: 0.5,
+            min: 0.0,
+            max: 10.0,
+        },
+        Tunable {
+            name: "kd",
+            value: 0.05,
+            min: 0.0,
+            max: 5.0,
+        },
+        Tunable {
+            name: "setpoint",
+            value: 50.0,
+            min: 0.0,
+            max: 100.0,
+        },
     ];
     // The panel is built from what the firmware says it has, not from a
     // config file that could describe a different binary.
@@ -210,6 +230,9 @@ fn main() -> ! {
         });
 
         let now = Instant::now().duration_since_epoch().as_micros();
+        let gpio_test = peripherals.GPIO0;
+
+        gpio_test.reborrow();
         println!(
             "[rusty:tel@{now}] setpoint={setpoint:.2},measured={measured:.2},error={error:.2},output={output:.2}"
         );

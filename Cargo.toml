@@ -7,12 +7,14 @@ members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/r
 exclude = ["crates/rusty-core/tests/fixtures"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT OR Apache-2.0"
-# Where users go: downloads and issues. The source repository is private.
-repository = "https://github.com/Linshiqi/rusty-releases"
+# Not MIT/Apache: this is source you may read, run and change, but not sell.
+# `license-file` rather than `license` because PolyForm is not one of the SPDX
+# identifiers cargo validates, and a wrong identifier is worse than none.
+license-file = "LICENSE.md"
+repository = "https://github.com/Linshiqi/rusty"
 authors = ["rusty contributors"]
 
 [workspace.lints.rust]

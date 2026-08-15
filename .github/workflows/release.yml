@@ -216,15 +216,11 @@ jobs:
               out.write(f"body<<EOF\n{body}\nEOF\n")
         id: notes
 
-      # Published to the public repository, not this one. The source stays
-      # private; downloads and issue reports need somewhere anybody can
-      # reach. GITHUB_TOKEN is scoped to this repository alone, so crossing
-      # over needs a token with `contents: write` on the target — a
-      # fine-grained PAT stored as RELEASES_TOKEN.
+      # Published here. It was a second, public repository while the source
+      # was private — GITHUB_TOKEN cannot cross repositories, so that needed a
+      # PAT — and going public collapsed the two back into one.
       - uses: softprops/action-gh-release@v2
         with:
-          repository: Linshiqi/rusty-releases
-          token: ${{ secrets.RELEASES_TOKEN }}
           generate_release_notes: false
           body: ${{ steps.notes.outputs.body }}
           files: assets/*

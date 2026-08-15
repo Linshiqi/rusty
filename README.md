@@ -2,12 +2,19 @@
 
 An embedded Rust workbench. ESP32 first, STM32 next.
 
-Not an editor. rusty owns the half of embedded Rust that an editor does not:
-which chip you are targeting, whether your toolchain can actually build for it,
-what is filling your flash, what is on the serial port — and an assistant that
-can call every one of those analyses instead of guessing at them.
+rusty owns the half of embedded Rust that a general-purpose editor does not:
+which chip you are targeting, whether your toolchain can actually build for
+it, what is filling your flash, what is on the serial port, what the loop is
+doing while it runs — and an assistant that can call every one of those
+analyses instead of guessing at them.
 
-> Status: engines complete and tested, frontend in progress.
+It edits code too: files, highlighting, and rust-analyzer behind it for
+completion, diagnostics and navigation, with optional Vim keys. A tool you
+cannot change a file in is a dashboard about work you do somewhere else.
+
+**Download:** [the latest release](../../releases/latest) — Windows installer,
+macOS universal DMG, Linux `.deb` or `.AppImage`. Nothing is code-signed yet,
+so SmartScreen and Gatekeeper will both object the first time.
 
 ## Why
 
@@ -93,6 +100,15 @@ cargo test --workspace
 cd crates/rusty-app && cargo tauri dev
 ```
 
+## Contributing
+
+Bug reports, "this was confusing", and hardware reports from parts that are
+not an ESP32-C3 are the most useful things you can send. **Please open an
+issue before writing code** — see [CONTRIBUTING.md](CONTRIBUTING.md) for why
+a one-person project has to work that way.
+
 ## Licence
 
-MIT OR Apache-2.0
+[PolyForm Noncommercial 1.0.0](LICENSE.md). Read it, run it, change it, share
+your changes — but not commercially. Open an issue if you want a commercial
+arrangement.
