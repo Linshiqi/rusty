@@ -1024,9 +1024,29 @@ fn Surface(document: Document) -> impl IntoView {
                 Some(':') if before.len() >= 2 && before[before.len() - 2] == ':' => {
                     controller::request_completion(state, path.clone(), line, col, col);
                 }
-                // Inside a word, the open popup narrows reactively — the
-                // filter derives from the draft, so nothing to do here.
-                Some(c) if c.is_alphanumeric() || c == '_' => {}
+                // Inside a word. Once the popup is open the filter narrows it
+                // reactively off the draft, so there is nothing to do — but
+                // *opening* it was the gap: only `.` and `::` ever did, so
+                // typing an identifier offered nothing at all, which reads as
+                // an editor with no completion rather than one with a
+                // deliberate trigger.
+                //
+                // On the second character, not the first: rust-analyzer
+                // answers a one-letter prefix with the entire visible scope,
+                // which is a thousand rows to draw and filter for a question
+                // nobody has asked yet. One request per word, not per key —
+                // after this the popup is open and this arm does nothing.
+                Some(c) if c.is_alphanumeric() || c == '_' => {
+                    let word = before
+                        .iter()
+                        .rev()
+                        .take_while(|c| c.is_alphanumeric() || **c == '_')
+                        .count();
+                    if !popup_open && word == 2 {
+                        let start = col - word as u32;
+                        controller::request_completion(state, path.clone(), line, col, start);
+                    }
+                }
                 // Anything else ends the word the popup was about.
                 _ => {
                     if popup_open {
