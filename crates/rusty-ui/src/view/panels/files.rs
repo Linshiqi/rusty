@@ -1581,6 +1581,19 @@ fn Surface(document: Document) -> impl IntoView {
                                     _ => {}
                                 }
                             }
+                            // Comment or uncomment, for everyone — Vim's `gc`
+                            // reaches the same function. This editor had no
+                            // comment toggle at all before, in any mode, and
+                            // commenting out a block of pin setup is the most
+                            // ordinary thing anyone does while bringing a
+                            // board up.
+                            if (event.ctrl_key() || event.meta_key()) && event.key() == "/" {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    comment_selection(state, &element);
+                                }
+                                return;
+                            }
                             // Ctrl+. asks what the server can fix here.
                             if (event.ctrl_key() || event.meta_key())
                                 && event.key() == "."
@@ -3341,6 +3354,36 @@ fn vim_key(
             // that would drift from it.
             Ask::Search { .. } => state.find_open.set(true),
             Ask::SearchNext | Ask::SearchPrevious => state.find_open.set(true),
+            // `:s/…` opens the same bar with its replace half showing. The
+            // pattern is not parsed here: this editor's replace is literal
+            // and Vim's is a regex dialect, and quietly accepting `\(` as
+            // either one would be a substitution nobody asked for.
+            Ask::Replace => {
+                state.find_open.set(true);
+                state.find_replace_open.set(true);
+            }
+            // `*` and `#`: the word under the caret, into the find bar.
+            Ask::SearchWord { .. } => {
+                if let Some(word) = word_at(&after, step.cursor) {
+                    state.find_query.set(word);
+                    state.find_open.set(true);
+                }
+            }
+            Ask::Centre { at } => centre_view(state, scroller, &after, step.cursor, at),
+            // Comment syntax belongs to the language, which the document
+            // knows and the state machine deliberately does not.
+            Ask::Comment { from, to } => {
+                let out = toggle_comments(state, &after, from, to);
+                if out != after {
+                    echo_edit(state, &out);
+                    state.draft.set(out.clone());
+                    area.set_value(&out);
+                    let at = units_of_scalar(&out, from.min(out.chars().count()));
+                    let _ = area.set_selection_start(Some(at));
+                    let _ = area.set_selection_end(Some(at));
+                    controller::schedule_pulse(state);
+                }
+            }
             // Half a screen, which only the editor knows the height of — the
             // reason this is a request rather than a motion. The cursor moves
             // with the view, because Vim's Ctrl+D moves both and a scroll
@@ -3395,4 +3438,136 @@ fn vim_key(
         }
     }
     true
+}
+
+/// The word the caret is on, for `*` and `#`.
+fn word_at(text: &str, cursor: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let at = cursor.min(chars.len().saturating_sub(1));
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    if chars.is_empty() || !is_word(chars[at]) {
+        return None;
+    }
+    let mut start = at;
+    while start > 0 && is_word(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = at;
+    while end + 1 < chars.len() && is_word(chars[end + 1]) {
+        end += 1;
+    }
+    Some(chars[start..=end].iter().collect())
+}
+
+/// `zz` `zt` `zb`: put the caret's line where it was asked for.
+fn centre_view(
+    state: AppState,
+    scroller: NodeRef<html::Div>,
+    text: &str,
+    cursor: usize,
+    at: crate::vim::View,
+) {
+    let Some(outer) = scroller.get_untracked() else {
+        return;
+    };
+    let line = text.chars().take(cursor).filter(|c| *c == '\n').count() as f64;
+    let lh = LINE_HEIGHT * state.editor_zoom.get_untracked();
+    let y = 8.0 + line * lh;
+    let height = f64::from(outer.client_height());
+    let top = match at {
+        crate::vim::View::Middle => y - height / 2.0 + lh / 2.0,
+        crate::vim::View::Top => y - lh,
+        crate::vim::View::Bottom => y - height + lh * 2.0,
+    };
+    outer.set_scroll_top(top.max(0.0) as i32);
+}
+
+/// The line comment this document uses, or `None` for a language with none
+/// that this editor knows — in which case nothing is toggled, rather than
+/// `//` being written into a TOML file.
+fn line_comment(state: AppState) -> Option<&'static str> {
+    let language = state
+        .document
+        .with_untracked(|d| d.as_ref().and_then(|d| d.language.clone()))?;
+    match language.as_str() {
+        "rust" | "c" | "cpp" | "javascript" | "json" => Some("//"),
+        "toml" | "python" | "shell" | "yaml" => Some("#"),
+        _ => None,
+    }
+}
+
+/// Toggle line comments across the lines `from..=to` touch.
+///
+/// Vim's rule, and every editor's: if *every* non-blank line in the range is
+/// already commented, uncomment; otherwise comment them all. A per-line
+/// toggle would shred a half-commented block into the other half.
+///
+/// The marker goes at the first non-blank, not at column zero, so indented
+/// code keeps its shape.
+fn toggle_comments(state: AppState, text: &str, from: usize, to: usize) -> String {
+    let Some(marker) = line_comment(state) else {
+        return text.to_string();
+    };
+    let chars: Vec<char> = text.chars().collect();
+    let mut lines: Vec<(usize, usize)> = Vec::new();
+    let (mut start, mut at) = (0usize, 0usize);
+    while at <= chars.len() {
+        if at == chars.len() || chars[at] == '\n' {
+            if start <= to && at >= from {
+                lines.push((start, at));
+            }
+            start = at + 1;
+        }
+        at += 1;
+    }
+
+    let body = |(a, b): (usize, usize)| -> String { chars[a..b].iter().collect() };
+    let commented = lines
+        .iter()
+        .map(|span| body(*span))
+        .filter(|line| !line.trim().is_empty())
+        .all(|line| line.trim_start().starts_with(marker));
+
+    let mut out: Vec<char> = chars.clone();
+    // Back to front, so an edit never moves the spans still to be applied.
+    for (a, b) in lines.into_iter().rev() {
+        let line = body((a, b));
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        let replacement: String = if commented {
+            let rest = line.trim_start().trim_start_matches(marker);
+            let rest = rest.strip_prefix(' ').unwrap_or(rest);
+            format!("{}{rest}", &line[..indent])
+        } else {
+            format!("{}{marker} {}", &line[..indent], line.trim_start())
+        };
+        out.splice(a..b, replacement.chars());
+    }
+    out.into_iter().collect()
+}
+
+/// Comment or uncomment whatever the selection touches, or the caret's line.
+///
+/// The shared implementation behind Ctrl+/ and Vim's `gc`, so the two cannot
+/// come to disagree about what a half-commented block does.
+fn comment_selection(state: AppState, area: &web_sys::HtmlTextAreaElement) {
+    let text = state.draft.get_untracked();
+    let from = scalar_of_units(&text, area.selection_start().ok().flatten().unwrap_or(0) as usize);
+    let to = scalar_of_units(&text, area.selection_end().ok().flatten().unwrap_or(0) as usize);
+    let out = toggle_comments(state, &text, from.min(to), from.max(to));
+    if out == text {
+        return;
+    }
+    record_edit(state);
+    echo_edit(state, &out);
+    state.draft.set(out.clone());
+    area.set_value(&out);
+    // Back where the caret was, clamped: the line grew or shrank by the
+    // marker's width and a caret past the end would snap to the buffer's.
+    let at = units_of_scalar(&out, from.min(out.chars().count()));
+    let _ = area.set_selection_start(Some(at));
+    let _ = area.set_selection_end(Some(at));
+    controller::schedule_pulse(state);
 }

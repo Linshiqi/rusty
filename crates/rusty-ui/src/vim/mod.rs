@@ -134,6 +134,25 @@ pub enum Ask {
     Scroll { down: bool },
     /// `Ctrl+O` / `Ctrl+I`, answered by the editor's navigation history.
     Jump { back: bool },
+    /// `*` and `#`: search for the word under the cursor. The editor pulls
+    /// the word out, because it is already the thing holding the caret.
+    SearchWord { backwards: bool },
+    /// `zz` `zt` `zb` — only the editor knows how tall the view is.
+    Centre { at: View },
+    /// `:s/…` — the replace bar that already exists, rather than a second
+    /// substitution engine that would disagree with it about escaping.
+    Replace,
+    /// `gc` and `gcc`, over the lines a motion covered. Comment syntax is
+    /// the document's language, which the editor knows and this does not.
+    Comment { from: usize, to: usize },
+}
+
+/// Where `zz`, `zt` and `zb` put the cursor's line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Middle,
+    Top,
+    Bottom,
 }
 
 /// A yanked or deleted span, and whether it was whole lines.
@@ -213,6 +232,7 @@ impl Vim {
                 // `:w` and `:wq` are prefixes of each other.
                 if let Some(ex) = self.pending.strip_prefix(':') {
                     let ask = match ex {
+                        _ if ex.starts_with("s/") || ex.starts_with("%s/") => Some(Ask::Replace),
                         "w" => Some(Ask::Save),
                         "q" | "q!" => Some(Ask::Close),
                         "wq" | "x" => Some(Ask::SaveAndClose),
@@ -403,12 +423,42 @@ impl Vim {
             self.mode = Mode::Normal;
         }
 
+        // Indent and comment act on whole lines however they were reached:
+        // `>j` shifts both lines, not the characters between the two carets.
+        if matches!(op, Op::Indent | Op::Outdent | Op::Comment) {
+            let first = motion::line_start(text, start);
+            let last = motion::line_end(text, end.max(start).saturating_sub(
+                usize::from(range.linewise && end > start),
+            ));
+            return match op {
+                Op::Comment => {
+                    let mut step = self.consumed(text, start);
+                    step.ask = Some(Ask::Comment {
+                        from: first,
+                        to: last,
+                    });
+                    step.seal = true;
+                    step
+                }
+                _ => {
+                    let out = shift(text, first, last, op == Op::Indent);
+                    let at = motion::line_first_word(&out, first.min(out.chars().count()));
+                    let mut step = self.consumed(&out, at);
+                    step.text = Some(out);
+                    step.seal = true;
+                    step
+                }
+            };
+        }
+
         match op {
             Op::Yank => {
                 // Yank leaves the buffer alone and parks the cursor at the
                 // start of what it took, as Vim does.
                 self.consumed(text, start)
             }
+            // Handled above; the compiler needs the arm.
+            Op::Indent | Op::Outdent | Op::Comment => self.consumed(text, start),
             Op::Delete | Op::Change => {
                 let mut out: String = text.chars().take(start).collect();
                 out.extend(text.chars().skip(end));
@@ -669,11 +719,20 @@ impl Vim {
 // Parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// One level of indent. Four spaces, because that is what rustfmt emits and
+/// what every file this editor opens is already using; reading it from the
+/// buffer would guess wrong on the first blank file.
+const SHIFT: usize = 4;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Op {
     Delete,
     Change,
     Yank,
+    Indent,
+    Outdent,
+    /// `gc` — handed to the editor, which knows the language.
+    Comment,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -760,7 +819,29 @@ fn parse(pending: &str) -> Parsed {
         // Two-key commands that are not operators.
         return match (first, tail.as_str()) {
             ('g', "g") => Parsed::Command(Command::Move(Motion::FirstLine, count)),
+            ('g', "c") => Parsed::Incomplete,
+            ('g', "cc") => Parsed::Command(Command::Operate {
+                op: Op::Comment,
+                target: Target::Line,
+                count,
+            }),
+            ('g', rest) if rest.starts_with('c') => {
+                parse_operator_target(Op::Comment, 'c', count, &rest[1..])
+            }
             ('g', _) => Parsed::Unknown,
+            ('z', "z") => Parsed::Command(Command::Simple(
+                Simple::Ask(Ask::Centre { at: View::Middle }),
+                1,
+            )),
+            ('z', "t") => Parsed::Command(Command::Simple(
+                Simple::Ask(Ask::Centre { at: View::Top }),
+                1,
+            )),
+            ('z', "b") => Parsed::Command(Command::Simple(
+                Simple::Ask(Ask::Centre { at: View::Bottom }),
+                1,
+            )),
+            ('z', _) => Parsed::Unknown,
             ('Z', "Z") => Parsed::Command(Command::Simple(Simple::Ask(Ask::SaveAndClose), 1)),
             ('Z', _) => Parsed::Unknown,
             ('f' | 'F' | 't' | 'T', target) => {
@@ -781,7 +862,17 @@ fn parse(pending: &str) -> Parsed {
 
     match first {
         // Waiting for a second key.
-        'g' | 'Z' | 'f' | 'F' | 't' | 'T' | 'r' => Parsed::Incomplete,
+        'g' | 'Z' | 'z' | 'f' | 'F' | 't' | 'T' | 'r' => Parsed::Incomplete,
+
+        // The word under the cursor, and where the view sits.
+        '*' => Parsed::Command(Command::Simple(
+            Simple::Ask(Ask::SearchWord { backwards: false }),
+            1,
+        )),
+        '#' => Parsed::Command(Command::Simple(
+            Simple::Ask(Ask::SearchWord { backwards: true }),
+            1,
+        )),
 
         'h' => Parsed::Command(Command::Move(Motion::Left, count)),
         'l' | ' ' => Parsed::Command(Command::Move(Motion::Right, count)),
@@ -862,6 +953,46 @@ fn parse(pending: &str) -> Parsed {
 
 /// True when the cursor is on whitespace — the one thing `cw` asks before
 /// deciding whether it is really `ce`.
+/// Add or remove one level of indent on every line the range touches.
+///
+/// Blank lines are left alone when indenting — Vim does, and a file full of
+/// trailing whitespace is what happens when they are not.
+fn shift(text: &str, from: usize, to: usize, deeper: bool) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut at = 0usize;
+    let mut line_start = 0usize;
+
+    while at <= chars.len() {
+        let ends = at == chars.len() || chars[at] == '\n';
+        if ends {
+            let line: String = chars[line_start..at].iter().collect();
+            let touched = line_start <= to && at >= from;
+            if touched && !(deeper && line.trim().is_empty()) {
+                if deeper {
+                    out.push_str(&" ".repeat(SHIFT));
+                    out.push_str(&line);
+                } else {
+                    let drop = line
+                        .chars()
+                        .take(SHIFT)
+                        .take_while(|c| *c == ' ')
+                        .count();
+                    out.push_str(&line[drop..]);
+                }
+            } else {
+                out.push_str(&line);
+            }
+            if at < chars.len() {
+                out.push('\n');
+            }
+            line_start = at + 1;
+        }
+        at += 1;
+    }
+    out
+}
+
 fn on_blank(text: &str, cursor: usize) -> bool {
     text.chars().nth(cursor).is_none_or(char::is_whitespace)
 }
@@ -871,6 +1002,8 @@ fn operator(key: char) -> Option<Op> {
         'd' => Some(Op::Delete),
         'c' => Some(Op::Change),
         'y' => Some(Op::Yank),
+        '>' => Some(Op::Indent),
+        '<' => Some(Op::Outdent),
         _ => None,
     }
 }
@@ -952,6 +1085,8 @@ fn visual_command(key: char) -> Option<Command> {
         'd' | 'x' => Op::Delete,
         'c' | 's' => Op::Change,
         'y' => Op::Yank,
+        '>' => Op::Indent,
+        '<' => Op::Outdent,
         _ => return None,
     };
     Some(Command::Operate {

@@ -60,6 +60,18 @@ pub fn defaults() -> Vec<Binding> {
             action: Action::RefreshProject,
         },
         Binding {
+            id: "editor.comment".into(),
+            label: "Comment or uncomment".into(),
+            default: "Ctrl+/".into(),
+            action: Action::ToggleComment,
+        },
+        Binding {
+            id: "editor.rename".into(),
+            label: "Rename symbol".into(),
+            default: "F2".into(),
+            action: Action::Rename,
+        },
+        Binding {
             id: "nav.back".into(),
             label: "Back".into(),
             default: "Alt+ArrowLeft".into(),
@@ -117,7 +129,13 @@ pub fn chord_of(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<String>
     // both. Everything else still requires Ctrl, which is what keeps plain
     // typing out of the binding system entirely.
     let alt_named = alt && key.chars().count() > 1;
-    if !ctrl && !alt_named {
+    // A function key is a chord on its own: nothing types F2, and every
+    // editor binds them bare — F2 to rename, F5 to run. Requiring Ctrl would
+    // make those defaults unreachable.
+    let function = key.len() >= 2
+        && key.starts_with('F')
+        && key[1..].chars().all(|c| c.is_ascii_digit());
+    if !ctrl && !alt_named && !function {
         return None;
     }
     if matches!(key, "Control" | "Shift" | "Alt" | "Meta") {
@@ -364,6 +382,16 @@ mod chord_tests {
         // character is typed at all. Binding either would swallow it.
         assert_eq!(chord_of(false, false, true, "f"), None);
         assert_eq!(chord_of(false, false, true, "3"), None);
+    }
+
+    #[test]
+    fn function_keys_bind_bare() {
+        assert_eq!(chord_of(false, false, false, "F2").as_deref(), Some("F2"));
+        assert_eq!(chord_of(false, false, false, "F12").as_deref(), Some("F12"));
+        // Not everything starting with F — `f` is a Vim motion and `Find` is
+        // a key name on some layouts.
+        assert_eq!(chord_of(false, false, false, "f"), None);
+        assert_eq!(chord_of(false, false, false, "Find"), None);
     }
 
     #[test]

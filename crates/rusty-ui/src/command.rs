@@ -52,6 +52,11 @@ pub enum Action {
     /// Back and forward through the positions the caret has visited.
     NavBack,
     NavForward,
+    /// Comment or uncomment the selected lines. Not a Vim feature — this
+    /// editor had none at all, in any mode.
+    ToggleComment,
+    /// Rename the symbol under the caret, through the language server.
+    Rename,
     /// Open a page in the desktop browser. `&'static str` so the action stays
     /// `Copy` and can sit in the palette beside every other one.
     OpenUrl(&'static str),
@@ -421,7 +426,10 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 Item::Submenu {
                     label: "Add C interop",
                     items: vec![
-                        project_entry(Action::ScaffoldC("rust-calls-c"), "Rust calls C…", None),
+                        project_entry(Action::ToggleComment, "Comment or uncomment", chord(Action::ToggleComment)),
+                project_entry(Action::Rename, "Rename symbol…", chord(Action::Rename)),
+                Item::Separator,
+                project_entry(Action::ScaffoldC("rust-calls-c"), "Rust calls C…", None),
                         project_entry(Action::ScaffoldC("c-calls-rust"), "C calls Rust…", None),
                     ],
                 },
@@ -518,6 +526,8 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
+        Action::ToggleComment => editor_key("/", false),
+        Action::Rename => editor_chord("F2", false, false),
         Action::NavBack => controller::nav_back(state),
         Action::NavForward => controller::nav_forward(state),
         Action::ToggleVim => {
@@ -541,6 +551,12 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
 /// own keydown path; synthesising the event means the menu cannot drift from
 /// the shortcut.
 fn editor_key(key: &str, shift: bool) {
+    editor_chord(key, true, shift);
+}
+
+/// The same, for keys that are not Ctrl chords — F2 is a bare key, and
+/// sending it as Ctrl+F2 would reach a handler that is not listening.
+fn editor_chord(key: &str, ctrl: bool, shift: bool) {
     use wasm_bindgen::JsCast;
     let Some(element) = web_sys::window()
         .and_then(|w| w.document())
@@ -552,7 +568,7 @@ fn editor_key(key: &str, shift: bool) {
     let _ = element.focus();
     let options = web_sys::KeyboardEventInit::new();
     options.set_key(key);
-    options.set_ctrl_key(true);
+    options.set_ctrl_key(ctrl);
     options.set_shift_key(shift);
     options.set_bubbles(true);
     options.set_cancelable(true);

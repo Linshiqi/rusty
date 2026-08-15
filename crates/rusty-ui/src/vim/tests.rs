@@ -573,3 +573,120 @@ fn a_colon_line_does_not_run_normal_mode_commands_while_it_is_open() {
     let (text, _) = run(&mut vim, ":dd", "one\ntwo");
     assert_eq!(text, "one\ntwo", "nothing was deleted");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Indent — the phase-one omission, and the most-pressed key of the lot
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn shift_right_and_left_move_one_level() {
+    assert_eq!(go(">>", "fn main() {}").0, "    fn main() {}");
+    assert_eq!(go("<<", "    fn main() {}").0, "fn main() {}");
+    // Outdenting a line with no indent left is a no-op, not a panic and not
+    // a line that loses its first four characters.
+    assert_eq!(go("<<", "fn main() {}").0, "fn main() {}");
+}
+
+#[test]
+fn an_indent_with_a_motion_takes_whole_lines() {
+    // `>j` shifts both lines, not the characters between the two carets —
+    // an indent that respected a characterwise range would insert spaces
+    // into the middle of the second line.
+    let text = "one\ntwo\nthree";
+    assert_eq!(go(">j", text).0, "    one\n    two\nthree");
+    assert_eq!(go("3>>", text).0, "    one\n    two\n    three");
+}
+
+#[test]
+fn indenting_leaves_blank_lines_alone() {
+    // Otherwise every commented-out block leaves a file full of trailing
+    // whitespace, which the next rustfmt or reviewer has to clean up.
+    assert_eq!(go(">j", "one\n\nthree").0, "    one\n\nthree");
+}
+
+#[test]
+fn indent_in_visual_mode_uses_the_selection() {
+    let mut vim = Vim::default();
+    let (text, _) = run(&mut vim, "Vj>", "one\ntwo\nthree");
+    assert_eq!(text, "    one\n    two\nthree");
+    assert_eq!(vim.mode, Mode::Normal);
+}
+
+#[test]
+fn indent_puts_the_cursor_on_the_first_word() {
+    // Vim's rule, and the one that makes `>>` then `i` land where you mean.
+    assert_eq!(go(">>", "fn main() {}").1, 4);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The rest of the daily set
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn star_and_hash_ask_for_the_word_under_the_cursor() {
+    let mut vim = Vim::default();
+    assert_eq!(
+        vim.feed(&Key::new("*"), "let radio = 1;", 4).ask,
+        Some(Ask::SearchWord { backwards: false }),
+    );
+    assert_eq!(
+        vim.feed(&Key::new("#"), "let radio = 1;", 4).ask,
+        Some(Ask::SearchWord { backwards: true }),
+    );
+}
+
+#[test]
+fn z_commands_ask_where_to_put_the_view() {
+    let mut vim = Vim::default();
+    assert!(vim.feed(&Key::new("z"), "x", 0).ask.is_none(), "still pending");
+    assert_eq!(
+        vim.feed(&Key::new("z"), "x", 0).ask,
+        Some(Ask::Centre { at: View::Middle }),
+    );
+    for (key, at) in [("t", View::Top), ("b", View::Bottom)] {
+        let mut vim = Vim::default();
+        vim.feed(&Key::new("z"), "x", 0);
+        assert_eq!(vim.feed(&Key::new(key), "x", 0).ask, Some(Ask::Centre { at }));
+    }
+}
+
+#[test]
+fn a_substitute_line_opens_the_replace_bar() {
+    // Not parsed here: this editor's replace is literal and Vim's is a regex
+    // dialect. Quietly treating `\(` as one or the other would substitute
+    // something nobody asked for.
+    let mut vim = Vim::default();
+    for key in [":", "%", "s", "/", "a", "/", "b", "/", "g"] {
+        vim.feed(&Key::new(key), "x", 0);
+    }
+    assert_eq!(vim.feed(&Key::new("Enter"), "x", 0).ask, Some(Ask::Replace));
+}
+
+#[test]
+fn gc_asks_the_editor_to_comment_the_lines_a_motion_covered() {
+    // The range is handed over, not the syntax: `//` versus `#` is the
+    // document's language, which this module deliberately cannot see.
+    let mut vim = Vim::default();
+    let step = vim.feed(&Key::new("c"), "one\ntwo", 0);
+    assert!(step.ask.is_none(), "`c` alone is still an operator");
+
+    let mut vim = Vim::default();
+    for key in ["g", "c", "c"] {
+        let step = vim.feed(&Key::new(key), "one\ntwo", 0);
+        if let Some(Ask::Comment { from, to }) = step.ask {
+            assert_eq!((from, to), (0, 3), "the first line only");
+            return;
+        }
+    }
+    panic!("gcc never asked to comment");
+}
+
+#[test]
+fn gc_with_a_motion_spans_the_lines_it_crossed() {
+    let mut vim = Vim::default();
+    let mut last = None;
+    for key in ["g", "c", "j"] {
+        last = vim.feed(&Key::new(key), "one\ntwo\nthree", 0).ask;
+    }
+    assert_eq!(last, Some(Ask::Comment { from: 0, to: 7 }));
+}
