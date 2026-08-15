@@ -2,10 +2,22 @@
 
 What each release changed, written for the people downloading it. The release
 workflow reads the section matching the tag and publishes it verbatim as the
-release body — so this file, not the commit log, is what users see. The commit
-log stays in the private repository where it belongs.
+release body — so this file, not the commit log, is what users see. The
+history is public too, but it is written for whoever maintains this; a
+release note is written for whoever downloads it, and they are not the same
+document.
 
 One `## v<version>` heading per release, newest first.
+
+## v0.2.1
+
+The macOS and Linux installers, which v0.2.0 shipped without. `bundle.targets`
+named `nsis` — a format only Windows can build — so the other two platforms
+compiled the app, packaged nothing, and the run went green anyway. The build
+now names what each platform should produce, and **fails** when a platform
+produces no installer at all.
+
+Everything below is in this release too.
 
 ## v0.2.0
 

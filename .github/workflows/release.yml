@@ -3,7 +3,9 @@
 # Push `v0.2.0` and three runners build: Windows NSIS, macOS universal DMG
 # (Intel + Apple Silicon in one image), Ubuntu deb + AppImage — plus the
 # headless rusty-cli for each. A final job publishes everything on one
-# Release with generated notes.
+# Release, with the body taken from CHANGELOG.md — never generated from the
+# commit log, which is written for whoever maintains this rather than for
+# whoever downloads it.
 #
 # Upgrades: with the Tauri updater keypair in the repo secrets
 # (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD, made once with
@@ -32,15 +34,15 @@ jobs:
           - os: windows-latest
             cli: rusty-cli.exe
             cli_asset: rusty-cli-windows-x86_64.exe
-            tauri_args: ""
+            tauri_args: "--bundles nsis"
           - os: macos-latest
             cli: rusty-cli
             cli_asset: rusty-cli-macos-universal
-            tauri_args: "--target universal-apple-darwin"
+            tauri_args: "--target universal-apple-darwin --bundles app,dmg"
           - os: ubuntu-22.04
             cli: rusty-cli
             cli_asset: rusty-cli-linux-x86_64
-            tauri_args: ""
+            tauri_args: "--bundles deb,appimage"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +127,17 @@ jobs:
               for pattern in patterns:
                   for path in glob.glob(f"{root}/{pattern}"):
                       shutil.copy(path, "stage/")
+          # Refuse rather than ship half a release. `bundle.targets` was
+          # once `["nsis"]`, which is Windows-only, so macOS and Linux built
+          # the app, bundled nothing, staged the CLI alone — and the run went
+          # green while two of three platforms had no installer at all. The
+          # upload's own `if-no-files-found` cannot catch that: the directory
+          # is not empty, it is just missing the only thing anyone downloads.
+          if not os.listdir("stage"):
+              raise SystemExit(
+                  "no installer produced on ${{ matrix.os }} — check --bundles"
+                  " against what this platform can actually build"
+              )
           cli = glob.glob("target/release/${{ matrix.cli }}") \
               + glob.glob("target/universal-apple-darwin/release/${{ matrix.cli }}")
           shutil.copy(cli[0], "stage/${{ matrix.cli_asset }}")
@@ -161,8 +174,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       # Into `source/`, because `assets/` is the upload set and everything in
-      # it is attached to the release — a repository checked out beside it
-      # would ship the private source as a release asset.
+      # it is attached to the release — a checkout beside it would ship the
+      # whole tree as a release asset.
       - uses: actions/checkout@v4
         with:
           path: source
