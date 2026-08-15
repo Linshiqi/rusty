@@ -1517,6 +1517,16 @@ pub fn rename_symbol(state: AppState, path: String, line: u32, col: u32, new_nam
     );
 }
 
+/// The editor's textarea, when there is one.
+fn editor_element() -> Option<web_sys::HtmlElement> {
+    use wasm_bindgen::JsCast;
+    web_sys::window()?
+        .document()?
+        .get_element_by_id("editor-area")?
+        .dyn_into::<web_sys::HtmlElement>()
+        .ok()
+}
+
 /// Where the caret is, for the navigation history to remember.
 ///
 /// Read off the DOM rather than tracked in a signal: the caret moves on
@@ -2697,6 +2707,14 @@ pub fn set_vim(state: AppState, enabled: bool) {
     // in a mode nobody asked for.
     state.vim.set(crate::vim::Vim::default());
     state.vim_on.set(enabled);
+
+    // And give the editor the keyboard back. Both ways of reaching this — the
+    // menu and the palette — take focus to get themselves clicked, and Vim's
+    // keys are handled on the textarea, so without this the very next `j`
+    // goes nowhere and the feature reads as not working at all.
+    if enabled && let Some(element) = editor_element() {
+        let _ = element.focus();
+    }
     track(
         state,
         async move { ipc::call::<_, ()>(cmd::workbench::SET_VIM, &Args { enabled }).await },
