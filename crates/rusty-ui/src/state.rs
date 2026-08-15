@@ -554,6 +554,9 @@ pub struct AppState {
     pub history: RwSignal<EditHistory>,
     /// Where the caret has been. Shared by Vim's jump keys and the menu.
     pub nav: RwSignal<NavHistory>,
+    /// A rename waiting for its new name: where the symbol is, and what it
+    /// is called now. `None` when no rename is being typed.
+    pub rename: RwSignal<Option<(String, u32, u32, String)>>,
     /// Modal editing: whether it is on, and where it currently is.
     ///
     /// The switch belongs in `workbench.toml` rather than here — a second
@@ -780,6 +783,7 @@ impl AppState {
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),
             nav: RwSignal::new(NavHistory::default()),
+            rename: RwSignal::new(None),
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
             search_query: RwSignal::new(String::new()),

@@ -1471,6 +1471,52 @@ fn run_search(state: AppState, generation: u64) {
     });
 }
 
+/// Rename the symbol at the caret, everywhere it is used.
+///
+/// Saves first, deliberately: the edits land on disk, and an unsaved buffer
+/// would overwrite them with its own stale bytes the next time Ctrl+S was
+/// pressed. Reloads afterwards so the window shows what is now on disk
+/// rather than what it remembers.
+pub fn rename_symbol(state: AppState, path: String, line: u32, col: u32, new_name: String) {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        path: String,
+        line: u32,
+        col: u32,
+        new_name: String,
+    }
+
+    save_file(state);
+    let reopen = path.clone();
+    let args = Args {
+        path,
+        line,
+        col,
+        new_name,
+    };
+    track(
+        state,
+        async move { ipc::call::<_, Vec<String>>(cmd::lsp::RENAME, &args).await },
+        move |changed| {
+            // Say how far it reached. A rename that touched eleven files and
+            // reported nothing leaves you wondering whether it worked.
+            state.push_log(LogLine {
+                stream: LogStream::Stdout,
+                text: match changed.len() {
+                    0 => "rename changed nothing — the server found no uses".to_string(),
+                    1 => "renamed in 1 file".to_string(),
+                    n => format!("renamed in {n} files"),
+                },
+                level: None,
+            });
+            if !changed.is_empty() {
+                open_file(state, reopen.clone());
+            }
+        },
+    );
+}
+
 /// Where the caret is, for the navigation history to remember.
 ///
 /// Read off the DOM rather than tracked in a signal: the caret moves on

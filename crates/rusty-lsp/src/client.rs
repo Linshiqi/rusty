@@ -481,7 +481,100 @@ impl LspClient {
         Ok(fixes)
     }
 
-    /// A WorkspaceEdit's changes for `path` only — `None` when the edit also
+    /// Rename the symbol at this position, everywhere, and write the files.
+    ///
+    /// Applied here rather than returned, because converting the server's
+    /// columns needs each file's own text and only a file this client can
+    /// read has any. A code action refuses when other files are involved;
+    /// a rename must not — a `pub fn` renamed in one file and not its callers
+    /// is a broken build, and that is the *normal* case.
+    ///
+    /// The caller is expected to have saved first: these edits land on disk,
+    /// and an unsaved buffer would be overwritten by its own stale bytes on
+    /// the next save. Returns the paths that changed, newest knowledge for
+    /// whoever has them open.
+    pub fn rename(
+        &self,
+        path: &str,
+        line: u32,
+        col: u32,
+        new_name: &str,
+    ) -> Result<Vec<String>> {
+        let position = self.protocol_position(path, line, col);
+        let result = self.shared.request(
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": self.uri(path) },
+                "position": position,
+                "newName": new_name,
+            }),
+        )?;
+
+        // uri -> the server's own edits, ungrouped.
+        let mut by_file: Vec<(String, Vec<Value>)> = Vec::new();
+        let mut add = |uri: &str, edits: &Value| {
+            let Some(list) = edits.as_array() else {
+                return;
+            };
+            match by_file.iter_mut().find(|(known, _)| same_file_uri(known, uri)) {
+                Some((_, existing)) => existing.extend(list.iter().cloned()),
+                None => by_file.push((uri.to_string(), list.clone())),
+            }
+        };
+
+        if let Some(changes) = result["changes"].as_object() {
+            for (uri, edits) in changes {
+                add(uri, edits);
+            }
+        }
+        if let Some(documents) = result["documentChanges"].as_array() {
+            for change in documents {
+                // A create/rename/delete *file* operation — rust-analyzer
+                // emits one when the symbol is a module. Applying only the
+                // text half would leave the project not building, so refuse
+                // the whole thing and say which part is missing.
+                let Some(uri) = change["textDocument"]["uri"].as_str() else {
+                    return Err(Error::Server {
+                        method: "textDocument/rename".into(),
+                        message: "this rename also moves a file, which rusty cannot apply yet                                   — rename the module in the file tree instead"
+                            .into(),
+                    });
+                };
+                add(uri, &change["edits"]);
+            }
+        }
+
+        let encoding = self.shared.encoding();
+        let mut changed = Vec::new();
+        for (uri, edits) in by_file {
+            let Some(file) = file_of_uri(&uri) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            // A file the server describes differently from the disk is left
+            // alone, and the rename says so rather than half-applying.
+            let Some(out) = apply_text_edits(&text, &edits, encoding) else {
+                return Err(Error::Server {
+                    method: "textDocument/rename".into(),
+                    message: format!(
+                        "{} has changed since rust-analyzer last read it — save and try again",
+                        file.display()
+                    ),
+                });
+            };
+            if out == text {
+                continue;
+            }
+            std::fs::write(&file, &out).map_err(Error::Io)?;
+            changed.push(file.display().to_string());
+        }
+        changed.sort();
+        Ok(changed)
+    }
+
+    /// A WorkspaceEdit's changes for `path` only    /// A WorkspaceEdit's changes for `path` only — `None` when the edit also
     /// touches other files and applying just part of it would lie.
     fn workspace_edit_for(&self, path: &str, edit: &Value) -> Option<Vec<ActionEdit>> {
         let ours = self.uri(path);
@@ -1267,6 +1360,159 @@ fn kind_name(kind: u64) -> &'static str {
         24 => "operator",
         25 => "type parameter",
         _ => "other",
+    }
+}
+
+/// A `file://` URI back to a path this process can open.
+fn file_of_uri(uri: &str) -> Option<std::path::PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let mut decoded = String::new();
+    let bytes = rest.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%'
+            && at + 2 < bytes.len()
+            && let Ok(byte) = u8::from_str_radix(&rest[at + 1..at + 3], 16)
+        {
+            decoded.push(byte as char);
+            at += 3;
+            continue;
+        }
+        decoded.push(bytes[at] as char);
+        at += 1;
+    }
+    Some(std::path::PathBuf::from(decoded))
+}
+
+/// Apply a server's text edits to a whole document.
+///
+/// Back to front by position, so an edit never moves the ones still to be
+/// applied — the mistake that turns a rename into corruption at the second
+/// occurrence in a line.
+///
+/// `None` when an edit names a line the file does not have. That means the
+/// server and the disk disagree, and then *every* range is suspect: columns
+/// clamp silently, so a stale edit would not fail, it would append text into
+/// somebody's source. Refusing the whole file is the only honest answer.
+fn apply_text_edits(
+    text: &str,
+    edits: &[Value],
+    encoding: crate::positions::Encoding,
+) -> Option<String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let offset = |line: u32, character: u32| -> usize {
+        let mut at = 0usize;
+        for row in lines.iter().take(line as usize) {
+            at += row.chars().count() + 1;
+        }
+        let row = lines.get(line as usize).copied().unwrap_or("");
+        at + crate::positions::character_to_scalar(row, character, encoding) as usize
+    };
+
+    let mut ranges: Vec<(usize, usize, String)> = Vec::new();
+    for edit in edits {
+        let last = edit["range"]["end"]["line"].as_u64().unwrap_or(0) as usize;
+        if last >= lines.len() {
+            return None;
+        }
+    }
+    let parsed = edits
+        .iter()
+        .filter_map(|edit| {
+            let start = offset(
+                edit["range"]["start"]["line"].as_u64()? as u32,
+                edit["range"]["start"]["character"].as_u64()? as u32,
+            );
+            let end = offset(
+                edit["range"]["end"]["line"].as_u64()? as u32,
+                edit["range"]["end"]["character"].as_u64()? as u32,
+            );
+            Some((
+                start.min(end),
+                start.max(end),
+                edit["newText"].as_str().unwrap_or("").to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    ranges.extend(parsed);
+    ranges.sort_by_key(|(start, ..)| *start);
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<char> = chars.clone();
+    for (start, end, replacement) in ranges.into_iter().rev() {
+        if start > out.len() || end > out.len() {
+            continue;
+        }
+        out.splice(start..end, replacement.chars());
+    }
+    Some(out.into_iter().collect())
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::{apply_text_edits, file_of_uri};
+    use crate::positions::Encoding;
+    use serde_json::json;
+
+    fn edit(line: u32, start: u32, end: u32, text: &str) -> serde_json::Value {
+        json!({
+            "range": {
+                "start": { "line": line, "character": start },
+                "end": { "line": line, "character": end },
+            },
+            "newText": text,
+        })
+    }
+
+    /// Two occurrences on one line. Applied front to back, the first edit
+    /// shifts the second's columns and the rename lands in the wrong place —
+    /// silently, as corrupted source rather than an error.
+    #[test]
+    fn edits_apply_back_to_front() {
+        let text = "let radio = radio_new();";
+        let out = apply_text_edits(
+            text,
+            &[edit(0, 4, 9, "tuner"), edit(0, 12, 17, "tuner")],
+            Encoding::Utf8,
+        );
+        assert_eq!(out.as_deref(), Some("let tuner = tuner_new();"));
+    }
+
+    /// The server counts in the negotiated encoding, and rusty negotiates
+    /// utf-8 — so a CJK comment above the edit must not shift it. The trap
+    /// the LSP client keeps a 中文 comment in its other tests for.
+    #[test]
+    fn columns_are_read_in_the_negotiated_encoding() {
+        let text = "// 中文注释
+let radio = 1;";
+        let out = apply_text_edits(text, &[edit(1, 4, 9, "tuner")], Encoding::Utf8);
+        assert_eq!(out.as_deref(), Some("// 中文注释
+let tuner = 1;"));
+    }
+
+    #[test]
+    fn a_uri_comes_back_as_a_path_with_its_escapes_undone() {
+        let path = file_of_uri("file:///E:/Code/my%20project/src/main.rs").expect("parsed");
+        assert!(path.to_string_lossy().contains("my project"), "{path:?}");
+        assert_eq!(file_of_uri("https://example.invalid/x.rs"), None);
+    }
+
+    /// A range naming a line the file does not have means the server and
+    /// the disk disagree. Every other range in that file is then suspect
+    /// too — columns clamp silently, so a stale edit would not fail, it
+    /// would append text into somebody's source. Refuse the file whole.
+    #[test]
+    fn a_file_the_server_and_the_disk_disagree_about_is_refused() {
+        assert_eq!(
+            apply_text_edits("one line", &[edit(9, 0, 1, "x")], Encoding::Utf8),
+            None,
+        );
+        // And a range inside the file still applies.
+        assert_eq!(
+            apply_text_edits("one line", &[edit(0, 0, 3, "two")], Encoding::Utf8).as_deref(),
+            Some("two line"),
+        );
     }
 }
 

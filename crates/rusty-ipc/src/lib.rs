@@ -142,6 +142,8 @@ pub mod lsp {
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
     pub const ACTIONS: &str = "lsp_code_actions";
+    /// Rename a symbol everywhere it is used. Writes the files it changes.
+    pub const RENAME: &str = "lsp_rename";
 }
 
 /// Breakpoints, stepping, and what the target is doing.

@@ -223,3 +223,28 @@ pub async fn lsp_definition(
             .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
     )
 }
+
+/// Rename the symbol at this position across the whole project.
+///
+/// Refuses without a server rather than doing nothing quietly: a rename that
+/// silently changed one file and not its callers is a broken build the user
+/// would find at the next compile, blaming their own edit.
+#[tauri::command]
+pub async fn lsp_rename(
+    path: String,
+    line: u32,
+    col: u32,
+    new_name: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Err(CommandError::new(
+            "rust-analyzer is not running, so nothing knows where this symbol is used",
+        ));
+    };
+    Ok(
+        tokio::task::spawn_blocking(move || client.rename(&path, line, col, &new_name))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
+}

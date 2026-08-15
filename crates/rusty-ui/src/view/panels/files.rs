@@ -1049,6 +1049,7 @@ fn Surface(document: Document) -> impl IntoView {
     view! {
         <div class="relative flex min-h-0 flex-1 flex-col">
             <FindBar area=area scroller=scroller />
+            <RenameBar />
 
             // The editor's own menu. It keeps the clipboard three every text
             // box has, and adds what only this editor knows: where a name is
@@ -1580,6 +1581,28 @@ fn Surface(document: Document) -> impl IntoView {
                                     }
                                     _ => {}
                                 }
+                            }
+                            // F2 renames the symbol under the caret, the
+                            // key every editor uses for it. rust-analyzer has
+                            // always been able to do this; rusty never asked.
+                            if event.key() == "F2" && !event.ctrl_key() && is_rust {
+                                event.prevent_default();
+                                if let Some(element) = area.get_untracked() {
+                                    let text = state.draft.get_untracked();
+                                    let cursor = scalar_of_units(
+                                        &text,
+                                        element.selection_start().ok().flatten().unwrap_or(0)
+                                            as usize,
+                                    );
+                                    if let (Some(word), Some((line, col))) =
+                                        (word_at(&text, cursor), caret_line_col(&element, &text))
+                                    {
+                                        state
+                                            .rename
+                                            .set(Some((path.clone(), line, col, word)));
+                                    }
+                                }
+                                return;
                             }
                             // Comment or uncomment, for everyone — Vim's `gc`
                             // reaches the same function. This editor had no
@@ -3570,4 +3593,69 @@ fn comment_selection(state: AppState, area: &web_sys::HtmlTextAreaElement) {
     let _ = area.set_selection_start(Some(at));
     let _ = area.set_selection_end(Some(at));
     controller::schedule_pulse(state);
+}
+
+/// Where a new name is typed. Appears only while a rename is pending.
+///
+/// A strip rather than a modal, matching the find bar: a rename is a small
+/// question about the code you are looking at, and covering the code to ask
+/// it takes away the one thing that answers it.
+#[component]
+fn RenameBar() -> impl IntoView {
+    let state = AppState::expect();
+    let box_ref: NodeRef<html::Input> = NodeRef::new();
+
+    // Focused and pre-selected, so the old name can be typed straight over.
+    Effect::new(move |_| {
+        if state.rename.with(Option::is_some)
+            && let Some(element) = box_ref.get()
+        {
+            let _ = element.focus();
+            element.select();
+        }
+    });
+
+    move || {
+        let (path, line, col, word) = state.rename.get()?;
+        Some(view! {
+            <div class="flex flex-none items-center gap-2 border-b border-line bg-raised px-3 py-1.5">
+                <span class="text-caption text-label-3">"Rename"</span>
+                <span class="font-mono text-caption text-label-2">{word.clone()}</span>
+                <span class="text-caption text-label-4">"to"</span>
+                <input
+                    node_ref=box_ref
+                    prop:value=word
+                    class="w-48 rounded-[5px] bg-sunken px-1.5 py-0.5 font-mono text-caption text-label outline-none ring-1 ring-line focus:ring-rust"
+                    on:keydown=move |event: ev::KeyboardEvent| {
+                        match event.key().as_str() {
+                            "Enter" => {
+                                event.prevent_default();
+                                let name = event_target_value(&event);
+                                let name = name.trim().to_string();
+                                state.rename.set(None);
+                                if !name.is_empty() {
+                                    controller::rename_symbol(
+                                        state,
+                                        path.clone(),
+                                        line,
+                                        col,
+                                        name,
+                                    );
+                                }
+                            }
+                            "Escape" => {
+                                event.prevent_default();
+                                event.stop_propagation();
+                                state.rename.set(None);
+                            }
+                            _ => {}
+                        }
+                    }
+                />
+                <span class="text-caption text-label-4">
+                    "every use in the project, written to disk"
+                </span>
+            </div>
+        })
+    }
 }
