@@ -695,10 +695,12 @@ impl Vim {
         match self.mode {
             Mode::Insert => None,
             Mode::Visual | Mode::VisualLine => Some(self.visual_range(text, cursor)),
-            Mode::Normal => {
-                let end = motion::line_end(text, cursor);
-                (cursor < end).then_some((cursor, cursor + 1))
-            }
+            // Normal mode has no selection: the block is the *caret*, drawn
+            // by `caret-shape: block`. Selecting the character instead was
+            // the first design, and it could not put a cursor on an empty
+            // line — there is nothing there to select — so a blank line
+            // showed no cursor at all.
+            Mode::Normal => None,
         }
     }
 

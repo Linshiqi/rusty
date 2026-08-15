@@ -397,19 +397,21 @@ body {
 
 /* Modal editing's block cursor.
  *
- * Normal mode selects the character the cursor is on, so the selection *is*
- * the cursor and no extra element is needed — which also means normal mode
- * and visual mode cannot disagree about where it is.
+ * `caret-shape: block` is the browser's own — so the block lands on an empty
+ * line and past the last character, where a selection-based one cannot: there
+ * is no character there to select. It blinks, which matters more than it
+ * sounds: an idle cursor that still says NORMAL is the mode indicator you
+ * look at without meaning to.
  *
- * Translucent rather than solid: the textarea's own glyphs are transparent
- * by design and the visible text is the `<pre>` underneath, so an opaque
- * block would hide the very character it points at. The native caret goes,
- * because a thin line beside a block reads as two cursors.
+ * Translucent, because the textarea's glyphs are transparent by design and
+ * the visible text is the `<pre>` underneath — an opaque block would hide the
+ * character it points at.
+ *
+ * Where `caret-shape` is not supported this degrades to the ordinary caret,
+ * which is a thin cursor in normal mode: wrong, but visible, and the status
+ * bar still names the mode.
  */
 .vim-block {
-  caret-color: transparent;
-}
-
-.vim-block::selection {
-  background: var(--vim-block);
+  caret-shape: block;
+  caret-color: var(--vim-block);
 }

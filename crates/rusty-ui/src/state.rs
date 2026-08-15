@@ -565,13 +565,6 @@ pub struct AppState {
     /// of Escape.
     pub vim_on: RwSignal<bool>,
     pub vim: RwSignal<crate::vim::Vim>,
-    /// Whether a one-character block is actually drawn right now.
-    ///
-    /// It cannot always be: an empty line and the end of a line have no
-    /// character to select. The native caret is hidden only while the block
-    /// *is* there, so those positions fall back to a blinking caret instead
-    /// of showing nothing at all.
-    pub vim_block: RwSignal<bool>,
     /// Project search. Kept here rather than in the panel so the results
     /// survive switching away and back.
     pub search_query: RwSignal<String>,
@@ -793,7 +786,6 @@ impl AppState {
             rename: RwSignal::new(None),
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
-            vim_block: RwSignal::new(false),
             search_query: RwSignal::new(String::new()),
             search_case: RwSignal::new(false),
             search_word: RwSignal::new(false),
