@@ -136,7 +136,15 @@
     lsp_open: () => null,
     lsp_saved: () => null,
     lsp_change: (a) => { window.__mock.changes.push(a); return null; },
-    lsp_complete: (a) => { window.__mock.completes.push(a); return ITEMS; },
+    // Edits carry the range as of *this* request, which is what the real
+    // server does and what the stale-range bug depended on: ask while two
+    // characters are typed and the range covers two, however many more
+    // arrive before the item is accepted.
+    lsp_complete: (a) => {
+      window.__mock.completes.push(a);
+      const start = a.col - 2;
+      return ITEMS.map((i) => ({ ...i, edit: { startLine: a.line, startCol: start, endLine: a.line, endCol: a.col, newText: i.insert } }));
+    },
     lsp_hover: (a) => ({
       text: "```rust\npub struct Radio {\n    gain: u32,\n}\n```\n---\nA struct providing radio control. See `Radio::new()`.",
       range: { startLine: a.line, startCol: 4, endLine: a.line, endCol: 9 },

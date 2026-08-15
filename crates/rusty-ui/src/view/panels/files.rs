@@ -2764,17 +2764,21 @@ fn accept_completion(state: AppState, area: &web_sys::HtmlTextAreaElement, index
         return;
     };
 
-    // The server's own edit range wins; without one, the typed word is what
-    // the insertion replaces.
-    let (start_line, start_col, end_line, end_col) = match &item.edit {
-        Some(edit) => (edit.start_line, edit.start_col, edit.end_line, edit.end_col),
-        None => (
-            popup.line,
-            popup.word_start,
-            popup.line,
-            popup.word_start + word.chars().count() as u32,
-        ),
+    // Where the replacement starts is the server's to say; where it *ends* is
+    // not, and taking the server's end was the bug: rust-analyzer computes
+    // the range against the text it had when asked, and the popup stays open
+    // while more is typed, filtering locally. Ask on `pe`, type `r`, accept —
+    // and the stale range replaced `pe` alone, leaving `peripheralsr`.
+    //
+    // The end is always the word as it stands now.
+    let (start_line, start_col) = match &item.edit {
+        Some(edit) => (edit.start_line, edit.start_col),
+        None => (popup.line, popup.word_start),
     };
+    let (end_line, end_col) = (
+        popup.line,
+        popup.word_start + word.chars().count() as u32,
+    );
 
     record_edit(state);
     let start = byte_of_utf16(&draft, utf16_offset_of(&draft, start_line, start_col) as usize);
