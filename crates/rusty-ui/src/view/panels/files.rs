@@ -1406,8 +1406,14 @@ fn Surface(document: Document) -> impl IntoView {
                             // Normal mode only. Visual mode keeps the ordinary
                             // selection tint, because there the selection is a
                             // range the user chose rather than the cursor.
+                            // Hide the native caret only while a block is
+                            // actually drawn. On an empty line there is no
+                            // character to select, and hiding it there left
+                            // the line with no cursor of any kind — which is
+                            // what a blank line in this editor looked like.
                             let block = state.vim_on.get()
-                                && state.vim.with(|vim| vim.mode == crate::vim::Mode::Normal);
+                                && state.vim.with(|vim| vim.mode == crate::vim::Mode::Normal)
+                                && state.vim_block.get();
                             if block { format!("{base} vim-block") } else { base.to_string() }
                         }
                         style=move || metrics.get()
@@ -2393,12 +2399,16 @@ fn snap_block(state: AppState, area: NodeRef<html::Textarea>) {
     }
     let text = state.draft.get_untracked();
     // Not past the end of the line: normal mode's cursor sits on a character,
-    // and there is none after the last one.
+    // and there is none after the last one — nor anywhere on an empty line.
+    // Saying so brings the native caret back, so a blank line shows a
+    // blinking cursor rather than nothing at all.
     let scalars = scalar_of_utf16(&text, start as usize);
     if text.chars().nth(scalars).is_none_or(|c| c == '\n') {
+        state.vim_block.set(false);
         return;
     }
     let _ = element.set_selection_end(Some(units_of_scalar(&text, scalars + 1)));
+    state.vim_block.set(true);
 }
 
 /// UTF-16 units to Unicode scalars — the other direction of
@@ -3414,11 +3424,15 @@ fn vim_key(
         Some((from, to)) => {
             let _ = area.set_selection_start(Some(units_of_scalar(&after, from)));
             let _ = area.set_selection_end(Some(units_of_scalar(&after, to)));
+            // Whether a block is really on screen, which is not the same as
+            // being in normal mode: an empty line has no character to select.
+            state.vim_block.set(to > from);
         }
         None => {
             let at = units_of_scalar(&after, step.cursor);
             let _ = area.set_selection_start(Some(at));
             let _ = area.set_selection_end(Some(at));
+            state.vim_block.set(false);
         }
     }
 
