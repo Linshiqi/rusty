@@ -115,11 +115,18 @@ pub fn plan(root: &Path, from: &Chip, to: &Chip) -> Migration {
         from.toolchain == ToolchainRequirement::EspXtensa,
         to.toolchain == ToolchainRequirement::EspXtensa,
     ) {
-        (true, false) if let Some(line) = build_std_line(&config) => {
-            config_edits.push(Edit {
-                before: line,
-                after: String::new(),
-            });
+        // The `if let` is inside the arm rather than in a guard: an if-let
+        // guard is unstable before the version this workspace declares as its
+        // minimum, so it built here and failed for anyone on the Rust we
+        // promise to support. Identical either way — the only other arm
+        // cannot match this tuple, so a failed guard fell through to `_`.
+        (true, false) => {
+            if let Some(line) = build_std_line(&config) {
+                config_edits.push(Edit {
+                    before: line,
+                    after: String::new(),
+                });
+            }
         }
         (false, true) if build_std_line(&config).is_none() => {
             config_edits.push(Edit {
