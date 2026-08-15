@@ -1115,6 +1115,22 @@ fn Surface(document: Document) -> impl IntoView {
                                     label="Paste"
                                     shortcut="Ctrl+V"
                                     disabled=read_only
+                        // Normal and visual mode cannot type, and this is
+                        // what guarantees it — not `preventDefault` on every
+                        // key, which only covers the keys we thought of.
+                        //
+                        // An IME is the one that got through: `is_composing`
+                        // returns before Vim is consulted, so with Chinese
+                        // input active a `j` in normal mode composed and
+                        // replaced the character the block cursor was on. A
+                        // read-only textarea cannot be typed into by anything
+                        // — IME, dictation, paste, a key nobody enumerated —
+                        // while Vim's own edits go through `set_value`, which
+                        // read-only does not touch.
+                        prop:readonly=move || {
+                            state.vim_on.get()
+                                && state.vim.with(|vim| vim.mode != crate::vim::Mode::Insert)
+                        }
                                     on_select=Callback::new(move |_| {
                                         paste_at_caret(state, area);
                                         editor_menu.set(None);
@@ -1404,6 +1420,15 @@ fn Surface(document: Document) -> impl IntoView {
                                     f64::from(event.client_y()),
                                 )));
                         }
+                        // Normal mode's cursor *is* a one-character selection,
+                        // so a collapsed caret means no visible cursor at all
+                        // — the native one is transparent while Vim is on.
+                        // A click, or switching Vim on, leaves exactly that,
+                        // and the editor looked like it had lost the cursor
+                        // until the first key was pressed. Snap it back to a
+                        // block on every pointer release and on focus.
+                        on:mouseup=move |_| snap_block(state, area)
+                        on:focus=move |_| snap_block(state, area)
                         on:scroll=move |_| {
                             let Some(element) = area.get_untracked() else {
                                 return;
@@ -2345,6 +2370,48 @@ fn caret_after_restore(target: &str, other: &str) -> u32 {
     let end = end.max(prefix);
 
     target[..end].encode_utf16().count() as u32
+}
+
+/// Give normal mode its block cursor back after anything that collapses the
+/// selection — a click, a focus, switching Vim on.
+///
+/// Only when the selection is empty: a real selection the user made with the
+/// mouse is theirs, and widening it would fight them.
+fn snap_block(state: AppState, area: NodeRef<html::Textarea>) {
+    if !state.vim_on.get_untracked()
+        || state.vim.with_untracked(|vim| vim.mode != crate::vim::Mode::Normal)
+    {
+        return;
+    }
+    let Some(element) = area.get_untracked() else {
+        return;
+    };
+    let start = element.selection_start().ok().flatten().unwrap_or(0);
+    let end = element.selection_end().ok().flatten().unwrap_or(0);
+    if start != end {
+        return;
+    }
+    let text = state.draft.get_untracked();
+    // Not past the end of the line: normal mode's cursor sits on a character,
+    // and there is none after the last one.
+    let scalars = scalar_of_utf16(&text, start as usize);
+    if text.chars().nth(scalars).is_none_or(|c| c == '\n') {
+        return;
+    }
+    let _ = element.set_selection_end(Some(units_of_scalar(&text, scalars + 1)));
+}
+
+/// UTF-16 units to Unicode scalars — the other direction of
+/// [`units_of_scalar`], at the same boundary.
+fn scalar_of_utf16(text: &str, units: usize) -> usize {
+    let mut seen = 0usize;
+    for (index, c) in text.chars().enumerate() {
+        if seen >= units {
+            return index;
+        }
+        seen += c.len_utf16();
+    }
+    text.chars().count()
 }
 
 /// Scroll the shared scroller so the caret's line is on screen. The textarea
