@@ -199,6 +199,38 @@ pub fn recent_label(path: &str) -> String {
     format!("{name} — {path}")
 }
 
+/// When a menu row is available.
+///
+/// An enum rather than a closure, for the reason [`Action`] is one: the set
+/// is enumerable and a row cannot capture state it should not see. It also
+/// keeps the *rendering* reactive — the menu is built once, and the answer
+/// is re-derived whenever what it depends on changes.
+///
+/// Greying out rather than hiding, which is this project's menu convention:
+/// present but unavailable says "this exists, and here is when"; hidden says
+/// nothing at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Requires {
+    Nothing,
+    /// A project open. File > Save with no document, in other words.
+    Project,
+    /// Somewhere to go. Back at the start of a session is the case that
+    /// otherwise looks like a broken button.
+    NavBack,
+    NavForward,
+}
+
+impl Requires {
+    pub fn met(self, state: AppState) -> bool {
+        match self {
+            Requires::Nothing => true,
+            Requires::Project => state.has_project(),
+            Requires::NavBack => state.nav.with(|nav| nav.can_go_back()),
+            Requires::NavForward => state.nav.with(|nav| nav.can_go_forward()),
+        }
+    }
+}
+
 /// One row in a menu.
 #[derive(Clone)]
 pub enum Item {
@@ -206,10 +238,8 @@ pub enum Item {
         action: Action,
         label: String,
         shortcut: Option<String>,
-        /// Greyed out until a project is open, the way File > Save is greyed
-        /// out with no document. Present but unavailable says "this exists and
-        /// here is when"; hidden says nothing at all.
-        needs_project: bool,
+        /// When this row can be used. See [`Requires`].
+        requires: Requires,
     },
     /// A flyout, VSCode's Open Recent shape — the list stays out of the way
     /// until asked for.
@@ -226,21 +256,25 @@ pub struct Menu {
 }
 
 fn entry(action: Action, label: &str, shortcut: Option<String>) -> Item {
+    entry_when(Requires::Nothing, action, label, shortcut)
+}
+
+fn entry_when(
+    requires: Requires,
+    action: Action,
+    label: &str,
+    shortcut: Option<String>,
+) -> Item {
     Item::Entry {
         action,
         label: label.to_string(),
         shortcut,
-        needs_project: false,
+        requires,
     }
 }
 
 fn project_entry(action: Action, label: &str, shortcut: Option<String>) -> Item {
-    Item::Entry {
-        action,
-        label: label.to_string(),
-        shortcut,
-        needs_project: true,
-    }
+    entry_when(Requires::Project, action, label, shortcut)
 }
 
 /// The menu bar.
@@ -278,8 +312,13 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 Item::Separator,
                 entry(Action::ResetLayout, "Reset panel sizes", None),
                 Item::Separator,
-                entry(Action::NavBack, "Back", chord(Action::NavBack)),
-                entry(Action::NavForward, "Forward", chord(Action::NavForward)),
+                entry_when(Requires::NavBack, Action::NavBack, "Back", chord(Action::NavBack)),
+                entry_when(
+                    Requires::NavForward,
+                    Action::NavForward,
+                    "Forward",
+                    chord(Action::NavForward),
+                ),
                 Item::Separator,
                 entry(Action::ToggleVim, "Vim keys in the editor", None),
             ],
@@ -291,7 +330,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             action: Action::ShowPanel(panel.id),
             label: panel.title.to_string(),
             shortcut: chord(Action::ShowPanel(panel.id)),
-            needs_project: panel.needs_project,
+            requires: if panel.needs_project {
+                Requires::Project
+            } else {
+                Requires::Nothing
+            },
         });
     }
     view_items.extend([
@@ -576,5 +619,47 @@ mod tests {
         assert!(!matches("xyz", "Flash"));
         // Order matters — otherwise every query matches everything.
         assert!(!matches("hsalf", "Flash"));
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    /// Rows that ask for a project keep asking. The check that matters is
+    /// that the *constructors* carry the condition through — `project_entry`
+    /// existed before `Requires` did, and a refactor that quietly turned its
+    /// rows unconditional would ungrey File > Save with no document open.
+    #[test]
+    fn a_project_row_still_requires_a_project() {
+        let Item::Entry { requires, .. } = project_entry(Action::Undo, "Undo", None) else {
+            panic!("not an entry");
+        };
+        assert_eq!(requires, Requires::Project);
+
+        let Item::Entry { requires, .. } = entry(Action::Undo, "Undo", None) else {
+            panic!("not an entry");
+        };
+        assert_eq!(requires, Requires::Nothing, "a plain row asks nothing");
+    }
+
+    /// The View menu offers Back and Forward, and each says when it applies
+    /// rather than sitting lit over an empty history.
+    #[test]
+    fn back_and_forward_are_conditional_rows() {
+        let rows = [
+            entry_when(Requires::NavBack, Action::NavBack, "Back", None),
+            entry_when(Requires::NavForward, Action::NavForward, "Forward", None),
+        ];
+        for row in rows {
+            let Item::Entry { requires, .. } = row else {
+                panic!("not an entry");
+            };
+            assert_ne!(
+                requires,
+                Requires::Nothing,
+                "a navigation row with no condition is lit over an empty history",
+            );
+        }
     }
 }

@@ -205,10 +205,8 @@ fn Rows(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> AnyView {
                         }
                         .into_any()
                     }
-                    Item::Entry { action, label, shortcut, needs_project } => {
-                        let disabled = Signal::derive(move || {
-                            needs_project && !state.has_project()
-                        });
+                    Item::Entry { action, label, shortcut, requires } => {
+                        let disabled = Signal::derive(move || !requires.met(state));
                         view! {
                             <button
                                 type="button"
