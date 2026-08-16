@@ -499,7 +499,23 @@ jobs:
       - name: Configure
         working-directory: qemu-src
         run: |
+          # meson validates --prefix before it reads anything else, and on
+          # Windows an absolute path needs a drive letter. QEMU's configure
+          # defaults the mingw prefix to `/qemu`, which meson 1.5 rejects at
+          # ../meson.build:1:0 — so the build dies on a path format having
+          # already found every dependency and written its options out.
+          #
+          # `cygpath -m` is what turns an MSYS path into the D:/… form meson
+          # wants. Nothing is ever installed from here — the binary is taken
+          # straight out of build/, as on the other two platforms — so this
+          # only has to satisfy the validation.
+          prefix=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
+            echo "using $prefix"
+          fi
           if ! ./configure \
+            $prefix \
             --target-list=riscv32-softmmu \
             --enable-slirp \
             --disable-docs \
