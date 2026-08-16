@@ -217,30 +217,43 @@ jobs:
           print("emulator :", emulator[:12])
           print("firmware :", firmware[:12])
 
+          def stop(why):
+              """Fail with the evidence attached.
+
+              An `::error::` becomes an annotation, which survives the run and
+              is readable without access to the logs. `sys.exit(msg)` writes to
+              stderr, which is neither — the first version of this step failed
+              with nothing but "exit code 1" to show for it.
+              """
+              print(f"::error::{why} | emulator={emulator[:12]} firmware={firmware[:12]}")
+              sys.exit(1)
+
           if len(emulator) < 4:
-              sys.exit(f"the emulator reported GPIO0 only {len(emulator)} times; "
-                       "blinky toggles it, so the model is missing writes")
+              stop(f"the emulator reported GPIO0 only {len(emulator)} times; "
+                   "blinky toggles it, so the model is missing writes")
 
           # Consecutive repeats mean a write was seen but the level was
           # computed wrong — a stuck pin reported over and over.
           if any(a == b for a, b in zip(emulator, emulator[1:])):
-              sys.exit("the emulator's GPIO0 does not alternate: "
-                       f"{emulator[:12]}")
+              stop("the emulator's GPIO0 does not alternate")
 
           # The firmware's own report is the second opinion. If it never
           # arrived the comparison cannot be made, and saying so is better
           # than passing on one source.
           if not firmware:
-              sys.exit("the firmware printed no GPIO report, so there is "
-                       "nothing to check the emulator against")
+              stop("the firmware printed no GPIO report, so there is "
+                   "nothing to check the emulator against")
 
           if emulator[0] != firmware[0]:
-              sys.exit("the two disagree on the first level: emulator "
-                       f"{emulator[0]}, firmware {firmware[0]}")
+              stop("the two disagree on the first level")
 
           print("both accounts of GPIO0 agree")
 
       - uses: actions/upload-artifact@v4
+        # Especially on failure: the logs are the evidence for whatever the
+        # comparison above rejected, and a step that only runs when the run
+        # succeeded throws them away exactly when they are needed.
+        if: always()
         with:
           name: pin-logs
           path: |
