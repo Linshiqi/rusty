@@ -122,6 +122,72 @@ jobs:
             exit 1
           fi
 
+      # The test that matters: boot real firmware and see whether writing a
+      # pin produces a line. `examples/blink-rust` is the ideal subject
+      # because it drives GPIO0 *and* prints `[rusty:gpio]` itself — two
+      # independent accounts of the same pin, so they can be checked against
+      # each other rather than either being taken on trust.
+      - name: Rust for the target
+        run: rustup target add riscv32imc-unknown-none-elf
+
+      - name: espflash, for the flash image
+        run: cargo binstall --no-confirm espflash
+
+      - name: Build blinky and make its image
+        working-directory: examples/blink-rust
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/blink-rust \
+            target/sim/flash.bin
+
+      # `-global`, because the machine creates the GPIO device — there is no
+      # `-device` line to hang a chardev off. If this is the wrong way to
+      # reach a machine-created device's property, the run says so here
+      # rather than by silently producing an empty file.
+      - name: Boot it and watch the pins
+        working-directory: qemu-src
+        run: |
+          image=../examples/blink-rust/target/sim/flash.bin
+          timeout 25 ./build/qemu-system-riscv32 \
+            -M esp32c3 -nographic \
+            -drive "file=$image,if=mtd,format=raw" \
+            -serial file:serial.log \
+            -chardev file,id=pins,path=pins.log \
+            -global driver=esp32.gpio,property=pins,value=pins \
+            > qemu.out 2>&1 || true
+
+          echo "─── the pin channel ───"
+          head -20 pins.log 2>/dev/null || echo "(no pins.log at all)"
+          echo "─── what the firmware said ───"
+          grep -m5 'rusty:gpio' serial.log 2>/dev/null || echo "(no firmware report)"
+          echo "─── qemu's own output ───"
+          head -10 qemu.out
+
+      # Refuse to call this proven on a file that exists but is empty — the
+      # exact shape of the release that shipped no installer.
+      - name: The pin channel carried something
+        working-directory: qemu-src
+        run: |
+          if [ ! -s pins.log ]; then
+            echo "::error::the GPIO chardev produced nothing. Either -global is"
+            echo "the wrong way to reach a machine-created device, or the model"
+            echo "is not seeing the writes esp-hal makes."
+            exit 1
+          fi
+          lines=$(grep -c 'rusty:gpio@' pins.log || echo 0)
+          echo "$lines pin reports from the emulator itself"
+          [ "$lines" -gt 0 ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pin-logs
+          path: |
+            qemu-src/pins.log
+            qemu-src/serial.log
+          if-no-files-found: warn
+
       - uses: actions/upload-artifact@v4
         with:
           name: qemu-linux-x86_64
