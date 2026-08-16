@@ -114,7 +114,12 @@ jobs:
       - name: Prove the built binary carries this model
         working-directory: qemu-src
         run: |
-          if strings build/qemu-system-riscv32 | grep -q '\[rusty:gpio@'; then
+          # `grep -a` rather than `strings`: macOS's strings reads only the
+          # text section by default, so it misses a literal that lives in
+          # __cstring — it reported this model absent from a binary that had
+          # built perfectly. One method across all three jobs, since this is
+          # one question.
+          if LC_ALL=C grep -aq '\[rusty:gpio@' build/qemu-system-riscv32; then
             echo "the GPIO model is compiled in"
           else
             echo "::error::built QEMU does not contain the replacement model —"
@@ -514,10 +519,17 @@ jobs:
             prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
             echo "using $prefix"
           fi
+          # --disable-guest-agent: qemu-ga is a separate program that runs
+          # *inside* a guest OS, and nothing about it touches the emulator.
+          # On Windows it drags in the VSS provider, which needs Microsoft's
+          # Volume Shadow Copy SDK and cannot build without it — the riscv32
+          # target had compiled clean and the build still died, at
+          # qga/vss-win32/install.cpp, 1593 steps in.
           if ! ./configure \
             $prefix \
             --target-list=riscv32-softmmu \
             --enable-slirp \
+            --disable-guest-agent \
             --disable-docs \
             --disable-sdl \
             --disable-gtk \
@@ -556,10 +568,16 @@ jobs:
           if [ -f "$bin.exe" ]; then
             bin="$bin.exe"
           fi
-          if strings "$bin" | grep -q '\[rusty:gpio@'; then
+          # `grep -a`, not `strings`. macOS's strings reads only the text
+          # section by default and the literal lives in __cstring, so the
+          # first version of this reported the model missing from a binary
+          # that had configured and compiled without a single error — a check
+          # failing for a reason that had nothing to do with what it checks.
+          if LC_ALL=C grep -aq '\[rusty:gpio@' "$bin"; then
             echo "the GPIO model is compiled into $bin"
           else
-            echo "::error::built QEMU does not contain the replacement model"
+            # Say enough to tell a real absence from another tooling quirk.
+            echo "::error::built QEMU does not contain the replacement model.%0Abinary=$bin%0Asize=$(wc -c < "$bin")%0Astrings -a hits: $(strings -a "$bin" 2>/dev/null | grep -c 'rusty:gpio' || echo 0)"
             exit 1
           fi
 
