@@ -585,8 +585,20 @@ fn BoardEditor(
                         .get()
                         .then(|| {
                             view! {
-                                <span class="text-footnote text-label-3">
-                                    "running — buttons are live"
+                                // Says where these levels come from, at the one
+                                // moment somebody is reading them. The stock
+                                // emulator's GPIO keeps no state, so a pin here
+                                // is the firmware's own account of itself — and
+                                // a user whose LED stays dark has to be able to
+                                // suspect their `println!` before they conclude
+                                // the simulator is broken. The tooltip carries
+                                // the whole of it; the line carries enough to
+                                // make somebody hover.
+                                <span
+                                    class="cursor-help text-footnote text-label-3 underline decoration-dotted underline-offset-2"
+                                    title="Pin levels are what the firmware reports over the serial line, not what the chip drove — the emulator's GPIO peripheral keeps no state, so firmware that does not print `[rusty:gpio] 0=1` tells this board nothing. Buttons are live, and travel the same way: pressing one sends `B<pin>=1` into the firmware's UART rather than driving the pin."
+                                >
+                                    "running — pins as the firmware reports them"
                                 </span>
                             }
                         })
