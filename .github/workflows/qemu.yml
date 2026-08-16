@@ -101,18 +101,25 @@ jobs:
         working-directory: qemu-src
         run: ninja -C build
 
-      # Proof it is the patched one: the stock model has no `pins` property,
-      # so a device that reports one is ours. Cheaper and more direct than
-      # booting firmware here — that check belongs beside the firmware.
-      - name: Check the model carries the new property
+      # Proof the binary contains *our* model and not the stub it replaced.
+      #
+      # By string rather than by `-device help`: `esp32.gpio` is a sysbus
+      # device and may not be user-creatable, so a help probe can come back
+      # empty for reasons that have nothing to do with whether the code is
+      # in there. The report format is a literal only this file has.
+      #
+      # Fatal, not a warning. The first version of this step could not fail,
+      # which made a green run mean nothing — the same tautology this
+      # project has already caught itself writing in a test.
+      - name: Prove the built binary carries this model
         working-directory: qemu-src
         run: |
-          ./build/qemu-system-riscv32 -machine esp32c3 -device help 2>&1 | head -20 || true
-          if ./build/qemu-system-riscv32 -machine esp32c3 \
-              -device esp32.gpio,help 2>&1 | grep -q "pins"; then
-            echo "the GPIO model exposes its chardev"
+          if strings build/qemu-system-riscv32 | grep -q '\[rusty:gpio@'; then
+            echo "the GPIO model is compiled in"
           else
-            echo "::warning::could not confirm the pins property from -device help"
+            echo "::error::built QEMU does not contain the replacement model —"
+            echo "the copy step or the build picked up the stub instead."
+            exit 1
           fi
 
       - uses: actions/upload-artifact@v4
