@@ -10,13 +10,19 @@
 # the job a patch's context would — if upstream edits the file, the run stops
 # and says so rather than quietly discarding their change.
 #
-# Manual only. This is not part of a release yet: the binaries are artifacts
-# to test with, and shipping them means committing to rebuilding a QEMU fork
-# for three desktops on every upstream bump.
+# Not part of a release: the binaries are artifacts to test with. Shipping
+# them means committing to rebuilding a QEMU fork for three desktops on every
+# upstream bump, and that decision comes after the model is proven.
 
 name: qemu
 
 on:
+  # Changing the model should compile it. The build is twenty minutes of a
+  # free runner and the alternative is finding out later.
+  push:
+    paths:
+      - "qemu/**"
+      - ".github/workflows/qemu.yml"
   workflow_dispatch:
     inputs:
       targets:
@@ -46,7 +52,14 @@ jobs:
       - name: Read the pinned QEMU release
         id: pin
         run: |
-          tag=$(grep -oP 'QEMU_RELEASE: &str = "\K[^"]+' crates/rusty-embed/src/simulate.rs)
+          # `grep | cut`, not `grep -oP`: PCRE is unavailable under some
+          # locales, and a step that fails for *that* reason costs a whole
+          # twenty-minute round trip to find out about.
+          tag=$(grep 'QEMU_RELEASE: &str' crates/rusty-embed/src/simulate.rs | cut -d'"' -f2)
+          if [ -z "$tag" ]; then
+            echo "::error::could not read QEMU_RELEASE from simulate.rs"
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "building against $tag"
 
