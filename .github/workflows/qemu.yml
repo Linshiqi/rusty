@@ -266,6 +266,102 @@ jobs:
           print(f"both accounts of GPIO0 agree, the emulator leading by {offset} "
                 "— the pin being configured, which the firmware never printed")
 
+      # Everything above proves the *output* half: the guest drove a pin and
+      # the model saw it. The input half — a host driving a level that
+      # unmodified firmware reads through GPIO_IN — has no witness in blinky,
+      # which never reads a pin. Claiming it works because the code is there
+      # is the same unproven claim this project keeps catching itself making.
+      #
+      # `qemu/gpio-probe` is the witness: it configures GPIO4 as an ordinary
+      # input and prints the level on change. It knows nothing about the
+      # simulator.
+      - name: Build the input probe and make its image
+        working-directory: qemu/gpio-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/gpio-probe \
+            target/sim/flash.bin
+
+      # A socket chardev, not a file: this direction needs somebody able to
+      # write, and `-chardev file` is one-way.
+      - name: A host-driven pin reaches the firmware's is_high()
+        working-directory: qemu-src
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, time
+
+          IMAGE = "../qemu/gpio-probe/target/sim/flash.bin"
+          SERIAL = "probe-serial.log"
+          PORT = 5555
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def levels():
+              """Every level the firmware printed, in order.
+
+              It prints on *change*, so this is the transition sequence — and
+              comparing a sequence is what lets the second half of the test
+              fail distinctly. Waiting for the string "gpio4=0" a second time
+              would match the first occurrence and pass without the pin ever
+              having come back down.
+              """
+              return [int(m) for m in re.findall(r"\[probe\] gpio4=([01])", read())]
+
+          def stop(why):
+              print(f"::error::{why} | levels={levels()}")
+              print("--- serial ---")
+              print(read()[-1500:])
+              sys.exit(1)
+
+          def settle(count, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if len(levels()) >= count:
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "./build/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("probe-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              settle(1, 60, "the probe never reported GPIO4 at all — it did not "
+                            "boot, or reading GPIO_IN does not come back")
+              print(f"booted, GPIO4 reads {levels()[0]}")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              link.sendall(b"4=1\n")
+              settle(2, 25, "the host drove GPIO4 high and the firmware never "
+                            "saw it — the input half does not reach GPIO_IN")
+
+              # Back down, because a model that ORed every write into `in`
+              # would have passed everything above this line.
+              link.sendall(b"4=0\n")
+              settle(3, 25, "GPIO4 went high and would not come back down — "
+                            "the model sets bits but never clears them")
+
+              seen = levels()[:3]
+              if seen != [0, 1, 0]:
+                  stop(f"expected the pin to read 0, then 1, then 0; got {seen}")
+              print("0 → 1 → 0, driven from the host and read through GPIO_IN")
+          finally:
+              qemu.kill()
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -276,6 +372,8 @@ jobs:
           path: |
             qemu-src/pins.log
             qemu-src/serial.log
+            qemu-src/probe-serial.log
+            qemu-src/probe-qemu.out
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@v4

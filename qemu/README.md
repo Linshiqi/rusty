@@ -47,7 +47,7 @@ artifact.
 
 ## What it is proven to do
 
-Four gates, each able to fail:
+Five gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -60,10 +60,19 @@ Four gates, each able to fail:
 4. The emulator's account of GPIO0 alternates **and contains the firmware's
    own** `[rusty:gpio]` narration of the same pin, in order.
 
+5. A level driven **from the host** reaches the firmware's `is_high()`.
+
 Gate 4 is what makes 3 mean something: a model reporting a stuck level, or
 the wrong pin, passes everything above it. The two accounts are independent —
 one is the register file, the other is a `println!` — so agreement is
 evidence and disagreement names which is wrong.
+
+Gate 5 is the other direction, and it needs its own firmware because blinky
+never reads a pin. `gpio-probe/` configures GPIO4 as an ordinary input and
+prints its level on change, knowing nothing about the simulator; the test
+drives `4=1` then `4=0` down the chardev and requires the firmware to have
+read 0, 1, 0. Both writes, because a model that ORed every write into the
+input register would pass a test that only ever drove a pin high.
 
 It first ran as:
 
