@@ -186,6 +186,60 @@ jobs:
           echo "$lines pin reports from the emulator itself"
           [ "$lines" -gt 0 ]
 
+      # The check the two accounts exist for. A line arriving proves the
+      # channel works; it does not prove the *level* is right, and a model
+      # that reported a stuck 1 would pass everything above.
+      #
+      # blinky toggles GPIO0, so the emulator's own account must alternate,
+      # and it must agree with what the firmware printed about the same pin.
+      - name: The emulator and the firmware agree about GPIO0
+        working-directory: qemu-src
+        shell: python
+        run: |
+          import re, sys
+
+          def levels(path):
+              out = []
+              try:
+                  text = open(path, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return out
+              for line in text.splitlines():
+                  if "rusty:gpio" not in line:
+                      continue
+                  found = re.search(r"\b0=([01])\b", line)
+                  if found:
+                      out.append(int(found.group(1)))
+              return out
+
+          emulator = levels("pins.log")
+          firmware = levels("serial.log")
+          print("emulator :", emulator[:12])
+          print("firmware :", firmware[:12])
+
+          if len(emulator) < 4:
+              sys.exit(f"the emulator reported GPIO0 only {len(emulator)} times; "
+                       "blinky toggles it, so the model is missing writes")
+
+          # Consecutive repeats mean a write was seen but the level was
+          # computed wrong — a stuck pin reported over and over.
+          if any(a == b for a, b in zip(emulator, emulator[1:])):
+              sys.exit("the emulator's GPIO0 does not alternate: "
+                       f"{emulator[:12]}")
+
+          # The firmware's own report is the second opinion. If it never
+          # arrived the comparison cannot be made, and saying so is better
+          # than passing on one source.
+          if not firmware:
+              sys.exit("the firmware printed no GPIO report, so there is "
+                       "nothing to check the emulator against")
+
+          if emulator[0] != firmware[0]:
+              sys.exit("the two disagree on the first level: emulator "
+                       f"{emulator[0]}, firmware {firmware[0]}")
+
+          print("both accounts of GPIO0 agree")
+
       - uses: actions/upload-artifact@v4
         with:
           name: pin-logs
