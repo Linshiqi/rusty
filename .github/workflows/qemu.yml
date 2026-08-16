@@ -130,8 +130,14 @@ jobs:
       - name: Rust for the target
         run: rustup target add riscv32imc-unknown-none-elf
 
+      # The action first: `cargo binstall` is not a command a runner has, and
+      # the release workflow installs it the same way. Building espflash from
+      # source is the fallback rather than the default — it is minutes of
+      # compiling for a tool that publishes binaries.
+      - uses: cargo-bins/cargo-binstall@main
+
       - name: espflash, for the flash image
-        run: cargo binstall --no-confirm espflash
+        run: cargo binstall --no-confirm espflash || cargo install --locked espflash
 
       - name: Build blinky and make its image
         working-directory: examples/blink-rust
