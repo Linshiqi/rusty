@@ -489,27 +489,57 @@ jobs:
       # The same flags the Linux job uses, on purpose. Divergence here would
       # muddle the answer: a build that needed different options would not be
       # evidence that *this* build is portable.
+      #
+      # The output is folded into a single `::error::` on failure because a
+      # run's *logs* need admin rights even on a public repository, while
+      # annotations are readable by anyone. Without this the entire report of
+      # a failed configure is "Process completed with exit code 1" — which is
+      # what this step said the first time, costing a whole round trip to
+      # learn nothing. `%0A` is how an annotation carries newlines.
       - name: Configure
         working-directory: qemu-src
         run: |
-          ./configure \
+          if ! ./configure \
             --target-list=riscv32-softmmu \
             --enable-slirp \
             --disable-docs \
             --disable-sdl \
             --disable-gtk \
             --disable-vnc \
-            --disable-werror
+            --disable-werror > configure.out 2>&1
+          then
+            detail=$(tail -50 configure.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::configure failed on ${{ matrix.name }}:%0A$detail"
+            if [ -f build/meson-logs/meson-log.txt ]; then
+              meson=$(tail -60 build/meson-logs/meson-log.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              echo "::error::meson-log tail:%0A$meson"
+            fi
+            exit 1
+          fi
+          tail -25 configure.out
 
       - name: Build
         working-directory: qemu-src
-        run: ninja -C build
+        run: |
+          if ! ninja -C build > build.out 2>&1; then
+            detail=$(tail -60 build.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::the build failed on ${{ matrix.name }}:%0A$detail"
+            exit 1
+          fi
+          tail -5 build.out
 
       - name: Prove the built binary carries this model
         working-directory: qemu-src
         run: |
+          # `if`, not `[ -f … ] && …`: GitHub runs these with `bash -e`, so a
+          # bare test that comes back false *ends the step*. macOS has no
+          # `.exe`, so the first version of this line failed a step that was
+          # only ever meant to look at a filename — and reported it as the
+          # model being missing from a binary that had built perfectly.
           bin=build/qemu-system-riscv32
-          [ -f "$bin.exe" ] && bin="$bin.exe"
+          if [ -f "$bin.exe" ]; then
+            bin="$bin.exe"
+          fi
           if strings "$bin" | grep -q '\[rusty:gpio@'; then
             echo "the GPIO model is compiled into $bin"
           else
