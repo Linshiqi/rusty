@@ -515,9 +515,19 @@ jobs:
           # straight out of build/, as on the other two platforms — so this
           # only has to satisfy the validation.
           prefix=""
+          # Slirp is user-mode networking for the guest. rusty's simulation
+          # never uses it — everything travels on the serial line and the pin
+          # chardev — so it is the one flag worth dropping rather than
+          # fighting for. MSYS2's libslirp headers declare their symbols
+          # dllimport while QEMU links the static library, and every one of
+          # them comes back as an undefined `__imp_slirp_*` at link time,
+          # 1817 steps in. Kept everywhere else, so the answer for Linux and
+          # macOS stays an answer about the same build.
+          net="--enable-slirp"
           if [ "$RUNNER_OS" = "Windows" ]; then
             prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
-            echo "using $prefix"
+            net="--disable-slirp"
+            echo "using $prefix and $net"
           fi
           # --disable-guest-agent: qemu-ga is a separate program that runs
           # *inside* a guest OS, and nothing about it touches the emulator.
@@ -528,7 +538,7 @@ jobs:
           if ! ./configure \
             $prefix \
             --target-list=riscv32-softmmu \
-            --enable-slirp \
+            $net \
             --disable-guest-agent \
             --disable-docs \
             --disable-sdl \
