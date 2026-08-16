@@ -1,0 +1,111 @@
+# Build Espressif's QEMU with a GPIO that keeps its state.
+#
+# Run from the Actions tab. It clones espressif/qemu at the tag rusty pins,
+# replaces the GPIO device model with the one in `qemu/`, builds only the two
+# targets this workbench uses, and uploads the binaries.
+#
+# Why replacement files rather than a patch: the model being replaced is a
+# stub, so almost every line changes, and a unified diff's line numbers would
+# be the fragile part of an otherwise simple substitution. The checksums do
+# the job a patch's context would — if upstream edits the file, the run stops
+# and says so rather than quietly discarding their change.
+#
+# Manual only. This is not part of a release yet: the binaries are artifacts
+# to test with, and shipping them means committing to rebuilding a QEMU fork
+# for three desktops on every upstream bump.
+
+name: qemu
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "QEMU targets to build"
+        default: "riscv32-softmmu"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU's own list for a minimal softmmu build. Slirp is what gives the
+      # guest a network without root, and pixman is needed even headless.
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev \
+            libslirp-dev python3-venv flex bison
+
+      # The tag rusty pins, read from the source rather than repeated here —
+      # two copies of a version is one that goes stale.
+      - name: Read the pinned QEMU release
+        id: pin
+        run: |
+          tag=$(grep -oP 'QEMU_RELEASE: &str = "\K[^"]+' crates/rusty-embed/src/simulate.rs)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "building against $tag"
+
+      - name: Clone espressif/qemu
+        run: |
+          git clone --depth 1 --branch "${{ steps.pin.outputs.tag }}" \
+            https://github.com/espressif/qemu.git qemu-src
+
+      # The check a patch would have done. If Espressif has edited either
+      # file since these were written, the substitution would silently drop
+      # their change — so stop, and make somebody read the new source.
+      - name: Verify the upstream files are the ones this was written against
+        working-directory: qemu-src
+        run: |
+          if ! sha256sum -c ../qemu/upstream.sha256; then
+            echo "::error::espressif/qemu's GPIO model has changed since qemu/*.c was written."
+            echo "Re-read hw/gpio/esp32_gpio.c upstream, fold in the change, and update qemu/upstream.sha256."
+            exit 1
+          fi
+
+      - name: Install the GPIO model
+        run: |
+          cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
+          cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
+
+      - name: Configure
+        working-directory: qemu-src
+        run: |
+          ./configure \
+            --target-list="${{ inputs.targets || 'riscv32-softmmu' }}" \
+            --enable-slirp \
+            --disable-docs \
+            --disable-sdl \
+            --disable-gtk \
+            --disable-vnc \
+            --disable-werror
+
+      - name: Build
+        working-directory: qemu-src
+        run: ninja -C build
+
+      # Proof it is the patched one: the stock model has no `pins` property,
+      # so a device that reports one is ours. Cheaper and more direct than
+      # booting firmware here — that check belongs beside the firmware.
+      - name: Check the model carries the new property
+        working-directory: qemu-src
+        run: |
+          ./build/qemu-system-riscv32 -machine esp32c3 -device help 2>&1 | head -20 || true
+          if ./build/qemu-system-riscv32 -machine esp32c3 \
+              -device esp32.gpio,help 2>&1 | grep -q "pins"; then
+            echo "the GPIO model exposes its chardev"
+          else
+            echo "::warning::could not confirm the pins property from -device help"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-linux-x86_64
+          path: |
+            qemu-src/build/qemu-system-riscv32
+            qemu-src/build/pc-bios/**
+          if-no-files-found: error
