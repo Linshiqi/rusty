@@ -26,23 +26,68 @@ honestly claim:
   `B14=1` over the UART instead of through the GPIO the firmware actually
   reads.
 
-`esp-gpio.patch` fills in the model: the output and enable registers, their
-set/clear aliases, and the input register. Pin changes leave on their own
-chardev — not the UART, which belongs to the firmware — and input can be
+`esp32_gpio.c` here fills in the model: the output and enable registers,
+their set/clear aliases, and the input register. Pin changes leave on their
+own chardev — not the UART, which belongs to the firmware — and input can be
 driven back in, so unmodified firmware reads a real pin.
+
+Replacement files rather than a patch: what is being replaced is a stub, so
+almost every line changes and a unified diff's line numbers would be the
+fragile part of an otherwise total substitution. `upstream.sha256` does the
+job a patch's context would — if Espressif edits either file, the build stops
+and says so rather than silently discarding their change.
 
 ## Building it
 
-`.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins,
-applies this patch and builds `riscv32-softmmu`. Run it from the Actions tab;
-it uploads the binary as an artifact.
+`.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
+(read out of `QEMU_RELEASE` in `crates/rusty-embed/src/simulate.rs`, not
+repeated), verifies the checksums, copies these two files in and builds
+`riscv32-softmmu`. Run it from the Actions tab; it uploads the binary as an
+artifact.
 
-The patch is against the tag in `QEMU_RELEASE` (`crates/rusty-embed/src/simulate.rs`).
-When that pin moves, this patch has to be re-checked against the new source —
-`git apply` failing loudly is the point.
+## What it is proven to do
+
+Four gates, each able to fail:
+
+1. The upstream files still hash to what this was written against.
+2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
+   by string because a sysbus device may not answer `-device help` at all.
+3. Booting `examples/blink-rust` puts **real pin reports on the chardev**, so
+   `-global driver=esp32.gpio,property=pins,value=pins` does reach a device
+   the machine created, and the model does see the `W1TS`/`W1TC` writes
+   esp-hal makes — it never touches `GPIO_OUT`, so a model handling only that
+   register would have passed 1 and 2 and reported nothing.
+4. The emulator's account of GPIO0 alternates **and contains the firmware's
+   own** `[rusty:gpio]` narration of the same pin, in order.
+
+Gate 4 is what makes 3 mean something: a model reporting a stuck level, or
+the wrong pin, passes everything above it. The two accounts are independent —
+one is the register file, the other is a `println!` — so agreement is
+evidence and disagreement names which is wrong.
+
+It first ran as:
+
+```
+emulator : [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
+firmware : [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+```
+
+and the check rejected it for disagreeing on the first level. It was wrong to.
+`Output::new(peripherals.GPIO0, Level::Low, …)` drives the pin *before* the
+loop that prints, so the emulator legitimately holds one transition the
+firmware never announced — the model was rejected for being more truthful
+than the firmware, which is the entire reason it exists. The check now aligns
+the two and reports the lead.
 
 ## Licence
 
-QEMU is GPL-2.0. This patch is a derivative of it and carries the same terms,
-not rusty's licence. It is kept as a patch rather than a fork so that stays
-unambiguous.
+QEMU is GPL-2.0. These files are derivatives of it and carry the same terms,
+not rusty's licence. They are kept here, outside the cargo workspace and
+applied at build time, so that stays unambiguous.
+
+## Not shipped
+
+The binaries are artifacts to test against. Shipping them means committing to
+building a QEMU fork for three desktops on every upstream bump, so the app
+still downloads Espressif's build and the board view's caption — pin levels
+are what the firmware *says* it set — stays true of what users run.

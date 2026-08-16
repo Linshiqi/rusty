@@ -244,10 +244,27 @@ jobs:
               stop("the firmware printed no GPIO report, so there is "
                    "nothing to check the emulator against")
 
-          if emulator[0] != firmware[0]:
-              stop("the two disagree on the first level")
+          # The two do not start together, and should not. `Output::new` sets
+          # the pin's direction and initial level *before* the loop that does
+          # the printing, so the emulator legitimately knows about transitions
+          # the firmware never announced. Demanding they agree on element zero
+          # was the first version of this check, and it rejected a model that
+          # was working — for being more truthful than the firmware.
+          #
+          # The real property: everything the firmware did announce appears in
+          # the emulator's account, in order, after a short lead.
+          offset = None
+          for lead in range(4):
+              overlap = min(len(emulator) - lead, len(firmware), 8)
+              if overlap >= 4 and emulator[lead:lead + overlap] == firmware[:overlap]:
+                  offset = lead
+                  break
 
-          print("both accounts of GPIO0 agree")
+          if offset is None:
+              stop("the emulator's account does not contain the firmware's")
+
+          print(f"both accounts of GPIO0 agree, the emulator leading by {offset} "
+                "— the pin being configured, which the firmware never printed")
 
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the

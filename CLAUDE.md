@@ -155,11 +155,20 @@ image). Espressif's prebuilt QEMU has the plugin interface compiled OUT
 needs our own QEMU build one day; until then the gdbstub's watchpoints are
 the honest bridge to register truth.
 
-That is a deliberate ceiling. The QEMU peripheral models expose no GPIO
-readback — probed with QMP on the real register addresses, esp32 and esp32c3
-both read zero — so the board shows *what the firmware says it set*, and the
-panel says so in as many words. A part therefore needs no code in rusty to
-exist, which is why `.rusty/parts/*.toml` can add one.
+That is a deliberate ceiling, and it is one the *stock* emulator imposes:
+Espressif's `esp32_gpio_write` is an empty function, so a pin has no state in
+either direction — which is why probing the real register addresses over QMP
+reads zero on esp32 and esp32c3 alike. The board therefore shows *what the
+firmware says it set*, and the panel says so in as many words. A part needs no
+code in rusty to exist, which is why `.rusty/parts/*.toml` can add one.
+
+`qemu/` is the way out and is now proven in CI: a real GPIO model, reporting
+pin changes on a chardev of its own and accepting host-driven levels back, so
+a LED lights because a pin went high and a button is read through the register
+the firmware actually reads. It is **not shipped** — that means rebuilding a
+QEMU fork for three desktops on every upstream bump — so the ceiling above
+still describes what users run. `qemu/README.md` has the four gates it passes
+and why each can fail.
 
 ### 6. Extensibility is data first
 
@@ -497,6 +506,17 @@ usty`) holds `location.toml`
   that had heard nothing at all. Only a *change* from the pre-write value is
   evidence, and a set to the value already held proves nothing either way and
   now says so.
+- **Two independent accounts of the same thing do not start together.** The
+  GPIO model's proof compares the emulator's register-level view of GPIO0
+  against the firmware's own `println!` about it — genuinely independent, so
+  agreement is evidence. The first version demanded they agree element by
+  element from zero, and rejected a model that was working: `Output::new(pin,
+  Level::Low, …)` drives the pin *before* the loop that prints, so the
+  emulator holds one transition the firmware never announced. The check
+  rejected the model for being **more truthful than the firmware**, which is
+  the whole reason it exists. Compare the sequences *aligned* — everything one
+  source announced appears in the other, in order — and print the lead, since
+  "the emulator saw N events first" is itself the finding.
 - **`espflash monitor` cannot be typed into by a program that spawned it.**
   Its input comes from crossterm's `poll`/`read` — *console* events, not
   stdin — so a monitor rusty launched with piped stdio is one-way however
