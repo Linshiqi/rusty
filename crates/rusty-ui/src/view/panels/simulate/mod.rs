@@ -581,24 +581,45 @@ fn BoardEditor(
                     </span>
                 </button>
                 {move || {
+                    // Says where these levels come from, at the one moment
+                    // somebody is reading them — and it has to follow the
+                    // emulator actually running, because the answer changed.
+                    // With rusty's QEMU a pin has state and the board shows
+                    // it; with Espressif's the write handler is empty, so the
+                    // board can only repeat what the firmware printed about
+                    // itself. A user whose LED stays dark needs to know which,
+                    // or they check their wiring when the bug is a missing
+                    // `println!` — or the reverse.
+                    let (label, detail) = match state.sim_pin_source.get() {
+                        rusty_embed::PinSource::Emulator => (
+                            "running — pins from the emulator",
+                            "Pin levels are read from the chip's GPIO registers, so they are \
+                             true whether or not the firmware prints anything about itself. \
+                             A button press drives the pin the firmware actually reads, and \
+                             also sends `B<pin>=1` over the console for firmware written \
+                             against rusty's text protocol.",
+                        ),
+                        rusty_embed::PinSource::Firmware => (
+                            "running — pins as the firmware reports them",
+                            "Pin levels are what the firmware reports over the serial line, \
+                             not what the chip drove — this emulator's GPIO peripheral keeps \
+                             no state, so firmware that does not print `[rusty:gpio] 0=1` \
+                             tells this board nothing. Buttons travel the same way: pressing \
+                             one sends `B<pin>=1` into the firmware's UART rather than \
+                             driving the pin.",
+                        ),
+                    };
                     running
                         .get()
                         .then(|| {
                             view! {
-                                // Says where these levels come from, at the one
-                                // moment somebody is reading them. The stock
-                                // emulator's GPIO keeps no state, so a pin here
-                                // is the firmware's own account of itself — and
-                                // a user whose LED stays dark has to be able to
-                                // suspect their `println!` before they conclude
-                                // the simulator is broken. The tooltip carries
-                                // the whole of it; the line carries enough to
-                                // make somebody hover.
+                                // The tooltip carries the whole of it; the line
+                                // carries enough to make somebody hover.
                                 <span
                                     class="cursor-help text-footnote text-label-3 underline decoration-dotted underline-offset-2"
-                                    title="Pin levels are what the firmware reports over the serial line, not what the chip drove — the emulator's GPIO peripheral keeps no state, so firmware that does not print `[rusty:gpio] 0=1` tells this board nothing. Buttons are live, and travel the same way: pressing one sends `B<pin>=1` into the firmware's UART rather than driving the pin."
+                                    title=detail
                                 >
-                                    "running — pins as the firmware reports them"
+                                    {label}
                                 </span>
                             }
                         })

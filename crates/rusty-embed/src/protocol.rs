@@ -120,6 +120,42 @@ pub fn parse_display_report(line: &str) -> Option<String> {
     Some(rest.trim().to_string())
 }
 
+/// Parse one `[rusty:pins]` line: who the pin levels are coming from.
+///
+/// Not a line any firmware writes — rusty emits it once per run, because the
+/// answer is a property of the *emulator* rather than of the code being
+/// simulated. With rusty's QEMU the levels come from the GPIO registers and a
+/// LED lights because a pin went high; with Espressif's stock build the write
+/// handler is an empty function, so a pin has no state and the board can only
+/// repeat what the firmware printed about itself.
+///
+/// The board has to say which, in as many words. A user whose LED stays dark
+/// needs to know whether to suspect their wiring or their `println!`, and the
+/// two answers send them to completely different places.
+pub fn parse_pin_source(line: &str) -> Option<PinSource> {
+    let rest = line.trim().strip_prefix("[rusty:pins]")?;
+    // The first word decides; the rest of the line is for whoever is reading
+    // the dock. An unknown word is not "firmware" — it is a newer rusty
+    // talking to an older frontend, and guessing would put a confident wrong
+    // caption under the board.
+    match rest.trim().split_whitespace().next()? {
+        "emulator" => Some(PinSource::Emulator),
+        "firmware" => Some(PinSource::Firmware),
+        _ => None,
+    }
+}
+
+/// Where the board's pin levels come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinSource {
+    /// The emulator's GPIO registers — true whatever the firmware says or
+    /// does not say about itself.
+    Emulator,
+    /// The firmware's own `[rusty:gpio]` lines. Code that does not print
+    /// tells the board nothing.
+    Firmware,
+}
+
 /// One `[rusty:tel]` line: named numeric channels at a moment.
 ///
 /// The analog sibling of [`GpioReport`], and the reason the board view is not
@@ -343,5 +379,28 @@ mod tests {
         );
         assert_eq!(parse_display_report("[rusty:disp]"), Some(String::new()));
         assert_eq!(parse_display_report("I (44) boot: x"), None);
+    }
+
+    #[test]
+    fn the_pin_source_line_names_which_emulator_is_running() {
+        use super::{PinSource, parse_pin_source};
+
+        assert_eq!(
+            parse_pin_source("[rusty:pins] emulator — pin state read from the GPIO registers"),
+            Some(PinSource::Emulator),
+        );
+        assert_eq!(
+            parse_pin_source("[rusty:pins] firmware"),
+            Some(PinSource::Firmware),
+        );
+
+        // A word this frontend does not know is a *newer* rusty talking to it.
+        // Falling back to "firmware" would put a confident wrong caption under
+        // the board, which is the failure this line exists to prevent.
+        assert_eq!(parse_pin_source("[rusty:pins] something-new"), None);
+
+        // And an ordinary firmware line is not an announcement.
+        assert_eq!(parse_pin_source("[rusty:gpio] 0=1"), None);
+        assert_eq!(parse_pin_source("I (44) boot: x"), None);
     }
 }

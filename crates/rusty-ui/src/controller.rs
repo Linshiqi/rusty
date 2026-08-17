@@ -747,6 +747,12 @@ fn clear_capture(state: AppState) {
     state.sim_display.set(String::new());
     state.plot.set(crate::state::Plot::default());
     state.params.set(Vec::new());
+    // Back to the weaker claim until this run announces otherwise. A run
+    // against rusty's QEMU followed by one against a stock build — the user
+    // swapped the binary, or is now watching a real board over the serial
+    // link — would otherwise keep a caption promising register-level truth
+    // about levels the firmware is once again merely narrating.
+    state.sim_pin_source.set(rusty_embed::PinSource::Firmware);
 }
 
 /// One line from a board, wherever it came from.
@@ -771,6 +777,11 @@ fn absorb(state: AppState, line: LogLine) {
                 None => params.push(param),
             }
         });
+    } else if let Some(source) = rusty_embed::parse_pin_source(&line.text) {
+        // Before the gpio arm on purpose: this line decides what the board's
+        // caption may claim about every line after it.
+        state.sim_pin_source.set(source);
+        state.push_log(line);
     } else if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
         state.sim_gpio.update(|gpio| {
             for (pin, level) in &report.pins {

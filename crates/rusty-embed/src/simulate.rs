@@ -658,31 +658,94 @@ pub struct QemuDownload {
     pub extract: CommandPlan,
 }
 
+/// The platform in Espressif's asset naming — which rusty's own packages
+/// reuse, so one ladder of URLs covers both.
+///
+/// Transcribed from the release's actual asset list rather than assembled
+/// from `env::consts`: `x86_64-w64-mingw32` is not a string any pair of those
+/// constants spells, and an asset name that is *nearly* right 404s exactly
+/// like a network problem.
+pub(crate) fn host_platform() -> Option<&'static str> {
+    Some(
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("windows", "x86_64") => "x86_64-w64-mingw32",
+            ("macos", "aarch64") => "aarch64-apple-darwin",
+            ("macos", "x86_64") => "x86_64-apple-darwin",
+            ("linux", "x86_64") => "x86_64-linux-gnu",
+            ("linux", "aarch64") => "aarch64-linux-gnu",
+            _ => return None,
+        },
+    )
+}
+
+/// rusty's own build of the release above, carrying the GPIO device model in
+/// `qemu/`. Where Espressif's emulator discards every GPIO write, this one
+/// keeps the registers, so the board view can show what a pin *is* rather
+/// than what the firmware said it set.
+///
+/// Tag, and the repository it hangs off, both pinned: an installer that
+/// fetches "latest" breaks the day a build changes layout.
+const RUSTY_QEMU_TAG: &str = "qemu-v1";
+const RUSTY_REPO: &str = "Linshiqi/rusty";
+
+/// Which platforms that release actually carries.
+///
+/// Espressif additionally ships `aarch64-linux-gnu` and rusty does not, so an
+/// ARM Linux user falls through to the stock emulator and everything works as
+/// it always has — minus real pin state. Listing it here rather than letting
+/// the URL 404 keeps "we do not build that" separate from "the download
+/// failed", which are different things to tell somebody.
+fn rusty_qemu_asset(platform: &str) -> Option<String> {
+    matches!(
+        platform,
+        "x86_64-linux-gnu" | "x86_64-apple-darwin" | "aarch64-apple-darwin" | "x86_64-w64-mingw32"
+    )
+    .then(|| {
+        let version = RUSTY_QEMU_TAG.trim_start_matches("qemu-");
+        format!("qemu-rusty-{version}-{platform}.tar.xz")
+    })
+}
+
 pub fn qemu_download(tool: &str) -> std::result::Result<QemuDownload, String> {
     let Some(arch) = tool.strip_prefix("qemu-system-") else {
         return Err(format!("{tool} is not a qemu emulator name"));
     };
-    if !cfg!(windows) {
+    let Some(platform) = host_platform() else {
         return Err(format!(
-            "one-click install only knows the Windows build so far — download the {tool} \
-             build from https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE} and \
-             unpack it into the data directory's tools/qemu/"
+            "no {tool} build is published for {}-{} — build QEMU from \
+             https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE} and unpack it \
+             into the data directory's tools/qemu/",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
         ));
-    }
+    };
     let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
         return Err("the data directory could not be resolved".to_string());
     };
     std::fs::create_dir_all(&tools)
         .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
 
-    let asset = format!("qemu-{arch}-softmmu-{QEMU_VERSION}-x86_64-w64-mingw32.tar.xz");
+    let asset = format!("qemu-{arch}-softmmu-{QEMU_VERSION}-{platform}.tar.xz");
     let archive = tools.join(format!("qemu-{arch}.tar.xz"));
-    let urls = vec![
-        format!("https://github.com/espressif/qemu/releases/download/{QEMU_RELEASE}/{asset}"),
-        format!(
-            "https://dl.espressif.com/github_assets/espressif/qemu/releases/download/{QEMU_RELEASE}/{asset}"
-        ),
-    ];
+    // rusty's build first, Espressif's behind it. Both unpack to the same
+    // `qemu/` directory, so whichever answers, the rest of the install is
+    // identical — and a failure to reach ours degrades to the emulator this
+    // workbench has always used rather than to no emulator at all.
+    //
+    // Ours carries both emulators in one package, so a request for either
+    // arch is satisfied by the same file.
+    let mut urls = Vec::new();
+    if let Some(ours) = rusty_qemu_asset(platform) {
+        urls.push(format!(
+            "https://github.com/{RUSTY_REPO}/releases/download/{RUSTY_QEMU_TAG}/{ours}"
+        ));
+    }
+    urls.push(format!(
+        "https://github.com/espressif/qemu/releases/download/{QEMU_RELEASE}/{asset}"
+    ));
+    urls.push(format!(
+        "https://dl.espressif.com/github_assets/espressif/qemu/releases/download/{QEMU_RELEASE}/{asset}"
+    ));
     let archive_text = archive.to_string_lossy().into_owned();
     let tools_text = tools.to_string_lossy().into_owned();
     let extract = CommandPlan {
@@ -893,6 +956,105 @@ fn find_qemu(emulator: &str) -> Option<PathBuf> {
     }
     let tools = config::data_dir()?.join("tools/qemu/bin").join(exe(emulator));
     tools.is_file().then_some(tools)
+}
+
+/// The line only rusty's GPIO model emits, and the thing to look for in a
+/// binary to know whether it has one.
+///
+/// A marker in the emulator's own output rather than a version file beside
+/// it: the question is "does *this* binary keep pin state", and a user who
+/// dropped Espressif's build into the same directory must get the right
+/// answer. The CI gate greps the same literal for the same reason.
+const GPIO_MODEL_MARKER: &[u8] = b"[rusty:gpio@";
+
+/// Does this emulator model GPIO, or is it the stock one whose write handler
+/// is an empty function?
+///
+/// Everything downstream branches on this: with the model, the board shows
+/// what a pin *is* and a button drives the register the firmware reads;
+/// without it, the firmware has to narrate its own pins over the serial line
+/// and a button arrives as a `B14=1` message. Both work — but claiming the
+/// first while running the second would show a dark LED for correct firmware,
+/// which is the failure this whole path exists to remove.
+///
+/// Cached on path, length and mtime, because it is asked once per run and the
+/// answer costs a scan of a hundred-megabyte file.
+pub fn has_gpio_model(qemu: &Path) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    type Stamp = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    static SEEN: OnceLock<Mutex<HashMap<Stamp, bool>>> = OnceLock::new();
+
+    let Ok(meta) = std::fs::metadata(qemu) else {
+        return false;
+    };
+    let stamp: Stamp = (qemu.to_path_buf(), meta.len(), meta.modified().ok());
+
+    let cache = SEEN.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(seen) = cache.lock()
+        && let Some(known) = seen.get(&stamp)
+    {
+        return *known;
+    }
+
+    let found = scan_for(qemu, GPIO_MODEL_MARKER);
+    if let Ok(mut seen) = cache.lock() {
+        seen.insert(stamp, found);
+    }
+    found
+}
+
+/// Is `needle` anywhere in this file?
+///
+/// Chunked with an overlap of `needle.len() - 1`, so a marker straddling a
+/// chunk boundary is still found — reading a hundred megabytes into memory to
+/// avoid thinking about that is the version of this that makes the toolchain
+/// panel stutter.
+fn scan_for(path: &Path, needle: &[u8]) -> bool {
+    use std::io::Read;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let overlap = needle.len() - 1;
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut filled = 0usize;
+    loop {
+        match file.read(&mut buffer[filled..]) {
+            Ok(0) => return false,
+            Ok(read) => {
+                filled += read;
+                if buffer[..filled].windows(needle.len()).any(|w| w == needle) {
+                    return true;
+                }
+                if filled + overlap >= buffer.len() {
+                    buffer.copy_within(filled - overlap..filled, 0);
+                    filled = overlap;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Where pin changes leave the emulator and host-driven levels go back in.
+///
+/// Its own chardev, not the serial line: the UART belongs to the firmware,
+/// and interleaving the two would make each unreadable to whoever wanted the
+/// other. `-global` rather than `-device` because the machine creates the
+/// GPIO device itself — there is no `-device` line to hang a chardev off.
+///
+/// QEMU listens and rusty connects, which is the arrangement the CI gate
+/// proves; having rusty listen would be a second arrangement nothing has
+/// booted.
+pub fn pins_args(port: u16) -> Vec<String> {
+    vec![
+        "-chardev".to_string(),
+        format!("socket,id=pins,host=127.0.0.1,port={port},server=on,wait=off"),
+        "-global".to_string(),
+        "driver=esp32.gpio,property=pins,value=pins".to_string(),
+    ]
 }
 
 /// The proxy the rest of this machine uses, if any.
@@ -1529,20 +1691,125 @@ mod tests {
     }
 
     #[test]
-    fn qemu_download_tries_github_then_espressifs_mirror() {
-        if !cfg!(windows) {
-            return;
-        }
-        let plan = qemu_download("qemu-system-xtensa").expect("windows plan");
-        assert_eq!(plan.urls.len(), 2);
-        assert!(plan.urls[0].contains("github.com/espressif/qemu"), "{}", plan.urls[0]);
+    fn qemu_download_prefers_rustys_build_then_falls_back_to_espressif() {
+        let Some(platform) = host_platform() else {
+            return; // a platform neither project publishes; qemu_download says so
+        };
+        let plan = qemu_download("qemu-system-xtensa").expect("a plan for this host");
+
+        // Espressif's two are always last and always in that order: GitHub is
+        // unreachable from some networks entirely, and dl.espressif.com exists
+        // precisely for that and serves identical bytes.
+        let espressif: Vec<_> = plan
+            .urls
+            .iter()
+            .filter(|u| u.contains("espressif/qemu"))
+            .collect();
+        assert_eq!(espressif.len(), 2, "{:?}", plan.urls);
+        assert!(espressif[0].contains("github.com/"), "{}", espressif[0]);
         assert!(
-            plan.urls[1].contains("dl.espressif.com/github_assets"),
+            espressif[1].contains("dl.espressif.com/github_assets"),
             "{}",
-            plan.urls[1],
+            espressif[1],
         );
-        assert!(plan.urls.iter().all(|u| u.contains("qemu-xtensa-softmmu")));
+        assert!(
+            espressif.iter().all(|u| u.contains("qemu-xtensa-softmmu")),
+            "{espressif:?}",
+        );
+
+        // Ours goes first where it exists, because it is the one with pin
+        // state. Asserting on the property rather than a count: an ARM Linux
+        // host has no rusty build and must still get a working plan.
+        match rusty_qemu_asset(platform) {
+            Some(asset) => {
+                assert!(plan.urls[0].contains(RUSTY_REPO), "{}", plan.urls[0]);
+                assert!(plan.urls[0].ends_with(&asset), "{}", plan.urls[0]);
+            }
+            None => assert!(
+                plan.urls.iter().all(|u| u.contains("espressif/qemu")),
+                "a platform rusty does not build must fall through cleanly: {:?}",
+                plan.urls,
+            ),
+        }
         assert!(plan.extract.display.starts_with("tar -xf"));
+    }
+
+    /// The marker has to be found wherever it lands, including across a read
+    /// boundary — which is the case a chunked scan gets wrong, and it gets it
+    /// wrong silently: the answer is "this is the stock emulator", and the
+    /// board quietly goes back to trusting the firmware's narration.
+    #[test]
+    fn the_model_marker_is_found_even_when_it_straddles_a_chunk() {
+        let dir = std::env::temp_dir().join("rusty-scan-test");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let chunk = 1 << 20;
+        for offset in [0usize, 4096, chunk - 6, chunk, chunk + 1, chunk * 2 - 3] {
+            let path = dir.join(format!("marked-{offset}.bin"));
+            let mut bytes = vec![b'.'; offset + GPIO_MODEL_MARKER.len() + 4096];
+            bytes[offset..offset + GPIO_MODEL_MARKER.len()].copy_from_slice(GPIO_MODEL_MARKER);
+            std::fs::write(&path, &bytes).expect("write");
+            assert!(
+                scan_for(&path, GPIO_MODEL_MARKER),
+                "marker at byte {offset} was missed",
+            );
+            let _ = std::fs::remove_file(&path);
+        }
+
+        // And a binary without it must not be mistaken for one with it: the
+        // stock emulator answering "yes" is a board claiming pin state it
+        // does not have.
+        let plain = dir.join("stock.bin");
+        std::fs::write(&plain, vec![b'.'; chunk * 2]).expect("write");
+        assert!(!scan_for(&plain, GPIO_MODEL_MARKER));
+        assert!(!has_gpio_model(&plain));
+        let _ = std::fs::remove_file(&plain);
+
+        // A path that is not there is not a model, and must not panic.
+        assert!(!has_gpio_model(&dir.join("absent")));
+    }
+
+    #[test]
+    fn the_pin_channel_is_a_chardev_of_its_own() {
+        let args = pins_args(4444);
+        let joined = args.join(" ");
+        assert!(joined.contains("socket,id=pins"), "{joined}");
+        assert!(joined.contains("port=4444"), "{joined}");
+        // QEMU listens, rusty connects — the arrangement CI boots. `wait=off`
+        // so a run still starts when nothing ever connects.
+        assert!(joined.contains("server=on"), "{joined}");
+        assert!(joined.contains("wait=off"), "{joined}");
+        // -global, because the machine creates the device; there is no
+        // -device line to attach the chardev to.
+        assert!(
+            joined.contains("-global driver=esp32.gpio,property=pins,value=pins"),
+            "{joined}",
+        );
+        // Never the serial line: that one belongs to the firmware.
+        assert!(!joined.contains("-serial"), "{joined}");
+    }
+
+    #[test]
+    fn every_platform_rusty_builds_is_one_espressif_names() {
+        // The two asset ladders must agree about how a platform is spelled,
+        // or ours resolves and theirs 404s on the same machine — a fallback
+        // that only works where it is not needed. These strings were read off
+        // the release's own asset list.
+        for platform in [
+            "x86_64-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin",
+            "x86_64-w64-mingw32",
+        ] {
+            assert!(
+                rusty_qemu_asset(platform).is_some(),
+                "{platform} is published by rusty",
+            );
+        }
+        assert!(
+            rusty_qemu_asset("aarch64-linux-gnu").is_none(),
+            "ARM Linux is Espressif's to serve; claiming it would 404 for every user",
+        );
     }
 
     #[test]

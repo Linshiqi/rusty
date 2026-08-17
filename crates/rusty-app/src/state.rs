@@ -26,6 +26,11 @@ pub struct AppState {
     /// The running session's stdin, when it has one worth writing — the
     /// simulator's board input path. Cleared with the session.
     session_input: Mutex<Option<rusty_embed::process::Input>>,
+    /// The emulator's pin channel, when the running QEMU has rusty's GPIO
+    /// model. Present, a button press drives the register the firmware reads;
+    /// absent, the board falls back to the `B14=1` message over the UART that
+    /// firmware has to be written to expect. Cleared with the session.
+    pins: Mutex<Option<crate::simulate::PinChannel>>,
     /// Where a debugger should attach, recorded by the run that armed it.
     attach: Mutex<Option<Attach>>,
     /// Chips and boards, after layering in the user's and the project's files.
@@ -212,6 +217,14 @@ impl AppState {
         self.session_input.lock().await.clone()
     }
 
+    pub async fn set_pins(&self, pins: Option<crate::simulate::PinChannel>) {
+        *self.pins.lock().await = pins;
+    }
+
+    pub async fn pins(&self) -> Option<crate::simulate::PinChannel> {
+        self.pins.lock().await.clone()
+    }
+
     /// Record where the debugger should attach. Set by the run that built the
     /// image and armed the target, because that run is the only thing that
     /// knows which binary is now executing.
@@ -232,6 +245,10 @@ impl AppState {
 
     pub async fn stop_session(&self) {
         *self.session_input.lock().await = None;
+        // With the emulator gone the pin channel is a socket to nothing. Left
+        // behind, the next button press would be written into it and vanish,
+        // which reads as firmware ignoring the press.
+        *self.pins.lock().await = None;
         if let Some(stopper) = self.session.lock().await.take() {
             stopper.stop();
         }

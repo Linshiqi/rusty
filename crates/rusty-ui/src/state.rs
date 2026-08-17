@@ -532,8 +532,16 @@ pub struct AppState {
     /// session and cannot be written to, and a tunable that silently went
     /// nowhere would read as firmware ignoring it.
     pub link_port: RwSignal<Option<String>>,
-    /// Pin levels the running firmware has reported, for the board view.
+    /// Pin levels for the board view, from whichever source [`sim_pin_source`]
+    /// names.
     pub sim_gpio: RwSignal<std::collections::HashMap<u8, bool>>,
+    /// Where those levels came from, as announced by the run that started.
+    ///
+    /// `Firmware` until a run says otherwise, because that is what every
+    /// emulator did until rusty shipped one that keeps pin state — and a
+    /// caption claiming register-level truth over a stock QEMU would send a
+    /// user with a dark LED to check their wiring instead of their `println!`.
+    pub sim_pin_source: RwSignal<rusty_embed::PinSource>,
     /// The simulation plan for the open project, when the panel asked.
     pub sim_plan: RwSignal<Option<rusty_embed::SimPlan>>,
     /// Tools whose one-click install failed — those cards reveal the manual
@@ -771,6 +779,7 @@ impl AppState {
             params: RwSignal::new(Vec::new()),
             link_port: RwSignal::new(None),
             sim_gpio: RwSignal::new(std::collections::HashMap::new()),
+            sim_pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
             sim_plan: RwSignal::new(None),
             sim_install_failed: RwSignal::new(Vec::new()),
             find_open: RwSignal::new(false),
