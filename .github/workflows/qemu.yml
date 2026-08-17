@@ -329,6 +329,29 @@ jobs:
               | while IFS= read -r chunk; do
                   echo "::error::…$chunk"
                 done
+            # When the link is what failed, the interesting thing is not the
+            # 284 duplicate symbols — it is *which library put the static
+            # archive on the line*. ninja passes the whole link through a
+            # response file, so that file is the answer, and meson's log says
+            # how each dependency was resolved.
+            #
+            # Added because this failure has now been diagnosed by hypothesis
+            # three times: prefer_static, then slirp's `static: true`, then
+            # gcrypt. Two were right about something and none of them was the
+            # whole story. A guess costs half an hour; the .rsp is already on
+            # disk.
+            rsp=$(ls *.rsp 2>/dev/null | head -1)
+            if [ -n "$rsp" ]; then
+              libs=$(tr ' ' '\n' < "$rsp" | grep -iE 'glib|slirp|gcrypt|pixman|\.a$|\.dll\.a$' \
+                | awk 'NR<=40' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0} END{printf "\n"}')
+              echo "::error::what the link was given ($rsp):%0A$libs"
+            fi
+            if [ -f meson-logs/meson-log.txt ]; then
+              how=$(grep -iE 'glib|slirp|gcrypt' meson-logs/meson-log.txt \
+                | grep -iE 'found|link|lib' | awk 'NR<=25' | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}')
+              echo "::error::how meson resolved them:%0A$how"
+            fi
             exit 1
           fi
           tail -5 build.out
