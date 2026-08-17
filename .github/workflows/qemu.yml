@@ -210,9 +210,20 @@ jobs:
           extra=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
-            # Keeps a very large PE within what mingw's ld handles; nothing
-            # shipped from here needs the debug info.
-            extra="--disable-debug-info"
+            # Two flags, each earned by a failed build, and neither optional:
+            #
+            # --disable-debug-info keeps a very large PE within what mingw's
+            #   ld handles. Nothing shipped from here needs it.
+            #
+            # -DLIBSLIRP_STATIC because the tag's own meson.build asks
+            #   pkg-config for the *static* libslirp unconditionally, and adds
+            #   the macro that makes libslirp's header agree only when
+            #   prefer_static is set. Without it the header declares every
+            #   symbol dllimport and the link ends in undefined
+            #   `__imp_slirp_*`. (Dropped once by a rewrite of this file, and
+            #   it stayed hidden for three runs because Windows was failing
+            #   earlier, at gcrypt, and never reached the link.)
+            extra="--disable-debug-info --extra-cflags=-DLIBSLIRP_STATIC"
           else
             prefix="--prefix=$PWD/qemu-install"
           fi
