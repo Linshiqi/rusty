@@ -690,15 +690,21 @@ const RUSTY_REPO: &str = "Linshiqi/rusty";
 
 /// Which platforms that release actually carries.
 ///
-/// Espressif additionally ships `aarch64-linux-gnu` and rusty does not, so an
-/// ARM Linux user falls through to the stock emulator and everything works as
-/// it always has — minus real pin state. Listing it here rather than letting
-/// the URL 404 keeps "we do not build that" separate from "the download
-/// failed", which are different things to tell somebody.
+/// Espressif additionally ships `aarch64-linux-gnu` and `x86_64-apple-darwin`
+/// and rusty does not, so those users fall through to the stock emulator and
+/// everything works as it always has — minus real pin state. Listing what we
+/// build rather than letting the URL 404 keeps "we do not build that" separate
+/// from "the download failed", which are different things to tell somebody.
+///
+/// Intel macOS is absent for a dull reason worth writing down: GitHub retired
+/// the `macos-13` runner, so that job queued for 103 minutes while the other
+/// three finished in four to fifteen and would never have been picked up.
+/// Adding it back needs a runner label somebody has watched work — guessing
+/// one costs another hour of queue to disprove.
 fn rusty_qemu_asset(platform: &str) -> Option<String> {
     matches!(
         platform,
-        "x86_64-linux-gnu" | "x86_64-apple-darwin" | "aarch64-apple-darwin" | "x86_64-w64-mingw32"
+        "x86_64-linux-gnu" | "aarch64-apple-darwin" | "x86_64-w64-mingw32"
     )
     .then(|| {
         let version = RUSTY_QEMU_TAG.trim_start_matches("qemu-");
@@ -1795,21 +1801,21 @@ mod tests {
         // or ours resolves and theirs 404s on the same machine — a fallback
         // that only works where it is not needed. These strings were read off
         // the release's own asset list.
-        for platform in [
-            "x86_64-linux-gnu",
-            "x86_64-apple-darwin",
-            "aarch64-apple-darwin",
-            "x86_64-w64-mingw32",
-        ] {
+        for platform in ["x86_64-linux-gnu", "aarch64-apple-darwin", "x86_64-w64-mingw32"] {
             assert!(
                 rusty_qemu_asset(platform).is_some(),
                 "{platform} is published by rusty",
             );
         }
-        assert!(
-            rusty_qemu_asset("aarch64-linux-gnu").is_none(),
-            "ARM Linux is Espressif's to serve; claiming it would 404 for every user",
-        );
+        // The two rusty does not build. Claiming either would 404 for every
+        // user on it, and a 404 in this ladder is indistinguishable from a
+        // network that is simply down.
+        for absent in ["aarch64-linux-gnu", "x86_64-apple-darwin"] {
+            assert!(
+                rusty_qemu_asset(absent).is_none(),
+                "{absent} is Espressif's to serve",
+            );
+        }
     }
 
     #[test]

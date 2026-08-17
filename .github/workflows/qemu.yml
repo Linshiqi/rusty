@@ -48,9 +48,6 @@ jobs:
           - os: macos-latest
             label: aarch64-apple-darwin
             shell: bash
-          - os: macos-13
-            label: x86_64-apple-darwin
-            shell: bash
           - os: windows-latest
             label: x86_64-w64-mingw32
             # QEMU on Windows builds under MSYS2's mingw64 — the route

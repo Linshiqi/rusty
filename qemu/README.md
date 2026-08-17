@@ -156,8 +156,15 @@ built it. Linux relies on the system's glib, pixman and slirp, exactly as
 Espressif's does; it is built on Ubuntu 22.04, so that is the oldest glibc it
 is known to run against.
 
-ARM Linux is not built here. Espressif publishes one, `qemu_download` says so
-rather than 404ing, and those users get the stock emulator.
+ARM Linux and Intel macOS are not built here. Espressif publishes both,
+`qemu_download` says so rather than 404ing, and those users get the stock
+emulator with everything working as it always has, minus real pin state.
+
+Intel macOS is absent for a dull reason worth recording: GitHub retired the
+`macos-13` runner, so that job sat queued for 103 minutes while the other
+three finished in four to fifteen, and would never have been picked up.
+Adding it back needs a runner label somebody has watched work — guessing one
+costs an hour of queue to disprove.
 
 ## Which one is running
 

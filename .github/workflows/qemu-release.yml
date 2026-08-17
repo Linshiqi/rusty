@@ -44,14 +44,16 @@ jobs:
       - name: What is being published
         run: |
           ls -la assets
-          # Four packages, or the release is missing a desktop and nobody
-          # finds out until somebody on it clicks install. This is the shape
-          # of the release that shipped only the Windows installer while
-          # every job went green.
+          # One per platform built, or the release is missing a desktop and
+          # nobody finds out until somebody on it clicks install. This is the
+          # shape of the release that shipped only the Windows installer while
+          # every job went green — and `if-no-files-found` cannot catch it,
+          # because the directory is not empty, it is just missing the only
+          # thing anyone downloads.
           count=$(ls assets/*.tar.xz 2>/dev/null | wc -l)
           echo "$count packages"
-          if [ "$count" -ne 4 ]; then
-            echo "::error::expected four packages (linux, two macOS, windows), found $count"
+          if [ "$count" -ne 3 ]; then
+            echo "::error::expected three packages (linux, macOS arm64, windows), found $count"
             exit 1
           fi
           (cd assets && sha256sum *.tar.xz | tee SHA256SUMS)
