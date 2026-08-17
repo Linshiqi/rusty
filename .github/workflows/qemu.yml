@@ -97,6 +97,35 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja pkg-config glib pixman libslirp libgcrypt dylibbundler
 
+      # Fail at minute two rather than at minute twenty. A missing header
+      # surfaces as a compile error deep in the build, on whichever file
+      # happens to include it first, and reads like a source problem — which
+      # is exactly how gcrypt.h was diagnosed twice.
+      - name: The headers the build needs are actually there
+        run: |
+          missing=""
+          for header in glib-2.0/glib.h pixman.h gcrypt.h; do
+            found=""
+            for dir in /usr/include /usr/local/include /mingw64/include \
+                       /opt/homebrew/include /opt/homebrew/opt/libgcrypt/include \
+                       /usr/include/glib-2.0 /usr/include/pixman-1 \
+                       /mingw64/include/pixman-1 /opt/homebrew/include/pixman-1; do
+              [ -f "$dir/$header" ] && found="$dir/$header" && break
+            done
+            if [ -n "$found" ]; then
+              echo "ok   $header -> $found"
+            else
+              echo "MISS $header"
+              missing="$missing $header"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::${{ matrix.label }} is missing:$missing — the dependency step \
+            above did not install what it claims to. This is what a 'source' error twenty \
+            minutes into the build actually is."
+            exit 1
+          fi
+
       # The tag rusty pins, read from the source rather than repeated here —
       # two copies of a version is one that goes stale.
       - name: Read the pinned QEMU release
@@ -213,7 +242,14 @@ jobs:
             # The failed block: FAILED: up to the next ninja progress line,
             # which is where the failing command's own output ends.
             block=$(awk '/^FAILED:/{seen=1} seen && /^\[[0-9]+\/[0-9]+\]/{exit} seen' build.out)
-            kept=$(printf '%s\n' "$block" | grep -vE '^"')
+            # Drop the echoed command by *length*, not by shape. It comes back
+            # quoted on Windows (`"cc" "-m64" …`) and bare on the other two
+            # (`cc -Ilibcommon… `), and a filter that only knew the quoted form
+            # let a 1500-character line eat the whole annotation budget on
+            # macOS — the report arrived saying "6 lines, 6 after dropping
+            # echoed commands" with the error nowhere in it. 400 is far above
+            # any diagnostic ld or cc emits and far below any command line.
+            kept=$(printf '%s\n' "$block" | awk 'length($0) < 400')
 
             # Say what was thrown away. Every earlier version of this step
             # reported only what survived its filter, so a filter eating the
