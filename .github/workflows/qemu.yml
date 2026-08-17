@@ -373,17 +373,50 @@ jobs:
             echo "::error::ninja install failed on ${{ matrix.label }}"
             exit 1
           }
+          installed="$PWD/qemu-install"
+          echo "─── what ninja install laid down ───"
+          find "$installed" -maxdepth 2 | awk 'NR<=40'
+
           root="$PWD/../package"
           rm -rf "$root"
-          mkdir -p "$root/qemu"
-          installed="$PWD/qemu-install"
-          cp -R "$installed/bin" "$root/qemu/bin"
-          cp -R "$installed/share" "$root/qemu/share"
-          # Only the two emulators. `ninja install` also lays down qemu-img and
-          # friends, and none of them are what rusty runs.
-          find "$root/qemu/bin" -type f \
-            ! -name 'qemu-system-riscv32*' ! -name 'qemu-system-xtensa*' -delete
+          mkdir -p "$root/qemu/bin" "$root/qemu/share/qemu"
+
+          # Found, not assumed. QEMU installs into <prefix>/bin on Linux and
+          # macOS and flat into <prefix> on mingw, so `cp <prefix>/bin` worked
+          # on two platforms and failed on the third with a message about a
+          # missing directory — which reads like the build not having produced
+          # anything.
+          #
+          # Only the two emulators: `ninja install` also lays down qemu-img
+          # and friends, and none of them are what rusty runs.
+          for arch in riscv32 xtensa; do
+            found=$(find "$installed" -type f \
+              \( -name "qemu-system-$arch" -o -name "qemu-system-$arch.exe" \) | head -1)
+            if [ -z "$found" ]; then
+              echo "::error::qemu-system-$arch is not in the install tree at all"
+              exit 1
+            fi
+            cp "$found" "$root/qemu/bin/"
+          done
+
+          # The data directory, located the same way — by the blobs QEMU
+          # actually loads at boot rather than by a path that happens to be
+          # right on the platform this was written on. Without them the
+          # emulator starts and then cannot find its firmware, which is a
+          # failure a packaging test would not catch but every user would.
+          blob=$(find "$installed" -type f \
+            \( -name 'opensbi-riscv32*' -o -name 'esp32*.bin' -o -name '*-bios*.bin' \) \
+            | head -1)
+          if [ -z "$blob" ]; then
+            echo "::error::no firmware blobs in the install tree — QEMU would boot to nothing"
+            find "$installed" -type d | awk 'NR<=30'
+            exit 1
+          fi
+          cp -R "$(dirname "$blob")/." "$root/qemu/share/qemu/"
+
+          echo "─── packaged ───"
           ls -la "$root/qemu/bin"
+          ls "$root/qemu/share/qemu" | awk 'NR<=15'
 
       # A dynamically linked build carries its libraries' absolute paths, so
       # without this the package runs only where it was built. Espressif ships
