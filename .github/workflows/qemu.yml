@@ -178,6 +178,43 @@ jobs:
           cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
           cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
 
+      # Espressif's fork asks pkg-config for slirp with `static: true`, which
+      # upstream QEMU 9.2 does not:
+      #
+      #   slirp_dep = dependency('slirp', required: get_option('slirp'),
+      #                      method: 'pkg-config',
+      #                      static: true)
+      #
+      # On MSYS2 that resolves libslirp's Libs.private statically and drags in
+      # libglib-2.0.a, while QEMU links glib through libglib-2.0.dll.a — so
+      # every glib symbol is defined twice and the final link dies in 289
+      # lines of `multiple definition of g_*`. Not something to paper over
+      # with --allow-multiple-definition either: two glibs in one binary is
+      # two allocators and two main contexts, and that turns a loud link error
+      # into a quiet runtime one.
+      #
+      # One keyword, appearing exactly once in 4896 lines, and the guards say
+      # so — if upstream ever writes it elsewhere or drops it, this stops
+      # rather than editing the wrong line or silently doing nothing. Same
+      # discipline as upstream.sha256, for the same reason.
+      - name: Link slirp the way this platform links everything else
+        if: runner.os == 'Windows'
+        working-directory: qemu-src
+        run: |
+          before=$(grep -c 'static: true' meson.build || true)
+          if [ "$before" != "1" ]; then
+            echo "::error::expected exactly one \`static: true\` in meson.build, found $before —"
+            echo "::error::the slirp dependency has moved; re-read it before trusting this edit."
+            exit 1
+          fi
+          sed -i 's/^\( *\)static: true)/\1static: false)/' meson.build
+          after=$(grep -c 'static: true' meson.build || true)
+          if [ "$after" != "0" ]; then
+            echo "::error::the substitution did not take — \`static: true\` is still there"
+            exit 1
+          fi
+          grep -n -B2 'static: false)' meson.build
+
       # Both target lists. riscv32 covers the C3 and C6; xtensa covers the
       # original ESP32 and the S3, which is the part most people own — a
       # package with only one of them would leave half the catalogue on the
@@ -217,20 +254,10 @@ jobs:
           extra=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
-            # Two flags, each earned by a failed build, and neither optional:
-            #
-            # --disable-debug-info keeps a very large PE within what mingw's
-            #   ld handles. Nothing shipped from here needs it.
-            #
-            # -DLIBSLIRP_STATIC because the tag's own meson.build asks
-            #   pkg-config for the *static* libslirp unconditionally, and adds
-            #   the macro that makes libslirp's header agree only when
-            #   prefer_static is set. Without it the header declares every
-            #   symbol dllimport and the link ends in undefined
-            #   `__imp_slirp_*`. (Dropped once by a rewrite of this file, and
-            #   it stayed hidden for three runs because Windows was failing
-            #   earlier, at gcrypt, and never reached the link.)
-            extra="--disable-debug-info --extra-cflags=-DLIBSLIRP_STATIC"
+            # Keeps a very large PE within what mingw's ld handles; nothing
+            # shipped from here needs the debug info. Not the slirp fix it was
+            # once guessed to be — that one is the meson step above.
+            extra="--disable-debug-info"
           else
             prefix="--prefix=$PWD/qemu-install"
           fi
@@ -294,7 +321,10 @@ jobs:
             # `END{printf "\n"}` is load-bearing — without a trailing newline
             # `read` drops the final chunk, and the folded output is usually
             # a single chunk, so the whole report vanishes.
-            printf '%s\n' "$kept" | head -80 | sed 's/%/%25/g' \
+            # `awk NR<=80`, not `head -80`: head closes the pipe as soon as it
+            # has its lines, printf dies of SIGPIPE, and the step reports exit
+            # 141 — a failing build whose report is itself a failure.
+            printf '%s\n' "$kept" | awk 'NR<=80' | sed 's/%/%25/g' \
               | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
               | while IFS= read -r chunk; do
                   echo "::error::…$chunk"
