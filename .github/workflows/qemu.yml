@@ -555,12 +555,30 @@ jobs:
             exit 1
           fi
           tail -25 configure.out
+          # What it decided about the two options that differ per platform,
+          # in a channel readable without admin rights. `--disable-slirp` was
+          # passed and net/slirp.c was compiled anyway; guessing why costs a
+          # round trip each time, and this makes the next one informed.
+          decided=$(grep -inE 'slirp|guest.agent' configure.out | head -12 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice::${{ matrix.name }} configure said about slirp/guest-agent:%0A${decided:-nothing at all}"
 
       - name: Build
         working-directory: qemu-src
         run: |
           if ! ninja -C build > build.out 2>&1; then
-            detail=$(tail -60 build.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            # From the first FAILED: line, keeping only diagnostics. A plain
+            # tail spends the whole annotation on successful ninja progress,
+            # and the compiler's actual complaint falls off the end — an
+            # annotation is capped at 4096 characters, and the command line
+            # ninja echoes is longer than that on its own. Twice now the
+            # report has arrived with everything except the error in it.
+            detail=$(awk '/^FAILED:/{seen=1} seen' build.out \
+              | grep -vE '^"' \
+              | grep -E 'FAILED:|error:|Error|undefined reference|No such file|fatal' \
+              | head -25 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            if [ -z "$detail" ]; then
+              detail=$(tail -25 build.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            fi
             echo "::error::the build failed on ${{ matrix.name }}:%0A$detail"
             exit 1
           fi
