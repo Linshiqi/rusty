@@ -27,7 +27,9 @@ honestly claim:
   reads.
 
 `esp32_gpio.c` here fills in the model: the output and enable registers,
-their set/clear aliases, and the input register. Pin changes leave on their
+their set/clear aliases, and the input register — for all forty pins, since
+the original ESP32 keeps GPIO32..39 in a second bank and that is where its
+input-only pins live. Pin changes leave on their
 own chardev — not the UART, which belongs to the firmware — and input can be
 driven back in, so unmodified firmware reads a real pin.
 
@@ -41,8 +43,9 @@ and says so rather than silently discarding their change.
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
 (read out of `QEMU_RELEASE` in `crates/rusty-embed/src/simulate.rs`, not
-repeated), verifies the checksums, copies these two files in and builds
-`riscv32-softmmu`. Run it from the Actions tab; it uploads the binary as an
+repeated), verifies the checksums, copies these two files in and builds both
+`riscv32-softmmu` and `xtensa-softmmu` — the C3 and C6 on one, the ESP32 and
+S3 on the other. Run it from the Actions tab; it packages each platform as an
 artifact.
 
 ## What it is proven to do
@@ -139,7 +142,7 @@ applied at build time, so that stays unambiguous.
 ## Shipped
 
 `qemu-release.yml` runs on a `qemu-v*` tag: it calls the build workflow, and
-only if every gate passes does it attach the four packages to a Release.
+only if every gate passes does it attach the packages to a Release.
 `qemu_download` in `crates/rusty-embed/src/simulate.rs` asks for that Release
 first and Espressif's second, so there is nothing for a user to install by
 hand and a failure to reach ours degrades to the emulator rusty has always
