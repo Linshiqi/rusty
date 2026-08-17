@@ -162,13 +162,31 @@ reads zero on esp32 and esp32c3 alike. The board therefore shows *what the
 firmware says it set*, and the panel says so in as many words. A part needs no
 code in rusty to exist, which is why `.rusty/parts/*.toml` can add one.
 
-`qemu/` is the way out and is now proven in CI: a real GPIO model, reporting
-pin changes on a chardev of its own and accepting host-driven levels back, so
-a LED lights because a pin went high and a button is read through the register
-the firmware actually reads. It is **not shipped** — that means rebuilding a
-QEMU fork for three desktops on every upstream bump — so the ceiling above
-still describes what users run. `qemu/README.md` has the four gates it passes
-and why each can fail.
+That ceiling is now the *fallback*, not the roof. `qemu/` holds a real GPIO
+model — Espressif's stub replaced — and `qemu-release.yml` builds it for four
+platforms and publishes it, so `qemu_download` fetches ours first and falls
+back to Espressif's. With ours a LED lights because a pin went high and a
+button is read through the register the firmware actually reads; with theirs
+everything works exactly as it always did. `qemu/README.md` has the gates each
+build passes and why each can fail.
+
+**Which of the two is running is never assumed.** `has_gpio_model` reads the
+binary for a marker only rusty's build emits, because a user who dropped a
+stock QEMU into the same directory has to get the right answer. The run then
+announces `[rusty:pins] emulator`, and the board's caption follows that rather
+than asserting — a caption promising register-level truth over a stock build
+would send somebody with a dark LED to check their wiring when the bug is a
+missing `println!`, and the reverse is just as wrong. An announcement the
+frontend does not recognise leaves the weaker claim standing.
+
+The pin channel is a chardev of its own (`-chardev socket` + `-global`, since
+the machine creates the GPIO device and there is no `-device` to hang it off),
+and the backend feeds its lines into **the same** stream the serial console
+uses — rule 5 above, one `absorb`. A button press goes both ways when both
+exist: `B14=1` on the console for firmware reading rusty's text protocol, and
+`14=1` on the pin channel for firmware reading `Input::is_high()`. The
+potentiometer stays console-only, because a GPIO carries one bit and there is
+no ADC model to put an analog value into.
 
 ### 6. Extensibility is data first
 

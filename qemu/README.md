@@ -133,9 +133,38 @@ QEMU is GPL-2.0. These files are derivatives of it and carry the same terms,
 not rusty's licence. They are kept here, outside the cargo workspace and
 applied at build time, so that stays unambiguous.
 
-## Not shipped
+## Shipped
 
-The binaries are artifacts to test against. Shipping them means committing to
-building a QEMU fork for three desktops on every upstream bump, so the app
-still downloads Espressif's build and the board view's caption — pin levels
-are what the firmware *says* it set — stays true of what users run.
+`qemu-release.yml` runs on a `qemu-v*` tag: it calls the build workflow, and
+only if every gate passes does it attach the four packages to a Release.
+`qemu_download` in `crates/rusty-embed/src/simulate.rs` asks for that Release
+first and Espressif's second, so there is nothing for a user to install by
+hand and a failure to reach ours degrades to the emulator rusty has always
+used rather than to no emulator at all.
+
+Each package carries **both** emulators — `qemu-system-riscv32` for the C3 and
+C6, `qemu-system-xtensa` for the ESP32 and S3 — laid out as `qemu/bin` beside
+`qemu/share/qemu`, which is Espressif's own layout and therefore a drop-in for
+a downloader that already knew how to unpack theirs.
+
+Windows carries its mingw DLLs and macOS is run through `dylibbundler`,
+because a dynamically linked build otherwise only runs on the machine that
+built it. Linux relies on the system's glib, pixman and slirp, exactly as
+Espressif's does; it is built on Ubuntu 22.04, so that is the oldest glibc it
+is known to run against.
+
+ARM Linux is not built here. Espressif publishes one, `qemu_download` says so
+rather than 404ing, and those users get the stock emulator.
+
+## Which one is running
+
+Never assumed. `has_gpio_model` reads the binary for `[rusty:gpio@`, the
+marker only this model emits — a version file beside the binary would answer
+about the install rather than about the emulator, and a user who dropped
+Espressif's build into the same directory would get the wrong answer.
+
+The run then announces `[rusty:pins] emulator` and the board's caption follows
+it. That matters more than it sounds: a caption promising register-level truth
+over a stock build sends somebody with a dark LED to check their wiring when
+the bug is a missing `println!`, and the reverse sends them to re-read
+firmware that was right all along.
