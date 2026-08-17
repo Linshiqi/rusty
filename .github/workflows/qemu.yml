@@ -198,6 +198,13 @@ jobs:
       #
       # Installing libgcrypt is necessary and was not sufficient: the header
       # was present on macOS and the compiler still could not see it.
+      #
+      # --disable-gnutls follows from that choice. Switching the backend left
+      # macOS building crypto/tlscreds.c without gnutls's include path, and
+      # rather than chase that path, ask whether a local emulator needs TLS at
+      # all. It does not — a serial line and a pin chardev, no VNC, no
+      # migration, no NBD — so the whole dependency goes, and with it one more
+      # way for the four platforms to differ.
       - name: Configure
         working-directory: qemu-src
         run: |
@@ -238,6 +245,7 @@ jobs:
             --target-list=riscv32-softmmu,xtensa-softmmu \
             --enable-slirp \
             --enable-gcrypt \
+            --disable-gnutls \
             --disable-guest-agent \
             --disable-docs \
             --disable-sdl \
