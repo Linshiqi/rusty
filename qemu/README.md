@@ -88,15 +88,11 @@ firmware never announced — the model was rejected for being more truthful
 than the firmware, which is the entire reason it exists. The check now aligns
 the two and reports the lead.
 
-## Does it build for the other two desktops?
+## What each desktop needed
 
-Yes — Linux, macOS (arm64) and Windows all produce a `qemu-system-riscv32`
-with this model in it. That was the open question before any decision about
-shipping one, and it is answered: `.github/workflows/qemu.yml`'s `portability`
-job builds on all three and proves each binary carries the model.
-
-macOS needed nothing. Windows needed four things, none of them in the
-emulator — its own source compiled clean on the first attempt that reached it:
+Nothing, on Linux and macOS. Windows needed four things, and one platform
+each needed a dependency nobody had named — none of it in the emulator, whose
+own source compiled clean on the first attempt that reached it, everywhere:
 
 - **A prefix with a drive letter.** QEMU's configure defaults the mingw prefix
   to `/qemu` and meson 1.5 will not call that absolute, so it stops at
@@ -114,6 +110,13 @@ emulator — its own source compiled clean on the first attempt that reached it:
   two main contexts.
 - **`--disable-debug-info`**, to keep a very large PE within what mingw's ld
   handles. Nothing shipped needs it.
+
+And **libgcrypt**, which only appeared once the xtensa target was added:
+`hw/misc/esp32_flash_enc.c` models that part's flash encryption and includes
+`<gcrypt.h>`. Ubuntu's runner image happens to ship the headers and the other
+two do not, so the Linux build passed while macOS and Windows failed on a
+dependency nobody had chosen — this project's own recorded trap, and it fails
+first on the platform you were not looking at. Named on all three now.
 
 That one `static: true` produced three different failures before it was
 found — undefined `__imp_slirp_*` at link time, then `--disable-slirp` having
