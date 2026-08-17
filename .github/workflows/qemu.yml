@@ -183,13 +183,21 @@ jobs:
       # package with only one of them would leave half the catalogue on the
       # stock emulator with no sign of why.
       #
-      # Adding xtensa is what pulled libgcrypt into the dependency lists
-      # above. `hw/misc/esp32_flash_enc.c` models that part's flash encryption
-      # and includes <gcrypt.h>, so a riscv32-only build never compiled it.
-      # Ubuntu's runner image happens to ship the headers and the other two do
-      # not — the same trap this project already recorded once: a dependency
-      # that comes from whatever the image includes is a dependency nobody
-      # chose. Named on every platform now.
+      # --enable-gcrypt is what makes xtensa buildable, and it is not
+      # optional. `hw/misc/esp32_flash_enc.c` opens with a bare
+      #
+      #     #include <gcrypt.h>
+      #
+      # before even qemu/osdep.h, while hw/misc/meson.build adds the file for
+      # CONFIG_XTENSA_ESP32 with no gcrypt dependency attached. So the include
+      # path arrives only if QEMU's *global* crypto backend happens to be
+      # gcrypt — which is what Ubuntu picks and what macOS and Windows do not,
+      # where meson finds gnutls and nettle first. Naming the backend makes it
+      # the same build everywhere instead of one that depends on which crypto
+      # library each platform's package manager offers first.
+      #
+      # Installing libgcrypt is necessary and was not sufficient: the header
+      # was present on macOS and the compiler still could not see it.
       - name: Configure
         working-directory: qemu-src
         run: |
@@ -218,6 +226,7 @@ jobs:
             $extra \
             --target-list=riscv32-softmmu,xtensa-softmmu \
             --enable-slirp \
+            --enable-gcrypt \
             --disable-guest-agent \
             --disable-docs \
             --disable-sdl \
