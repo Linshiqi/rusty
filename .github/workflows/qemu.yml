@@ -1,51 +1,100 @@
-# Build Espressif's QEMU with a GPIO that keeps its state.
+# Espressif's QEMU with a GPIO that keeps its state — built, proven, shipped.
 #
-# Run from the Actions tab. It clones espressif/qemu at the tag rusty pins,
-# replaces the GPIO device model with the one in `qemu/`, builds only the two
-# targets this workbench uses, and uploads the binaries.
+# Three jobs, in that order:
+#
+#   build    one per desktop. Clones espressif/qemu at the tag rusty pins,
+#            checks the two files being replaced are the ones the model was
+#            written against, builds both target lists and packages the
+#            result in Espressif's own layout so it is a drop-in.
+#   prove    unpacks the *packaged* Linux build and boots real firmware
+#            through it. Deliberately the shipped artifact rather than a
+#            second build: proving one binary and shipping another is how a
+#            green run comes to mean nothing.
+# Publishing lives in `qemu-release.yml`, which calls this one and then
+# attaches the packages to a Release. Two files rather than a tag filter here:
+# `on.push` applies `paths` and `tags` together, so a release tag on a commit
+# that happens not to touch qemu/ would silently not build.
 #
 # Why replacement files rather than a patch: the model being replaced is a
 # stub, so almost every line changes, and a unified diff's line numbers would
-# be the fragile part of an otherwise simple substitution. The checksums do
-# the job a patch's context would — if upstream edits the file, the run stops
-# and says so rather than quietly discarding their change.
-#
-# Not part of a release: the binaries are artifacts to test with. Shipping
-# them means committing to rebuilding a QEMU fork for three desktops on every
-# upstream bump, and that decision comes after the model is proven.
+# be the fragile part of an otherwise total substitution. The checksums do the
+# job a patch's context would — if upstream edits the file, the run stops and
+# says so rather than quietly discarding their change.
 
 name: qemu
 
 on:
-  # Changing the model should compile it. The build is twenty minutes of a
-  # free runner and the alternative is finding out later.
   push:
+    branches: ["master"]
     paths:
       - "qemu/**"
       - ".github/workflows/qemu.yml"
   workflow_dispatch:
-    inputs:
-      targets:
-        description: "QEMU targets to build"
-        default: "riscv32-softmmu"
-        required: false
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    name: build for ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: x86_64-linux-gnu
+            shell: bash
+          - os: macos-latest
+            label: aarch64-apple-darwin
+            shell: bash
+          - os: macos-13
+            label: x86_64-apple-darwin
+            shell: bash
+          - os: windows-latest
+            label: x86_64-w64-mingw32
+            # QEMU on Windows builds under MSYS2's mingw64 — the route
+            # upstream documents, and the reason every step below has to run
+            # in that shell rather than in PowerShell.
+            shell: "msys2 {0}"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
 
-      # QEMU's own list for a minimal softmmu build. Slirp is what gives the
-      # guest a network without root, and pixman is needed even headless.
+      # Before any `run` step: the shell default above applies to all of them,
+      # so on Windows there is no shell to run in until this has set one up.
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel git binutils
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-pixman
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-libslirp
+            mingw-w64-x86_64-python
+
       - name: Build dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev \
             libslirp-dev python3-venv flex bison
+
+      # dylibbundler: a macOS build links Homebrew's glib and pixman by
+      # absolute path, so without this the tarball only runs on a machine
+      # that already has the same Homebrew. It copies each dependency in and
+      # rewrites the install names to point at the copy.
+      - name: Build dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja pkg-config glib pixman libslirp dylibbundler
 
       # The tag rusty pins, read from the source rather than repeated here —
       # two copies of a version is one that goes stale.
@@ -63,18 +112,32 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "building against $tag"
 
+      # `core.autocrlf=false` explicitly: Windows runners default it to true,
+      # which would rewrite every line ending in the clone and make the
+      # checksum below fail — indistinguishable, in the log, from Espressif
+      # having edited the file.
       - name: Clone espressif/qemu
         run: |
-          git clone --depth 1 --branch "${{ steps.pin.outputs.tag }}" \
+          git -c core.autocrlf=false clone --depth 1 \
+            --branch "${{ steps.pin.outputs.tag }}" \
             https://github.com/espressif/qemu.git qemu-src
 
       # The check a patch would have done. If Espressif has edited either
       # file since these were written, the substitution would silently drop
       # their change — so stop, and make somebody read the new source.
+      #
+      # macOS has no `sha256sum`, only `shasum -a 256`, which takes the same
+      # `-c` file. Assuming the GNU name is how this check would have failed
+      # on the platform it was added to test.
       - name: Verify the upstream files are the ones this was written against
         working-directory: qemu-src
         run: |
-          if ! sha256sum -c ../qemu/upstream.sha256; then
+          if command -v sha256sum >/dev/null 2>&1; then
+            check="sha256sum -c"
+          else
+            check="shasum -a 256 -c"
+          fi
+          if ! $check ../qemu/upstream.sha256; then
             echo "::error::espressif/qemu's GPIO model has changed since qemu/*.c was written."
             echo "Re-read hw/gpio/esp32_gpio.c upstream, fold in the change, and update qemu/upstream.sha256."
             exit 1
@@ -85,60 +148,208 @@ jobs:
           cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
           cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
 
+      # Both target lists. riscv32 covers the C3 and C6; xtensa covers the
+      # original ESP32 and the S3, which is the part most people own — a
+      # package with only one of them would leave half the catalogue on the
+      # stock emulator with no sign of why.
       - name: Configure
         working-directory: qemu-src
         run: |
-          ./configure \
-            --target-list="${{ inputs.targets || 'riscv32-softmmu' }}" \
+          # An explicit prefix inside the build tree on every platform, so
+          # `ninja install` lays the package out without sudo and without
+          # touching the runner. It is also required on Windows: meson
+          # validates --prefix before reading anything else and wants a drive
+          # letter, while QEMU's configure defaults the mingw prefix to
+          # `/qemu`, which meson 1.5 rejects at ../meson.build:1:0.
+          extra=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
+            # Keeps a very large PE within what mingw's ld handles; nothing
+            # shipped from here needs the debug info.
+            extra="--disable-debug-info"
+          else
+            prefix="--prefix=$PWD/qemu-install"
+          fi
+          echo "using $prefix $extra"
+          # --disable-guest-agent: qemu-ga is a program that runs *inside* a
+          # guest OS and touches nothing in the emulator. On Windows it drags
+          # in the VSS provider, which needs Microsoft's Volume Shadow Copy
+          # SDK and cannot build without it.
+          if ! ./configure \
+            $prefix \
+            $extra \
+            --target-list=riscv32-softmmu,xtensa-softmmu \
             --enable-slirp \
+            --disable-guest-agent \
             --disable-docs \
             --disable-sdl \
             --disable-gtk \
             --disable-vnc \
-            --disable-werror
+            --disable-werror > configure.out 2>&1
+          then
+            detail=$(tail -50 configure.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::configure failed on ${{ matrix.label }}:%0A$detail"
+            if [ -f build/meson-logs/meson-log.txt ]; then
+              meson=$(tail -60 build/meson-logs/meson-log.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              echo "::error::meson-log tail:%0A$meson"
+            fi
+            exit 1
+          fi
+          tail -25 configure.out
 
       - name: Build
         working-directory: qemu-src
-        run: ninja -C build
-
-      # Proof the binary contains *our* model and not the stub it replaced.
-      #
-      # By string rather than by `-device help`: `esp32.gpio` is a sysbus
-      # device and may not be user-creatable, so a help probe can come back
-      # empty for reasons that have nothing to do with whether the code is
-      # in there. The report format is a literal only this file has.
-      #
-      # Fatal, not a warning. The first version of this step could not fail,
-      # which made a green run mean nothing — the same tautology this
-      # project has already caught itself writing in a test.
-      - name: Prove the built binary carries this model
-        working-directory: qemu-src
         run: |
-          # `grep -a` rather than `strings`: macOS's strings reads only the
-          # text section by default, so it misses a literal that lives in
-          # __cstring — it reported this model absent from a binary that had
-          # built perfectly. One method across all three jobs, since this is
-          # one question.
-          if LC_ALL=C grep -aq '\[rusty:gpio@' build/qemu-system-riscv32; then
-            echo "the GPIO model is compiled in"
-          else
-            echo "::error::built QEMU does not contain the replacement model —"
-            echo "the copy step or the build picked up the stub instead."
+          if ! ninja -C build > build.out 2>&1; then
+            # The failed block: FAILED: up to the next ninja progress line,
+            # which is where the failing command's own output ends.
+            block=$(awk '/^FAILED:/{seen=1} seen && /^\[[0-9]+\/[0-9]+\]/{exit} seen' build.out)
+            kept=$(printf '%s\n' "$block" | grep -vE '^"')
+
+            # Say what was thrown away. Every earlier version of this step
+            # reported only what survived its filter, so a filter eating the
+            # diagnosis looked exactly like a toolchain that produced none —
+            # and those need different fixes.
+            echo "::error::the build failed on ${{ matrix.label }}: failed block \
+            $(printf '%s\n' "$block" | wc -l) lines, \
+            $(printf '%s\n' "$kept" | wc -l) after dropping echoed commands"
+
+            # In chunks: one annotation is capped at 4096 characters, and a
+            # run's logs need admin rights on the repository, so annotations
+            # are the only channel that reaches anyone.
+            #
+            # `END{printf "\n"}` is load-bearing — without a trailing newline
+            # `read` drops the final chunk, and the folded output is usually
+            # a single chunk, so the whole report vanishes.
+            printf '%s\n' "$kept" | head -80 | sed 's/%/%25/g' \
+              | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+              | while IFS= read -r chunk; do
+                  echo "::error::…$chunk"
+                done
             exit 1
           fi
+          tail -5 build.out
 
-      # The test that matters: boot real firmware and see whether writing a
-      # pin produces a line. `examples/blink-rust` is the ideal subject
-      # because it drives GPIO0 *and* prints `[rusty:gpio]` itself — two
-      # independent accounts of the same pin, so they can be checked against
-      # each other rather than either being taken on trust.
+      # Espressif's own layout — `qemu/bin` beside `qemu/share/qemu` — because
+      # rusty's downloader unpacks into the data directory's tools/ and looks
+      # for tools/qemu/bin. A package that needs a different unpack is not a
+      # drop-in, and the fallback to Espressif's build would then land
+      # somewhere else.
+      #
+      # `ninja install` rather than copying by hand: QEMU decides what belongs
+      # in share/qemu, and a hand-picked list is a list that goes stale on the
+      # next bump with the symptom of a missing bios blob at boot.
+      - name: Package
+        working-directory: qemu-src
+        run: |
+          ninja -C build install > install.out 2>&1 || {
+            tail -30 install.out
+            echo "::error::ninja install failed on ${{ matrix.label }}"
+            exit 1
+          }
+          root="$PWD/../package"
+          rm -rf "$root"
+          mkdir -p "$root/qemu"
+          installed="$PWD/qemu-install"
+          cp -R "$installed/bin" "$root/qemu/bin"
+          cp -R "$installed/share" "$root/qemu/share"
+          # Only the two emulators. `ninja install` also lays down qemu-img and
+          # friends, and none of them are what rusty runs.
+          find "$root/qemu/bin" -type f \
+            ! -name 'qemu-system-riscv32*' ! -name 'qemu-system-xtensa*' -delete
+          ls -la "$root/qemu/bin"
+
+      # A dynamically linked build carries its libraries' absolute paths, so
+      # without this the package runs only where it was built. Espressif ships
+      # these beside the exe too; a user who has to install MSYS2 or Homebrew
+      # first is a user for whom this did not work.
+      - name: Bring the libraries along
+        working-directory: package/qemu
+        if: runner.os != 'Linux'
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # ldd resolves the mingw DLLs by name; anything under /mingw64 is
+            # ours to ship, anything under /c/Windows belongs to the OS.
+            for exe in bin/*.exe; do
+              ldd "$exe" | awk '/=> \/mingw64/ {print $3}'
+            done | sort -u | while IFS= read -r dll; do
+              cp -n "$dll" bin/ || true
+            done
+            ls bin/ | head -40
+          else
+            for exe in bin/qemu-system-*; do
+              dylibbundler -od -b -x "$exe" -d libs -p '@executable_path/../libs/' \
+                || { echo "::error::dylibbundler failed for $exe"; exit 1; }
+            done
+            ls libs/ | head -40
+          fi
+
+      # The proof the binary is ours and not the stub it replaced.
+      #
+      # `grep -a` rather than `strings`: macOS's strings reads only the text
+      # section by default and the marker lives in __cstring, so it reported
+      # this model absent from a binary that had built perfectly. One method
+      # across every platform, since this is one question.
+      - name: Prove the packaged binaries carry this model
+        working-directory: package/qemu/bin
+        run: |
+          for arch in riscv32 xtensa; do
+            bin="qemu-system-$arch"
+            if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+            if LC_ALL=C grep -aq '\[rusty:gpio@' "$bin"; then
+              echo "the GPIO model is compiled into $bin"
+            else
+              echo "::error::$bin does not contain the replacement model.%0Asize=$(wc -c < "$bin")"
+              exit 1
+            fi
+          done
+
+      - name: Name and compress it
+        run: |
+          version="${GITHUB_REF_NAME#qemu-}"
+          case "$version" in refs/*|master|main) version="dev-${GITHUB_SHA::7}" ;; esac
+          name="qemu-rusty-$version-${{ matrix.label }}"
+          echo "$version" > package/qemu/RUSTY_VERSION
+          tar -C package -cJf "$name.tar.xz" qemu
+          ls -la "$name.tar.xz"
+          echo "PACKAGE=$name.tar.xz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-${{ matrix.label }}
+          path: ${{ env.PACKAGE }}
+          if-no-files-found: error
+
+  # Boot real firmware through the package that would ship.
+  #
+  # blink-rust is the ideal subject because it drives GPIO0 *and* prints
+  # `[rusty:gpio]` itself — two independent accounts of one pin, so they can
+  # be checked against each other rather than either taken on trust.
+  prove:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: qemu-x86_64-linux-gnu
+          path: package
+
+      - name: Unpack exactly as a user's install would
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
+          mkdir -p tools
+          tar -C tools -xf package/*.tar.xz
+          tools/qemu/bin/qemu-system-riscv32 --version
+          tools/qemu/bin/qemu-system-xtensa --version
+
       - name: Rust for the target
         run: rustup target add riscv32imc-unknown-none-elf
 
-      # The action first: `cargo binstall` is not a command a runner has, and
-      # the release workflow installs it the same way. Building espflash from
-      # source is the fallback rather than the default — it is minutes of
-      # compiling for a tool that publishes binaries.
+      # The action first: `cargo binstall` is not a command a runner has.
+      # Building espflash from source is the fallback rather than the default.
       - uses: cargo-bins/cargo-binstall@main
 
       - name: espflash, for the flash image
@@ -154,21 +365,16 @@ jobs:
             target/sim/flash.bin
 
       # `-global`, because the machine creates the GPIO device — there is no
-      # `-device` line to hang a chardev off. If this is the wrong way to
-      # reach a machine-created device's property, the run says so here
-      # rather than by silently producing an empty file.
+      # `-device` line to hang a chardev off.
       - name: Boot it and watch the pins
-        working-directory: qemu-src
         run: |
-          image=../examples/blink-rust/target/sim/flash.bin
-          timeout 25 ./build/qemu-system-riscv32 \
+          timeout 25 tools/qemu/bin/qemu-system-riscv32 \
             -M esp32c3 -nographic \
-            -drive "file=$image,if=mtd,format=raw" \
+            -drive "file=examples/blink-rust/target/sim/flash.bin,if=mtd,format=raw" \
             -serial file:serial.log \
             -chardev file,id=pins,path=pins.log \
             -global driver=esp32.gpio,property=pins,value=pins \
             > qemu.out 2>&1 || true
-
           echo "─── the pin channel ───"
           head -20 pins.log 2>/dev/null || echo "(no pins.log at all)"
           echo "─── what the firmware said ───"
@@ -179,7 +385,6 @@ jobs:
       # Refuse to call this proven on a file that exists but is empty — the
       # exact shape of the release that shipped no installer.
       - name: The pin channel carried something
-        working-directory: qemu-src
         run: |
           if [ ! -s pins.log ]; then
             echo "::error::the GPIO chardev produced nothing. Either -global is"
@@ -191,14 +396,10 @@ jobs:
           echo "$lines pin reports from the emulator itself"
           [ "$lines" -gt 0 ]
 
-      # The check the two accounts exist for. A line arriving proves the
-      # channel works; it does not prove the *level* is right, and a model
-      # that reported a stuck 1 would pass everything above.
-      #
-      # blinky toggles GPIO0, so the emulator's own account must alternate,
-      # and it must agree with what the firmware printed about the same pin.
+      # A line arriving proves the channel works; it does not prove the
+      # *level* is right, and a model reporting a stuck 1 would pass
+      # everything above.
       - name: The emulator and the firmware agree about GPIO0
-        working-directory: qemu-src
         shell: python
         run: |
           import re, sys
@@ -226,9 +427,8 @@ jobs:
               """Fail with the evidence attached.
 
               An `::error::` becomes an annotation, which survives the run and
-              is readable without access to the logs. `sys.exit(msg)` writes to
-              stderr, which is neither — the first version of this step failed
-              with nothing but "exit code 1" to show for it.
+              is readable without admin rights on the repository. `sys.exit(msg)`
+              writes to stderr, which is neither.
               """
               print(f"::error::{why} | emulator={emulator[:12]} firmware={firmware[:12]}")
               sys.exit(1)
@@ -242,9 +442,6 @@ jobs:
           if any(a == b for a, b in zip(emulator, emulator[1:])):
               stop("the emulator's GPIO0 does not alternate")
 
-          # The firmware's own report is the second opinion. If it never
-          # arrived the comparison cannot be made, and saying so is better
-          # than passing on one source.
           if not firmware:
               stop("the firmware printed no GPIO report, so there is "
                    "nothing to check the emulator against")
@@ -255,9 +452,6 @@ jobs:
           # the firmware never announced. Demanding they agree on element zero
           # was the first version of this check, and it rejected a model that
           # was working — for being more truthful than the firmware.
-          #
-          # The real property: everything the firmware did announce appears in
-          # the emulator's account, in order, after a short lead.
           offset = None
           for lead in range(4):
               overlap = min(len(emulator) - lead, len(firmware), 8)
@@ -271,15 +465,9 @@ jobs:
           print(f"both accounts of GPIO0 agree, the emulator leading by {offset} "
                 "— the pin being configured, which the firmware never printed")
 
-      # Everything above proves the *output* half: the guest drove a pin and
-      # the model saw it. The input half — a host driving a level that
-      # unmodified firmware reads through GPIO_IN — has no witness in blinky,
-      # which never reads a pin. Claiming it works because the code is there
-      # is the same unproven claim this project keeps catching itself making.
-      #
-      # `qemu/gpio-probe` is the witness: it configures GPIO4 as an ordinary
-      # input and prints the level on change. It knows nothing about the
-      # simulator.
+      # Everything above proves the *output* half. The input half — a host
+      # driving a level that unmodified firmware reads through GPIO_IN — has
+      # no witness in blinky, which never reads a pin.
       - name: Build the input probe and make its image
         working-directory: qemu/gpio-probe
         run: |
@@ -292,12 +480,11 @@ jobs:
       # A socket chardev, not a file: this direction needs somebody able to
       # write, and `-chardev file` is one-way.
       - name: A host-driven pin reaches the firmware's is_high()
-        working-directory: qemu-src
         shell: python
         run: |
           import re, socket, subprocess, sys, time
 
-          IMAGE = "../qemu/gpio-probe/target/sim/flash.bin"
+          IMAGE = "qemu/gpio-probe/target/sim/flash.bin"
           SERIAL = "probe-serial.log"
           PORT = 5555
 
@@ -312,9 +499,8 @@ jobs:
 
               It prints on *change*, so this is the transition sequence — and
               comparing a sequence is what lets the second half of the test
-              fail distinctly. Waiting for the string "gpio4=0" a second time
-              would match the first occurrence and pass without the pin ever
-              having come back down.
+              fail distinctly. Waiting for "gpio4=0" a second time would match
+              the first occurrence and pass without the pin coming back down.
               """
               return [int(m) for m in re.findall(r"\[probe\] gpio4=([01])", read())]
 
@@ -334,7 +520,7 @@ jobs:
 
           qemu = subprocess.Popen(
               [
-                  "./build/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
                   "-drive", f"file={IMAGE},if=mtd,format=raw",
                   "-serial", f"file:{SERIAL}",
                   "-chardev",
@@ -375,304 +561,8 @@ jobs:
         with:
           name: pin-logs
           path: |
-            qemu-src/pins.log
-            qemu-src/serial.log
-            qemu-src/probe-serial.log
-            qemu-src/probe-qemu.out
+            pins.log
+            serial.log
+            probe-serial.log
+            probe-qemu.out
           if-no-files-found: warn
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qemu-linux-x86_64
-          path: |
-            qemu-src/build/qemu-system-riscv32
-            qemu-src/build/pc-bios/**
-          if-no-files-found: error
-
-  # Does the same thing build on the other two desktops?
-  #
-  # Only that. Shipping our own QEMU means committing to rebuilding it for
-  # three platforms on every upstream bump, and that is not a commitment worth
-  # discussing before knowing whether the build even works — so this job
-  # answers the one unknown and promises nothing.
-  #
-  # A separate job rather than a matrix over `build`, deliberately: `build` is
-  # green and every gate in it has been read. Turning it into a matrix would
-  # put the proven path at the mercy of three platforms' setup, and the first
-  # red run would be about a runner rather than about the model.
-  #
-  # The behavioural gates stay on Linux for the same reason. The model is one
-  # file of portable C; what differs here is glib, pixman and ninja, not
-  # `s->out |= word`. Booting firmware on three platforms would mostly test
-  # whether espflash and a TCP port behave the same everywhere, and a failure
-  # in *that* says nothing about whether QEMU compiles.
-  portability:
-    name: builds on ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            name: macOS
-            shell: bash
-          - os: windows-latest
-            name: Windows
-            # QEMU on Windows builds under MSYS2's mingw64 — the same route
-            # upstream documents, and the reason every step below has to run
-            # in that shell rather than in PowerShell.
-            shell: "msys2 {0}"
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # Before any `run` step: the shell default above applies to all of them,
-      # so on Windows there is no shell to run in until this has set one up.
-      - uses: msys2/setup-msys2@v2
-        if: runner.os == 'Windows'
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            base-devel git binutils
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-glib2
-            mingw-w64-x86_64-pixman
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-libslirp
-            mingw-w64-x86_64-python
-
-      - name: Build dependencies
-        if: runner.os == 'macOS'
-        run: brew install ninja pkg-config glib pixman libslirp
-
-      - name: Read the pinned QEMU release
-        id: pin
-        run: |
-          tag=$(grep 'QEMU_RELEASE: &str' crates/rusty-embed/src/simulate.rs | cut -d'"' -f2)
-          if [ -z "$tag" ]; then
-            echo "::error::could not read QEMU_RELEASE from simulate.rs"
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "building against $tag"
-
-      # `core.autocrlf=false` explicitly: Windows runners default it to true,
-      # which would rewrite every line ending in the clone and make the
-      # checksum below fail — indistinguishable, in the log, from Espressif
-      # having edited the file.
-      - name: Clone espressif/qemu
-        run: |
-          git -c core.autocrlf=false clone --depth 1 \
-            --branch "${{ steps.pin.outputs.tag }}" \
-            https://github.com/espressif/qemu.git qemu-src
-
-      # macOS has no `sha256sum` — only `shasum -a 256`, which takes the same
-      # `-c` file. Assuming the GNU name is how this check would have failed
-      # on the platform it was added to test.
-      - name: Verify the upstream files are the ones this was written against
-        working-directory: qemu-src
-        run: |
-          if command -v sha256sum >/dev/null 2>&1; then
-            check="sha256sum -c"
-          else
-            check="shasum -a 256 -c"
-          fi
-          if ! $check ../qemu/upstream.sha256; then
-            echo "::error::espressif/qemu's GPIO model has changed since qemu/*.c was written."
-            exit 1
-          fi
-
-      - name: Install the GPIO model
-        run: |
-          cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
-          cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
-
-      # Espressif's fork asks pkg-config for slirp with `static: true`, which
-      # upstream QEMU 9.2 does not:
-      #
-      #   slirp_dep = dependency('slirp', required: get_option('slirp'),
-      #                      method: 'pkg-config',
-      #                      static: true)
-      #
-      # On MSYS2 that resolves libslirp's Libs.private statically and drags in
-      # libglib-2.0.a, while QEMU links glib through libglib-2.0.dll.a — so
-      # every glib symbol is defined twice and the final link dies in 289
-      # lines of `multiple definition of g_*`. Two glibs in one binary is not
-      # something to paper over with --allow-multiple-definition either: it
-      # means two allocators and two main contexts.
-      #
-      # One keyword, appearing exactly once in 4896 lines, and the guards say
-      # so — if upstream ever writes it elsewhere or drops it, this stops
-      # rather than editing the wrong line or silently doing nothing. Same
-      # discipline as upstream.sha256, for the same reason.
-      - name: Link slirp the way this platform links everything else
-        if: runner.os == 'Windows'
-        working-directory: qemu-src
-        run: |
-          before=$(grep -c 'static: true' meson.build || true)
-          if [ "$before" != "1" ]; then
-            echo "::error::expected exactly one \`static: true\` in meson.build, found $before —"
-            echo "::error::the slirp dependency has moved; re-read it before trusting this edit."
-            exit 1
-          fi
-          sed -i 's/^\( *\)static: true)/\1static: false)/' meson.build
-          after=$(grep -c 'static: true' meson.build || true)
-          if [ "$after" != "0" ]; then
-            echo "::error::the substitution did not take — \`static: true\` is still there"
-            exit 1
-          fi
-          grep -n -B2 'static: false)' meson.build
-
-      # The same flags the Linux job uses, on purpose. Divergence here would
-      # muddle the answer: a build that needed different options would not be
-      # evidence that *this* build is portable.
-      #
-      # The output is folded into a single `::error::` on failure because a
-      # run's *logs* need admin rights even on a public repository, while
-      # annotations are readable by anyone. Without this the entire report of
-      # a failed configure is "Process completed with exit code 1" — which is
-      # what this step said the first time, costing a whole round trip to
-      # learn nothing. `%0A` is how an annotation carries newlines.
-      - name: Configure
-        working-directory: qemu-src
-        run: |
-          # meson validates --prefix before it reads anything else, and on
-          # Windows an absolute path needs a drive letter. QEMU's configure
-          # defaults the mingw prefix to `/qemu`, which meson 1.5 rejects at
-          # ../meson.build:1:0 — so the build dies on a path format having
-          # already found every dependency and written its options out.
-          #
-          # `cygpath -m` is what turns an MSYS path into the D:/… form meson
-          # wants. Nothing is ever installed from here — the binary is taken
-          # straight out of build/, as on the other two platforms — so this
-          # only has to satisfy the validation.
-          prefix=""
-          extra=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
-            # No -DLIBSLIRP_STATIC: the step above makes slirp resolve
-            # dynamically like every other library here, so libslirp's header
-            # should declare its symbols dllimport and match the import
-            # library. Defining the macro was right only while the fork was
-            # asking for a static slirp, and is wrong now.
-            #
-            # --disable-debug-info stays, but not for the reason it arrived.
-            # It was a guess at why ld exited 1 without a word, and it was
-            # wrong — the link was failing on duplicate glib. It does keep a
-            # very large PE within what mingw's ld handles comfortably, and
-            # the run where it went in is also the first where ld managed to
-            # print its 289 lines rather than dying mid-diagnosis. Nothing
-            # rusty would ship needs the debug info.
-            extra="--disable-debug-info"
-            echo "using $prefix $extra"
-          fi
-          # --disable-guest-agent: qemu-ga is a separate program that runs
-          # *inside* a guest OS, and nothing about it touches the emulator.
-          # On Windows it drags in the VSS provider, which needs Microsoft's
-          # Volume Shadow Copy SDK and cannot build without it — the riscv32
-          # target had compiled clean and the build still died, at
-          # qga/vss-win32/install.cpp, 1593 steps in.
-          if ! ./configure \
-            $prefix \
-            $extra \
-            --target-list=riscv32-softmmu \
-            --enable-slirp \
-            --disable-guest-agent \
-            --disable-docs \
-            --disable-sdl \
-            --disable-gtk \
-            --disable-vnc \
-            --disable-werror > configure.out 2>&1
-          then
-            detail=$(tail -50 configure.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            echo "::error::configure failed on ${{ matrix.name }}:%0A$detail"
-            if [ -f build/meson-logs/meson-log.txt ]; then
-              meson=$(tail -60 build/meson-logs/meson-log.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-              echo "::error::meson-log tail:%0A$meson"
-            fi
-            exit 1
-          fi
-          tail -25 configure.out
-          # What it decided about the options that differ per platform, in a
-          # channel readable without admin rights — a run's logs are 403 for
-          # anyone without admin, so anything not annotated is invisible.
-          decided=$(grep -inE 'slirp|guest.agent' configure.out | head -12 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-          echo "::notice::${{ matrix.name }} configure said about slirp/guest-agent:%0A${decided:-nothing at all}"
-
-      - name: Build
-        working-directory: qemu-src
-        run: |
-          if ! ninja -C build > build.out 2>&1; then
-            # The failed block: FAILED: up to the next ninja progress line,
-            # which is where the failing command's own output ends.
-            block=$(awk '/^FAILED:/{seen=1} seen && /^\[[0-9]+\/[0-9]+\]/{exit} seen' build.out)
-            kept=$(printf '%s\n' "$block" | grep -vE '^"')
-
-            # Say what was thrown away. Every previous version of this step
-            # reported only what survived its filter, so a filter that was
-            # eating the diagnosis looked exactly like a toolchain that had
-            # not produced one — and those need different fixes. Counting
-            # first means the next failure says which of the two it is.
-            echo "::error::the build failed on ${{ matrix.name }}: failed block \
-            $(printf '%s\n' "$block" | wc -l) lines, \
-            $(printf '%s\n' "$kept" | wc -l) after dropping echoed commands"
-
-            # In chunks, because one annotation is capped at 4096 characters
-            # and the whole block is worth having. They come back in order
-            # from the annotations API, which is the only channel that does
-            # not need admin rights on the repository.
-            # `END{printf "\n"}` is load-bearing: without a trailing newline
-            # `read` drops the final chunk, and since the folded output is
-            # usually one chunk that meant the whole report vanished. Caught
-            # locally against a synthetic ninja failure rather than by
-            # another twenty-minute run coming back empty.
-            # `awk NR<=80`, not `head -80`: head closes the pipe and the
-            # printf feeding it dies of SIGPIPE, which surfaced as the step
-            # exiting 141 instead of 1 — a failing build reporting a signal
-            # number that has nothing to do with the build.
-            printf '%s\n' "$kept" | awk 'NR<=80' | sed 's/%/%25/g' \
-              | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
-              | while IFS= read -r chunk; do
-                  echo "::error::…$chunk"
-                done
-            exit 1
-          fi
-          tail -5 build.out
-
-      - name: Prove the built binary carries this model
-        working-directory: qemu-src
-        run: |
-          # `if`, not `[ -f … ] && …`: GitHub runs these with `bash -e`, so a
-          # bare test that comes back false *ends the step*. macOS has no
-          # `.exe`, so the first version of this line failed a step that was
-          # only ever meant to look at a filename — and reported it as the
-          # model being missing from a binary that had built perfectly.
-          bin=build/qemu-system-riscv32
-          if [ -f "$bin.exe" ]; then
-            bin="$bin.exe"
-          fi
-          # `grep -a`, not `strings`. macOS's strings reads only the text
-          # section by default and the literal lives in __cstring, so the
-          # first version of this reported the model missing from a binary
-          # that had configured and compiled without a single error — a check
-          # failing for a reason that had nothing to do with what it checks.
-          if LC_ALL=C grep -aq '\[rusty:gpio@' "$bin"; then
-            echo "the GPIO model is compiled into $bin"
-          else
-            # Say enough to tell a real absence from another tooling quirk.
-            echo "::error::built QEMU does not contain the replacement model.%0Abinary=$bin%0Asize=$(wc -c < "$bin")%0Astrings -a hits: $(strings -a "$bin" 2>/dev/null | grep -c 'rusty:gpio' || echo 0)"
-            exit 1
-          fi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qemu-${{ matrix.os }}
-          path: |
-            qemu-src/build/qemu-system-riscv32
-            qemu-src/build/qemu-system-riscv32.exe
-            qemu-src/build/pc-bios/**
-          if-no-files-found: error

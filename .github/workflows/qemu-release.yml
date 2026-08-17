@@ -1,0 +1,84 @@
+# Publish rusty's QEMU builds. Push a `qemu-v*` tag and this runs.
+#
+# It does not build anything itself — it calls `qemu.yml`, which builds every
+# desktop and boots real firmware through the packaged Linux artifact. Only if
+# that passes does `publish` attach the packages to a Release.
+#
+# A separate file rather than a tag filter inside qemu.yml because `on.push`
+# applies `paths` and `tags` together: a release tag on a commit that happens
+# not to touch `qemu/` would match the tag, fail the path filter, and never
+# build — a release that silently does nothing.
+#
+# The Release these produce is what `qemu_download` reads. Espressif's own
+# build stays the fallback, so a failure to publish degrades to the emulator
+# rusty has always used rather than to no emulator at all.
+
+name: qemu-release
+
+on:
+  push:
+    tags: ["qemu-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # Every gate qemu.yml has: upstream checksums, both target lists, the model
+  # provably in each binary, and the packaged Linux build booting blinky and
+  # the input probe.
+  build:
+    uses: ./.github/workflows/qemu.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      # The called workflow's artifacts belong to this same run, so they are
+      # here without rebuilding anything.
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          pattern: qemu-*
+          merge-multiple: true
+
+      - name: What is being published
+        run: |
+          ls -la assets
+          # Four packages, or the release is missing a desktop and nobody
+          # finds out until somebody on it clicks install. This is the shape
+          # of the release that shipped only the Windows installer while
+          # every job went green.
+          count=$(ls assets/*.tar.xz 2>/dev/null | wc -l)
+          echo "$count packages"
+          if [ "$count" -ne 4 ]; then
+            echo "::error::expected four packages (linux, two macOS, windows), found $count"
+            exit 1
+          fi
+          (cd assets && sha256sum *.tar.xz | tee SHA256SUMS)
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: false
+          body: |
+            Espressif's QEMU with rusty's GPIO device model, for every desktop
+            rusty ships on.
+
+            The stock emulator's GPIO peripheral is a stub — its write handler
+            is an empty function — so a pin has no state in either direction,
+            and the board view can only show what the firmware *says* it set.
+            These builds keep the output, enable and input registers, report
+            pin changes on a chardev of their own, and accept host-driven
+            levels back. A LED lights because a pin went high, and a button is
+            read through the register the firmware actually reads.
+
+            Both emulators are included: `qemu-system-riscv32` for the C3 and
+            C6, `qemu-system-xtensa` for the ESP32 and S3.
+
+            rusty downloads the right package for your platform on its own —
+            there is nothing to install by hand. Espressif's own build remains
+            the fallback and everything works as before on it, minus the real
+            pin state.
+
+            Source, and the gates each build passes, are in `qemu/` in this
+            repository. QEMU is GPL-2.0 and so are these binaries.

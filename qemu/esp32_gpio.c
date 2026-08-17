@@ -38,10 +38,31 @@
 /* What a pin reads as: an output reports the level the guest drove, an input
  * the level the host is driving. Reporting `out` for an input would be
  * reporting a number nothing can observe. */
-static inline int esp32_gpio_level(Esp32GpioState *s, uint32_t bit)
+static inline int esp32_gpio_level(Esp32GpioState *s, uint64_t bit)
 {
-    uint32_t source = (s->enable & bit) ? s->out : s->in;
+    uint64_t source = (s->enable & bit) ? s->out : s->in;
     return (source & bit) ? 1 : 0;
+}
+
+/* Fold a 32-bit register write into one half of a 64-bit field.
+ *
+ * `bank` is 0 for pins 0..31 and 1 for 32..39. Doing it here rather than at
+ * each case is what keeps the twelve registers from becoming twelve chances
+ * to shift by the wrong amount. */
+static inline uint64_t esp32_gpio_half(uint64_t whole, unsigned bank,
+                                       uint32_t word, int op)
+{
+    uint64_t mask = 0xffffffffULL << (bank * 32);
+    uint64_t bits = (uint64_t)word << (bank * 32);
+
+    switch (op) {
+    case 0:  /* assign */
+        return (whole & ~mask) | bits;
+    case 1:  /* set */
+        return whole | bits;
+    default: /* clear */
+        return whole & ~bits;
+    }
 }
 
 /*
@@ -53,9 +74,12 @@ static inline int esp32_gpio_level(Esp32GpioState *s, uint32_t bit)
  * host reading pins from the emulator and a firmware printing them itself
  * produce the same text and can be checked against each other.
  */
-static void esp32_gpio_report(Esp32GpioState *s, uint32_t changed)
+static void esp32_gpio_report(Esp32GpioState *s, uint64_t changed)
 {
-    char line[160];
+    /* Forty pins at up to "39=1," each, plus the timestamped prefix. Sized so
+     * a report of every pin at once still fits rather than tripping the
+     * truncation guard below. */
+    char line[384];
     int at;
     bool first = true;
 
@@ -66,8 +90,8 @@ static void esp32_gpio_report(Esp32GpioState *s, uint32_t changed)
     at = snprintf(line, sizeof(line), "[rusty:gpio@%" PRId64 "] ",
                   qemu_clock_get_us(QEMU_CLOCK_VIRTUAL));
 
-    for (int pin = 0; pin < 32; pin++) {
-        uint32_t bit = 1u << pin;
+    for (int pin = 0; pin < ESP32_GPIO_PINS; pin++) {
+        uint64_t bit = 1ULL << pin;
 
         if ((changed & bit) == 0) {
             continue;
@@ -100,9 +124,10 @@ static void esp32_gpio_host_read(void *opaque, const uint8_t *buf, int size)
             unsigned pin, level;
 
             s->host_line[s->host_at] = '\0';
-            if (sscanf(s->host_line, "%u=%u", &pin, &level) == 2 && pin < 32) {
-                uint32_t bit = 1u << pin;
-                uint32_t before = s->in;
+            if (sscanf(s->host_line, "%u=%u", &pin, &level) == 2
+                && pin < ESP32_GPIO_PINS) {
+                uint64_t bit = 1ULL << pin;
+                uint64_t before = s->in;
 
                 s->in = level ? (s->in | bit) : (s->in & ~bit);
                 /* Only a real change is reported, so a host holding a button
@@ -135,18 +160,30 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
         break;
 
     case A_GPIO_OUT:
-        r = s->out;
+        r = (uint32_t)s->out;
+        break;
+
+    case A_GPIO_OUT1:
+        r = (uint32_t)(s->out >> 32);
         break;
 
     case A_GPIO_ENABLE:
-        r = s->enable;
+        r = (uint32_t)s->enable;
+        break;
+
+    case A_GPIO_ENABLE1:
+        r = (uint32_t)(s->enable >> 32);
         break;
 
     /* An output pin reads back its own driven level, which is what the
      * silicon does and what firmware toggling a pin by read-modify-write
      * depends on. */
     case A_GPIO_IN:
-        r = (s->in & ~s->enable) | (s->out & s->enable);
+        r = (uint32_t)((s->in & ~s->enable) | (s->out & s->enable));
+        break;
+
+    case A_GPIO_IN1:
+        r = (uint32_t)(((s->in & ~s->enable) | (s->out & s->enable)) >> 32);
         break;
 
     default:
@@ -159,36 +196,61 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
     Esp32GpioState *s = ESP32_GPIO(opaque);
-    uint32_t before_out = s->out;
-    uint32_t before_enable = s->enable;
+    uint64_t before_out = s->out;
+    uint64_t before_enable = s->enable;
     uint32_t word = (uint32_t)value;
 
     switch (addr) {
     case A_GPIO_OUT:
-        s->out = word;
+        s->out = esp32_gpio_half(s->out, 0, word, 0);
         break;
 
     /* The set and clear aliases. esp-hal drives a pin through these rather
      * than through OUT, so a model handling only OUT would see nothing at
      * all from ordinary firmware. */
     case A_GPIO_OUT_W1TS:
-        s->out |= word;
+        s->out = esp32_gpio_half(s->out, 0, word, 1);
         break;
 
     case A_GPIO_OUT_W1TC:
-        s->out &= ~word;
+        s->out = esp32_gpio_half(s->out, 0, word, 2);
         break;
 
     case A_GPIO_ENABLE:
-        s->enable = word;
+        s->enable = esp32_gpio_half(s->enable, 0, word, 0);
         break;
 
     case A_GPIO_ENABLE_W1TS:
-        s->enable |= word;
+        s->enable = esp32_gpio_half(s->enable, 0, word, 1);
         break;
 
     case A_GPIO_ENABLE_W1TC:
-        s->enable &= ~word;
+        s->enable = esp32_gpio_half(s->enable, 0, word, 2);
+        break;
+
+    /* The same six for GPIO32..39, which only the original ESP32 has. */
+    case A_GPIO_OUT1:
+        s->out = esp32_gpio_half(s->out, 1, word, 0);
+        break;
+
+    case A_GPIO_OUT1_W1TS:
+        s->out = esp32_gpio_half(s->out, 1, word, 1);
+        break;
+
+    case A_GPIO_OUT1_W1TC:
+        s->out = esp32_gpio_half(s->out, 1, word, 2);
+        break;
+
+    case A_GPIO_ENABLE1:
+        s->enable = esp32_gpio_half(s->enable, 1, word, 0);
+        break;
+
+    case A_GPIO_ENABLE1_W1TS:
+        s->enable = esp32_gpio_half(s->enable, 1, word, 1);
+        break;
+
+    case A_GPIO_ENABLE1_W1TC:
+        s->enable = esp32_gpio_half(s->enable, 1, word, 2);
         break;
 
     default:
