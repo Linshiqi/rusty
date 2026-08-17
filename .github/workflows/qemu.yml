@@ -491,6 +491,42 @@ jobs:
           cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
           cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
 
+      # Espressif's fork asks pkg-config for slirp with `static: true`, which
+      # upstream QEMU 9.2 does not:
+      #
+      #   slirp_dep = dependency('slirp', required: get_option('slirp'),
+      #                      method: 'pkg-config',
+      #                      static: true)
+      #
+      # On MSYS2 that resolves libslirp's Libs.private statically and drags in
+      # libglib-2.0.a, while QEMU links glib through libglib-2.0.dll.a — so
+      # every glib symbol is defined twice and the final link dies in 289
+      # lines of `multiple definition of g_*`. Two glibs in one binary is not
+      # something to paper over with --allow-multiple-definition either: it
+      # means two allocators and two main contexts.
+      #
+      # One keyword, appearing exactly once in 4896 lines, and the guards say
+      # so — if upstream ever writes it elsewhere or drops it, this stops
+      # rather than editing the wrong line or silently doing nothing. Same
+      # discipline as upstream.sha256, for the same reason.
+      - name: Link slirp the way this platform links everything else
+        if: runner.os == 'Windows'
+        working-directory: qemu-src
+        run: |
+          before=$(grep -c 'static: true' meson.build || true)
+          if [ "$before" != "1" ]; then
+            echo "::error::expected exactly one \`static: true\` in meson.build, found $before —"
+            echo "::error::the slirp dependency has moved; re-read it before trusting this edit."
+            exit 1
+          fi
+          sed -i 's/^\( *\)static: true)/\1static: false)/' meson.build
+          after=$(grep -c 'static: true' meson.build || true)
+          if [ "$after" != "0" ]; then
+            echo "::error::the substitution did not take — \`static: true\` is still there"
+            exit 1
+          fi
+          grep -n -B2 'static: false)' meson.build
+
       # The same flags the Linux job uses, on purpose. Divergence here would
       # muddle the answer: a build that needed different options would not be
       # evidence that *this* build is portable.
@@ -518,27 +554,20 @@ jobs:
           extra=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
-            # -DLIBSLIRP_STATIC, read out of the pinned tag's own meson.build:
+            # No -DLIBSLIRP_STATIC: the step above makes slirp resolve
+            # dynamically like every other library here, so libslirp's header
+            # should declare its symbols dllimport and match the import
+            # library. Defining the macro was right only while the fork was
+            # asking for a static slirp, and is wrong now.
             #
-            #   slirp_dep = dependency('slirp', …, static: true)
-            #   if host_os == 'windows' and get_option('prefer_static')
-            #     slirp_cflags += ['-DLIBSLIRP_STATIC']
-            #
-            # It asks pkg-config for the *static* library unconditionally but
-            # only defines the macro that makes libslirp's header agree when
-            # prefer_static is set. Without it the header declares every
-            # symbol dllimport, and the link ends in undefined `__imp_slirp_*`
-            # — which is exactly what happened, 1817 steps in.
-            #
-            # --disable-debug-info is a hypothesis, not a known fix, and it
-            # is here because each round costs half an hour: ld died with
-            # `collect2.exe: error: ld returned 1 exit status` and no message
-            # of its own, which on mingw is what linking a very large PE with
-            # full debug info looks like. CFLAGS carried `-g -O2` and this
-            # binary is enormous. If it is wrong, the reporting above now
-            # says so in words instead of leaving another silent exit status.
-            # Nothing we would ship needs the debug info.
-            extra="--extra-cflags=-DLIBSLIRP_STATIC --disable-debug-info"
+            # --disable-debug-info stays, but not for the reason it arrived.
+            # It was a guess at why ld exited 1 without a word, and it was
+            # wrong — the link was failing on duplicate glib. It does keep a
+            # very large PE within what mingw's ld handles comfortably, and
+            # the run where it went in is also the first where ld managed to
+            # print its 289 lines rather than dying mid-diagnosis. Nothing
+            # rusty would ship needs the debug info.
+            extra="--disable-debug-info"
             echo "using $prefix $extra"
           fi
           # --disable-guest-agent: qemu-ga is a separate program that runs
@@ -601,7 +630,11 @@ jobs:
             # usually one chunk that meant the whole report vanished. Caught
             # locally against a synthetic ninja failure rather than by
             # another twenty-minute run coming back empty.
-            printf '%s\n' "$kept" | head -80 | sed 's/%/%25/g' \
+            # `awk NR<=80`, not `head -80`: head closes the pipe and the
+            # printf feeding it dies of SIGPIPE, which surfaced as the step
+            # exiting 141 instead of 1 — a failing build reporting a signal
+            # number that has nothing to do with the build.
+            printf '%s\n' "$kept" | awk 'NR<=80' | sed 's/%/%25/g' \
               | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
               | while IFS= read -r chunk; do
                   echo "::error::…$chunk"
