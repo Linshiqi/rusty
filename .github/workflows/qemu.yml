@@ -569,16 +569,22 @@ jobs:
         working-directory: qemu-src
         run: |
           if ! ninja -C build > build.out 2>&1; then
-            # From the first FAILED: line, keeping only diagnostics. A plain
-            # tail spends the whole annotation on successful ninja progress,
-            # and the compiler's actual complaint falls off the end — an
-            # annotation is capped at 4096 characters, and the command line
-            # ninja echoes is longer than that on its own. Twice now the
-            # report has arrived with everything except the error in it.
+            # From the first FAILED: line onward. An annotation is capped at
+            # 4096 characters and the command line ninja echoes is longer
+            # than that by itself, so the filtering is about *budget*, not
+            # about recognising errors.
+            #
+            # Which is why it drops by shape — echoed commands start with a
+            # quote and are enormous — rather than by matching known error
+            # text. A previous version listed the wordings it knew
+            # (`error:`, `undefined reference`, `No such file`) and threw
+            # away everything else, so a link failure reported as
+            # `ld.exe: cannot find -lslirp` arrived as nothing but FAILED:
+            # and collect2's exit status. A filter that only recognises the
+            # errors you have already seen hides the one you have not.
             detail=$(awk '/^FAILED:/{seen=1} seen' build.out \
-              | grep -vE '^"' \
-              | grep -E 'FAILED:|error:|Error|undefined reference|No such file|fatal' \
-              | head -25 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              | awk 'length($0) < 300 && $0 !~ /^"/' \
+              | head -30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             if [ -z "$detail" ]; then
               detail=$(tail -25 build.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             fi
