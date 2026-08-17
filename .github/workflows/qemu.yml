@@ -569,26 +569,34 @@ jobs:
         working-directory: qemu-src
         run: |
           if ! ninja -C build > build.out 2>&1; then
-            # From the first FAILED: line onward. An annotation is capped at
-            # 4096 characters and the command line ninja echoes is longer
-            # than that by itself, so the filtering is about *budget*, not
-            # about recognising errors.
-            #
-            # Which is why it drops by shape — echoed commands start with a
-            # quote and are enormous — rather than by matching known error
-            # text. A previous version listed the wordings it knew
-            # (`error:`, `undefined reference`, `No such file`) and threw
-            # away everything else, so a link failure reported as
-            # `ld.exe: cannot find -lslirp` arrived as nothing but FAILED:
-            # and collect2's exit status. A filter that only recognises the
-            # errors you have already seen hides the one you have not.
-            detail=$(awk '/^FAILED:/{seen=1} seen' build.out \
-              | awk 'length($0) < 300 && $0 !~ /^"/' \
-              | head -30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            if [ -z "$detail" ]; then
-              detail=$(tail -25 build.out | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            fi
-            echo "::error::the build failed on ${{ matrix.name }}:%0A$detail"
+            # The failed block: FAILED: up to the next ninja progress line,
+            # which is where the failing command's own output ends.
+            block=$(awk '/^FAILED:/{seen=1} seen && /^\[[0-9]+\/[0-9]+\]/{exit} seen' build.out)
+            kept=$(printf '%s\n' "$block" | grep -vE '^"')
+
+            # Say what was thrown away. Every previous version of this step
+            # reported only what survived its filter, so a filter that was
+            # eating the diagnosis looked exactly like a toolchain that had
+            # not produced one — and those need different fixes. Counting
+            # first means the next failure says which of the two it is.
+            echo "::error::the build failed on ${{ matrix.name }}: failed block \
+            $(printf '%s\n' "$block" | wc -l) lines, \
+            $(printf '%s\n' "$kept" | wc -l) after dropping echoed commands"
+
+            # In chunks, because one annotation is capped at 4096 characters
+            # and the whole block is worth having. They come back in order
+            # from the annotations API, which is the only channel that does
+            # not need admin rights on the repository.
+            # `END{printf "\n"}` is load-bearing: without a trailing newline
+            # `read` drops the final chunk, and since the folded output is
+            # usually one chunk that meant the whole report vanished. Caught
+            # locally against a synthetic ninja failure rather than by
+            # another twenty-minute run coming back empty.
+            printf '%s\n' "$kept" | head -80 | sed 's/%/%25/g' \
+              | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+              | while IFS= read -r chunk; do
+                  echo "::error::…$chunk"
+                done
             exit 1
           fi
           tail -5 build.out
