@@ -529,7 +529,16 @@ jobs:
             # prefer_static is set. Without it the header declares every
             # symbol dllimport, and the link ends in undefined `__imp_slirp_*`
             # — which is exactly what happened, 1817 steps in.
-            extra="--extra-cflags=-DLIBSLIRP_STATIC"
+            #
+            # --disable-debug-info is a hypothesis, not a known fix, and it
+            # is here because each round costs half an hour: ld died with
+            # `collect2.exe: error: ld returned 1 exit status` and no message
+            # of its own, which on mingw is what linking a very large PE with
+            # full debug info looks like. CFLAGS carried `-g -O2` and this
+            # binary is enormous. If it is wrong, the reporting above now
+            # says so in words instead of leaving another silent exit status.
+            # Nothing we would ship needs the debug info.
+            extra="--extra-cflags=-DLIBSLIRP_STATIC --disable-debug-info"
             echo "using $prefix $extra"
           fi
           # --disable-guest-agent: qemu-ga is a separate program that runs
