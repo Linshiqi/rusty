@@ -515,19 +515,22 @@ jobs:
           # straight out of build/, as on the other two platforms — so this
           # only has to satisfy the validation.
           prefix=""
-          # Slirp is user-mode networking for the guest. rusty's simulation
-          # never uses it — everything travels on the serial line and the pin
-          # chardev — so it is the one flag worth dropping rather than
-          # fighting for. MSYS2's libslirp headers declare their symbols
-          # dllimport while QEMU links the static library, and every one of
-          # them comes back as an undefined `__imp_slirp_*` at link time,
-          # 1817 steps in. Kept everywhere else, so the answer for Linux and
-          # macOS stays an answer about the same build.
-          net="--enable-slirp"
+          extra=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             prefix="--prefix=$(cygpath -m "$PWD")/qemu-install"
-            net="--disable-slirp"
-            echo "using $prefix and $net"
+            # -DLIBSLIRP_STATIC, read out of the pinned tag's own meson.build:
+            #
+            #   slirp_dep = dependency('slirp', …, static: true)
+            #   if host_os == 'windows' and get_option('prefer_static')
+            #     slirp_cflags += ['-DLIBSLIRP_STATIC']
+            #
+            # It asks pkg-config for the *static* library unconditionally but
+            # only defines the macro that makes libslirp's header agree when
+            # prefer_static is set. Without it the header declares every
+            # symbol dllimport, and the link ends in undefined `__imp_slirp_*`
+            # — which is exactly what happened, 1817 steps in.
+            extra="--extra-cflags=-DLIBSLIRP_STATIC"
+            echo "using $prefix $extra"
           fi
           # --disable-guest-agent: qemu-ga is a separate program that runs
           # *inside* a guest OS, and nothing about it touches the emulator.
@@ -537,8 +540,9 @@ jobs:
           # qga/vss-win32/install.cpp, 1593 steps in.
           if ! ./configure \
             $prefix \
+            $extra \
             --target-list=riscv32-softmmu \
-            $net \
+            --enable-slirp \
             --disable-guest-agent \
             --disable-docs \
             --disable-sdl \
@@ -555,10 +559,9 @@ jobs:
             exit 1
           fi
           tail -25 configure.out
-          # What it decided about the two options that differ per platform,
-          # in a channel readable without admin rights. `--disable-slirp` was
-          # passed and net/slirp.c was compiled anyway; guessing why costs a
-          # round trip each time, and this makes the next one informed.
+          # What it decided about the options that differ per platform, in a
+          # channel readable without admin rights — a run's logs are 403 for
+          # anyone without admin, so anything not annotated is invisible.
           decided=$(grep -inE 'slirp|guest.agent' configure.out | head -12 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice::${{ matrix.name }} configure said about slirp/guest-agent:%0A${decided:-nothing at all}"
 
