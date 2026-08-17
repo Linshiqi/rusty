@@ -88,6 +88,45 @@ firmware never announced — the model was rejected for being more truthful
 than the firmware, which is the entire reason it exists. The check now aligns
 the two and reports the lead.
 
+## Does it build for the other two desktops?
+
+Yes — Linux, macOS (arm64) and Windows all produce a `qemu-system-riscv32`
+with this model in it. That was the open question before any decision about
+shipping one, and it is answered: `.github/workflows/qemu.yml`'s `portability`
+job builds on all three and proves each binary carries the model.
+
+macOS needed nothing. Windows needed four things, none of them in the
+emulator — its own source compiled clean on the first attempt that reached it:
+
+- **A prefix with a drive letter.** QEMU's configure defaults the mingw prefix
+  to `/qemu` and meson 1.5 will not call that absolute, so it stops at
+  `../meson.build:1:0` before reading anything else. Nothing is installed from
+  here, so this only has to satisfy the validation.
+- **`--disable-guest-agent`.** qemu-ga's VSS provider needs Microsoft's Volume
+  Shadow Copy SDK. It is a program that runs inside a guest OS and has nothing
+  to do with the emulator.
+- **`static: false` on the slirp dependency.** Espressif's fork writes
+  `dependency('slirp', …, static: true)` where upstream 9.2 does not. On MSYS2
+  that resolves libslirp's `Libs.private` statically and pulls in
+  `libglib-2.0.a` while QEMU links glib as a DLL, so the final link dies in
+  289 lines of `multiple definition of g_*`. Not something to silence with
+  `--allow-multiple-definition`: two glibs in one binary is two allocators and
+  two main contexts.
+- **`--disable-debug-info`**, to keep a very large PE within what mingw's ld
+  handles. Nothing shipped needs it.
+
+That one `static: true` produced three different failures before it was
+found — undefined `__imp_slirp_*` at link time, then `--disable-slirp` having
+no effect at all, then duplicate glib. The middle one is worth knowing about
+on its own: the fork wraps the dependency in `declare_dependency`, which
+always returns a *found* object, so with slirp disabled `net/slirp.c` is still
+added to the build while its include path is gone. configure's own summary
+says `slirp: disabled` and `slirp support: YES` on the same page.
+
+The behavioural gates stay on Linux. What differs across these platforms is
+glib, pixman and ninja, not `s->out |= word`, and booting firmware three times
+would mostly test whether espflash and a TCP port behave the same everywhere.
+
 ## Licence
 
 QEMU is GPL-2.0. These files are derivatives of it and carry the same terms,
