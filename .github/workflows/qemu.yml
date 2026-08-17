@@ -79,6 +79,7 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-libslirp
+            mingw-w64-x86_64-libgcrypt
             mingw-w64-x86_64-python
 
       - name: Build dependencies
@@ -86,7 +87,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev \
-            libslirp-dev python3-venv flex bison
+            libslirp-dev libgcrypt20-dev python3-venv flex bison
 
       # dylibbundler: a macOS build links Homebrew's glib and pixman by
       # absolute path, so without this the tarball only runs on a machine
@@ -94,7 +95,7 @@ jobs:
       # rewrites the install names to point at the copy.
       - name: Build dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja pkg-config glib pixman libslirp dylibbundler
+        run: brew install ninja pkg-config glib pixman libslirp libgcrypt dylibbundler
 
       # The tag rusty pins, read from the source rather than repeated here —
       # two copies of a version is one that goes stale.
@@ -152,6 +153,14 @@ jobs:
       # original ESP32 and the S3, which is the part most people own — a
       # package with only one of them would leave half the catalogue on the
       # stock emulator with no sign of why.
+      #
+      # Adding xtensa is what pulled libgcrypt into the dependency lists
+      # above. `hw/misc/esp32_flash_enc.c` models that part's flash encryption
+      # and includes <gcrypt.h>, so a riscv32-only build never compiled it.
+      # Ubuntu's runner image happens to ship the headers and the other two do
+      # not — the same trap this project already recorded once: a dependency
+      # that comes from whatever the image includes is a dependency nobody
+      # chose. Named on every platform now.
       - name: Configure
         working-directory: qemu-src
         run: |
