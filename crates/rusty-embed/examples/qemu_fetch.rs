@@ -10,13 +10,13 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "qemu-system-riscv32".to_string());
 
-    let plan = rusty_embed::simulate::qemu_download(&name).expect("plan");
+    let plan = rusty_embed::install::qemu_download(&name).expect("plan");
     println!("archive: {}", plan.archive.display());
     for url in &plan.urls {
         println!("candidate: {url}");
     }
 
-    rusty_embed::simulate::download(&plan.urls, &plan.archive, |line| println!("{line}"))
+    rusty_embed::install::download(&plan.urls, &plan.archive, |line| println!("{line}"))
         .expect("download");
 
     println!("$ {}", plan.extract.display);
@@ -42,7 +42,13 @@ fn main() {
         .arg("--version")
         .output()
         .expect("run qemu --version");
-    println!("{}", String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or(""));
+    println!(
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+    );
     assert!(out.status.success());
     println!("installer proven: {}", binary.display());
 }

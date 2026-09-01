@@ -48,7 +48,10 @@ pub fn parse(xml: &str) -> RegisterMap {
                 text.clear();
             }
             Ok(Event::Text(bytes)) => {
-                text = bytes.decode().map(|t| t.trim().to_string()).unwrap_or_default();
+                text = bytes
+                    .decode()
+                    .map(|t| t.trim().to_string())
+                    .unwrap_or_default();
             }
             Ok(Event::End(element)) => {
                 let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
@@ -135,13 +138,11 @@ pub fn parse(xml: &str) -> RegisterMap {
                             r.fields.push(f);
                         }
                     }
-                    ("registers", "register") => {
-                        match (&mut peripheral, register.take()) {
-                            (Some(p), Some(r)) if !r.name.is_empty() => p.registers.push(r),
-                            (_, Some(_)) => map.dropped += 1,
-                            _ => {}
-                        }
-                    }
+                    ("registers", "register") => match (&mut peripheral, register.take()) {
+                        (Some(p), Some(r)) if !r.name.is_empty() => p.registers.push(r),
+                        (_, Some(_)) => map.dropped += 1,
+                        _ => {}
+                    },
                     ("peripherals", "peripheral") => match peripheral.take() {
                         // A peripheral with no registers is `derivedFrom`
                         // another — inheritance this deliberately does not
@@ -196,10 +197,10 @@ pub fn source(chip: &str) -> Option<(String, std::path::PathBuf)> {
     if !known.contains(&chip) {
         return None;
     }
-    let url = format!(
-        "https://raw.githubusercontent.com/espressif/svd/main/svd/{chip}.svd",
-    );
-    let dest = crate::config::data_dir()?.join("svd").join(format!("{chip}.svd"));
+    let url = format!("https://raw.githubusercontent.com/espressif/svd/main/svd/{chip}.svd",);
+    let dest = crate::config::data_dir()?
+        .join("svd")
+        .join(format!("{chip}.svd"));
     Some((url, dest))
 }
 
@@ -208,13 +209,15 @@ pub fn source(chip: &str) -> Option<(String, std::path::PathBuf)> {
 pub fn fetch(chip: &str, progress: impl FnMut(String)) -> Result<std::path::PathBuf, String> {
     let (url, dest) = source(chip).ok_or_else(|| {
         format!(
-            "rusty has no SVD source for {chip}. Put one at              <project>/.rusty/svd/{chip}.svd and it will be used.",
+            "rusty has no SVD source for {chip}. Put one at \
+             <project>/.rusty/svd/{chip}.svd and it will be used.",
         )
     })?;
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
-    crate::simulate::download(&[url], &dest, progress)?;
+    crate::install::download(&[url], &dest, progress)?;
     Ok(dest)
 }
 
@@ -292,7 +295,10 @@ mod tests {
     fn a_peripheral_carries_its_registers_and_their_fields() {
         let map = parse(SAMPLE);
         assert_eq!(map.peripherals.len(), 1, "the derived one is not invented");
-        assert_eq!(map.dropped, 1, "and it is counted rather than silently gone");
+        assert_eq!(
+            map.dropped, 1,
+            "and it is counted rather than silently gone"
+        );
 
         let gpio = &map.peripherals[0];
         assert_eq!(gpio.name, "GPIO");
@@ -322,7 +328,10 @@ mod tests {
             !w1ts.readable,
             "reading a write-only register can wedge the peripheral it belongs to",
         );
-        assert_eq!(w1ts.fields[0].width, 32, "bitOffset/bitWidth is the other spelling");
+        assert_eq!(
+            w1ts.fields[0].width, 32,
+            "bitOffset/bitWidth is the other spelling"
+        );
     }
 
     #[test]

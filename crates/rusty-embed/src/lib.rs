@@ -34,9 +34,13 @@ pub mod firmware;
 #[cfg(feature = "backend")]
 pub mod flash;
 #[cfg(feature = "backend")]
+pub mod install;
+#[cfg(feature = "backend")]
 pub mod memory;
 #[cfg(feature = "backend")]
 pub mod migrate;
+#[cfg(feature = "backend")]
+pub mod net;
 #[cfg(feature = "backend")]
 pub mod pins;
 #[cfg(feature = "backend")]
@@ -53,6 +57,8 @@ pub mod simulate;
 pub mod svd;
 #[cfg(feature = "backend")]
 pub mod toolchain;
+#[cfg(feature = "backend")]
+pub mod tools;
 #[cfg(feature = "backend")]
 pub mod update;
 #[cfg(feature = "backend")]

@@ -46,7 +46,7 @@ pub fn check() -> UpdateStatus {
 /// `(version, release page)` from the releases API.
 fn fetch_latest() -> Result<(String, String), String> {
     let mut last = "no route to github".to_string();
-    for route in crate::simulate::proxy_routes() {
+    for route in crate::net::proxy_routes() {
         let mut builder = ureq::Agent::config_builder()
             .timeout_connect(Some(std::time::Duration::from_secs(10)))
             .timeout_global(Some(std::time::Duration::from_secs(30)));

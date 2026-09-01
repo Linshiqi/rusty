@@ -27,8 +27,7 @@ pub const REPO_RELEASES: &str = "https://github.com/Linshiqi/rusty/releases";
 pub const REPO_ISSUES: &str = "https://github.com/Linshiqi/rusty/issues/new/choose";
 
 /// The releases API for [`REPO`]. Anonymous calls work because it is public.
-pub const RELEASES_API: &str =
-    "https://api.github.com/repos/Linshiqi/rusty/releases/latest";
+pub const RELEASES_API: &str = "https://api.github.com/repos/Linshiqi/rusty/releases/latest";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chips
@@ -626,12 +625,6 @@ pub enum FlashAction {
     FlashAndMonitor,
 }
 
-/// A command that is about to be run, in full.
-///
-/// Produced without spawning anything so it can be tested without hardware —
-/// and shown to the user verbatim before it runs. Embedded developers reach for
-/// the terminal constantly; hiding the command behind a button is how a tool
-/// becomes something to work around rather than with.
 /// What a scaffolding run wrote, on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -748,6 +741,12 @@ pub struct UpdateStatus {
     pub note: Option<String>,
 }
 
+/// A command that is about to be run, in full.
+///
+/// Produced without spawning anything so it can be tested without hardware —
+/// and shown to the user verbatim before it runs. Embedded developers reach for
+/// the terminal constantly; hiding the command behind a button is how a tool
+/// becomes something to work around rather than with.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandPlan {
@@ -824,8 +823,14 @@ pub struct SimTool {
     pub install: String,
 }
 
+/// A display pin nobody has wired yet.
+///
+/// One value, named once: the file format and the wire model both need it,
+/// and two spellings of 255 is how one of them ends up meaning something else.
+pub const UNWIRED_PIN: u8 = 255;
+
 fn unwired_pin() -> u8 {
-    255
+    UNWIRED_PIN
 }
 
 /// Serde's skip test for the common case: most parts are never turned.
@@ -833,14 +838,23 @@ pub(crate) fn is_upright(rot: &u16) -> bool {
     *rot == 0
 }
 
-/// One LED on the simulated board view.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Where a part sits on the sheet, how it is turned, and how its wires run.
+///
+/// One struct rather than the same five fields on every part. They were copied
+/// six times, comments and all, and the copies drifted the moment one of them
+/// gained a field: `flip` was added to all six wire types and to *neither*
+/// half of the file format, so mirroring a part survived until the project was
+/// reopened and then silently was not there. A field added here reaches every
+/// part or none of them.
+///
+/// A nested field rather than `#[serde(flatten)]`: flatten routes the whole
+/// struct through serde's buffering path, and the frontend decodes this from a
+/// JS value, where a buffered number is not reliably the integer `rot` needs.
+/// The JSON shape is internal — both sides `use` this same type — so nesting
+/// costs nothing and cannot misdecode.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SimLed {
-    pub pin: u8,
-    /// `green`, `blue`, `red`, `yellow` — the stylesheet's palette names.
-    pub color: String,
-    pub label: String,
+pub struct Placement {
     /// Canvas position, when the editor has placed it. Absent means "lay it
     /// out automatically", which is what hand-written files get.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -856,8 +870,22 @@ pub struct SimLed {
     #[serde(default, skip_serializing_if = "is_upright")]
     pub rot: u16,
     /// Mirrored left-to-right — what a part on the chip's right wants.
-    #[serde(default)]
+    /// Mirrored rather than turned because a 180° turn also reverses the stub
+    /// order, and seven wires to a seven-segment then cross on the way in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip: bool,
+}
+
+/// One LED on the simulated board view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimLed {
+    pub pin: u8,
+    /// `green`, `blue`, `red`, `yellow` — the stylesheet's palette names.
+    pub color: String,
+    pub label: String,
+    #[serde(default)]
+    pub place: Placement,
 }
 
 /// A push button on the board. Pressing it sends `B<pin>=1` (and release
@@ -867,21 +895,8 @@ pub struct SimLed {
 pub struct SimButton {
     pub pin: u8,
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    /// User-drawn waypoints per wire, world coordinates. Empty means "route
-    /// automatically". routes[0] belongs to pins[0] (or the only pin).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<Vec<(f64, f64)>>,
-    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
-    /// nobody can rotate is a diagram that fights its own wiring.
-    #[serde(default, skip_serializing_if = "is_upright")]
-    pub rot: u16,
-    /// Mirrored left-to-right — what a part on the chip's right wants.
     #[serde(default)]
-    pub flip: bool,
+    pub place: Placement,
 }
 
 /// An RGB LED: three pins, one lens. The lit colour is the additive mix of
@@ -893,21 +908,8 @@ pub struct SimRgb {
     pub g: u8,
     pub b: u8,
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    /// User-drawn waypoints per wire, world coordinates. Empty means "route
-    /// automatically". routes[0] belongs to pins[0] (or the only pin).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<Vec<(f64, f64)>>,
-    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
-    /// nobody can rotate is a diagram that fights its own wiring.
-    #[serde(default, skip_serializing_if = "is_upright")]
-    pub rot: u16,
-    /// Mirrored left-to-right — what a part on the chip's right wants.
     #[serde(default)]
-    pub flip: bool,
+    pub place: Placement,
 }
 
 /// A seven-segment digit: seven GPIO pins, one per segment a..g. Lit
@@ -920,21 +922,8 @@ pub struct SimSeven {
     /// Segments a, b, c, d, e, f, g in order.
     pub pins: [u8; 7],
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    /// User-drawn waypoints per wire, world coordinates. Empty means "route
-    /// automatically". routes[0] belongs to pins[0] (or the only pin).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<Vec<(f64, f64)>>,
-    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
-    /// nobody can rotate is a diagram that fights its own wiring.
-    #[serde(default, skip_serializing_if = "is_upright")]
-    pub rot: u16,
-    /// Mirrored left-to-right — what a part on the chip's right wants.
     #[serde(default)]
-    pub flip: bool,
+    pub place: Placement,
 }
 
 /// A small text screen fed by the `[rusty:disp]` serial channel — the
@@ -950,20 +939,9 @@ pub struct SimDisplay {
     pub sda: u8,
     #[serde(default = "unwired_pin")]
     pub scl: u8,
-    /// User-drawn waypoints per wire (sda, scl), world coordinates.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<Vec<(f64, f64)>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
-    /// nobody can rotate is a diagram that fights its own wiring.
-    #[serde(default, skip_serializing_if = "is_upright")]
-    pub rot: u16,
-    /// Mirrored left-to-right — what a part on the chip's right wants.
+    /// `routes` here is (sda, scl), in that order.
     #[serde(default)]
-    pub flip: bool,
+    pub place: Placement,
 }
 
 /// A potentiometer: a slider in the UI that sends `P<pin>=<0..255>` into
@@ -973,21 +951,8 @@ pub struct SimDisplay {
 pub struct SimPot {
     pub pin: u8,
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    /// User-drawn waypoints per wire, world coordinates. Empty means "route
-    /// automatically". routes[0] belongs to pins[0] (or the only pin).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<Vec<(f64, f64)>>,
-    /// Quarter turns on the sheet: 0, 90, 180 or 270 degrees. A schematic
-    /// nobody can rotate is a diagram that fights its own wiring.
-    #[serde(default, skip_serializing_if = "is_upright")]
-    pub rot: u16,
-    /// Mirrored left-to-right — what a part on the chip's right wants.
     #[serde(default)]
-    pub flip: bool,
+    pub place: Placement,
 }
 
 /// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never

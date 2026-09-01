@@ -45,16 +45,16 @@ impl Session {
         self.lines.recv().ok()
     }
 
-    /// A handle that can end this session from another thread.
-    ///
-    /// Separate from the session itself because the reader loop blocks on
-    /// `recv`: whoever wants to stop a monitor cannot be the thread that is
-    /// sitting inside it.
     /// A handle that can write to the child's stdin from another thread.
     pub fn input(&self) -> Input {
         self.input.clone()
     }
 
+    /// A handle that can end this session from another thread.
+    ///
+    /// Separate from the session itself because the reader loop blocks on
+    /// `recv`: whoever wants to stop a monitor cannot be the thread that is
+    /// sitting inside it.
     pub fn stopper(&self) -> Stopper {
         let child = Arc::clone(&self.child);
         Stopper::new(move || {
@@ -155,7 +155,7 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
     // reports it — the user installs it with one click and the build still
     // fails. Appended, not prepended: a compiler the user put on PATH
     // themselves is the one they meant.
-    let bins = crate::simulate::tool_bin_dirs();
+    let bins = crate::tools::tool_bin_dirs();
     if !bins.is_empty()
         && let Some(existing) = std::env::var_os("PATH")
     {

@@ -1,6 +1,6 @@
 //! Simulation commands: plan the three steps, then run them end to end.
 
-use rusty_embed::{LogLine, LogStream, SimBoard, SimPlan, process, project, simulate};
+use rusty_embed::{LogLine, LogStream, SimBoard, SimPlan, install, process, project, simulate};
 use tauri::{State, ipc::Channel};
 
 use crate::{error::CommandError, state::AppState};
@@ -33,7 +33,7 @@ pub async fn install_sim_tool(
     if name.starts_with("qemu-system-") || name.ends_with("-gdb") || name.ends_with("-gcc") {
         return install_archive(&name, on_line, state).await;
     }
-    let steps = simulate::install_steps(&name).map_err(CommandError::new)?;
+    let steps = install::install_steps(&name).map_err(CommandError::new)?;
 
     let mut last_code = None;
     for step in steps {
@@ -222,18 +222,18 @@ async fn install_archive(
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
     let plan = if name.ends_with("-gcc") {
-        simulate::gcc_download(name).map_err(CommandError::new)?
+        install::gcc_download(name).map_err(CommandError::new)?
     } else if name.ends_with("-gdb") {
-        simulate::gdb_download(name).map_err(CommandError::new)?
+        install::gdb_download(name).map_err(CommandError::new)?
     } else {
-        simulate::qemu_download(name).map_err(CommandError::new)?
+        install::qemu_download(name).map_err(CommandError::new)?
     };
 
     let feed = on_line.clone();
     let archive = plan.archive.clone();
     let urls = plan.urls.clone();
     let downloaded = tokio::task::spawn_blocking(move || {
-        simulate::download(&urls, &archive, |line| {
+        install::download(&urls, &archive, |line| {
             let _ = feed.send(LogLine {
                 stream: LogStream::Stdout,
                 text: line,
@@ -382,8 +382,7 @@ pub async fn run_simulation(
             // the pin reports themselves never reach the log.
             let _ = on_line.send(LogLine {
                 stream: LogStream::Stdout,
-                text: "[rusty:pins] emulator — pin state read from the GPIO registers"
-                    .to_string(),
+                text: "[rusty:pins] emulator — pin state read from the GPIO registers".to_string(),
                 level: None,
             });
         }

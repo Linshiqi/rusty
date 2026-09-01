@@ -9,12 +9,12 @@
 
 use std::process::Command;
 
-use crate::simulate::find_tool as on_path;
+use crate::tools::find_tool as on_path;
 use crate::{
     chip,
     model::{
-        CommandPlan, EmbeddedProject, Problem, Severity, ToolStatus, Toolchain,
-        ToolchainReport, ToolchainStatus,
+        CommandPlan, EmbeddedProject, Problem, Severity, ToolStatus, Toolchain, ToolchainReport,
+        ToolchainStatus,
     },
 };
 
@@ -132,8 +132,8 @@ pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>, String> {
             ],
             display: format!("cargo install {package} --locked"),
             rationale: why.to_string(),
-                         warning: None,
-             }]
+            warning: None,
+        }]
     };
 
     match tool {
@@ -166,8 +166,8 @@ pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>, String> {
             rationale: "the stable component; rusty resolves it directly, so the esp \
                         toolchain's missing component stops mattering"
                 .to_string(),
-                                               warning: None,
-                                   }]),
+            warning: None,
+        }]),
         // Two steps by design: the first is quick, the second downloads the
         // Xtensa toolchain and is honestly slow — better one visible slow
         // step than a guide page nobody finds.
@@ -181,7 +181,7 @@ pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>, String> {
                 ],
                 display: "cargo install espup --locked".to_string(),
                 rationale: "the Xtensa toolchain manager itself".to_string(),
-                            warning: None,
+                warning: None,
             },
             CommandPlan {
                 program: "espup".to_string(),
@@ -190,7 +190,7 @@ pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>, String> {
                 rationale: "downloads the esp toolchain (Xtensa rustc + gcc) — a gigabyte-\
                             class download, so this step takes minutes"
                     .to_string(),
-                            warning: None,
+                warning: None,
             },
         ]),
         "rustup" => Err(
@@ -373,11 +373,7 @@ fn list_toolchains() -> Vec<Toolchain> {
         .filter(|line| !line.is_empty())
         .map(|line| {
             let is_default = line.contains("(default)");
-            let name = line
-                .split_whitespace()
-                .next()
-                .unwrap_or(line)
-                .to_string();
+            let name = line.split_whitespace().next().unwrap_or(line).to_string();
             // espup names its toolchain `esp`; rustup shows it without a host
             // triple suffix because it is a custom install.
             let is_esp = name == "esp" || name.starts_with("esp-");

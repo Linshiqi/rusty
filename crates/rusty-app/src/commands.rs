@@ -87,7 +87,7 @@ pub async fn crate_report(state: State<'_, AppState>) -> Answer<Vec<rusty_core::
         .ok_or_else(|| CommandError::new("the Cargo analysis is not available for this project"))?;
     tokio::task::spawn_blocking(move || {
         let deps = rusty_core::registry::direct_dependencies(workspace.graph());
-        let proxy = rusty_embed::simulate::effective_proxy();
+        let proxy = rusty_embed::net::effective_proxy();
         rusty_core::registry::annotate_latest(deps, proxy)
     })
     .await
@@ -98,7 +98,7 @@ pub async fn crate_report(state: State<'_, AppState>) -> Answer<Vec<rusty_core::
 #[tauri::command]
 pub async fn proxy_setting() -> Answer<serde_json::Value> {
     let stored = storage::workbench().proxy;
-    let detected = rusty_embed::simulate::system_proxy();
+    let detected = rusty_embed::net::system_proxy();
     Ok(serde_json::json!({ "stored": stored, "detected": detected }))
 }
 
@@ -241,9 +241,7 @@ pub async fn record_tabs(
 
 /// What a project had open last time.
 #[tauri::command]
-pub async fn project_tabs(
-    root: String,
-) -> Result<Option<rusty_embed::ProjectTabs>, CommandError> {
+pub async fn project_tabs(root: String) -> Result<Option<rusty_embed::ProjectTabs>, CommandError> {
     tokio::task::spawn_blocking(move || rusty_embed::config::tabs_for(&root))
         .await
         .map_err(|e| CommandError::new(format!("reading the tab strip panicked: {e}")))
@@ -254,8 +252,7 @@ pub async fn project_tabs(
 /// Never the key: that lives in the OS credential store and is fetched by the
 /// backend at the moment of the request, so it never enters the window.
 #[tauri::command]
-pub async fn assistant_choice() -> Result<Option<rusty_embed::AssistantChoice>, CommandError>
-{
+pub async fn assistant_choice() -> Result<Option<rusty_embed::AssistantChoice>, CommandError> {
     tokio::task::spawn_blocking(|| rusty_embed::config::workbench().assistant)
         .await
         .map_err(|e| CommandError::new(format!("reading the assistant profile panicked: {e}")))
@@ -324,7 +321,11 @@ pub async fn plan_migration(
             .cloned()
             .ok_or_else(|| CommandError::new(format!("{id} is not in the chip catalogue.")))
     };
-    Ok(rusty_embed::migrate::plan(&root, &find(&current)?, &find(&chip)?))
+    Ok(rusty_embed::migrate::plan(
+        &root,
+        &find(&current)?,
+        &find(&chip)?,
+    ))
 }
 
 /// Carry out a migration and report the files written.
