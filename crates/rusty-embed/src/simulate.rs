@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use crate::config;
 use crate::install::GDB_RELEASE;
 use crate::model::{
-    CommandPlan, EmbeddedProject, PartDef, SimBoard, SimButton, SimDebug, SimDisplay, SimLed,
-    SimPlan, SimPot, SimRgb, SimSeven, SimTool, UNWIRED_PIN,
+    CommandPlan, EmbeddedProject, PartDef, SimAnalog, SimBoard, SimButton, SimDebug, SimDisplay,
+    SimLed, SimMotor, SimPlan, SimPot, SimRgb, SimSeven, SimTool, UNWIRED_PIN,
 };
 use crate::tools::{exe, home_dir, on_path};
 
@@ -371,6 +371,40 @@ mod file {
     }
 
     #[derive(Debug, Default, Deserialize, Serialize)]
+    pub struct Analog {
+        pub pin: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub max: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub start: Option<u16>,
+        /// What the count means on this board, in the author's own words.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub note: Option<String>,
+        #[serde(flatten)]
+        pub place: Place,
+    }
+
+    #[derive(Debug, Default, Deserialize, Serialize)]
+    pub struct Motor {
+        /// Absent means "not wired". A motor with no duty pin is drawn and
+        /// says it has nothing to be driven by, rather than sitting at zero
+        /// as though the firmware had commanded a stop.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pwm: Option<u8>,
+        /// The H-bridge direction pins. Both absent is a fan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub in1: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub in2: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub label: Option<String>,
+        #[serde(flatten)]
+        pub place: Place,
+    }
+
+    #[derive(Debug, Default, Deserialize, Serialize)]
     pub struct Pot {
         pub pin: u8,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -397,6 +431,10 @@ mod file {
         pub display: Vec<Display>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub pot: Vec<Pot>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub motor: Vec<Motor>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub analog: Vec<Analog>,
     }
 
     impl Place {
@@ -437,6 +475,8 @@ fn board_view(root: &Path) -> Option<SimBoard> {
         && parsed.seven.is_empty()
         && parsed.display.is_empty()
         && parsed.pot.is_empty()
+        && parsed.motor.is_empty()
+        && parsed.analog.is_empty()
     {
         return None;
     }
@@ -500,6 +540,29 @@ fn board_view(root: &Path) -> Option<SimBoard> {
                 label: pot.label.unwrap_or_else(|| format!("POT{}", pot.pin)),
                 pin: pot.pin,
                 place: pot.place.into_model(),
+            })
+            .collect(),
+        analogs: parsed
+            .analog
+            .into_iter()
+            .map(|a| SimAnalog {
+                label: a.label.unwrap_or_else(|| format!("A{}", a.pin)),
+                pin: a.pin,
+                max: a.max.unwrap_or(4095),
+                start: a.start.unwrap_or(0),
+                note: a.note,
+                place: a.place.into_model(),
+            })
+            .collect(),
+        motors: parsed
+            .motor
+            .into_iter()
+            .map(|motor| SimMotor {
+                label: motor.label.unwrap_or_else(|| "MOTOR".to_string()),
+                pwm: motor.pwm.unwrap_or(UNWIRED_PIN),
+                in1: motor.in1.unwrap_or(UNWIRED_PIN),
+                in2: motor.in2.unwrap_or(UNWIRED_PIN),
+                place: motor.place.into_model(),
             })
             .collect(),
     })
@@ -750,6 +813,29 @@ pub fn save_board(root: &Path, board: &SimBoard) -> std::result::Result<(), Stri
                 place: file::Place::from_model(&pot.place),
             })
             .collect(),
+        analog: board
+            .analogs
+            .iter()
+            .map(|a| file::Analog {
+                pin: a.pin,
+                label: Some(a.label.clone()),
+                max: Some(a.max),
+                start: Some(a.start),
+                note: a.note.clone(),
+                place: file::Place::from_model(&a.place),
+            })
+            .collect(),
+        motor: board
+            .motors
+            .iter()
+            .map(|motor| file::Motor {
+                pwm: unwired(motor.pwm),
+                in1: unwired(motor.in1),
+                in2: unwired(motor.in2),
+                label: Some(motor.label.clone()),
+                place: file::Place::from_model(&motor.place),
+            })
+            .collect(),
     };
     let text = toml::to_string_pretty(&sheet).map_err(|e| format!("could not encode: {e}"))?;
     let dir = root.join(".rusty");
@@ -919,6 +1005,34 @@ mod tests {
                 label: "POT34".to_string(),
                 place: place(20.0, 200.0, 90, true),
             }],
+            analogs: vec![SimAnalog {
+                pin: 35,
+                label: "BATT".to_string(),
+                max: 1023,
+                start: 800,
+                note: Some("1023 = 4.2 V through 100k/27k".to_string()),
+                place: place(500.0, 320.0, 180, true),
+            }],
+            motors: vec![
+                // An H-bridge drive: all three wired.
+                SimMotor {
+                    pwm: 5,
+                    in1: 6,
+                    in2: 7,
+                    label: "DRIVE".to_string(),
+                    place: place(400.0, 260.0, 270, true),
+                },
+                // And a fan, which is the same part with the direction pins
+                // left off. Both spellings have to survive the file, or the
+                // one nobody wrote a fixture for is the one that breaks.
+                SimMotor {
+                    pwm: 8,
+                    in1: UNWIRED_PIN,
+                    in2: UNWIRED_PIN,
+                    label: "FAN".to_string(),
+                    place: Placement::default(),
+                },
+            ],
         };
         save_board(dir.path(), &board).expect("save");
         let loaded = board_view(dir.path()).expect("load");
@@ -933,6 +1047,22 @@ mod tests {
             "and a turned one stays turned"
         );
         assert_eq!(loaded.displays[1].sda, UNWIRED_PIN);
+        assert_eq!(
+            loaded.analogs[0].max, 1023,
+            "a source that is not a 12-bit ADC keeps saying so",
+        );
+        assert_eq!(
+            loaded.analogs[0].note.as_deref(),
+            Some("1023 = 4.2 V through 100k/27k"),
+        );
+        assert_eq!(
+            loaded.motors[0].in1, 6,
+            "an H-bridge keeps its direction pins"
+        );
+        assert_eq!(
+            loaded.motors[1].in1, UNWIRED_PIN,
+            "and a fan keeps not having any",
+        );
     }
 
     #[test]

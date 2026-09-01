@@ -229,10 +229,12 @@ pub enum DockTab {
     Debug,
     /// The chip's peripherals, as the target holds them right now.
     Registers,
+    /// A control loop's attitude and its outputs, side by side.
+    Flight,
 }
 
 impl DockTab {
-    pub const ALL: [DockTab; 8] = [
+    pub const ALL: [DockTab; 9] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
@@ -240,6 +242,7 @@ impl DockTab {
         DockTab::Plot,
         DockTab::Debug,
         DockTab::Registers,
+        DockTab::Flight,
         DockTab::Devices,
     ];
 
@@ -253,6 +256,7 @@ impl DockTab {
             DockTab::Devices => "Devices",
             DockTab::Debug => "Debug",
             DockTab::Registers => "Registers",
+            DockTab::Flight => "Flight",
         }
     }
 }
@@ -655,6 +659,27 @@ pub struct Sim {
     /// Pin levels for the board view, from whichever source [`sim_pin_source`]
     /// names.
     pub gpio: RwSignal<std::collections::HashMap<u8, bool>>,
+    /// Duty cycles for the board view, from `[rusty:pwm]` — the analogue
+    /// half of [`Self::gpio`], and what a motor turns on.
+    ///
+    /// **Absent is not zero.** A pin with no entry has never been reported,
+    /// and a motor on it says so rather than showing a commanded stop; a pin
+    /// mapped to `0.0` was told to stop. The two look the same on a dial and
+    /// mean opposite things when a motor will not start.
+    pub pwm: RwSignal<std::collections::HashMap<u8, f32>>,
+    /// Sensors the firmware has declared it wants fed, newest wins by name.
+    ///
+    /// Declared rather than guessed, for the reason the tunables are: a panel
+    /// that invented `gyro` and a range for it would one day inject 2000°/s
+    /// into a loop written for 250. Empty means the firmware has asked for
+    /// nothing, and the panel offers nothing.
+    pub sensors: RwSignal<Vec<rusty_embed::SensorDef>>,
+    /// The last sample the panel *sent* for each sensor — what its sliders
+    /// sit at. Not what the firmware did with it, which only the firmware can
+    /// say and only by printing something.
+    pub sensor_values: RwSignal<std::collections::HashMap<String, Vec<f32>>>,
+    /// Raw ADC counts the panel is holding on each pin.
+    pub analog: RwSignal<std::collections::HashMap<u8, u16>>,
     /// Where those levels came from, as announced by the run that started.
     ///
     /// `Firmware` until a run says otherwise, because that is what every
@@ -916,6 +941,10 @@ impl AppState {
                 params: RwSignal::new(Vec::new()),
                 link_port: RwSignal::new(None),
                 gpio: RwSignal::new(std::collections::HashMap::new()),
+                pwm: RwSignal::new(std::collections::HashMap::new()),
+                sensors: RwSignal::new(Vec::new()),
+                sensor_values: RwSignal::new(std::collections::HashMap::new()),
+                analog: RwSignal::new(std::collections::HashMap::new()),
                 pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
                 plan: RwSignal::new(None),
                 install_failed: RwSignal::new(Vec::new()),

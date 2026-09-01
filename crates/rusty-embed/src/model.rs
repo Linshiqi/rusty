@@ -955,6 +955,124 @@ pub struct SimPot {
     pub place: Placement,
 }
 
+/// An analog source on a pin: a battery through a divider, a thermistor, any
+/// voltage the firmware reads with its ADC.
+///
+/// Distinct from [`SimPot`], which is a *knob a person turns* and sends 8
+/// bits. This is a *voltage that is there*, at the resolution the chip's ADC
+/// actually has — a 1S cell sagging from 4.2 V to 3.3 V under throttle is
+/// four counts of an 8-bit range and eighty of a 12-bit one, and a low-battery
+/// cutoff cannot be tested against four.
+///
+/// **Counts, not volts.** rusty does not know the divider on your board, so
+/// it does not claim a voltage. [`Self::note`] is where you write what the
+/// count means to *you*, and it is shown verbatim as your words, not rusty's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimAnalog {
+    pub pin: u8,
+    pub label: String,
+    /// Full scale for this source. 4095 is the ESP32's 12-bit ADC; a part
+    /// wired to something else can say so.
+    #[serde(default = "full_scale")]
+    pub max: u16,
+    /// Where the slider sits when the board loads.
+    #[serde(default)]
+    pub start: u16,
+    /// What the count means on this board — "4095 = 4.2 V through 100k/27k".
+    /// Yours to write and yours to be right about; rusty only repeats it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub place: Placement,
+}
+
+fn full_scale() -> u16 {
+    4095
+}
+
+/// A motor: a toy car's drive through an H-bridge, or a fan.
+///
+/// One part rather than two, because a fan *is* a motor with one direction —
+/// and which one you have is a property of what you wired, not a mode to
+/// pick from a menu. Wire only [`Self::pwm`] and it turns one way; wire the
+/// two direction pins as well and it is an H-bridge.
+///
+/// The direction pins are ordinary GPIO and arrive on the boolean channel.
+/// The speed cannot: a duty cycle is not a level, which is why
+/// [`crate::protocol::parse_pwm_report`] exists at all.
+///
+/// **This shows commanded drive, never a measured shaft speed.** There is no
+/// inertia here, no load, no back-EMF — a motor that has been told 40% shows
+/// 40% the instant it is told, and a real one takes time to get there under
+/// a load rusty knows nothing about. The panel says so rather than implying
+/// a physics it does not have.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimMotor {
+    /// The pin carrying the duty cycle — the enable leg of an H-bridge, or
+    /// the fan's single control wire.
+    #[serde(default = "unwired_pin")]
+    pub pwm: u8,
+    /// The H-bridge's two direction inputs. Both [`UNWIRED_PIN`] for a fan.
+    #[serde(default = "unwired_pin")]
+    pub in1: u8,
+    #[serde(default = "unwired_pin")]
+    pub in2: u8,
+    pub label: String,
+    /// `routes` here is (pwm, in1, in2), in that order.
+    #[serde(default)]
+    pub place: Placement,
+}
+
+/// What an H-bridge is doing, from its two direction inputs.
+///
+/// Worth naming rather than leaving as two booleans in the view, because the
+/// table is the thing people get wrong: `1,1` is not "full speed", it is a
+/// brake — both low-side transistors on, the winding shorted, the motor
+/// fighting its own momentum. Someone who reaches for it expecting speed
+/// gets a stop, and nothing in a datasheet page of timing diagrams says so
+/// as plainly as a board that shows BRAKE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Drive {
+    Forward,
+    Reverse,
+    /// Both inputs low: the bridge is open and the motor freewheels.
+    Coast,
+    /// Both inputs high: the winding is shorted and the motor is held.
+    Brake,
+}
+
+impl Drive {
+    /// The H-bridge truth table, and the whole reason this type exists.
+    pub fn from_inputs(in1: bool, in2: bool) -> Self {
+        match (in1, in2) {
+            (true, false) => Drive::Forward,
+            (false, true) => Drive::Reverse,
+            (false, false) => Drive::Coast,
+            (true, true) => Drive::Brake,
+        }
+    }
+
+    /// What the panel writes beside the rotor.
+    pub fn label(self) -> &'static str {
+        match self {
+            Drive::Forward => "FWD",
+            Drive::Reverse => "REV",
+            Drive::Coast => "COAST",
+            Drive::Brake => "BRAKE",
+        }
+    }
+
+    /// Whether the shaft turns at all — a duty of 90% into a braked bridge
+    /// still goes nowhere, and a rotor that spun anyway would be teaching
+    /// the wrong thing.
+    pub fn turns(self) -> bool {
+        matches!(self, Drive::Forward | Drive::Reverse)
+    }
+}
+
 /// A user-defined part from `.rusty/parts/*.toml` — how a device rusty never
 /// heard of still gets drawn and driven. v1 parts behave as lamps on the
 /// gpio report channel; richer behaviours grow on this same record.
@@ -988,6 +1106,10 @@ pub struct SimBoard {
     pub displays: Vec<SimDisplay>,
     #[serde(default)]
     pub pots: Vec<SimPot>,
+    #[serde(default)]
+    pub motors: Vec<SimMotor>,
+    #[serde(default)]
+    pub analogs: Vec<SimAnalog>,
 }
 
 /// Everything the frontend needs to attach a debugger to a frozen boot.
@@ -1288,4 +1410,39 @@ pub struct ToolchainReport {
     /// Whether this project needs the Xtensa toolchain.
     pub needs_esp_toolchain: bool,
     pub problems: Vec<Problem>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The H-bridge table, which is the one piece of real hardware knowledge
+    /// this type carries. `1,1` is the entry worth having a test for: it is
+    /// the one people reach for expecting full speed, and it is a brake.
+    #[test]
+    fn both_inputs_high_is_a_brake_and_not_full_speed() {
+        assert_eq!(Drive::from_inputs(true, true), Drive::Brake);
+        assert!(!Drive::Brake.turns(), "a braked bridge holds the shaft");
+
+        assert_eq!(Drive::from_inputs(false, false), Drive::Coast);
+        assert!(!Drive::Coast.turns(), "an open bridge freewheels");
+
+        assert_eq!(Drive::from_inputs(true, false), Drive::Forward);
+        assert_eq!(Drive::from_inputs(false, true), Drive::Reverse);
+        assert!(Drive::Forward.turns() && Drive::Reverse.turns());
+    }
+
+    /// Reversing is swapping the two inputs, and nothing else. Firmware that
+    /// drives one pin and leaves the other alone gets brake or coast rather
+    /// than the reverse it wanted, which is exactly the mistake the board is
+    /// meant to make visible.
+    #[test]
+    fn reverse_is_the_mirror_of_forward() {
+        for (a, b) in [(true, false), (false, true)] {
+            let one = Drive::from_inputs(a, b);
+            let other = Drive::from_inputs(b, a);
+            assert_ne!(one, other);
+            assert!(one.turns() && other.turns());
+        }
+    }
 }

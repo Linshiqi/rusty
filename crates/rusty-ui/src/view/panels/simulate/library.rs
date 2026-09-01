@@ -52,6 +52,29 @@ pub(super) fn Library(
                     </button>
                     <button
                         type="button"
+                        title="A voltage on a pin — battery, divider, thermistor. Sends raw ADC counts (A<pin>=<count>), because rusty does not know your divider"
+                        on:click=move |_| add_part(PartKind::Analog, String::new())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="grid h-3.5 w-3 shrink-0 place-items-center rounded-[2px] border border-line-strong">
+                            <span class="h-px w-1.5 bg-label-3" />
+                        </span>
+                        <span>"analog in"</span>
+                    </button>
+                    <button
+                        type="button"
+                        title="A toy car drive or a fan. Wire pwm for speed; wire in1/in2 as well for an H-bridge that can reverse and brake"
+                        on:click=move |_| add_part(PartKind::Motor, String::new())
+                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                    >
+                        <span class="relative grid size-3.5 shrink-0 place-items-center rounded-full border border-line-strong">
+                            <span class="absolute top-0 left-1/2 h-1/2 w-px -translate-x-1/2 bg-label-3" />
+                            <span class="size-1 rounded-full bg-label-3" />
+                        </span>
+                        <span>"motor"</span>
+                    </button>
+                    <button
+                        type="button"
                         title="Three pins, additive colour"
                         on:click=move |_| add_part(PartKind::Rgb, "RGB".to_string())
                         class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"

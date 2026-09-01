@@ -187,6 +187,25 @@ pub fn sim_pot(state: AppState, pin: u8, value: u8) {
     sim_send(state, format!("P{pin}={value}"));
 }
 
+/// Inject one sensor sample — the whole sample, in one line.
+///
+/// Kept together deliberately: see [`rusty_embed::sensor_line`] for why a
+/// torn sample is worse than a late one.
+pub fn sim_sensor(state: AppState, name: String, values: Vec<f32>) {
+    sim_send(state, rusty_embed::sensor_line(&name, &values));
+    state.sim.sensor_values.update(|held| {
+        held.insert(name, values);
+    });
+}
+
+/// Put a raw ADC count on a pin — a battery, a divider, any analog source.
+pub fn sim_analog(state: AppState, pin: u8, count: u16) {
+    sim_send(state, rusty_embed::analog_line(pin, count));
+    state.sim.analog.update(|held| {
+        held.insert(pin, count);
+    });
+}
+
 /// Persist the board editor's layout, then re-plan so the panel shows what
 /// the file now says.
 pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSignal<bool>) {

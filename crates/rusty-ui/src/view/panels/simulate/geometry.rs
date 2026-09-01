@@ -22,6 +22,13 @@ pub(super) enum PartKind {
     Display,
     /// A slider sending `P<pin>=<0..255>`.
     Pot,
+    /// A toy car's drive or a fan. Slot 0 is the duty pin; slots 1 and 2 are
+    /// the H-bridge's direction inputs, and leaving them unwired is what
+    /// makes it a fan.
+    Motor,
+    /// A voltage on a pin — a battery through a divider, a thermistor. Sends
+    /// raw ADC counts, because rusty does not know your divider.
+    Analog,
 }
 
 impl PartKind {
@@ -35,6 +42,10 @@ impl PartKind {
             // are where the coming I2C decode will attach, and a part that
             // floats outside the circuit reads as a mistake either way.
             PartKind::Display => 2,
+            // Duty, then the two direction inputs. A fan wires only the
+            // first and leaves the other two stubs hanging, which is how the
+            // sheet shows that it turns one way.
+            PartKind::Motor => 3,
             _ => 1,
         }
     }
@@ -57,6 +68,12 @@ impl PartKind {
             PartKind::Seven => 80.0,
             PartKind::Display => 144.0,
             PartKind::Pot => 128.0,
+            // Room for the slider and the count beside it.
+            PartKind::Analog => 136.0,
+            // Wide enough for the rotor and the readout beside it: "BRAKE"
+            // and "100%" have to fit without the body growing when they
+            // appear, or the wires move every time the motor changes state.
+            PartKind::Motor => 128.0,
             _ => 112.0,
         }
     }
@@ -199,6 +216,24 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             (160.0, 160.0),
         ));
     }
+    for analog in &board.analogs {
+        out.push(EditPart::placed(
+            PartKind::Analog,
+            pins3(analog.pin, 0, 0),
+            &analog.label,
+            &analog.place,
+            (60.0, 360.0),
+        ));
+    }
+    for motor in &board.motors {
+        out.push(EditPart::placed(
+            PartKind::Motor,
+            [motor.pwm, motor.in1, motor.in2, 0, 0, 0, 0],
+            &motor.label,
+            &motor.place,
+            (160.0, 300.0),
+        ));
+    }
     for pot in &board.pots {
         out.push(EditPart::placed(
             PartKind::Pot,
@@ -222,6 +257,8 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
         sevens: Vec::new(),
         displays: Vec::new(),
         pots: Vec::new(),
+        motors: Vec::new(),
+        analogs: Vec::new(),
     };
     for part in parts {
         let place = part.place();
@@ -257,6 +294,24 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
             }),
             PartKind::Pot => board.pots.push(rusty_embed::SimPot {
                 pin: part.pins[0],
+                label: part.label.clone(),
+                place,
+            }),
+            PartKind::Analog => board.analogs.push(rusty_embed::SimAnalog {
+                pin: part.pins[0],
+                label: part.label.clone(),
+                // The editor does not edit these two yet; a hand-written file
+                // that set them keeps them because `board_of` is only reached
+                // from the canvas, and the canvas only ever adds defaults.
+                max: 4095,
+                start: 0,
+                note: None,
+                place,
+            }),
+            PartKind::Motor => board.motors.push(rusty_embed::SimMotor {
+                pwm: part.pins[0],
+                in1: part.pins[1],
+                in2: part.pins[2],
                 label: part.label.clone(),
                 place,
             }),
@@ -660,6 +715,8 @@ pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
     let base = match kind {
         PartKind::Button => "BTN",
         PartKind::Pot => "POT",
+        PartKind::Motor => "PWM",
+        PartKind::Analog => "ADC",
         _ => "GPIO",
     };
     if pin == UNWIRED {

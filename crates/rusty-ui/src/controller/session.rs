@@ -112,6 +112,16 @@ pub fn delete_key(state: AppState, profile: String) {
 /// one signal and is not one.
 pub(super) fn clear_capture(state: AppState) {
     state.sim.gpio.set(std::collections::HashMap::new());
+    state.sim.pwm.set(std::collections::HashMap::new());
+    state.sim.analog.set(std::collections::HashMap::new());
+    // The declarations go too: they belong to the run that made them, and
+    // offering a sensor the next firmware never asked for is the invented
+    // range in another costume.
+    state.sim.sensors.set(Vec::new());
+    state
+        .sim
+        .sensor_values
+        .set(std::collections::HashMap::new());
     state.sim.trace.set(crate::state::SimTrace::default());
     state.sim.display.set(String::new());
     state.sim.plot.set(crate::state::Plot::default());
@@ -146,6 +156,16 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
                 None => params.push(param),
             }
         });
+    } else if let Some(def) = rusty_embed::parse_sensor_def(&line.text) {
+        // Newest wins by name, exactly as the tunables do: firmware that
+        // re-announces on a timer is how a panel connecting late finds out
+        // what it may inject at all.
+        state.sim.sensors.update(
+            |known| match known.iter_mut().find(|s| s.name == def.name) {
+                Some(existing) => *existing = def,
+                None => known.push(def),
+            },
+        );
     } else if let Some(source) = rusty_embed::parse_pin_source(&line.text) {
         // Before the gpio arm on purpose: this line decides what the board's
         // caption may claim about every line after it.
@@ -158,6 +178,15 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
             }
         });
         record_trace(state, report);
+    } else if let Some(report) = rusty_embed::parse_pwm_report(&line.text) {
+        // The analogue half of the arm above. Not folded into it: a level and
+        // a duty are different facts about a pin, and a motor asked to hold
+        // 40% is not the same as a pin that happens to be high right now.
+        state.sim.pwm.update(|pwm| {
+            for (pin, duty) in &report.pins {
+                pwm.insert(*pin, *duty);
+            }
+        });
     } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
         state.sim.display.set(text);
     } else {

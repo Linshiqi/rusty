@@ -18,7 +18,8 @@ pub mod chip;
 
 pub use model::*;
 pub use protocol::{
-    GpioReport, PinSource, parse_display_report, parse_gpio_report, parse_pin_source, to_vcd,
+    GpioReport, PinSource, PwmReport, SensorDef, analog_line, parse_display_report,
+    parse_gpio_report, parse_pin_source, parse_pwm_report, parse_sensor_def, sensor_line, to_vcd,
 };
 
 #[cfg(feature = "backend")]

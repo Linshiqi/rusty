@@ -51,6 +51,7 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Debug => view! { <DebugTab /> }.into_any(),
                         DockTab::Registers => view! { <RegistersTab /> }.into_any(),
                         DockTab::Devices => view! { <DevicesTab /> }.into_any(),
+                        DockTab::Flight => view! { <FlightTab /> }.into_any(),
                     }}
                 </div>
             </Show>
@@ -208,6 +209,16 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             // the telemetry is arriving at all.
             DockTab::Plot => (state.sim.plot.with(|p| p.channels.len()), Tone::Neutral),
             DockTab::Devices => (0, Tone::Neutral),
+            // How many motors are being driven right now. Worth a glance
+            // from another tab for one reason: it is not zero when it should
+            // be zero.
+            DockTab::Flight => (
+                state
+                    .sim
+                    .pwm
+                    .with(|p| p.values().filter(|d| **d > 0.01).count()),
+                Tone::Rust,
+            ),
             // The frame count while stopped: a badge that says how deep
             // the target is, without opening the tab.
             DockTab::Registers => (0, Tone::Neutral),
@@ -266,6 +277,7 @@ struct DiagMenuAt {
 
 mod debug;
 mod devices;
+mod flight;
 mod output;
 mod problems;
 mod registers;
@@ -273,6 +285,7 @@ mod shell;
 
 use debug::*;
 use devices::*;
+use flight::*;
 use output::*;
 use problems::*;
 use registers::*;

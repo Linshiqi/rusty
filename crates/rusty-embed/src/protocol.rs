@@ -49,6 +49,63 @@ pub fn parse_gpio_report(line: &str) -> Option<GpioReport> {
     (!pins.is_empty()).then_some(GpioReport { at_us, pins })
 }
 
+/// One `[rusty:pwm]` line: how hard a pin is being driven, not merely
+/// whether it is high.
+///
+/// The analogue sibling of [`GpioReport`], and the reason a motor needs one.
+/// A lamp is on or off and `[rusty:gpio]` says so; a motor is a *speed*, and
+/// the speed lives in a duty cycle that a boolean channel cannot carry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PwmReport {
+    /// Microseconds on the firmware's systimer, from `[rusty:pwm@1234]`, on
+    /// the same terms as [`GpioReport::at_us`].
+    pub at_us: Option<u64>,
+    /// Pin, and the fraction of full drive on it — `0.0` to `1.0`.
+    pub pins: Vec<(u8, f32)>,
+}
+
+/// Parse `[rusty:pwm] 5=0.75,6=0` — the duty the firmware set on each pin.
+///
+/// **Why a channel of its own rather than timing the `[rusty:gpio]` edges.**
+/// That would be the more honest measurement, and it is not available: a
+/// motor driven at anything from 1 to 20 kHz produces thousands of edges a
+/// second, and reporting each one would flood the same serial line the
+/// console is on and drown everything else the firmware has to say. So this
+/// is reported per *change* rather than per cycle — one line when the
+/// firmware writes a new duty, and silence while it holds.
+///
+/// **A fraction, not a percentage and not 0..255.** Firmware counts duty in
+/// whatever its timer's bit width gives it, so any integer convention here
+/// would be one more thing to get wrong at 3am; `0.0..=1.0` cannot be
+/// misread. Values outside the range are clamped rather than dropped —
+/// a `set_duty` that overshot its maximum is a real bug worth *seeing* as
+/// full drive rather than as silence.
+///
+/// What this does not carry is a shaft speed. Nothing here measures a motor;
+/// it reports what the firmware said it commanded, which is the same footing
+/// the board view stands on everywhere else, and the panel says so.
+pub fn parse_pwm_report(line: &str) -> Option<PwmReport> {
+    let rest = line.trim().strip_prefix("[rusty:pwm")?;
+    let (at_us, rest) = match rest.strip_prefix('@') {
+        Some(stamped) => {
+            let (stamp, tail) = stamped.split_once(']')?;
+            (Some(stamp.trim().parse::<u64>().ok()?), tail)
+        }
+        None => (None, rest.strip_prefix(']')?),
+    };
+    let mut pins = Vec::new();
+    for pair in rest.trim().split(',') {
+        let (pin, duty) = pair.trim().split_once('=')?;
+        let pin: u8 = pin.trim().parse().ok()?;
+        let duty: f32 = duty.trim().parse().ok()?;
+        if !duty.is_finite() {
+            continue;
+        }
+        pins.push((pin, duty.clamp(0.0, 1.0)));
+    }
+    (!pins.is_empty()).then_some(PwmReport { at_us, pins })
+}
+
 /// A captured trace as a Value Change Dump, the format every waveform tool
 /// opens — PulseView, GTKWave, Surfer.
 ///
@@ -248,6 +305,102 @@ pub fn parse_param(line: &str) -> Option<Param> {
     })
 }
 
+/// A sensor the firmware wants fed, as it announces itself.
+///
+/// The mirror of [`Param`], and for the same reason: a panel that invents a
+/// sensor's name or its range is a panel that will one day inject 2000°/s
+/// into a loop written for 250. The firmware declares; the panel offers
+/// exactly what was declared and nothing else.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorDef {
+    pub name: String,
+    /// How many numbers one sample carries — 3 for a gyro, 1 for a range
+    /// finder. The injection line must carry exactly this many.
+    pub components: u8,
+    /// `rad/s`, `m/s^2`, `V` — decoration for the panel, and the thing that
+    /// stops somebody feeding degrees to a loop that wanted radians.
+    pub unit: Option<String>,
+    /// The range each component accepts, when the firmware says.
+    pub min: Option<f32>,
+    pub max: Option<f32>,
+}
+
+/// Parse `[rusty:sensor] gyro=3 rad/s -35..35` — a sensor, how many numbers
+/// it takes, and optionally its unit and range.
+///
+/// After the count the tokens are order-free: anything containing `..` is the
+/// range, anything else is the unit. Order-free because this line is written
+/// by hand in firmware and a format that fails on a swapped pair would fail
+/// silently — the sensor simply would not appear, and nothing would say why.
+pub fn parse_sensor_def(line: &str) -> Option<SensorDef> {
+    let rest = line.trim().strip_prefix("[rusty:sensor]")?.trim();
+    let (name, tail) = rest.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut parts = tail.split_whitespace();
+    let components: u8 = parts.next()?.parse().ok()?;
+    // A sample with no numbers in it is not a sample, and one with more
+    // components than a line can sensibly carry is a typo rather than a
+    // sensor. Refusing beats offering a card nothing can fill.
+    if !(1..=8).contains(&components) {
+        return None;
+    }
+
+    let (mut unit, mut min, mut max) = (None, None, None);
+    for token in parts {
+        match token.split_once("..") {
+            Some((low, high)) => {
+                min = low.trim().parse().ok();
+                max = high.trim().parse().ok();
+            }
+            None => unit = Some(token.to_string()),
+        }
+    }
+    Some(SensorDef {
+        name: name.to_string(),
+        components,
+        unit,
+        min,
+        max,
+    })
+}
+
+/// The line that injects one sensor sample — `Igyro=1.25,-0.5,0.02`.
+///
+/// **Every component on one line, always.** An IMU sample is atomic: split
+/// across three lines, the firmware can read x from one moment and y from the
+/// next, and an attitude fused from a torn sample is wrong in a way that
+/// looks exactly like drift. One line, one sample, or the loop this exists to
+/// serve cannot be trusted.
+///
+/// `I` for the same reason `B`, `P` and `S` are single letters: firmware
+/// reads all four with the same three lines of parsing.
+pub fn sensor_line(name: &str, values: &[f32]) -> String {
+    let mut out = format!("I{name}=");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&value.to_string());
+    }
+    out
+}
+
+/// The line that puts a raw ADC count on a pin — `A34=2048`.
+///
+/// **Counts, not volts.** rusty does not know your divider: a battery through
+/// 100k/27k reads one number and the same battery direct reads another, and a
+/// panel that claimed "3.7 V" while the firmware's arithmetic said otherwise
+/// would be the confident wrong answer this workbench exists to avoid. The
+/// firmware already owns that conversion; this hands it the number its ADC
+/// would have produced.
+pub fn analog_line(pin: u8, count: u16) -> String {
+    format!("A{pin}={count}")
+}
+
 /// The line that sets a parameter, for writing into the firmware's serial
 /// input — `Spid_roll_p=12.5`.
 ///
@@ -310,6 +463,65 @@ mod tests {
         assert_eq!(parse_param("[rusty:param] broken"), None);
     }
 
+    #[test]
+    fn a_sensor_declares_its_shape_and_optionally_its_range() {
+        assert_eq!(
+            parse_sensor_def("[rusty:sensor] gyro=3 rad/s -35..35"),
+            Some(SensorDef {
+                name: "gyro".to_string(),
+                components: 3,
+                unit: Some("rad/s".to_string()),
+                min: Some(-35.0),
+                max: Some(35.0),
+            }),
+        );
+
+        // Order-free after the count: this line is typed by hand in firmware,
+        // and a swapped pair must not make the sensor silently not appear.
+        let swapped = parse_sensor_def("[rusty:sensor] gyro=3 -35..35 rad/s").expect("parsed");
+        assert_eq!(swapped.unit.as_deref(), Some("rad/s"));
+        assert_eq!(swapped.min, Some(-35.0));
+
+        let bare = parse_sensor_def("[rusty:sensor] range=1").expect("a count is enough");
+        assert_eq!((bare.components, bare.unit, bare.min), (1, None, None));
+    }
+
+    /// A sample with no numbers is not a sample, and a count in the hundreds
+    /// is a typo. Both refuse rather than offering a card nothing can fill.
+    #[test]
+    fn a_component_count_outside_what_a_sample_can_be_is_refused() {
+        assert_eq!(parse_sensor_def("[rusty:sensor] gyro=0"), None);
+        assert_eq!(parse_sensor_def("[rusty:sensor] gyro=99"), None);
+        assert_eq!(parse_sensor_def("[rusty:sensor] =3"), None);
+        assert_eq!(parse_sensor_def("[rusty:sensor] gyro"), None);
+        assert_eq!(parse_sensor_def("[rusty:param] kp=1"), None);
+    }
+
+    /// The whole sample on one line. Split across three, the firmware can
+    /// read x from one moment and y from the next, and an attitude fused from
+    /// a torn sample drifts in a way nothing in the code explains.
+    #[test]
+    fn a_sample_travels_whole() {
+        assert_eq!(
+            sensor_line("gyro", &[1.25, -0.5, 0.02]),
+            "Igyro=1.25,-0.5,0.02"
+        );
+        assert_eq!(sensor_line("range", &[0.42]), "Irange=0.42");
+        // The same single-letter shape the presses and knobs already use, so
+        // firmware parses all of them with one branch.
+        assert!(sensor_line("gyro", &[0.0]).starts_with('I'));
+    }
+
+    /// Counts rather than volts: rusty does not know the divider, and a panel
+    /// that claimed a voltage the firmware's arithmetic disagreed with would
+    /// be exactly the confident wrong answer this workbench refuses to give.
+    #[test]
+    fn an_analog_pin_carries_the_count_the_adc_would_have_produced() {
+        assert_eq!(analog_line(34, 2048), "A34=2048");
+        assert_eq!(analog_line(0, 0), "A0=0");
+        assert_eq!(analog_line(39, 4095), "A39=4095");
+    }
+
     /// The write side is the same shape as the presses and knobs that came
     /// before it, so firmware parses all three the same way.
     #[test]
@@ -336,6 +548,43 @@ mod tests {
         );
         assert_eq!(parse_gpio_report("I (44) boot: Loaded app"), None);
         assert_eq!(parse_gpio_report("[rusty:gpio] nonsense"), None);
+    }
+
+    #[test]
+    fn a_duty_report_carries_a_fraction_per_pin() {
+        assert_eq!(
+            parse_pwm_report("[rusty:pwm] 5=0.75,6=0"),
+            Some(PwmReport {
+                at_us: None,
+                pins: vec![(5, 0.75), (6, 0.0)],
+            }),
+        );
+        assert_eq!(
+            parse_pwm_report("[rusty:pwm@4210] 5=1").map(|r| r.at_us),
+            Some(Some(4210)),
+        );
+    }
+
+    /// A `set_duty` that overshot its timer's maximum is a real bug, and one
+    /// worth seeing as full drive rather than as silence — the motor really
+    /// is pinned. Same for a negative, which is a wrapped subtraction.
+    #[test]
+    fn a_duty_outside_the_range_is_clamped_rather_than_dropped() {
+        let over = parse_pwm_report("[rusty:pwm] 5=1.4").expect("kept");
+        assert_eq!(over.pins, vec![(5, 1.0)]);
+        let under = parse_pwm_report("[rusty:pwm] 5=-0.2").expect("kept");
+        assert_eq!(under.pins, vec![(5, 0.0)]);
+    }
+
+    /// The two channels must not read each other's lines: a boolean pin
+    /// report arriving as a duty of 1.0 would make every lit LED look like a
+    /// motor at full throttle.
+    #[test]
+    fn the_duty_channel_and_the_pin_channel_stay_apart() {
+        assert_eq!(parse_pwm_report("[rusty:gpio] 5=1"), None);
+        assert_eq!(parse_gpio_report("[rusty:pwm] 5=0.5"), None);
+        assert_eq!(parse_pwm_report("[rusty:pwm] nonsense"), None);
+        assert_eq!(parse_pwm_report("I (44) boot: Loaded app"), None);
     }
 
     #[test]

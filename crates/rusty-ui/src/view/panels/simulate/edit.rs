@@ -43,6 +43,8 @@ pub(super) fn new_label(kind: &PartKind, stub: &str) -> String {
         PartKind::Seven => "7SEG".to_string(),
         PartKind::Display => "DISPLAY".to_string(),
         PartKind::Pot => "POT —".to_string(),
+        PartKind::Motor => "MOTOR".to_string(),
+        PartKind::Analog => "ADC —".to_string(),
     }
 }
 

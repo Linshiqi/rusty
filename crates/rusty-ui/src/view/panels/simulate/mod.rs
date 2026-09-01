@@ -157,6 +157,8 @@ pub fn Simulate() -> impl IntoView {
                         sevens: Vec::new(),
                         displays: Vec::new(),
                         pots: Vec::new(),
+            motors: Vec::new(),
+            analogs: Vec::new(),
                     })
                     blocked=blocked
                     debuggable=plan.debug.is_some()
@@ -1094,6 +1096,13 @@ fn BoardEditor(
                                                 gpio.get(&pin).copied().unwrap_or(false)
                                             })
                                     };
+                                    // `None` means the firmware has never reported
+                                    // a duty for this pin, which is not the
+                                    // same as reporting zero -- see the field's
+                                    // own note. A motor draws the difference.
+                                    let duty = move |pin: u8| {
+                                        state.sim.pwm.with(|pwm| pwm.get(&pin).copied())
+                                    };
 
                                     let face = match kind.clone() {
                                         PartKind::Led { color } => view! {
@@ -1164,6 +1173,126 @@ fn BoardEditor(
                                             </span>
                                         }
                                             .into_any(),
+                                        PartKind::Motor => {
+                                            // A fan has no direction pins, and
+                                            // reading two unwired inputs as two
+                                            // lows would call it COAST and stop
+                                            // a motor that has nowhere to say
+                                            // otherwise.
+                                            let bridged = pins[1] != UNWIRED
+                                                || pins[2] != UNWIRED;
+                                            let drive = move || {
+                                                if bridged {
+                                                    rusty_embed::Drive::from_inputs(
+                                                        level(pins[1]),
+                                                        level(pins[2]),
+                                                    )
+                                                } else {
+                                                    rusty_embed::Drive::Forward
+                                                }
+                                            };
+                                            // Faster duty, faster rotor. Capped
+                                            // at four turns a second because
+                                            // past that a spoke reads as a blur
+                                            // and the direction stops being
+                                            // legible, which is the one thing
+                                            // this drawing is for.
+                                            let spin = move || match duty(pins[0]) {
+                                                Some(d) if d > 0.01 && drive().turns() => {
+                                                    let seconds = (0.25 / d).clamp(0.25, 4.0);
+                                                    let way = match drive() {
+                                                        rusty_embed::Drive::Reverse => "reverse",
+                                                        _ => "normal",
+                                                    };
+                                                    format!(
+                                                        "animation-duration: {seconds:.2}s;                                                          animation-direction: {way}",
+                                                    )
+                                                }
+                                                // Still, and for two different
+                                                // reasons the readout spells out.
+                                                _ => "animation: none".to_string(),
+                                            };
+                                            let readout = move || match duty(pins[0]) {
+                                                None => "— no duty reported".to_string(),
+                                                Some(d) => {
+                                                    format!("{:.0}% {}", d * 100.0, drive().label())
+                                                }
+                                            };
+                                            let tone = move || match duty(pins[0]) {
+                                                // Never reported: the same grey
+                                                // every other "rusty does not
+                                                // know" reads in.
+                                                None => "text-label-3",
+                                                Some(_) if !drive().turns() => "text-label-2",
+                                                Some(_) => "text-label",
+                                            };
+                                            view! {
+                                                <span class="flex items-center gap-2">
+                                                    <span class="relative grid size-5 shrink-0 place-items-center rounded-full border border-line-strong bg-sunken">
+                                                        <span
+                                                            class="absolute inset-[3px] animate-spin"
+                                                            style=spin
+                                                        >
+                                                            <span class="absolute top-0 left-1/2 h-1/2 w-px -translate-x-1/2 bg-label-2" />
+                                                            <span class="absolute bottom-0 left-1/2 h-1/2 w-px -translate-x-1/2 bg-line-strong" />
+                                                        </span>
+                                                        <span class="size-1 rounded-full bg-label-3" />
+                                                    </span>
+                                                    <span class=move || {
+                                                        format!("font-mono text-caption {}", tone())
+                                                    }>{readout}</span>
+                                                </span>
+                                            }
+                                                .into_any()
+                                        }
+                                        PartKind::Analog => {
+                                            // Counts, and the count is what is
+                                            // shown. rusty does not know the
+                                            // divider on this board, so it
+                                            // does not print a voltage it
+                                            // cannot stand behind.
+                                            let held = move || {
+                                                state
+                                                    .sim
+                                                    .analog
+                                                    .with(|a| {
+                                                        a.get(&pins[0]).copied().unwrap_or(0)
+                                                    })
+                                            };
+                                            view! {
+                                                <span class="flex items-center gap-2">
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="4095"
+                                                        prop:value=move || held().to_string()
+                                                        on:pointerdown=move |
+                                                            event: ev::PointerEvent|
+                                                        {
+                                                            event.stop_propagation();
+                                                        }
+                                                        on:input=move |event: ev::Event| {
+                                                            if let Ok(value) = event_target_value(
+                                                                    &event,
+                                                                )
+                                                                .parse::<u16>()
+                                                            {
+                                                                controller::sim_analog(
+                                                                    state,
+                                                                    pins[0],
+                                                                    value,
+                                                                );
+                                                            }
+                                                        }
+                                                        class="w-[68px] accent-[#4aa8ff]"
+                                                    />
+                                                    <span class="w-[4ch] text-right font-mono text-caption text-label-2">
+                                                        {held}
+                                                    </span>
+                                                </span>
+                                            }
+                                                .into_any()
+                                        }
                                         PartKind::Pot => view! {
                                             <input
                                                 type="range"
@@ -1902,6 +2031,8 @@ fn BoardEditor(
                                         PartKind::Seven => "7-segment",
                                         PartKind::Display => "Display",
                                         PartKind::Pot => "Potentiometer",
+                                        PartKind::Motor => "Motor",
+                                        PartKind::Analog => "Analog source",
                                     }}
                                 </span>
                                 {(part.kind.wires() > 0)
@@ -1912,6 +2043,7 @@ fn BoardEditor(
                                                 &["a", "b", "c", "d", "e", "f", "g"]
                                             }
                                             PartKind::Display => &["sda", "scl"],
+                                            PartKind::Motor => &["pwm", "in1", "in2"],
                                             _ => &["pin"],
                                         };
                                         view! {

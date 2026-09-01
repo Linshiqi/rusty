@@ -77,7 +77,10 @@ pub fn Plot() -> impl IntoView {
                 <Signals />
             </div>
             <div class="w-px bg-line" />
-            <Tunables />
+            <div class="flex w-[17rem] shrink-0 flex-col overflow-y-auto">
+                <Tunables />
+                <Sensors />
+            </div>
         </div>
     }
 }
@@ -403,6 +406,128 @@ fn Link() -> impl IntoView {
 }
 
 /// The tunables the firmware announced, and the sliders that change them.
+/// Feeding the firmware a sensor it asked for.
+///
+/// The input mirror of [`Tunables`], and it follows the same rule for the
+/// same reason: **only what the firmware declared**. A panel that offered
+/// `gyro` because a drone usually has one, with a range it chose itself,
+/// would one day inject 2000°/s into a loop written for 250 — the invented
+/// range, in the other direction.
+///
+/// This is what makes a control loop testable without hardware. QEMU models
+/// no I2C or SPI slave, so a firmware that reads its IMU over a bus reads
+/// nothing; a firmware that also accepts `Igyro=…` can be flown at a desk.
+#[component]
+fn Sensors() -> impl IntoView {
+    let state = AppState::expect();
+
+    move || {
+        let sensors = state.sim.sensors.get();
+        if sensors.is_empty() {
+            return view! {
+                <div class="shrink-0 border-t border-line">
+                    <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                        "Sensors"
+                    </div>
+                    <p class="px-3 pb-2 text-caption leading-relaxed text-label-3">
+                        "None announced. Firmware prints "
+                        <span class="font-mono">"[rusty:sensor] gyro=3 rad/s -35..35"</span>
+                        " and a card appears here; reading "
+                        <span class="font-mono">"Igyro=1.25,-0.5,0.02"</span>
+                        " back off its serial input is what lets a loop run with no IMU                          attached. Announce on a timer, not only at boot."
+                    </p>
+                </div>
+            }
+                .into_any();
+        }
+        // The same gate the tunables use, and for the same reason: a spawned
+        // `espflash monitor` is a running session whose stdin the board never
+        // sees, so sliders that silently went nowhere would read as firmware
+        // ignoring them.
+        let writable = state.sim.link_port.with(Option::is_some) || state.app.session_running.get();
+        view! {
+            <div class="shrink-0 border-t border-line">
+                <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                    "Sensors"
+                </div>
+                {sensors
+                    .into_iter()
+                    .map(|def| {
+                        // `StoredValue` so every closure below stays `Copy`:
+                        // a captured `String` would move into the first one
+                        // and leave the rest without a name.
+                        let name = StoredValue::new(def.name.clone());
+                        let count = def.components as usize;
+                        // Bounds from the firmware or none at all.
+                        let (low, high) = (def.min.unwrap_or(-1.0), def.max.unwrap_or(1.0));
+                        let unit = def.unit.clone().unwrap_or_default();
+                        let label = def.name.clone();
+                        let held = move || {
+                            state
+                                .sim
+                                .sensor_values
+                                .with(|all| {
+                                    name.with_value(|n| all.get(n).cloned())
+                                        .unwrap_or_else(|| vec![0.0; count])
+                                })
+                        };
+                        // One line carries the whole sample: moving any
+                        // component sends every component. A torn sample is
+                        // worse than a late one for anything that fuses them.
+                        let send = move |axis: usize, raw: String| {
+                            let Ok(parsed) = raw.trim().parse::<f32>() else {
+                                return;
+                            };
+                            let mut values = held();
+                            if let Some(slot) = values.get_mut(axis) {
+                                *slot = parsed;
+                            }
+                            name.with_value(|n| controller::sim_sensor(state, n.clone(), values));
+                        };
+                        view! {
+                            <div class="px-3 py-1.5">
+                                <div class="flex items-baseline justify-between gap-2">
+                                    <span class="min-w-0 truncate font-mono text-caption text-label-2">
+                                        {label}
+                                    </span>
+                                    <span class="shrink-0 text-caption text-label-3">{unit}</span>
+                                </div>
+                                {(0..count)
+                                    .map(|axis| {
+                                        let reading = move || {
+                                            held().get(axis).copied().unwrap_or(0.0)
+                                        };
+                                        view! {
+                                            <div class="flex items-center gap-2 pt-0.5">
+                                                <input
+                                                    type="range"
+                                                    min=low.to_string()
+                                                    max=high.to_string()
+                                                    step="any"
+                                                    disabled=!writable
+                                                    prop:value=move || reading().to_string()
+                                                    on:input=move |event| {
+                                                        send(axis, event_target_value(&event))
+                                                    }
+                                                    class="min-w-0 flex-1 accent-rust disabled:opacity-40"
+                                                />
+                                                <span class="w-[5ch] shrink-0 text-right font-mono text-caption text-label-3">
+                                                    {move || format!("{:.2}", reading())}
+                                                </span>
+                                            </div>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                            </div>
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+        }
+            .into_any()
+    }
+}
+
 #[component]
 fn Tunables() -> impl IntoView {
     let state = AppState::expect();
@@ -415,7 +540,7 @@ fn Tunables() -> impl IntoView {
         // nothing — read as firmware ignoring the change.
         let running = state.sim.link_port.with(Option::is_some);
         view! {
-            <div class="w-[17rem] shrink-0 overflow-y-auto">
+            <div class="shrink-0">
                 <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                     "Tunables"
                 </div>
