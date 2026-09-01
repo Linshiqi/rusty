@@ -1,0 +1,217 @@
+//! The shell, and the one-shot runner the panels use to launch a tool.
+
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+
+use rusty_embed::{LogLine, LogStream};
+use rusty_term::Screen as TermScreen;
+
+// The sibling modules, flat: `controller` re-exports every one of them,
+// so a call between two of them reads the same as a call from a view.
+use super::*;
+use crate::{
+    ipc::{self, cmd},
+    state::AppState,
+};
+
+/// Open a shell and render whatever it draws.
+///
+/// Frames arrive on a channel and replace the screen wholesale, because a pty
+/// *is* a screen: a progress bar redraws its own line, a prompt redraws itself
+/// after every backspace, and appending would turn both into a waterfall.
+pub fn open_terminal(state: AppState, cols: u16, rows: u16) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        cols: u16,
+        rows: u16,
+    }
+
+    // This call's generation. Everything below writes only while it is
+    // still the current one.
+    let epoch = state.term.epoch.get_untracked() + 1;
+    state.term.epoch.set(epoch);
+
+    let channel = ipc::Channel::new();
+    let on_frame = Closure::wrap(Box::new(move |value: JsValue| {
+        if state.term.epoch.get_untracked() != epoch {
+            return;
+        }
+        if let Ok(screen) = serde_wasm_bindgen::from_value::<TermScreen>(value) {
+            state.term.screen.set(Some(screen));
+        }
+    }) as Box<dyn FnMut(JsValue)>);
+    channel.set_onmessage(&on_frame);
+    // Held by the backend for the life of the shell, which outlives this call.
+    on_frame.forget();
+
+    // Deliberately not tracked. This call does not return until the shell
+    // exits, so counting it as work in flight pins the status bar to "working"
+    // for as long as a terminal is open — which is to say, for ever.
+    let args = Args { cols, rows };
+    spawn_local(async move {
+        let outcome =
+            ipc::call_streaming::<_, ()>(cmd::terminal::OPEN, &args, "onFrame", &channel).await;
+        // A replaced session's ending is not news: the session that replaced
+        // it owns the screen now.
+        if state.term.epoch.get_untracked() != epoch {
+            return;
+        }
+        if let Err(e) = outcome {
+            state.app.error.set(Some(e));
+        }
+        // A shell that exited leaves its final screen up — it says "exited"
+        // and any key starts a fresh one. Only a session that never produced
+        // an exit (the error path) drops to the placeholder.
+        if state
+            .term
+            .screen
+            .with_untracked(|t| t.as_ref().is_none_or(|screen| screen.exited.is_none()))
+        {
+            state.term.screen.set(None);
+        }
+    });
+}
+
+/// Send keystrokes to the shell.
+///
+/// Not tracked: this fires on every keypress, and routing it through the busy
+/// indicator would make the whole window flicker while you type.
+pub fn terminal_input(state: AppState, bytes: Vec<u8>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        bytes: Vec<u8>,
+    }
+
+    let args = Args { bytes };
+    spawn_local(async move {
+        if let Err(e) = ipc::call::<_, ()>(cmd::terminal::WRITE, &args).await {
+            state.app.error.set(Some(e));
+        }
+    });
+}
+
+/// Tell the shell the view changed size.
+pub fn terminal_resize(cols: u16, rows: u16) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        cols: u16,
+        rows: u16,
+    }
+
+    let args = Args { cols, rows };
+    spawn_local(async move {
+        // Silent on failure: resizes fire from a layout observer that neither
+        // knows nor cares whether a shell is running.
+        let _ = ipc::call::<_, ()>(cmd::terminal::RESIZE, &args).await;
+    });
+}
+
+/// Move the view through scrollback.
+pub fn terminal_scroll(state: AppState, delta: i32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        delta: i32,
+    }
+
+    let args = Args { delta };
+    spawn_local(async move {
+        // Scrolling changes what is shown without the shell writing anything,
+        // so the new screen comes back from the call rather than as a frame.
+        if let Ok(screen) = ipc::call::<_, TermScreen>(cmd::terminal::SCROLL, &args).await {
+            state.term.screen.set(Some(screen));
+        }
+    });
+}
+
+pub fn close_terminal(state: AppState) {
+    spawn_local(async move {
+        // Await the close, *then* clear the screen. Clearing first fires the
+        // view's reopen effect immediately, and the close — still in flight —
+        // then landed on the session that had just replaced this one, killing
+        // the new shell at birth. That is the blank terminal after switching
+        // shells.
+        let _ = ipc::get::<serde_json::Value>(cmd::terminal::CLOSE).await;
+        state.term.screen.set(None);
+    });
+}
+
+/// Install a tool, then notice that it is installed.
+///
+/// Separate from [`run_command`] only for the re-probe. Without it the panel
+/// that offered the install still says the tool is missing after it succeeds,
+/// and the user is left pressing a button that has already done its job.
+pub fn install_tool(state: AppState, line: String) {
+    run_command_then(state, line, move |code| {
+        if matches!(code, Some(0) | None) {
+            refresh_toolchain(state);
+        }
+    });
+}
+
+/// Run one command in the project root.
+pub fn run_command(state: AppState, line: String) {
+    run_command_then(state, line, |_| {});
+}
+
+fn run_command_then(state: AppState, line: String, after: impl FnOnce(Option<i32>) + 'static) {
+    state.dock.source.set("commands");
+    let mut parts = line.split_whitespace().map(str::to_string);
+    let Some(program) = parts.next() else {
+        return;
+    };
+    let args: Vec<String> = parts.collect();
+
+    #[derive(serde::Serialize)]
+    struct Args {
+        program: String,
+        args: Vec<String>,
+    }
+
+    // Echo it first. Without this the output has no header and a scrollback of
+    // several runs becomes unreadable.
+    state.push_log(LogLine {
+        stream: LogStream::Stdout,
+        text: format!("$ {line}"),
+        level: None,
+    });
+
+    let channel = stream_to_terminal(state);
+    let args = Args { program, args };
+    track_session(
+        state,
+        async move {
+            ipc::call_streaming::<_, Option<i32>>(cmd::terminal::RUN, &args, "onLine", &channel)
+                .await
+        },
+        move |code| {
+            note_exit(state, code);
+            after(code);
+        },
+    );
+}
+
+/// End the running session. The normal way a monitor finishes, not an error.
+pub fn stop_session(state: AppState) {
+    track(
+        state,
+        ipc::get::<serde_json::Value>(cmd::flash::STOP),
+        move |_| state.app.session_running.set(false),
+    );
+}
+
+pub fn dismiss_error(state: AppState) {
+    state.app.error.set(None);
+}
+
+/// Window buttons.
+///
+/// Failures here are deliberately not surfaced: if minimising fails there is
+/// nothing the user can do about it, and a banner about it would be noise on
+/// top of a window that did not move.
+pub fn window_action(command: &'static str) {
+    spawn_local(async move {
+        let _ = ipc::get::<serde_json::Value>(command).await;
+    });
+}
