@@ -434,7 +434,8 @@ fn Sensors() -> impl IntoView {
                         <span class="font-mono">"[rusty:sensor] gyro=3 rad/s -35..35"</span>
                         " and a card appears here; reading "
                         <span class="font-mono">"Igyro=1.25,-0.5,0.02"</span>
-                        " back off its serial input is what lets a loop run with no IMU                          attached. Announce on a timer, not only at boot."
+                        " back off its serial input is what lets a loop run with no IMU \
+                         attached. Announce on a timer, not only at boot."
                     </p>
                 </div>
             }

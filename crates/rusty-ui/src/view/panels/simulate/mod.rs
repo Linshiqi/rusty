@@ -1205,7 +1205,8 @@ fn BoardEditor(
                                                         _ => "normal",
                                                     };
                                                     format!(
-                                                        "animation-duration: {seconds:.2}s;                                                          animation-direction: {way}",
+                                                        "animation-duration: {seconds:.2}s; \
+                                                         animation-direction: {way}",
                                                     )
                                                 }
                                                 // Still, and for two different
