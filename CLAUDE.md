@@ -60,6 +60,13 @@ cd crates/rusty-app && cargo tauri dev
 # directory's tools/).
 cargo run -p rusty-embed --example sim_probe -- <project-dir> [seconds]
 
+# The inward half, which sim_probe cannot prove because it never writes:
+# a declared sensor, an injected sample, and a controller that answers it in
+# the right direction. Then the same with a plant in the middle, which is what
+# turns "it responds" into "it settles".
+cargo run -p rusty-embed --example loop_probe -- examples/rate-loop
+cargo run -p rusty-embed --example flight_probe -- examples/rate-loop
+
 # The workbench without the window
 cargo run -p rusty-cli -- check .
 cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
@@ -173,6 +180,27 @@ fused from a torn sample drifts in a way that looks exactly like a bad gyro.
 the motors the *opposite* way, because a loop that answered every injection
 with the same asymmetry would pass every weaker test while being wired
 backwards.
+
+**Injection alone is an open loop, so there is a plant.** A rate fed in never
+changed because the motors spun, which catches a reversed axis and says
+nothing about whether a loop settles. `rusty_embed::plant` is the integrator
+between the two: duties in, body rates and an accelerometer out, run by the
+panel on a timer and by `flight_probe` headless. Orientation is a quaternion
+because angle accumulators get rotation order and gimbal lock wrong, and the
+tests pin exactly that. Carrying an orientation is what lets it synthesise
+gravity in the body frame, which is what makes a *fusion* filter testable —
+the larger half of the reason it exists.
+
+It is a model and says so in its own header: no translation, so it is a drone
+on a test gimbal; no aerodynamics past damping; and no claim about anybody's
+aircraft. **What transfers is the sign of each axis, the order of the motors,
+and whether the loop is stable in shape — not the gains.** `flight_probe`
+holds it to that: a gust at the firmware's gains must come back, and the same
+gust at the top of a declared range must look visibly worse, because a plant
+that showed every tune settling would quietly reassure about all of them.
+Measure overshoot and sign changes rather than peak rate — the mixer clamps
+each motor to 0..1, and a gust big enough to saturate it makes every gain
+command the same thing.
 
 The reading of that protocol lives in *one* function (`controller::absorb`),
 because it was per-stream once and the consequence was telemetry that plotted
