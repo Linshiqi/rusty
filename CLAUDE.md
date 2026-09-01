@@ -16,9 +16,13 @@ in this file that still reads as "we do not edit code" is stale.
 ## Commands
 
 ```bash
-# Everything, the way CI runs it
+# Everything, the way CI runs it — and it does now: `.github/workflows/ci.yml`
+# runs these four on every push and pull request. For a long stretch this line
+# was aspirational, the three workflows were all tag-triggered publishing, and
+# nothing looked at a push.
+cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
 
 # The frontend links only the model layers, so these must stay green
 cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
@@ -66,15 +70,15 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy) |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging: gdb's machine interface parsed, folded into a session state — breakpoints, stepping, stack, variables |
-| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens |
+| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
-| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm) |
+| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface |
 
 ## The rules that are load-bearing
@@ -255,6 +259,13 @@ it is a file; if only this WebView cares and losing it costs a shrug, it may be
 localStorage; high-volume queryable data picks its own format when the feature
 that needs it lands.**
 
+**In the window itself, `AppState` is grouped by concern** — `state.editor.draft`,
+`state.debug.session`, `state.find.open`. It was 112 signals in one flat struct,
+which is a struct nobody can read and a boundary nothing enforces; the `find_`,
+`search_`, `ai_` and `sim_` prefixes half the fields carried were the group's
+name written into every field for want of a group to put it in. A new signal
+goes in the group it belongs to, or a new group gets added — not on the end.
+
 - The data directory (`config::data_dir()`) holds `boards/` and
   `workbench.toml` — plain TOML, user-readable, checked by tests. Its location
   is configurable: a fixed anchor (`%APPDATA%
@@ -293,13 +304,23 @@ usty`) holds `location.toml`
 - **Fixtures are real.** `rusty-core/tests/fixtures/feature-lab` is a genuine
   workspace; `tests/memory.rs` writes a real ELF with `object`'s writer. Mocks
   would not have caught the section-flag classification bugs.
+- **A round-trip fixture must differ from the default in every field, or it
+  proves nothing about the ones it does not.** `the_board_round_trips_through_
+  save_and_load` existed for the whole time `flip` was being dropped on save,
+  and passed: the fixture set `flip: false` on every part, so a writer that
+  never wrote the field and a reader that hard-coded `false` agreed perfectly.
+  Same blind spot in the frontend's `parts_survive_the_round_trip_through_the_
+  wire_model`, which set `rot` and left `flip` alone. Both fixtures now set
+  every optional field to something that is not its default.
 - **Geometry and protocol get tests; views get driven.** The board canvas got
   its arithmetic wrong three times while none of it was reachable from a test.
-  The pure half now lives in `simulate/geometry.rs` under tests that pin the
-  real pinmap, rotated anchor points, orthogonality and endpoint anchoring.
-  What genuinely needs a browser — a drag, a right-click — is driven through
-  `mock.js` and asserted on numbers read back from the DOM, in a *separate*
-  call from the one that dispatched the event.
+  The pure halves now live beside the component: `simulate/geometry.rs` (shapes
+  and anchors, under tests that pin the real pinmap, rotated anchor points,
+  orthogonality and endpoint anchoring) and `simulate/edit.rs` (what rotate,
+  mirror, delete, duplicate and undo *do* to the part list). What genuinely
+  needs a browser — a drag, a right-click — is driven through `mock.js` and
+  asserted on numbers read back from the DOM, in a *separate* call from the one
+  that dispatched the event.
 - The built-in catalogue is checked by a `debug_assert!` at load — a typo in
   `data/*.toml` would otherwise surface only as a part mysteriously missing.
 
@@ -316,6 +337,39 @@ usty`) holds `location.toml`
   array so `$pair[0]` indexed a *character* and replaced every `u` with `s`
   across four files. Use the editing tools. If a bulk change is needed, do it
   file by file.
+- **And the same trap has a Python spelling: `open(p, "w")`.** On Windows,
+  text mode translates every `\n` into `\r\n` on the way out. A script that
+  read a file, changed one token and wrote it back turned 34 files CRLF in one
+  sitting — the repository is LF, git stores LF, `core.autocrlf` is false, so
+  `git diff` then reported 8,000 changed lines of which about 300 were real.
+  Nothing is corrupted and nothing fails to build, which is what makes it
+  worth writing down: the damage is that the diff becomes unreviewable, and a
+  review is the only thing standing between a bulk edit and the two failures
+  above. `newline=""` on the write, or read and write bytes. `.gitattributes`
+  and `rustfmt.toml` now both pin LF, and `file crates/**/*.rs | grep CRLF`
+  is the check.
+- **`cargo fmt` is the house style, and CI checks it.** Not because the
+  formatting was bad, but because unmanaged drift hides real damage: the
+  leftovers of those bulk edits — `warning: None,` at forty columns of
+  indent, a `\` line-continuation lost so a user-facing string carried
+  twenty-five spaces mid-sentence — sat in the tree looking like formatting
+  nobody had got round to. rustfmt normalises the first kind and cannot see
+  the second, so the second is worth grepping for on its own:
+  `"[^"]*[^ ] {6,}[^ ]`. Where hand alignment genuinely reads better —
+  `rusty_ai::model::presets` is a table — say so with `#[rustfmt::skip]` and
+  a comment, rather than leaving the file unformatted.
+- **Five fields copied onto six structs will lose one.** `SimLed`,
+  `SimButton`, `SimRgb`, `SimSeven`, `SimDisplay` and `SimPot` each repeated
+  `x`/`y`/`routes`/`rot`/`flip`, comments and all, and the file format
+  repeated them again in *two* more sets — one for reading, one for writing.
+  `flip` was added to the six wire types and to none of the four other
+  places, so mirroring a part worked until the project was reopened. There is
+  one `Placement` now, and one `file::Place` used in both directions.
+  Nested rather than `#[serde(flatten)]` on the wire side, deliberately:
+  flatten routes the struct through serde's buffering path, and the frontend
+  decodes from a JS value where a buffered number is not reliably the integer
+  `rot` needs. The file side does flatten, because TOML is self-describing
+  and its keys have to stay where a hand-written file puts them.
 - **TOML scoping**: in `data/boards.toml`, every scalar key must precede the
   first `[[board.usb]]` or `[board.pins]` header. A `flash_baud` after the usb
   block is parsed as a usb field. `deny_unknown_fields` catches it.
