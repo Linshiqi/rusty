@@ -1,0 +1,22 @@
+# LF in the repository and LF in the working tree, on every platform.
+#
+# git already stores LF here and `core.autocrlf` is false, so nothing *asked*
+# for CRLF — but a tool that writes a file in the platform's text mode puts it
+# there anyway, and then `git diff` reports every line of the file as changed.
+# Thirty-four files went that way in one sitting, from a script that opened
+# them for writing without saying `newline=""`; the diff was 8,000 lines of
+# nothing.
+#
+# `eol=lf` makes the checkout explicit rather than relying on the default, and
+# `text=auto` keeps git from ever guessing about a file it has not seen before.
+* text=auto eol=lf
+
+# Binary, and must not be touched by any of the above.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.bin binary
+*.elf binary

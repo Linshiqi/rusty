@@ -1,0 +1,13 @@
+# Default rustfmt, with two things said out loud.
+#
+# `newline_style` defaults to `Auto`, which means "whatever the file already
+# uses" — so a file that has picked up CRLF keeps it, and rustfmt is no help
+# in getting it back. Saying Unix means formatting is also normalising, which
+# is what `.gitattributes` next door assumes.
+newline_style = "Unix"
+
+# The edition rustfmt parses with. It reads this from the manifest for a
+# `cargo fmt` run, but not for an editor calling `rustfmt` on one file — and
+# `edition = "2024"` is what lets it parse `let ... else` and if-let chains,
+# which this codebase uses throughout.
+edition = "2024"

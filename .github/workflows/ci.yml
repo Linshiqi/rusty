@@ -1,0 +1,121 @@
+# Every gate the project already believed it had.
+#
+# CLAUDE.md opens with "Everything, the way CI runs it" — and until this file
+# there was no CI that ran any of it. The three release workflows are all
+# tag- or path-triggered publishing pipelines; a push that broke the wasm
+# split, a test, or clippy went green because nothing looked. This is the file
+# that looks.
+#
+# Four jobs, cheapest first, and none of them depends on the others: a
+# formatting slip and a failing test are different reports, and finding out
+# about the second only after fixing the first wastes a round trip.
+#
+#   fmt      rustfmt, as a check
+#   clippy   the workspace, all targets, warnings denied
+#   test     the workspace, on Linux and Windows
+#   wasm     the model layers, with `default-features = false`
+#
+# The wasm job is the one that is easy to lose and expensive to lose: it is
+# what makes rule 1 real. `std::process` in a `model` type compiles perfectly
+# on the host and breaks only here.
+
+name: ci
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+
+# A second push to the same branch makes the first one's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same list the release workflow installs, and for the same reasons
+      # — see the comment there. Clippy type-checks rusty-app, which links
+      # tauri, so it needs them as much as a build does.
+      - name: Linux system libraries (webkit2gtk and friends)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl \
+            wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev libudev-dev libdbus-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # `--all-targets` so tests and examples are linted too: half this
+      # repository's most careful code is in its tests.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both, deliberately. The pty, the console modes and the path
+        # comparisons are all platform-specific, and the traps this project
+        # has hit — ConPTY's cursor query, a pty read that never reports EOF,
+        # `E:\x` against `e:/x` — are every one of them Windows-only.
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system libraries (webkit2gtk and friends)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl \
+            wget file libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev libudev-dev libdbus-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # `rusty-core`'s fixture is a real standalone workspace that
+      # `cargo metadata` resolves at test time, so the runner needs to be able
+      # to reach crates.io. It is excluded from this workspace on purpose.
+      - run: cargo test --workspace
+
+  wasm:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # The frontend links only the model layers, and `default-features =
+      # false` is how it takes them. Anything that spawns a process, reads a
+      # file or walks a graph has to be behind `backend`, and this is the only
+      # thing that proves it — the host build is happy either way.
+      - name: model layers compile to wasm32
+        run: |
+          cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
+            -p rusty-edit -p rusty-lsp -p rusty-dbg \
+            --no-default-features --target wasm32-unknown-unknown
+
+      # And the frontend itself, which is what actually consumes them.
+      - name: the frontend compiles to wasm32
+        run: cargo check -p rusty-ui --target wasm32-unknown-unknown
