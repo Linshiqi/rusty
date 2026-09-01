@@ -147,6 +147,33 @@ motor loop. `examples/pid-tune` is the worked end of it, proven in QEMU —
 `Ssetpoint=80` moved the plant, `Ssetpoint=500` came back as 100, and an
 unknown name changed nothing and said nothing.
 
+**A boolean channel cannot carry a control loop, so three lines carry
+numbers.** `[rusty:pwm] 5=0.75` is how hard a pin is driven rather than
+whether it is high — reported per *change*, because timing the `[rusty:gpio]`
+edges would be the more honest measurement and is unavailable: 1–20 kHz is
+thousands of edges a second on the line the console shares.
+`[rusty:sensor] gyro=3 rad/s -35..35` declares a sensor the firmware wants
+fed and `Igyro=1.25,-0.5,0.02` feeds it; `A34=2900` puts raw ADC counts on a
+pin. Counts and not volts, because rusty does not know anybody's divider and
+a claimed 3.7 V that the firmware's arithmetic disagreed with is the
+confident wrong answer in miniature.
+
+The inward half is what makes a flight controller simulatable at all. QEMU
+models no I2C and no SPI slave, so firmware reading an MPU6500 reads nothing
+and the attitude loop — the whole of the thing — could not run at a desk.
+The declaration is the tunables' rule pointed the other way: a panel that
+offered `gyro` because a drone usually has one, over a range it chose
+itself, would one day inject 2000°/s into a loop written for 250.
+
+**A sample travels whole or not at all.** Split across three lines the
+firmware can read x from one moment and y from the next, and an attitude
+fused from a torn sample drifts in a way that looks exactly like a bad gyro.
+`examples/rate-loop` is the worked end, and `loop_probe` is the check that
+`sim_probe` cannot be — it writes, and it requires rolling each way to move
+the motors the *opposite* way, because a loop that answered every injection
+with the same asymmetry would pass every weaker test while being wired
+backwards.
+
 The reading of that protocol lives in *one* function (`controller::absorb`),
 because it was per-stream once and the consequence was telemetry that plotted
 in the simulator and vanished on hardware.
