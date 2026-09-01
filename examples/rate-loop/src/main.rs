@@ -156,6 +156,11 @@ fn main() -> ! {
     ];
 
     let mut gyro = [0.0f32; 3];
+    let mut accel = [0.0f32, 0.0, 1.0];
+    // The fused attitude, radians. Not a state the controller uses -- this is
+    // a rate loop -- but what an angle mode would sit on, and what the panel
+    // draws the aircraft from.
+    let mut attitude = [0.0f32; 2];
     let mut battery = BATTERY_FULL;
     let mut armed = false;
     let mut axes = [Axis::default(), Axis::default(), Axis::default()];
@@ -174,6 +179,7 @@ fn main() -> ! {
         // and would show nothing with no way to find out why.
         if announced.elapsed().as_millis() > 1000 {
             println!("[rusty:sensor] gyro=3 rad/s -35..35");
+            println!("[rusty:sensor] accel=3 g -1..1");
             for tunable in &tunables {
                 tunable.announce();
             }
@@ -199,6 +205,7 @@ fn main() -> ! {
                     &line[..filled],
                     &mut tunables,
                     &mut gyro,
+                    &mut accel,
                     &mut battery,
                     &mut armed,
                 );
@@ -212,6 +219,21 @@ fn main() -> ! {
                 filled = 0;
             }
         }
+
+        // A complementary filter: trust the gyro over a second or so and let
+        // gravity pull the estimate straight over minutes. The classic, and
+        // the reason the accelerometer is worth feeding at all -- integrating
+        // the gyro alone drifts, and gravity alone is unusable the moment the
+        // aircraft accelerates.
+        //
+        // `atan2` and not `asin`: at 90° of tilt the divisor goes to zero and
+        // `asin` walks off its domain into NaN, which then poisons the
+        // estimate for the rest of the flight.
+        let accel_roll = libm::atan2f(accel[1], accel[2]);
+        let accel_pitch = libm::atan2f(-accel[0], libm::sqrtf(accel[1] * accel[1] + accel[2] * accel[2]));
+        const TRUST_GYRO: f32 = 0.98;
+        attitude[0] = TRUST_GYRO * (attitude[0] + gyro[0] * DT) + (1.0 - TRUST_GYRO) * accel_roll;
+        attitude[1] = TRUST_GYRO * (attitude[1] + gyro[1] * DT) + (1.0 - TRUST_GYRO) * accel_pitch;
 
         let (p, i, d, throttle) = (
             tunables[0].value,
@@ -251,10 +273,12 @@ fn main() -> ! {
             MOTORS[0], duties[0], MOTORS[1], duties[1], MOTORS[2], duties[2], MOTORS[3], duties[3],
         );
         println!(
-            "[rusty:tel@{now}] gyro_r={:.2},gyro_p={:.2},gyro_y={:.2},m0={:.3},m1={:.3},m2={:.3},m3={:.3},batt={:.2}",
+            "[rusty:tel@{now}] gyro_r={:.2},gyro_p={:.2},gyro_y={:.2},att_roll={:.1},             att_pitch={:.1},m0={:.3},m1={:.3},m2={:.3},m3={:.3},batt={:.2}",
             gyro[0],
             gyro[1],
             gyro[2],
+            attitude[0] * 180.0 / core::f32::consts::PI,
+            attitude[1] * 180.0 / core::f32::consts::PI,
             duties[0],
             duties[1],
             duties[2],
@@ -295,6 +319,7 @@ fn apply(
     raw: &[u8],
     tunables: &mut [Tunable],
     gyro: &mut [f32; 3],
+    accel: &mut [f32; 3],
     battery: &mut f32,
     armed: &mut bool,
 ) {
@@ -313,6 +338,20 @@ fn apply(
         // The whole sample, or none of it. A partial `Igyro=1.0` would leave
         // pitch and yaw at their previous values and fuse two moments — the
         // drift this protocol exists to avoid.
+        "I" if name == "accel" => {
+            let mut parsed = [0.0f32; 3];
+            let mut seen = 0;
+            for (slot, field) in parsed.iter_mut().zip(value.split(',')) {
+                let Ok(number) = field.trim().parse::<f32>() else {
+                    return;
+                };
+                *slot = number;
+                seen += 1;
+            }
+            if seen == 3 {
+                *accel = parsed;
+            }
+        }
         "I" if name == "gyro" => {
             let mut parsed = [0.0f32; 3];
             let mut seen = 0;
