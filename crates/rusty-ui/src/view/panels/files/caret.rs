@@ -124,7 +124,7 @@ pub(super) fn keep_caret_in_view(
     let Some((row, _)) = caret_line_col(area, &text) else {
         return;
     };
-    let lh = LINE_HEIGHT * state.editor.zoom.get_untracked();
+    let lh = row_height(state.editor.zoom.get_untracked());
     let y = 8.0 + f64::from(row) * lh;
     let view_top = f64::from(outer.scroll_top());
     let view_height = f64::from(outer.client_height());
@@ -181,7 +181,7 @@ pub(super) fn cell_under(
     zoom: f64,
 ) -> Option<(u32, u32)> {
     // The 8s are the text column's pl-2 / py-2.
-    let line = ((offset_y - 8.0) / (LINE_HEIGHT * zoom)).floor();
+    let line = ((offset_y - 8.0) / (row_height(zoom))).floor();
     if line < 0.0 {
         return None;
     }
@@ -282,7 +282,7 @@ pub(super) fn centre_view(
         return;
     };
     let line = text.chars().take(cursor).filter(|c| *c == '\n').count() as u32;
-    let lh = LINE_HEIGHT * state.editor.zoom.get_untracked();
+    let lh = row_height(state.editor.zoom.get_untracked());
     let y = 8.0 + f64::from(row_for(state, line)) * lh;
     let height = f64::from(outer.client_height());
     let top = match at {

@@ -5306,7 +5306,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-ai"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5325,7 +5325,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-app"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "rusty-ai",
  "rusty-core",
@@ -5345,7 +5345,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5357,7 +5357,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "camino",
  "guppy",
@@ -5370,7 +5370,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-dbg"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -5378,7 +5378,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-edit"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "grep-matcher",
  "grep-regex",
@@ -5393,7 +5393,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-embed"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "object",
  "quick-xml",
@@ -5409,21 +5409,22 @@ dependencies = [
 
 [[package]]
 name = "rusty-ipc"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "rusty-lsp"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]
 name = "rusty-term"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "brush-builtins",
  "brush-core",
@@ -5439,7 +5440,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-ui"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

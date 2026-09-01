@@ -148,7 +148,7 @@ pub(super) fn vim_key(
                     .get_untracked()
                     .map(|element| {
                         let height = f64::from(element.client_height());
-                        let line = (LINE_HEIGHT * state.editor.zoom.get_untracked()).max(1.0);
+                        let line = (row_height(state.editor.zoom.get_untracked())).max(1.0);
                         ((height / line) / 2.0).round().max(1.0) as usize
                     })
                     .unwrap_or(10);

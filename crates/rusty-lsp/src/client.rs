@@ -884,6 +884,49 @@ impl Shared {
     }
 }
 
+/// Manifests rust-analyzer would otherwise never see.
+///
+/// The layout this exists for is the standard embedded one: a workspace whose
+/// host-testable crates are members, and a firmware crate `exclude`d because
+/// it needs a bare-metal target and its own toolchain — `cargo test` at the
+/// root would otherwise try to build `no_std` firmware for the host.
+///
+/// rust-analyzer loads *one* workspace from the root, so every file under the
+/// excluded directory comes back "not included in any crates, so
+/// rust-analyzer can't offer IDE services" — no completion, no diagnostics,
+/// no navigation, in exactly the half of the repository this workbench is
+/// for. `linkedProjects` is the server's own answer: name the extra manifests
+/// and it loads them alongside.
+///
+/// Read from `workspace.exclude` rather than guessed by walking: a directory
+/// the workspace deliberately named is a fact, and linking every `Cargo.toml`
+/// under the root would pull in vendored copies and fixtures.
+fn linked_projects(root: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    // `Table`, not `Value`: in toml 1.x `Value`'s `FromStr` parses a single
+    // TOML *value*, so a whole manifest fails at the first table header with
+    // an error that reads as a broken `Cargo.toml`.
+    let Ok(manifest) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(excluded) = manifest
+        .get("workspace")
+        .and_then(|w| w.get("exclude"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    excluded
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .map(|name| root.join(name).join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .map(|manifest| manifest.to_string_lossy().into_owned())
+        .collect()
+}
+
 /// The `initialize` round trip.
 fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<()> {
     let mut cargo = serde_json::Map::new();
@@ -894,6 +937,27 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     if let Some(target) = target {
         cargo.insert("target".into(), json!(target));
     }
+
+    // Named only when there is something to name. An empty `linkedProjects`
+    // is not the same as an absent one — it tells rust-analyzer the set of
+    // projects is exactly nothing, and the root workspace stops loading.
+    let mut options = serde_json::Map::new();
+    let linked = linked_projects(root);
+    if !linked.is_empty() {
+        let mut all = vec![root.join("Cargo.toml").to_string_lossy().into_owned()];
+        all.extend(linked);
+        options.insert("linkedProjects".into(), json!(all));
+    }
+    options.insert("cargo".into(), Value::Object(cargo));
+    options.insert("check".into(), json!({ "allTargets": false }));
+    // Off, deliberately. Embedded projects here use `build-std`, and
+    // `cargo check` under build-std emits messages for packages that are not
+    // in `cargo metadata` — rust-analyzer logs an error storm and, when the
+    // run completes, publishes empty diagnostics that wipe the native ones.
+    // Observed as: squiggles appear for a few seconds, then vanish. Native
+    // diagnostics — type errors, unresolved names — are the ones the editor
+    // needs live anyway.
+    options.insert("checkOnSave".into(), json!(false));
 
     let params = json!({
         "processId": std::process::id(),
@@ -951,18 +1015,7 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "diagnostics": { "refreshSupport": true },
             },
         },
-        "initializationOptions": {
-            "cargo": Value::Object(cargo),
-            "check": { "allTargets": false },
-            // Off, deliberately. Embedded projects here use `build-std`, and
-            // `cargo check` under build-std emits messages for packages that
-            // are not in `cargo metadata` — rust-analyzer logs an error storm
-            // and, when the run completes, publishes empty diagnostics that
-            // wipe the native ones. Observed as: squiggles appear for a few
-            // seconds, then vanish. Native diagnostics — type errors,
-            // unresolved names — are the ones the editor needs live anyway.
-            "checkOnSave": false,
-        },
+        "initializationOptions": Value::Object(options),
     });
 
     let reply = shared.request("initialize", params)?;
@@ -1584,5 +1637,72 @@ mod tests {
             uri_to_relative(&format!("{uri}/src/a.rs"), root).as_deref(),
             Some("src/a.rs"),
         );
+    }
+
+    /// The layout this exists for: a workspace whose firmware is excluded
+    /// because it cross-compiles. Without the link, every file under it comes
+    /// back "not included in any crates" and the editor is inert in exactly
+    /// the half of the repository this workbench is for.
+    #[test]
+    fn an_excluded_firmware_crate_is_linked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]
+members = [\"core\"]
+exclude = [\"firmware\"]
+",
+        )
+        .expect("root manifest");
+        std::fs::create_dir(root.join("firmware")).expect("mkdir");
+        std::fs::write(
+            root.join("firmware/Cargo.toml"),
+            "[package]
+name = \"fw\"
+",
+        )
+        .expect("firmware manifest");
+
+        let linked = linked_projects(root);
+        assert_eq!(linked.len(), 1, "{linked:?}");
+        assert!(linked[0].ends_with("Cargo.toml"));
+        assert!(linked[0].contains("firmware"));
+    }
+
+    /// An excluded directory that is not a crate — a fixture tree, a vendored
+    /// copy — must not be handed to rust-analyzer as a project. It would fail
+    /// to load and the failure reads as the server being broken.
+    #[test]
+    fn an_excluded_directory_with_no_manifest_is_not_linked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]
+exclude = [\"fixtures\"]
+",
+        )
+        .expect("root manifest");
+        std::fs::create_dir(root.join("fixtures")).expect("mkdir");
+        assert!(linked_projects(root).is_empty());
+    }
+
+    /// An ordinary project excludes nothing, and must be left entirely alone:
+    /// naming `linkedProjects` at all changes how rust-analyzer discovers the
+    /// workspace, so the option has to stay absent rather than empty.
+    #[test]
+    fn a_plain_workspace_links_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]
+name = \"solo\"
+",
+        )
+        .expect("manifest");
+        assert!(linked_projects(root).is_empty());
+        assert!(linked_projects(Path::new("/nowhere-at-all")).is_empty());
     }
 }

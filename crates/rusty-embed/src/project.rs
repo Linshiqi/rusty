@@ -115,6 +115,41 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
     Ok(project)
 }
 
+/// Excluded directories that are firmware crates in their own right.
+///
+/// Named, never adopted. rusty could open one of these instead and be right
+/// most of the time — and wrong in a way that flashes the wrong binary to a
+/// board. So this only says where to look.
+fn firmware_candidates(root: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(excluded) = manifest
+        .get("workspace")
+        .and_then(|w| w.get("exclude"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    excluded
+        .iter()
+        .filter_map(toml::Value::as_str)
+        // A chip by the same two tests applied to the root: an `esp-hal` chip
+        // feature in the manifest, or a bare-metal triple in
+        // `.cargo/config.toml`. Recursing is bounded — an excluded directory
+        // is not itself a workspace root with excludes in practice, and even
+        // if it were, `detect` reads files rather than walking.
+        .filter(|name| {
+            let dir = root.join(name);
+            dir.join("Cargo.toml").is_file() && detect(&dir).is_ok_and(|inner| inner.chip.is_some())
+        })
+        .map(|name| format!("`{name}/`"))
+        .collect()
+}
+
 /// Cross-check what the four files claim.
 ///
 /// Ordered most-blocking first, because the panel shows them in order and the
@@ -123,13 +158,31 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
     let mut problems = Vec::new();
 
     let Some(chip_id) = &project.chip else {
+        // A workspace that excludes its firmware is the standard embedded
+        // layout: the host-testable crates are members, and the bare-metal
+        // one is left out so `cargo test` at the root does not try to build
+        // `no_std` for the host. The chip is down there, not here — and
+        // answering only "unknown" leaves somebody re-reading a root that was
+        // never going to have one.
+        let elsewhere = firmware_candidates(Path::new(&project.root));
+        let detail = if elsewhere.is_empty() {
+            "No `esp-hal` chip feature and no recognisable target triple. \
+             Without a chip, rusty cannot pick a toolchain, flash, or size \
+             the binary."
+                .to_string()
+        } else {
+            format!(
+                "No `esp-hal` chip feature and no recognisable target triple here — \
+                 this looks like a workspace whose firmware is excluded from it. \
+                 The chip is in {}. Open that directory as the project to flash, \
+                 size or simulate; this one is where its tests run.",
+                elsewhere.join(" or "),
+            )
+        };
         problems.push(Problem {
             severity: Severity::Blocking,
             title: "Target chip unknown".into(),
-            detail: "No `esp-hal` chip feature and no recognisable target triple. \
-                     Without a chip, rusty cannot pick a toolchain, flash, or size \
-                     the binary."
-                .into(),
+            detail,
             fix_command: None,
         });
         return problems;

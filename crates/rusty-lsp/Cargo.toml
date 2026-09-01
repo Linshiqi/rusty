@@ -14,10 +14,14 @@ serde = { version = "1.0.229", features = ["derive"] }
 
 serde_json = { version = "1.0.151", optional = true }
 thiserror = { version = "2.0.20", optional = true }
+# Only to read `workspace.exclude` out of the root manifest, so a firmware
+# crate the workspace deliberately leaves out still gets IDE services. Hand
+# parsing that key is the kind of thing that silently gets it wrong.
+toml = { version = "1.1.4", optional = true }
 
 [features]
 default = ["backend"]
-backend = ["dep:serde_json", "dep:thiserror"]
+backend = ["dep:serde_json", "dep:thiserror", "dep:toml"]
 
 [lints]
 workspace = true

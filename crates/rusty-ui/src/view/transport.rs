@@ -31,21 +31,21 @@ pub fn DebugTransport() -> impl IntoView {
                     title=title
                     disabled=running
                     on:click=move |_| controller::debug_control(state, action)
-                    class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
                 >
                     <IconView icon=icon size=15 />
                 </button>
             }
         };
         Some(view! {
-            <span class="mx-1 h-5 w-px bg-line" />
+            <span class="my-1 h-px w-5 bg-line" />
             {if running {
                 view! {
                     <button
                         type="button"
                         title="Pause the target"
                         on:click=move |_| controller::debug_control(state, "pause")
-                        class="grid size-7 place-items-center rounded-[6px] text-amber hover:bg-sunken"
+                        class="grid size-8 place-items-center rounded-[6px] text-amber hover:bg-sunken"
                     >
                         <IconView icon=Icon::Pause size=15 />
                     </button>
@@ -57,7 +57,7 @@ pub fn DebugTransport() -> impl IntoView {
                         type="button"
                         title="Continue (F5)"
                         on:click=move |_| controller::debug_control(state, "resume")
-                        class="grid size-7 place-items-center rounded-[6px] text-patina hover:bg-sunken"
+                        class="grid size-8 place-items-center rounded-[6px] text-patina hover:bg-sunken"
                     >
                         <IconView icon=Icon::Play size=15 />
                     </button>
@@ -74,7 +74,7 @@ pub fn DebugTransport() -> impl IntoView {
                 type="button"
                 title="Stop debugging and the run it started"
                 on:click=move |_| controller::debug_stop(state)
-                class="grid size-7 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
+                class="grid size-8 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
             >
                 <IconView icon=Icon::Stop size=15 />
             </button>

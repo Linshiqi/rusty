@@ -352,7 +352,41 @@ with a batch.
   re-checked *after* the round trip too, because typing is synchronous and the
   read is not.
 
+## The gutter, and one line height
+
+The margin now carries three things beside each line — a run arrow for a
+`#[test]`, a fold chevron, the breakpoint dot — and adding them cost two bugs
+worth writing down, because both read as "the editor is broken" rather than as
+a layout mistake.
+
+- **One integral row height, and nothing computes its own.** `row_height(zoom)`
+  rounds `LINE_HEIGHT * zoom` to whole pixels, and the two layers plus every
+  overlay take it from there. The gutter draws its rows as flex containers and
+  the echo draws its as blocks; at a fractional `line-height` the two round
+  differently — fifteen thousandths of a pixel each — which is invisible on one
+  row and a whole line by row eighty. `LINE_HEIGHT` itself is used by nothing
+  else, so a new site cannot reintroduce the fraction.
+- **The icons scale with the row.** A fixed 13px chevron is *taller than the
+  row* once the editor is zoomed out, and a row that out-grows its line height
+  pushes every number below it down. Sized from `row_height` instead.
+- **The margin is `justify-end`, so anything that does not fit overflows off
+  the left edge** rather than wrapping or scrolling — silently. That is how the
+  run arrows were invisible for a while: the width reserved a column for them
+  and then the chevron took it. The width counts the columns the file actually
+  needs.
+- Fold chevron right of the number, hard against the code, as VSCode puts it;
+  the run arrow left of the breakpoint dot. Each is its own click target,
+  because one glyph that means two things depending on where you hit it is how
+  you set a breakpoint when you meant to run a test.
+
 ## UI conventions
+
+**The panel's actions live in the left rail, under the panel switchers** —
+there is no toolbar row. A full-width strip cost forty pixels of height on
+every panel to hold four buttons, and put the thing you press most as far from
+the panel it acts on as the window allows. A panel that registers no actions
+leaves no gap. Toolbar content is authored for a *column*: dividers are
+`h-px w-5`, and nothing in one may be wider than the 46px rail.
 
 Chrome actions are icon buttons with a `title` tooltip — flat like VSCode's,
 no ring, no fill; colour lands on the glyph (accent Play, crimson Stop). Text
@@ -513,6 +547,23 @@ usty`) holds `location.toml`
   silently ignored** in rust-analyzer's initializationOptions. The first
   attempt at the fix above failed while looking applied, because the sibling
   `procMacro` object *did* take effect. Nest keys in their object.
+- **A workspace that excludes its firmware gets no IDE services there.**
+  The standard embedded layout is host-testable crates as members and the
+  bare-metal crate `exclude`d, so `cargo test` at the root does not try to
+  build `no_std` for the host. rust-analyzer loads *one* workspace from the
+  root, so every file under the excluded directory comes back "not included in
+  any crates" — no completion, no diagnostics, no navigation, in exactly the
+  half of the repository this workbench is for. The client reads
+  `workspace.exclude` and names those manifests in `linkedProjects`. Read
+  rather than guessed: linking every `Cargo.toml` under the root would pull in
+  fixtures and vendored copies. And `toml::Table`, not `toml::Value` — in toml
+  1.x `Value`'s `FromStr` parses a single *value*, so a manifest fails at its
+  first table header with an error that reads as a broken `Cargo.toml`.
+- **Detection reports where the chip is, not just that it is missing.** Open
+  such a workspace at its root and there is genuinely no chip there; the
+  problem now names the excluded directory that has one and says to open it.
+  Not adopted — rusty could open it instead and be right most of the time, and
+  wrong in a way that flashes the wrong binary to a board.
 - **rust-analyzer's `check.allTargets` default buries no_std projects.** It
   builds tests and benches, which need a test harness `no_std` does not have,
   so every real diagnostic drowns in "can't find crate for `test`". The client

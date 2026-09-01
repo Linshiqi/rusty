@@ -80,7 +80,7 @@ pub fn Toolchain() -> impl IntoView {
                 type="button"
                 title="Probe the machine again"
                 on:click=move |_| controller::refresh_toolchain(state)
-                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
+                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
                 <IconView icon=Icon::Refresh size=15 />
             </button>

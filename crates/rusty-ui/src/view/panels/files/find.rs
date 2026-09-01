@@ -60,7 +60,7 @@ pub(super) fn find_jump(state: AppState, scroller: NodeRef<html::Div>, direction
     state.find.index.set(next);
     let (line, _) = line_col_of_byte(&text, matches[next].0);
     if let Some(outer) = scroller.get_untracked() {
-        let lh = LINE_HEIGHT * state.editor.zoom.get_untracked();
+        let lh = row_height(state.editor.zoom.get_untracked());
         // Find searches the whole document, folds and all, so the match's
         // line has to be turned into the row it is drawn on — otherwise
         // pressing Enter past a collapsed function scrolls to empty space.

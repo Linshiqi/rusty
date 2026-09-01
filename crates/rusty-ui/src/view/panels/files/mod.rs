@@ -51,3 +51,19 @@ use tabs::*;
 /// character it is over, a column at a time, all the way across the line.
 const FONT_SIZE: f64 = 12.5;
 const LINE_HEIGHT: f64 = 19.0;
+
+/// The height of one row at this zoom, in whole pixels.
+///
+/// Integral on purpose. The gutter draws its rows as flex containers and the
+/// echo draws its as blocks, and at a fractional `line-height` the two round
+/// differently — about fifteen thousandths of a pixel each, which is
+/// invisible on one row and a whole line by row eighty. The numbers walk away
+/// from the code they belong to, and the further down the file you look the
+/// worse it is.
+///
+/// So the two layers are never given a fraction to disagree about, and every
+/// overlay that positions itself by row uses the same number rather than
+/// recomputing `LINE_HEIGHT * zoom` and landing between rows.
+fn row_height(zoom: f64) -> f64 {
+    (LINE_HEIGHT * zoom).round().max(1.0)
+}

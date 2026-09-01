@@ -287,6 +287,51 @@ fn a_non_embedded_project_says_so_rather_than_guessing() {
     assert_eq!(titles(&project), vec!["Target chip unknown"]);
 }
 
+/// The standard embedded layout: host-testable crates as members, the
+/// bare-metal one excluded so `cargo test` at the root does not try to build
+/// `no_std` for the host. Answering only "unknown" here sends somebody back
+/// to a root that was never going to name a chip.
+#[test]
+fn a_workspace_whose_firmware_is_excluded_says_where_the_chip_is() {
+    let dir = project_dir(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"core\"]\nexclude = [\"firmware\"]\n",
+        ),
+        (
+            "firmware/Cargo.toml",
+            "[package]\nname = \"fw\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nesp-hal = { version = \"1\", features = [\"esp32c3\"] }\n",
+        ),
+    ]);
+    let project = detect(dir.path());
+
+    assert!(project.chip.is_none(), "the root itself has no chip");
+    assert_eq!(titles(&project), vec!["Target chip unknown"]);
+    let detail = &project.problems[0].detail;
+    assert!(
+        detail.contains("`firmware/`"),
+        "the message must name where to look: {detail}"
+    );
+}
+
+/// And it must not invent one. An excluded directory that is not a firmware
+/// crate — a fixture tree, a vendored copy — gets the plain message.
+#[test]
+fn an_excluded_directory_that_is_not_firmware_is_not_offered() {
+    let dir = project_dir(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"core\"]\nexclude = [\"fixtures\"]\n",
+        ),
+        (
+            "fixtures/Cargo.toml",
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+    ]);
+    let project = detect(dir.path());
+    assert!(!project.problems[0].detail.contains("fixtures"));
+}
+
 #[test]
 fn a_directory_without_a_manifest_is_an_error_not_an_empty_result() {
     let dir = tempfile::tempdir().unwrap();

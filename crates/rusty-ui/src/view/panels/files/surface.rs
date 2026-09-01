@@ -60,6 +60,12 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
         rusty_edit::tests_in::runnables(&state.editor.draft.get())
     });
 
+    // Which lines head a foldable region. Memoised for the same reason and a
+    // sharper one: the scan walks forward from every line, so asking it once
+    // per gutter row made drawing a thousand-line file quadratic in the
+    // number of rows on screen.
+    let foldables = Memo::new(move |_| rusty_edit::fold::regions(&state.editor.draft.get()));
+
     // Where `line` sits in the scroller's visible box: (pixels from the top
     // of the view, view height). The overlays decide their direction with
     // this — a card that always opens downward is unreadable for exactly the
@@ -67,7 +73,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
     let line_in_view = move |line: u32| {
         scroller.get_untracked().map(|el| {
             (
-                8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get()
+                8.0 + f64::from(row_for(state, line)) * row_height(zoom.get())
                     - f64::from(el.scroll_top()),
                 f64::from(el.client_height()),
             )
@@ -88,7 +94,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                 title="Format and save (Ctrl+S)"
                 disabled=read_only
                 on:click=move |_| format_and_save(state, area)
-                class="grid size-7 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-8 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
             >
                 <IconView icon=Icon::Save size=15 />
             </button>
@@ -97,16 +103,16 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                 title="Build — cargo build --release, output in the dock"
                 disabled=move || running.get()
                 on:click=move |_| controller::build_project(state)
-                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
             >
                 <IconView icon=Icon::Hammer size=15 />
             </button>
-            <span class="mx-1 h-5 w-px bg-line" />
+            <span class="my-1 h-px w-5 bg-line" />
             <button
                 type="button"
                 title="Flash the board…"
                 on:click=move |_| state.show_dock(crate::state::DockTab::Devices)
-                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
+                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
                 <IconView icon=Icon::Flash size=15 />
             </button>
@@ -128,7 +134,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 state.layout.panel.set("simulate".to_string());
                                 controller::run_simulation(state, true);
                             }
-                            class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+                            class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
                         >
                             <IconView icon=Icon::Bug size=15 />
                         </button>
@@ -146,7 +152,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                     state.layout.panel.set("simulate".to_string());
                     controller::run_simulation(state, false);
                 }
-                class="grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
+                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
             >
                 <IconView icon=Icon::Play size=15 />
             </button>
@@ -214,8 +220,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // the jump lands in context rather than at the top
                         // edge.
                         let top = f64::from(row_for(state, target.line))
-                            * LINE_HEIGHT
-                            * zoom.get_untracked()
+                            * row_height(zoom.get_untracked())
                             - 120.0;
                         scroller.set_scroll_top(top.max(0.0) as i32);
                     }
@@ -235,7 +240,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; \
              tab-size: 4",
             FONT_SIZE * z,
-            LINE_HEIGHT * z,
+            row_height(z),
         )
     });
 
@@ -536,11 +541,23 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // column. The width now names the digits and adds the
                         // padding explicitly.
                         let digits = count.to_string().len().max(3);
-                        // The run column is only reserved when the file has
-                        // something to run. Holding it open for every file
-                        // would push the code right by a character for the
-                        // sake of an affordance most files never show.
-                        let extra = if runnables.get().is_empty() { 32 } else { 46 };
+                        // Padding, the breakpoint dot and its gap, plus a
+                        // column for each margin affordance the file actually
+                        // has. Reserving them unconditionally would push the
+                        // code right by two characters in every file that has
+                        // neither; reserving *neither* was the bug that made
+                        // the run arrows invisible — the row is `justify-end`,
+                        // so anything that does not fit overflows off the left
+                        // edge rather than wrapping or scrolling.
+                        let columns = usize::from(!runnables.get().is_empty())
+                            + usize::from(!foldables.get().is_empty());
+                        let extra = 32 + columns * 17;
+                        // The icons scale with the row. A fixed 13px chevron
+                        // is taller than the row itself once the editor is
+                        // zoomed out far enough, and a row that out-grows its
+                        // line height pushes every number below it down — the
+                        // gutter walks away from the code a row at a time.
+                        let icon_px = (row_height(zoom.get()) * 0.68).round().max(7.0) as u32;
                         view! {
                             <div
                                 class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
@@ -605,9 +622,9 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                                 filter.clone(),
                                                             );
                                                         }
-                                                        class="shrink-0 leading-none text-accent/50 hover:text-accent"
+                                                        class="flex shrink-0 items-center text-accent/60 hover:text-accent"
                                                     >
-                                                        "▷"
+                                                        <IconView icon=Icon::Play size=icon_px />
                                                     </button>
                                                 }
                                             });
@@ -619,16 +636,32 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                         let collapsed = state
                                             .editor.folds
                                             .with(|f| f.is_folded(line));
-                                        let chevron = region_at(state, line)
-                                            .map(|_| {
+                                        let chevron = foldables
+                                            .get()
+                                            .iter()
+                                            .any(|r| r.header == line)
+                                            .then(|| {
+                                                // VSCode's shape: a stroked
+                                                // chevron, down when the
+                                                // region is open and turned a
+                                                // quarter right when it is
+                                                // collapsed. A filled triangle
+                                                // reads as a disclosure widget
+                                                // from a different decade and,
+                                                // worse, as the run arrow's
+                                                // sibling rather than as a
+                                                // different kind of control.
                                                 let class = if collapsed {
-                                                    "shrink-0 leading-none text-label-2"
+                                                    "flex shrink-0 -rotate-90 items-center text-label-2"
                                                 } else {
-                                                    "shrink-0 leading-none text-transparent \
+                                                    "flex shrink-0 items-center text-transparent \
                                                      group-hover:text-label-3"
                                                 };
-                                                let title = if collapsed { "Unfold" } else { "Fold" };
-                                                let glyph = if collapsed { "▸" } else { "▾" };
+                                                let title = if collapsed {
+                                                    "Click to expand the range"
+                                                } else {
+                                                    "Click to collapse the range"
+                                                };
                                                 view! {
                                                     <button
                                                         type="button"
@@ -639,7 +672,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                         }
                                                         class=class
                                                     >
-                                                        {glyph}
+                                                        <IconView icon=Icon::Chevron size=icon_px />
                                                     </button>
                                                 }
                                             });
@@ -660,7 +693,6 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 class="group flex cursor-pointer items-center justify-end gap-1.5"
                                             >
                                                 {run}
-                                                {chevron}
                                                 <span class=move || {
                                                     if marked.get() {
                                                         "text-crimson"
@@ -674,6 +706,15 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                     "●"
                                                 </span>
                                                 <span>{n.to_string()}</span>
+                                                // Right of the number, hard
+                                                // against the code, which is
+                                                // where VSCode puts it — the
+                                                // chevron belongs to the line
+                                                // it opens, and on the far
+                                                // side of the margin it reads
+                                                // as another breakpoint
+                                                // control.
+                                                {chevron}
                                             </div>
                                         }
                                     })
@@ -711,7 +752,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 let width = ((column_px(&text, line, end_col)
                                     - column_px(&text, line, col)) * z)
                                     .max(2.0);
-                                let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * z;
+                                let y = 8.0 + f64::from(row_for(state, line)) * row_height(z);
                                 let wash = if index == current {
                                     "pointer-events-none absolute rounded-[3px] bg-amber-fill"
                                 } else {
@@ -722,7 +763,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                         class=wash
                                         style=format!(
                                             "left: {x}px; top: {y}px; width: {width}px; height: {h}px",
-                                            h = LINE_HEIGHT * z,
+                                            h = row_height(z),
                                         )
                                     />
                                 }
@@ -780,9 +821,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                             .find(|r| r.header == index as u32)
                                             .map(|r| {
                                                 let n = r.hidden();
+                                                let unit = if n == 1 { "line" } else { "lines" };
                                                 view! {
                                                     <span class="rounded-[3px] bg-selection px-1 text-label-3">
-                                                        {format!(" ⋯ {n} lines ")}
+                                                        {format!(" ⋯ {n} {unit} ")}
                                                     </span>
                                                 }
                                             });
@@ -1259,8 +1301,8 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 return None;
                             }
                             let line = frame.line?;
-                            let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get();
-                            let height = LINE_HEIGHT * zoom.get();
+                            let y = 8.0 + f64::from(row_for(state, line)) * row_height(zoom.get());
+                            let height = row_height(zoom.get());
                             Some(view! {
                                 <div
                                     class="pointer-events-none absolute left-0 w-full bg-amber-fill"
@@ -1293,12 +1335,12 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             // card at all.
                             let place = if opens_up(range.start_line) {
                                 let y = 8.0
-                                    + f64::from(row_for(state, range.start_line)) * LINE_HEIGHT * zoom.get()
+                                    + f64::from(row_for(state, range.start_line)) * row_height(zoom.get())
                                     - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             } else {
                                 let y = 8.0
-                                    + f64::from(row_for(state, range.end_line) + 1) * LINE_HEIGHT * zoom.get()
+                                    + f64::from(row_for(state, range.end_line) + 1) * row_height(zoom.get())
                                     + 2.0;
                                 format!("top: {y}px")
                             };
@@ -1337,10 +1379,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             }
                             let chosen = picked_action.get().min(fixes.len().saturating_sub(1));
                             let place = if opens_up(line) {
-                                let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get() - 4.0;
+                                let y = 8.0 + f64::from(row_for(state, line)) * row_height(zoom.get()) - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             } else {
-                                let y = 8.0 + f64::from(row_for(state, line) + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                let y = 8.0 + f64::from(row_for(state, line) + 1) * row_height(zoom.get()) + 2.0;
                                 format!("top: {y}px")
                             };
                             view! {
@@ -1405,10 +1447,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             let place = if line_in_view(line)
                                 .is_some_and(|(top, _)| top < 96.0)
                             {
-                                let y = 8.0 + f64::from(row_for(state, line) + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                let y = 8.0 + f64::from(row_for(state, line) + 1) * row_height(zoom.get()) + 2.0;
                                 format!("top: {y}px")
                             } else {
-                                let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get() - 4.0;
+                                let y = 8.0 + f64::from(row_for(state, line)) * row_height(zoom.get()) - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             };
                             let label = info.label;
@@ -1500,10 +1542,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             let chosen = picked.get().min(shown.len() - 1);
                             let x = 8.0 + column_px(&draft, popup.line, popup.word_start) * zoom.get();
                             let place = if opens_up(popup.line) {
-                                let y = 8.0 + f64::from(row_for(state, popup.line)) * LINE_HEIGHT * zoom.get() - 4.0;
+                                let y = 8.0 + f64::from(row_for(state, popup.line)) * row_height(zoom.get()) - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             } else {
-                                let y = 8.0 + f64::from(row_for(state, popup.line) + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                let y = 8.0 + f64::from(row_for(state, popup.line) + 1) * row_height(zoom.get()) + 2.0;
                                 format!("top: {y}px")
                             };
                             // A window around the selection rather than a

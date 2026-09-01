@@ -159,17 +159,12 @@ pub fn App() -> impl IntoView {
             // they cannot cover the title bar. Settings used to: its own Done
             // button ended up underneath the menu bar and the page became a
             // room with no door.
-            // The context toolbar: whatever the active workspace registered.
-            // Absent registration collapses the row entirely — no dead strip
-            // over panels that brought no tools.
-            {move || {
-                let content = state.layout.toolbar.get()?;
-                Some(view! {
-                    <div class="flex h-10 flex-none items-center gap-1.5 border-b border-line bg-content px-3">
-                        {content.run(())}
-                    </div>
-                })
-            }}
+            // The context actions used to be a strip across the top of the
+            // window. They are in the rail now, under the panel switchers —
+            // see `Sidebar`. A full-width row cost forty pixels of height on
+            // every panel to hold four buttons, and put the thing you press
+            // most (Run) as far from the thing you press next (the panel it
+            // switches to) as the window allows.
             <div class="relative flex min-h-0 flex-1">
 
                 <palette::Palette open=palette_open chrome=chrome />
@@ -409,6 +404,18 @@ fn Sidebar() -> impl IntoView {
                     }
                 })
                 .collect_view()}
+            // The active panel's own actions — save, build, flash, debug,
+            // run — under the switchers rather than in a strip across the
+            // top of the window. Same rail, so the panel and the things you
+            // do to it are one reach apart; and a panel that registers
+            // nothing leaves no gap, exactly as the old row collapsed.
+            {move || {
+                let content = state.layout.toolbar.get()?;
+                Some(view! {
+                    <div class="mx-3 my-2 h-px bg-line" />
+                    <div class="flex flex-col items-center gap-0.5">{content.run(())}</div>
+                })
+            }}
             <div class="mt-auto flex flex-col items-center pt-2">
                 {
                     let SettingsOpen(settings) = expect_context::<SettingsOpen>();
