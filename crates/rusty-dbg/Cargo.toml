@@ -1,13 +1,19 @@
 [package]
 name = "rusty-dbg"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 
-# The session side: a gdb to talk to, and a thread to pump it.
-thiserror = { version = "1.0.69", optional = true }
+# The session side: a gdb to talk to, and a thread to pump it. Same major as
+# every other crate here — two thiserror majors in one lock file is two copies
+# of the derive machinery built for nothing.
+thiserror = { version = "2.0.20", optional = true }
 
 [features]
 default = ["backend"]
