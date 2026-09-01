@@ -117,12 +117,15 @@ pub(super) fn keep_caret_in_view(
     let Some(outer) = scroller.get_untracked() else {
         return;
     };
-    let text = state.editor.draft.get_untracked();
-    let Some((line, _)) = caret_line_col(area, &text) else {
+    // The caret's line inside the textarea is already a *row*: the textarea
+    // holds the screen text, so measuring it against the draft would place
+    // the caret wherever the folded lines pushed it.
+    let text = screen(state);
+    let Some((row, _)) = caret_line_col(area, &text) else {
         return;
     };
     let lh = LINE_HEIGHT * state.editor.zoom.get_untracked();
-    let y = 8.0 + f64::from(line) * lh;
+    let y = 8.0 + f64::from(row) * lh;
     let view_top = f64::from(outer.scroll_top());
     let view_height = f64::from(outer.client_height());
     if y < view_top + lh {
@@ -146,10 +149,13 @@ pub(super) fn caret_line_col(
     Some((line, col))
 }
 
-/// The caret's byte offset into the draft.
+/// The caret's byte offset into the *screen* text.
+///
+/// Not the draft: `selectionStart` is an index into what the textarea holds,
+/// and while anything is folded that is shorter than the document.
 pub(super) fn caret_byte(area: &web_sys::HtmlTextAreaElement, state: AppState) -> usize {
     let units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
-    byte_of_utf16(&state.editor.draft.get_untracked(), units)
+    byte_of_utf16(&screen(state), units)
 }
 
 /// selectionStart counts UTF-16 units — it is a JS string index. Treating it
@@ -275,9 +281,9 @@ pub(super) fn centre_view(
     let Some(outer) = scroller.get_untracked() else {
         return;
     };
-    let line = text.chars().take(cursor).filter(|c| *c == '\n').count() as f64;
+    let line = text.chars().take(cursor).filter(|c| *c == '\n').count() as u32;
     let lh = LINE_HEIGHT * state.editor.zoom.get_untracked();
-    let y = 8.0 + line * lh;
+    let y = 8.0 + f64::from(row_for(state, line)) * lh;
     let height = f64::from(outer.client_height());
     let top = match at {
         crate::vim::View::Middle => y - height / 2.0 + lh / 2.0,

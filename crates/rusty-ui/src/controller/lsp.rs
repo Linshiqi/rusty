@@ -317,6 +317,24 @@ pub fn lsp_open_doc(path: String, text: String) {
     lsp_sync(cmd::lsp::OPEN, Args { path, text });
 }
 
+/// Tell the server the buffer was replaced from outside the editor.
+///
+/// The watcher's path: rust-analyzer holds its own copy of every open
+/// document and has no idea the disk moved, so a file reloaded underneath it
+/// leaves the server answering about the previous text — completions at
+/// offsets that no longer exist, diagnostics on lines that are gone.
+pub(super) fn lsp_changed_doc(path: String, text: String) {
+    if !path.ends_with(".rs") {
+        return;
+    }
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+    lsp_sync(cmd::lsp::CHANGE, Args { path, text });
+}
+
 pub(super) fn lsp_saved_doc(path: String) {
     if !path.ends_with(".rs") {
         return;

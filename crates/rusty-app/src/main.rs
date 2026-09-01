@@ -69,6 +69,7 @@ fn main() {
             files::open_external,
             files::format_text,
             files::search_project,
+            files::watch_project,
             lsp::lsp_start,
             lsp::lsp_open,
             lsp::lsp_change,
@@ -226,6 +227,7 @@ mod wire_names {
             cmd::files::OPEN_EXTERNAL => files::open_external,
             cmd::files::FORMAT => files::format_text,
             cmd::files::SEARCH => files::search_project,
+            cmd::files::WATCH => files::watch_project,
 
             cmd::lsp::START => lsp::lsp_start,
             cmd::lsp::OPEN => lsp::lsp_open,

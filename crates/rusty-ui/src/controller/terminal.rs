@@ -215,3 +215,24 @@ pub fn window_action(command: &'static str) {
         let _ = ipc::get::<serde_json::Value>(command).await;
     });
 }
+
+/// Run the tests a filter names, in the dock.
+///
+/// The filter is a **substring**, not `--exact`, and that is forced rather
+/// than chosen: the editor's scan sees the modules inside one file, so it
+/// knows `tests::it_works` but not the `foo::bar::` the file itself sits at.
+/// `cargo test` with an `--exact` path that matches nothing exits *zero*
+/// having run nothing, which on screen is indistinguishable from a pass — so
+/// the broader filter is the safe one. Running a same-named test in a sibling
+/// module too is a visible extra line of output; a silent green tick is not.
+///
+/// `--nocapture` because the reason to click one test rather than run the
+/// suite is usually to read what it prints.
+pub fn run_test(state: AppState, filter: String) {
+    let line = if filter.is_empty() {
+        "cargo test".to_string()
+    } else {
+        format!("cargo test {filter} -- --nocapture")
+    };
+    run_command(state, line);
+}

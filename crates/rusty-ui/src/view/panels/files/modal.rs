@@ -55,8 +55,7 @@ pub(super) fn vim_key(
 
     let after = if let Some(next) = step.text.clone() {
         echo_edit(state, &next);
-        state.editor.draft.set(next.clone());
-        area.set_value(&next);
+        set_buffer(state, area, &next);
         controller::schedule_pulse(state);
         next
     } else {
@@ -133,8 +132,7 @@ pub(super) fn vim_key(
                 let out = toggle_comments(state, &after, from, to);
                 if out != after {
                     echo_edit(state, &out);
-                    state.editor.draft.set(out.clone());
-                    area.set_value(&out);
+                    set_buffer(state, area, &out);
                     let at = units_of_scalar(&out, from.min(out.chars().count()));
                     let _ = area.set_selection_start(Some(at));
                     let _ = area.set_selection_end(Some(at));

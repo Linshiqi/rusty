@@ -45,8 +45,7 @@ pub(super) fn apply_action(state: AppState, area: &web_sys::HtmlTextAreaElement,
     }
 
     echo_edit(state, &new);
-    state.editor.draft.set(new.clone());
-    area.set_value(&new);
+    set_buffer(state, area, &new);
     state.editor.actions.set(None);
     controller::schedule_pulse(state);
 }
@@ -123,8 +122,7 @@ pub(super) fn accept_completion(
     text.replace_range(start.min(end)..end.max(start), &item.insert);
 
     echo_edit(state, &text);
-    state.editor.draft.set(text.clone());
-    area.set_value(&text);
+    set_buffer(state, area, &text);
     let caret = utf16_offset_of(&text, start_line, start_col) + utf16_len(&item.insert);
     let _ = area.set_selection_start(Some(caret));
     let _ = area.set_selection_end(Some(caret));
@@ -157,8 +155,7 @@ pub(super) fn insert_at_caret(area: &web_sys::HtmlTextAreaElement, state: AppSta
 
     text.replace_range(start..end, insert);
     echo_edit(state, &text);
-    state.editor.draft.set(text.clone());
-    area.set_value(&text);
+    set_buffer(state, area, &text);
     let at = start_units as u32 + utf16_len(insert);
     let _ = area.set_selection_start(Some(at));
     let _ = area.set_selection_end(Some(at));

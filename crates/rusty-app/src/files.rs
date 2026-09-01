@@ -183,3 +183,43 @@ pub async fn search_project(
         .await
         .map_err(|e| CommandError::new(format!("search panicked: {e}")))
 }
+
+/// Watch the project and stream a batch every time it settles.
+///
+/// Long-lived, like `lsp_start`: it does not resolve while the watcher is up,
+/// so a resolved promise on the frontend means the watch ended.
+///
+/// A failure to start is an event's worth of nothing rather than an error. A
+/// watcher can fail for reasons the user cannot act on — an exhausted inotify
+/// budget, a network share — and the workbench still works without one; a red
+/// banner about it would be crying wolf, exactly as it would for a missing
+/// rust-analyzer.
+#[tauri::command]
+pub async fn watch_project(
+    on_change: tauri::ipc::Channel<rusty_edit::FileChanges>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+
+    let started = tokio::task::spawn_blocking(move || rusty_edit::watch(&root))
+        .await
+        .map_err(|e| CommandError::new(format!("the file watcher task panicked: {e}")))?;
+
+    let Ok((watch, changes)) = started else {
+        return Ok(());
+    };
+
+    let _ = tokio::task::spawn_blocking(move || {
+        // The handle has to outlive the loop: dropping it stops the OS
+        // watcher, and a watcher dropped at the end of `watch()` would report
+        // nothing while looking perfectly healthy.
+        let _watch = watch;
+        while let Ok(batch) = changes.recv() {
+            if on_change.send(batch).is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    Ok(())
+}

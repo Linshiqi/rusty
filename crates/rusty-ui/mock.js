@@ -71,6 +71,24 @@
     "    fn flags(&self) -> u8 { 0 }",
     "}",
     "",
+    // A test module, so the gutter's run arrows and its fold chevrons both
+    // have something to point at. Without one the two newest decorations in
+    // the margin cannot be exercised here at all.
+    "#[cfg(test)]",
+    "mod tests {",
+    "    use super::*;",
+    "",
+    "    #[test]",
+    "    fn a_radio_frobnicates() {",
+    "        assert_eq!(Radio::new().frobnicate(), 42);",
+    "    }",
+    "",
+    "    #[test]",
+    "    fn a_radio_starts_with_no_flags() {",
+    "        assert_eq!(Radio::new().flags(), 0);",
+    "    }",
+    "}",
+    "",
   ].join("\n");
 
   const TOML = ['[package]', 'name = "firmware"', 'version = "0.1.0"', ''].join("\n");
@@ -133,6 +151,10 @@
     // The real command is a long-lived stream; resolving would read as "the
     // server exited" and flip Ready back to Off.
     lsp_start: (a) => { window.__mock.lspChannel = a.onEvent; a.onEvent.send({ event: "ready" }); return new Promise(() => {}); },
+    // Also long-lived. The channel is kept so a change can be injected by
+    // hand — `__mock.watchChannel.send({changed: ["src/main.rs"], tree: false})`
+    // is how the follow-the-disk path is exercised without a disk.
+    watch_project: (a) => { window.__mock.watchChannel = a.onChange; return new Promise(() => {}); },
     lsp_open: () => null,
     lsp_saved: () => null,
     lsp_change: (a) => { window.__mock.changes.push(a); return null; },

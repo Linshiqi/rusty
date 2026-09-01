@@ -81,6 +81,11 @@ pub struct ParkedEditor {
     pub caret: Option<(u32, u32)>,
     /// The tab's undo/redo stacks, so history survives switching away.
     pub history: EditHistory,
+    /// And its collapsed regions. Carried for the same reason the caret is:
+    /// coming back to a tab should be coming back to what you were looking
+    /// at, and a file that unfolds itself every time you glance at another
+    /// one is a fold feature nobody uses twice.
+    pub folds: rusty_edit::Folded,
 }
 
 /// The editor's own undo history.
@@ -581,6 +586,21 @@ pub struct Editor {
     /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
     /// the editor derives from it.
     pub zoom: RwSignal<f64>,
+    /// Which regions of the active document are collapsed.
+    ///
+    /// Session state, per tab, deliberately not persisted: a fold is where
+    /// you were looking a minute ago, and restoring yesterday's folds on a
+    /// file somebody else has since edited would collapse the wrong lines.
+    pub folds: RwSignal<rusty_edit::Folded>,
+    /// Open files whose copy on disk changed while this window held an
+    /// unsaved draft. Marked rather than reloaded: replacing a draft with the
+    /// disk's text is an editor eating work, and a modal prompt per file
+    /// would be unusable after a `git checkout` touching a dozen of them.
+    pub stale: RwSignal<Vec<String>>,
+    /// Bumped each time the project's file watcher is started, so batches
+    /// from the previous project's watcher can be told apart from the live
+    /// one and dropped.
+    pub watch_session: RwSignal<u64>,
     /// Modal editing: whether it is on, and where it currently is.
     ///
     /// The switch belongs in `workbench.toml` rather than here — a second
@@ -920,6 +940,9 @@ impl AppState {
                 rename: RwSignal::new(None),
                 reveal: RwSignal::new(None),
                 expanded: RwSignal::new(Vec::new()),
+                folds: RwSignal::new(rusty_edit::Folded::default()),
+                stale: RwSignal::new(Vec::new()),
+                watch_session: RwSignal::new(0),
                 zoom: RwSignal::new(stored_zoom()),
                 vim_on: RwSignal::new(false),
                 vim: RwSignal::new(crate::vim::Vim::default()),

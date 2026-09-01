@@ -16,14 +16,16 @@ use crate::{controller, state::AppState};
 pub(super) fn format_and_save(state: AppState, area: NodeRef<html::Textarea>) {
     let caret = area
         .get_untracked()
-        .and_then(|element| caret_line_col(&element, &state.editor.draft.get_untracked()));
+        .and_then(|element| caret_line_col(&element, &screen(state)));
     controller::format_then_save(state, caret, move |text, caret| {
         record_edit(state);
         echo_edit(state, text);
         let Some(element) = area.get_untracked() else {
             return;
         };
-        element.set_value(text);
+        // rustfmt hands back a whole new document, so this is a wholesale
+        // rewrite like every other: the folds go, and the two texts agree.
+        set_buffer(state, &element, text);
         // The old caret's line and column, clamped into the reformatted
         // text. rustfmt moves lines, not the one being typed on, so this
         // lands where the eye already is.
@@ -143,8 +145,7 @@ pub(super) fn apply_history(
 
     let caret = caret_after_restore(&text, &current);
     echo_edit(state, &text);
-    state.editor.draft.set(text.clone());
-    area.set_value(&text);
+    set_buffer(state, area, &text);
     let _ = area.set_selection_start(Some(caret));
     let _ = area.set_selection_end(Some(caret));
     state.editor.completion.set(None);
@@ -259,8 +260,7 @@ pub(super) fn comment_selection(state: AppState, area: &web_sys::HtmlTextAreaEle
     }
     record_edit(state);
     echo_edit(state, &out);
-    state.editor.draft.set(out.clone());
-    area.set_value(&out);
+    set_buffer(state, area, &out);
     // Back where the caret was, clamped: the line grew or shrank by the
     // marker's width and a caret past the end would snap to the buffer's.
     let at = units_of_scalar(&out, from.min(out.chars().count()));

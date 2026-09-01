@@ -40,4 +40,11 @@ pub enum Error {
     /// truncated: "new file" must never be a way to empty an existing one.
     #[error("{path} already exists")]
     Exists { path: String },
+
+    /// The platform said no to something with no better name — today only the
+    /// file watcher, which can fail on an exhausted inotify budget or a path
+    /// the OS will not watch. Carried as a message because there is nothing
+    /// the caller can do differently, and the reason is the whole value.
+    #[error("{0}")]
+    Io(String),
 }

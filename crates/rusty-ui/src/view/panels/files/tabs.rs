@@ -73,6 +73,16 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 }
                             })
                         };
+                        // The disk moved under an unsaved draft. Distinct
+                        // from dirty, and shown as well as it rather than
+                        // instead: the tab has two problems at once and
+                        // saving it would overwrite somebody else's change.
+                        let stale = {
+                            let path = path.clone();
+                            Signal::derive(move || {
+                                state.editor.stale.with(|list| list.contains(&path))
+                            })
+                        };
                         let activate = {
                             let path = path.clone();
                             move |_| controller::activate_tab(state, path.clone())
@@ -131,6 +141,20 @@ pub(super) fn TabStrip() -> impl IntoView {
                                                     class="size-1.5 shrink-0 rounded-full bg-rust"
                                                     title="Unsaved"
                                                 />
+                                            }
+                                        })
+                                }}
+                                {move || {
+                                    stale
+                                        .get()
+                                        .then(|| {
+                                            view! {
+                                                <span
+                                                    class="shrink-0 leading-none text-amber"
+                                                    title="Changed on disk. Saving overwrites that change."
+                                                >
+                                                    "⚠"
+                                                </span>
                                             }
                                         })
                                 }}

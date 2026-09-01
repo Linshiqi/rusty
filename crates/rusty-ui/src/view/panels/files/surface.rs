@@ -48,6 +48,18 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
 
     let zoom = state.editor.zoom;
 
+    // Which lines can be run, keyed by line. Derived from the *draft* rather
+    // than from the document, so an arrow appears beside a test the moment it
+    // is typed rather than on the next save, and goes with it when it is
+    // deleted. The scan is lexical and cheap; a `Memo` keeps it to once per
+    // edit rather than once per gutter row.
+    let runnables = Memo::new(move |_| {
+        if !is_rust {
+            return Vec::new();
+        }
+        rusty_edit::tests_in::runnables(&state.editor.draft.get())
+    });
+
     // Where `line` sits in the scroller's visible box: (pixels from the top
     // of the view, view height). The overlays decide their direction with
     // this — a card that always opens downward is unreadable for exactly the
@@ -55,7 +67,8 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
     let line_in_view = move |line: u32| {
         scroller.get_untracked().map(|el| {
             (
-                8.0 + f64::from(line) * LINE_HEIGHT * zoom.get() - f64::from(el.scroll_top()),
+                8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get()
+                    - f64::from(el.scroll_top()),
                 f64::from(el.client_height()),
             )
         })
@@ -200,8 +213,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // A third of the viewport above the target line, so
                         // the jump lands in context rather than at the top
                         // edge.
-                        let top =
-                            f64::from(target.line) * LINE_HEIGHT * zoom.get_untracked() - 120.0;
+                        let top = f64::from(row_for(state, target.line))
+                            * LINE_HEIGHT
+                            * zoom.get_untracked()
+                            - 120.0;
                         scroller.set_scroll_top(top.max(0.0) as i32);
                     }
                 },
@@ -227,7 +242,23 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
     let on_input = {
         let path = path.clone();
         move |event: ev::Event| {
-            let new = event_target_value(&event);
+            // The textarea holds the screen text, so what comes out of an
+            // input event is the screen *after* the edit. Turning that back
+            // into a document edit is the one write path folding introduces,
+            // and it is the reason `fold::splice` is a pure function with its
+            // own tests rather than something written inline here.
+            let screen_now = event_target_value(&event);
+            // The screen as it was: the draft and the folds have not moved
+            // yet, so re-deriving it is exact and needs no second signal to
+            // keep in step with every programmatic `set_value`.
+            let screen_was = screen(state);
+            let (new, folds) = rusty_edit::fold::splice(
+                &state.editor.draft.get_untracked(),
+                &state.editor.folds.get_untracked(),
+                &screen_was,
+                &screen_now,
+            );
+            state.editor.folds.set(folds);
             record_edit(state);
             echo_edit(state, &new);
             state.editor.draft.set(new.clone());
@@ -243,9 +274,12 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
             let Some(element) = area.get_untracked() else {
                 return;
             };
-            let Some((line, col)) = caret_line_col(&element, &new) else {
+            // The caret is a position in the screen text; the server wants
+            // one in the document. Identical while nothing is folded.
+            let Some((row, col)) = caret_line_col(&element, &screen_now) else {
                 return;
             };
+            let line = line_of_row(state, row);
             let line_text = new.split('\n').nth(line as usize).unwrap_or_default();
             let before: Vec<char> = line_text.chars().take(col as usize).collect();
             let last = before.last().copied();
@@ -340,8 +374,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 let mut next = text.clone();
                                                 next.replace_range(from..to, "");
                                                 echo_edit(state, &next);
-                                                state.editor.draft.set(next.clone());
-                                                element.set_value(&next);
+                                                set_buffer(state, &element, &next);
                                                 let caret = utf16_len(&next[..from]);
                                                 let _ = element.set_selection_start(Some(caret));
                                                 let _ = element.set_selection_end(Some(caret));
@@ -399,15 +432,13 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     disabled=!is_rust
                                     on_select=Callback::new(move |_| {
                                         if let Some(element) = area.get_untracked()
-                                            && let Some((line, col)) = caret_line_col(
-                                                &element,
-                                                &state.editor.draft.get_untracked(),
-                                            )
+                                            && let Some((row, col)) =
+                                                caret_line_col(&element, &screen(state))
                                         {
                                             controller::goto_definition(
                                                 state,
                                                 goto_path.clone(),
-                                                line,
+                                                line_of_row(state, row),
                                                 col,
                                             );
                                         }
@@ -420,18 +451,31 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     disabled=!is_rust
                                     on_select=Callback::new(move |_| {
                                         if let Some(element) = area.get_untracked()
-                                            && let Some((line, col)) = caret_line_col(
-                                                &element,
-                                                &state.editor.draft.get_untracked(),
-                                            )
+                                            && let Some((row, col)) =
+                                                caret_line_col(&element, &screen(state))
                                         {
                                             controller::request_actions(
                                                 state,
                                                 fix_path.clone(),
-                                                line,
+                                                line_of_row(state, row),
                                                 col,
                                             );
                                         }
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuSeparator />
+                                <MenuItem
+                                    label="Fold all"
+                                    on_select=Callback::new(move |_| {
+                                        fold_all(state);
+                                        editor_menu.set(None);
+                                    })
+                                />
+                                <MenuItem
+                                    label="Unfold all"
+                                    on_select=Callback::new(move |_| {
+                                        unfold_all(state);
                                         editor_menu.set(None);
                                     })
                                 />
@@ -492,6 +536,11 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // column. The width now names the digits and adds the
                         // padding explicitly.
                         let digits = count.to_string().len().max(3);
+                        // The run column is only reserved when the file has
+                        // something to run. Holding it open for every file
+                        // would push the code right by a character for the
+                        // sake of an affordance most files never show.
+                        let extra = if runnables.get().is_empty() { 32 } else { 46 };
                         view! {
                             <div
                                 class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
@@ -499,16 +548,23 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     // The dot's column, then the digits, then the
                                     // padding — a width that only counted digits
                                     // clipped the number the moment a dot appeared.
-                                    "{}; width: calc({digits}ch + 32px)",
+                                    "{}; width: calc({digits}ch + {extra}px)",
                                     metrics.get(),
                                 )
                             >
                                 // Each number is a breakpoint target, as in
                                 // every debugger since the first one with a
                                 // mouse: click the margin, get a breakpoint.
-                                {(1..=count)
-                                    .map(|n| {
-                                        let line = (n - 1) as u32;
+                                // Only the lines on screen, each keeping its
+                                // real number: a folded file whose numbers
+                                // renumbered themselves would make every
+                                // compiler error point at the wrong place.
+                                {state
+                                    .editor.folds
+                                    .with(|f| f.visible(count as u32))
+                                    .into_iter()
+                                    .map(|line| {
+                                        let n = line + 1;
                                         let file = path_for_gutter.clone();
                                         let toggle = file.clone();
                                         let marked = Signal::derive(move || {
@@ -516,6 +572,77 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 list.iter().any(|(f, l)| f == &file && *l == line)
                                             })
                                         });
+                                        // The test declared on this line, if
+                                        // any, as its own click target rather
+                                        // than a second meaning for the
+                                        // margin. The margin already means
+                                        // "breakpoint", and one glyph that did
+                                        // two things depending on where you
+                                        // hit it is how you set a breakpoint
+                                        // when you meant to run a test.
+                                        let run = runnables
+                                            .get()
+                                            .into_iter()
+                                            .find(|r| r.line == line)
+                                            .map(|r| {
+                                                let label = match r.kind {
+                                                    rusty_edit::RunnableKind::Module => {
+                                                        format!("Run the tests in {}", r.name)
+                                                    }
+                                                    rusty_edit::RunnableKind::Test => {
+                                                        format!("Run {}", r.name)
+                                                    }
+                                                };
+                                                let filter = r.filter.clone();
+                                                view! {
+                                                    <button
+                                                        type="button"
+                                                        title=label
+                                                        on:click=move |event: ev::MouseEvent| {
+                                                            event.stop_propagation();
+                                                            controller::run_test(
+                                                                state,
+                                                                filter.clone(),
+                                                            );
+                                                        }
+                                                        class="shrink-0 leading-none text-accent/50 hover:text-accent"
+                                                    >
+                                                        "▷"
+                                                    </button>
+                                                }
+                                            });
+                                        // Fold control. Shown only where
+                                        // something can collapse, and only on
+                                        // hover unless it is already folded —
+                                        // a chevron on every second line is a
+                                        // margin nobody can read past.
+                                        let collapsed = state
+                                            .editor.folds
+                                            .with(|f| f.is_folded(line));
+                                        let chevron = region_at(state, line)
+                                            .map(|_| {
+                                                let class = if collapsed {
+                                                    "shrink-0 leading-none text-label-2"
+                                                } else {
+                                                    "shrink-0 leading-none text-transparent \
+                                                     group-hover:text-label-3"
+                                                };
+                                                let title = if collapsed { "Unfold" } else { "Fold" };
+                                                let glyph = if collapsed { "▸" } else { "▾" };
+                                                view! {
+                                                    <button
+                                                        type="button"
+                                                        title=title
+                                                        on:click=move |event: ev::MouseEvent| {
+                                                            event.stop_propagation();
+                                                            toggle_fold(state, line);
+                                                        }
+                                                        class=class
+                                                    >
+                                                        {glyph}
+                                                    </button>
+                                                }
+                                            });
                                         view! {
                                             // The dot sits *left of* the number, as every
                                             // editor with a breakpoint margin puts it:
@@ -532,6 +659,8 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 title="Click to set a breakpoint"
                                                 class="group flex cursor-pointer items-center justify-end gap-1.5"
                                             >
+                                                {run}
+                                                {chevron}
                                                 <span class=move || {
                                                     if marked.get() {
                                                         "text-crimson"
@@ -582,7 +711,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 let width = ((column_px(&text, line, end_col)
                                     - column_px(&text, line, col)) * z)
                                     .max(2.0);
-                                let y = 8.0 + f64::from(line) * LINE_HEIGHT * z;
+                                let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * z;
                                 let wash = if index == current {
                                     "pointer-events-none absolute rounded-[3px] bg-amber-fill"
                                 } else {
@@ -623,20 +752,44 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                             .map(|(_, spans)| spans.clone())
                                     })
                                     .unwrap_or_default();
+                                let folds = state.editor.folds.get();
                                 state
                                     .editor.highlighted
                                     .get()
                                     .into_iter()
                                     .enumerate()
+                                    // Hidden lines are not drawn, and the
+                                    // echo must drop exactly the lines the
+                                    // textarea dropped: one row of
+                                    // disagreement and every caret below it
+                                    // sits on the wrong glyph.
+                                    .filter(|(index, _)| !folds.hides(*index as u32))
                                     .map(|(index, line)| {
                                         let line = overlay_semantic(
                                             line,
                                             index as u32,
                                             &semantic,
                                         );
+                                        // A collapsed header says how much is
+                                        // underneath it. A bare `…` gives no
+                                        // sense of whether unfolding costs
+                                        // three lines or three hundred.
+                                        let summary = folds
+                                            .regions()
+                                            .iter()
+                                            .find(|r| r.header == index as u32)
+                                            .map(|r| {
+                                                let n = r.hidden();
+                                                view! {
+                                                    <span class="rounded-[3px] bg-selection px-1 text-label-3">
+                                                        {format!(" ⋯ {n} lines ")}
+                                                    </span>
+                                                }
+                                            });
                                         view! {
                                             <div>
                                                 {decorate(line, index as u32, &diags)}
+                                                {summary}
                                                 // An empty line still occupies
                                                 // one, or the caret above sits a
                                                 // row too high for the rest of
@@ -669,7 +822,11 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             if block { format!("{base} vim-block") } else { base.to_string() }
                         }
                         style=move || metrics.get()
-                        prop:value=move || state.editor.draft.get()
+                        // What the textarea holds is the *screen* text, which
+                        // is the draft minus every folded region. Identical to
+                        // the draft while nothing is collapsed, so this is a
+                        // no-op for a file nobody has folded.
+                        prop:value=move || screen_tracked(state)
                         on:contextmenu=move |event: ev::MouseEvent| {
                             event.prevent_default();
                             editor_menu
@@ -705,8 +862,12 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     return;
                                 }
                                 event.prevent_default();
-                                if let Some((line, col)) = cell_under(
-                                    &state.editor.draft.get_untracked(),
+                                // A pixel names a *row*; the server wants a
+                                // document line. `screen` and `line_of_row`
+                                // are both the identity while nothing is
+                                // folded.
+                                if let Some((row, col)) = cell_under(
+                                    &screen(state),
                                     event.offset_x() as f64,
                                     event.offset_y() as f64,
                                     zoom.get_untracked(),
@@ -714,7 +875,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     controller::goto_definition(
                                         state,
                                         path.clone(),
-                                        line,
+                                        line_of_row(state, row),
                                         col,
                                     );
                                 }
@@ -727,11 +888,12 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     return;
                                 }
                                 let cell = cell_under(
-                                    &state.editor.draft.get_untracked(),
+                                    &screen(state),
                                     event.offset_x() as f64,
                                     event.offset_y() as f64,
                                     zoom.get_untracked(),
-                                );
+                                )
+                                .map(|(row, col)| (line_of_row(state, row), col));
                                 if hover_cell.get_untracked() == cell {
                                     return;
                                 }
@@ -862,15 +1024,21 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             if event.key() == "F2" && !event.ctrl_key() && is_rust {
                                 event.prevent_default();
                                 if let Some(element) = area.get_untracked() {
-                                    let text = state.editor.draft.get_untracked();
+                                    // The word under the caret is read off the
+                                    // screen text, because that is what the
+                                    // selection indexes; the line it is on is
+                                    // then a document line, because that is
+                                    // what the server renames by.
+                                    let text = screen(state);
                                     let cursor = scalar_of_units(
                                         &text,
                                         element.selection_start().ok().flatten().unwrap_or(0)
                                             as usize,
                                     );
-                                    if let (Some(word), Some((line, col))) =
+                                    if let (Some(word), Some((row, col))) =
                                         (word_at(&text, cursor), caret_line_col(&element, &text))
                                     {
+                                        let line = line_of_row(state, row);
                                         state
                                             .editor.rename
                                             .set(Some((path.clone(), line, col, word)));
@@ -898,13 +1066,13 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             {
                                 event.prevent_default();
                                 if let Some(element) = area.get_untracked() {
-                                    let text = state.editor.draft.get_untracked();
-                                    if let Some((line, col)) = caret_line_col(&element, &text) {
+                                    let text = screen(state);
+                                    if let Some((row, col)) = caret_line_col(&element, &text) {
                                         state.editor.completion.set(None);
                                         controller::request_actions(
                                             state,
                                             path.clone(),
-                                            line,
+                                            line_of_row(state, row),
                                             col,
                                         );
                                     }
@@ -1033,9 +1201,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             if event.ctrl_key() && event.key() == " " {
                                 event.prevent_default();
                                 if let Some(element) = area.get_untracked() {
-                                    let text = state.editor.draft.get_untracked();
-                                    if let Some((line, col)) = caret_line_col(&element, &text) {
-                                        let start = word_start_before(&text, line, col);
+                                    let text = screen(state);
+                                    if let Some((row, col)) = caret_line_col(&element, &text) {
+                                        let start = word_start_before(&text, row, col);
+                                        let line = line_of_row(state, row);
                                         controller::request_completion(
                                             state,
                                             path.clone(),
@@ -1090,7 +1259,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 return None;
                             }
                             let line = frame.line?;
-                            let y = 8.0 + f64::from(line) * LINE_HEIGHT * zoom.get();
+                            let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get();
                             let height = LINE_HEIGHT * zoom.get();
                             Some(view! {
                                 <div
@@ -1124,12 +1293,12 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             // card at all.
                             let place = if opens_up(range.start_line) {
                                 let y = 8.0
-                                    + f64::from(range.start_line) * LINE_HEIGHT * zoom.get()
+                                    + f64::from(row_for(state, range.start_line)) * LINE_HEIGHT * zoom.get()
                                     - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             } else {
                                 let y = 8.0
-                                    + f64::from(range.end_line + 1) * LINE_HEIGHT * zoom.get()
+                                    + f64::from(row_for(state, range.end_line) + 1) * LINE_HEIGHT * zoom.get()
                                     + 2.0;
                                 format!("top: {y}px")
                             };
@@ -1168,10 +1337,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             }
                             let chosen = picked_action.get().min(fixes.len().saturating_sub(1));
                             let place = if opens_up(line) {
-                                let y = 8.0 + f64::from(line) * LINE_HEIGHT * zoom.get() - 4.0;
+                                let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get() - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             } else {
-                                let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                let y = 8.0 + f64::from(row_for(state, line) + 1) * LINE_HEIGHT * zoom.get() + 2.0;
                                 format!("top: {y}px")
                             };
                             view! {
@@ -1236,10 +1405,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             let place = if line_in_view(line)
                                 .is_some_and(|(top, _)| top < 96.0)
                             {
-                                let y = 8.0 + f64::from(line + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                let y = 8.0 + f64::from(row_for(state, line) + 1) * LINE_HEIGHT * zoom.get() + 2.0;
                                 format!("top: {y}px")
                             } else {
-                                let y = 8.0 + f64::from(line) * LINE_HEIGHT * zoom.get() - 4.0;
+                                let y = 8.0 + f64::from(row_for(state, line)) * LINE_HEIGHT * zoom.get() - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             };
                             let label = info.label;
@@ -1331,10 +1500,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             let chosen = picked.get().min(shown.len() - 1);
                             let x = 8.0 + column_px(&draft, popup.line, popup.word_start) * zoom.get();
                             let place = if opens_up(popup.line) {
-                                let y = 8.0 + f64::from(popup.line) * LINE_HEIGHT * zoom.get() - 4.0;
+                                let y = 8.0 + f64::from(row_for(state, popup.line)) * LINE_HEIGHT * zoom.get() - 4.0;
                                 format!("top: {y}px; transform: translateY(-100%)")
                             } else {
-                                let y = 8.0 + f64::from(popup.line + 1) * LINE_HEIGHT * zoom.get() + 2.0;
+                                let y = 8.0 + f64::from(row_for(state, popup.line) + 1) * LINE_HEIGHT * zoom.get() + 2.0;
                                 format!("top: {y}px")
                             };
                             // A window around the selection rather than a

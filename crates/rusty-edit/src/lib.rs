@@ -9,10 +9,16 @@
 //! is a long-running process with a protocol, and bolting it onto the code that
 //! reads a file would put a socket behind `open`.
 
+/// Code folding: what can collapse, and the line map that follows.
+pub mod fold;
 pub mod lexical;
 pub mod model;
+/// Which tests a Rust file holds, so the gutter can offer to run them.
+pub mod tests_in;
 
+pub use fold::{Folded, Region};
 pub use model::*;
+pub use tests_in::{Runnable, RunnableKind};
 
 #[cfg(feature = "backend")]
 mod document;
@@ -26,6 +32,8 @@ mod highlight;
 mod search;
 #[cfg(feature = "backend")]
 mod tree;
+#[cfg(feature = "backend")]
+mod watch;
 
 #[cfg(feature = "backend")]
 pub use document::{Files, create, save};
@@ -37,3 +45,5 @@ pub use format::format_rust;
 pub use search::{Query as SearchQuery, search};
 #[cfg(feature = "backend")]
 pub use tree::read as read_tree;
+#[cfg(feature = "backend")]
+pub use watch::{Watch, watch};

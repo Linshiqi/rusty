@@ -27,6 +27,7 @@ mod session;
 mod simulate;
 mod storage;
 mod terminal;
+mod watch;
 mod wizard;
 mod workbench;
 
@@ -42,6 +43,7 @@ pub use session::*;
 pub use simulate::*;
 pub use storage::*;
 pub use terminal::*;
+pub use watch::*;
 pub use wizard::*;
 pub use workbench::*;
 

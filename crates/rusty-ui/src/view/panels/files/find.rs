@@ -61,7 +61,10 @@ pub(super) fn find_jump(state: AppState, scroller: NodeRef<html::Div>, direction
     let (line, _) = line_col_of_byte(&text, matches[next].0);
     if let Some(outer) = scroller.get_untracked() {
         let lh = LINE_HEIGHT * state.editor.zoom.get_untracked();
-        let y = 8.0 + f64::from(line) * lh;
+        // Find searches the whole document, folds and all, so the match's
+        // line has to be turned into the row it is drawn on — otherwise
+        // pressing Enter past a collapsed function scrolls to empty space.
+        let y = 8.0 + f64::from(row_for(state, line)) * lh;
         let top = f64::from(outer.scroll_top());
         let height = f64::from(outer.client_height());
         if y < top + lh || y + lh * 2.0 > top + height {
@@ -93,9 +96,10 @@ fn find_replace(state: AppState, area: NodeRef<html::Textarea>, all: bool) {
     }
 
     echo_edit(state, &new);
-    state.editor.draft.set(new.clone());
     if let Some(element) = area.get_untracked() {
-        element.set_value(&new);
+        set_buffer(state, &element, &new);
+    } else {
+        state.editor.draft.set(new.clone());
     }
     controller::schedule_pulse(state);
 }

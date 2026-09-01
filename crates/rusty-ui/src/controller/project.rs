@@ -175,6 +175,7 @@ fn project_opened(state: AppState, result: OpenResult) {
             refresh_firmware(state);
             refresh_tree(state);
             start_lsp(state);
+            start_watch(state);
             if let Some(root) = state
                 .project
                 .detected
@@ -216,6 +217,7 @@ fn reload_project(state: AppState) {
             refresh_workspace(state);
             refresh_tree(state);
             start_lsp(state);
+            start_watch(state);
             // A WebView reload reaches a project the backend never closed —
             // this path skips project_opened, so the strip is replayed here
             // too or a refresh would silently drop every open tab.

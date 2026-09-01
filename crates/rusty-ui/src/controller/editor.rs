@@ -268,6 +268,7 @@ fn park_active(state: AppState) {
         highlighted: state.editor.highlighted.get_untracked(),
         caret: active_caret(state),
         history: state.editor.history.get_untracked(),
+        folds: state.editor.folds.get_untracked(),
         document,
     };
     state.editor.parked.update(|parked| {
@@ -309,6 +310,10 @@ fn active_caret(state: AppState) -> Option<(u32, u32)> {
 }
 
 fn clear_editor_transients(state: AppState) {
+    // Folds describe *this* document's line numbers. Carried into another
+    // file they would collapse whatever happens to be at those lines, which
+    // is a file that opens with its middle missing.
+    state.editor.folds.set(rusty_edit::Folded::default());
     state.editor.completion.set(None);
     state.editor.signature.set(None);
     state.editor.hover.set(None);
@@ -330,6 +335,8 @@ pub fn activate_tab(state: AppState, path: String) {
         // A strip entry with no parked body should not exist; refusing to
         // guess beats showing a stale document as if it were current.
         state.editor.tabs.update(|tabs| tabs.retain(|t| t != &path));
+        // A closed tab has no draft left to protect, so its warning is spent.
+        clear_stale(state, &path);
     }
 }
 
@@ -348,6 +355,9 @@ fn front_parked(state: AppState, path: &str) -> bool {
     let dirty = entry.draft != entry.document.text;
     let read_only = entry.document.read_only;
     state.editor.history.set(entry.history);
+    // After `clear_editor_transients` has reset them, or the tab comes back
+    // flat while its caret comes back where it was.
+    state.editor.folds.set(entry.folds);
     state.editor.draft.set(entry.draft.clone());
     state.editor.echo_text.set(entry.draft);
     state.editor.highlighted.set(entry.highlighted);
@@ -510,6 +520,9 @@ pub fn save_file(state: AppState) {
         async move { ipc::call::<_, ()>(cmd::files::SAVE, &args).await },
         move |()| {
             lsp_saved_doc(path.clone());
+            // Whatever the disk held is gone now — the user chose this write
+            // over it, so the warning has done its job and must not linger.
+            clear_stale(state, &path);
             // Re-read so the highlighting matches what is now on disk, and so
             // the saved/unsaved marker clears against real content rather than
             // against an assumption that the write did what was asked.

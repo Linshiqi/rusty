@@ -128,6 +128,10 @@ pub mod files {
     pub const OPEN_EXTERNAL: &str = "open_external";
     pub const FORMAT: &str = "format_text";
     pub const SEARCH: &str = "search_project";
+    /// Long-lived: streams a batch every time the project settles after
+    /// somebody else changed it. Never resolves while it is up, like
+    /// `lsp_start`.
+    pub const WATCH: &str = "watch_project";
 }
 
 /// The language server behind the editor.

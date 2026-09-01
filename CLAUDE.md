@@ -298,6 +298,60 @@ ones is what stops a `d` in normal mode also reaching the window listener.
   at a command boundary, so `ciwfoo<Esc>` undoes in one press instead of one
   keystroke at a time.
 
+## Code folding
+
+**Folding is the one feature that makes the text on screen stop being the text
+in the file**, and every other rule here follows from that. The surface is a
+transparent `<textarea>` over a highlighted `<pre>` that line up glyph for
+glyph, so hiding a region means removing it from the textarea too — and from
+that moment the caret, the selection, every squiggle and every card is
+positioned in a coordinate system that is not the document's.
+
+- **The arithmetic is in `rusty_edit::fold`, pure and tested.** Which regions
+  can collapse (indentation, as VSCode's default is — a file mid-edit does not
+  parse), the two line conversions, and `splice`, which turns an edit made
+  against the folded screen back into an edit against the document.
+- **`view/panels/files/folding.rs` is the only place that reads them off
+  state.** `screen` is what the textarea holds; `row_for` is what every
+  overlay anchors to. A line inside a collapsed region answers `row_for` with
+  the *header* rather than with nothing, so an error in a folded function
+  marks the fold instead of disappearing.
+- **What made this safe to add to a working editor: with nothing folded,
+  `screen` is the draft and `row_for` is the identity.** Every existing call
+  site behaves exactly as before, so a site that was missed is a misplaced
+  overlay while something is collapsed — never a wrong write.
+- **One keystroke path is fold-aware; every wholesale rewrite is not.** Cut,
+  paste, undo, comment toggle, completion accept, replace-all, a Vim operator
+  and a format all compute a new *document* and hand it to `set_value`. They
+  go through `set_buffer`, which expands the folds first. Twelve separate
+  splices would be twelve chances to write the wrong bytes to disk; unfolding
+  makes the two texts the same text again. Only `on:input` splices, because
+  only it carries the screen after the edit.
+- Folds are session state, parked per tab like the caret, and **not
+  persisted**: restoring yesterday's folds onto a file somebody else has since
+  edited collapses the wrong lines.
+
+## Following the disk
+
+The workbench is never the only thing writing to a checkout. `rusty_edit::watch`
+is `notify` behind a quiet window; `controller/watch.rs` decides what to do
+with a batch.
+
+- **`target/` is not watched.** One `cargo build` writes tens of thousands of
+  files, and a watcher that reported them would spend the build storming the
+  frontend. Dot directories go the same way — the tree does not draw them.
+- **Batched, and structural changes are told apart from content ones.** One
+  Ctrl+S in another editor is up to four notifications on Windows; a `git
+  checkout` is one action that takes a second of syscalls. Re-reading one open
+  file is free and walking the project is not, so a modify says "this file"
+  and a create/remove/rename says "the tree".
+- **An unsaved draft is never reloaded — it is marked.** The tab shows a
+  warning beside its dirty dot and the reload is skipped. Silently replacing a
+  draft with the disk's copy is an editor eating work, and a modal prompt per
+  file is unusable after a checkout that touched a dozen. The reload is
+  re-checked *after* the round trip too, because typing is synchronous and the
+  read is not.
+
 ## UI conventions
 
 Chrome actions are icon buttons with a `title` tooltip — flat like VSCode's,
@@ -653,6 +707,19 @@ usty`) holds `location.toml`
   "a session is running": a slider that silently does nothing reads as
   firmware ignoring the change. The trade is explicit — rusty's own link is
   plain text, and defmt decoding stays espflash's.
+- **An ESP32 cannot be simulated once it does floating point.** Espressif's
+  QEMU dies — `Fatal error: divide by zero`, taking the emulator with it, so
+  the guest's buffered console output is lost too and the log ends mid-boot —
+  on the **first FPU instruction** an `-M esp32` application executes.
+  Bisected down from a minimal firmware: integer `println!`s tick over
+  indefinitely; adding one `black_box(1.25) * black_box(3.0)` ends it before
+  the next line prints. LEDC, UART0 with `with_rx`/`with_tx`, and GPIO were
+  each cleared first, so it is not a peripheral. `-M esp32c3` runs the same
+  code. That is why every example here is a C3 — `pid-tune` is float PID and
+  has always worked — and why anything float-heavy for an ESP32 board needs a
+  C3 build to be watchable at all. The symptom to recognise: two lines of
+  output and then silence, with `esp32_i2c: slave mode not implemented`
+  alongside as unrelated machine-init noise.
 - Child processes get `CREATE_NO_WINDOW` on Windows; the toolchain panel probes
   six tools on open and would otherwise flash six console windows.
 - **`NO_COLOR=1` breaks Trunk.** It maps the variable onto its `--no-color`

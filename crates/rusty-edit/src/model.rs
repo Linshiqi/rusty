@@ -138,3 +138,22 @@ pub struct SearchResults {
     #[serde(default)]
     pub error: Option<String>,
 }
+
+/// What changed on disk, while the window was looking elsewhere.
+///
+/// One batch rather than one event per path: a save from another editor is
+/// often a write, a rename and a second write, and `cargo build` touches tens
+/// of thousands of files. A refresh per event would be a refresh storm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChanges {
+    /// Files whose *contents* changed. Project-relative, `/`-separated, like
+    /// every other path on this wire.
+    pub changed: Vec<String>,
+    /// True when something appeared, vanished or was renamed, so the tree
+    /// itself is stale rather than just a file's text.
+    ///
+    /// Separate because the two answers cost very different amounts: rereading
+    /// one open file is nothing, and walking the project is not.
+    pub tree: bool,
+}
