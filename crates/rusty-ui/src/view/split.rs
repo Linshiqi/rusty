@@ -15,10 +15,10 @@ use crate::state::{AppState, Divider, remember_size};
 /// Install the drag listeners. Called once, from the shell.
 pub fn install(state: AppState) {
     let move_handle = window_event_listener(ev::mousemove, move |event| {
-        let Some(divider) = state.dragging.get_untracked() else {
+        let Some(divider) = state.layout.dragging.get_untracked() else {
             return;
         };
-        let (from_pointer, from_size) = state.drag_from.get_untracked();
+        let (from_pointer, from_size) = state.layout.drag_from.get_untracked();
         let (min, max) = divider.bounds();
         // Delta from where the grab started, not absolute window geometry.
         // "Height is the distance to the bottom of the window" ignored the
@@ -26,20 +26,17 @@ pub fn install(state: AppState) {
         // so the divider ran that far from the pointer for the whole drag.
         match divider {
             Divider::Tree => {
-                let width = (from_size + (event.client_x() as f64 - from_pointer))
-                    .clamp(min, max);
-                state.tree_width.set(width);
+                let width = (from_size + (event.client_x() as f64 - from_pointer)).clamp(min, max);
+                state.layout.tree_width.set(width);
             }
             // Anchored to the bottom, so dragging up grows it.
             Divider::Dock => {
-                let height = (from_size + (from_pointer - event.client_y() as f64))
-                    .clamp(min, max);
-                state.dock_height.set(height);
+                let height = (from_size + (from_pointer - event.client_y() as f64)).clamp(min, max);
+                state.layout.dock_height.set(height);
             }
             Divider::DebugStack => {
-                let width = (from_size + (event.client_x() as f64 - from_pointer))
-                    .clamp(min, max);
-                state.debug_width.set(width);
+                let width = (from_size + (event.client_x() as f64 - from_pointer)).clamp(min, max);
+                state.layout.debug_width.set(width);
             }
         }
     });
@@ -47,14 +44,14 @@ pub fn install(state: AppState) {
     let up_handle = window_event_listener(ev::mouseup, move |_| {
         // Written on release rather than on every move: dragging fires dozens
         // of events a second, and localStorage is synchronous.
-        if let Some(divider) = state.dragging.get_untracked() {
+        if let Some(divider) = state.layout.dragging.get_untracked() {
             let value = match divider {
-                Divider::Tree => state.tree_width.get_untracked(),
-                Divider::Dock => state.dock_height.get_untracked(),
-                Divider::DebugStack => state.debug_width.get_untracked(),
+                Divider::Tree => state.layout.tree_width.get_untracked(),
+                Divider::Dock => state.layout.dock_height.get_untracked(),
+                Divider::DebugStack => state.layout.debug_width.get_untracked(),
             };
             remember_size(divider, value);
-            state.dragging.set(None);
+            state.layout.dragging.set(None);
         }
     });
 
@@ -86,20 +83,20 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                 event.prevent_default();
                 let (pointer, size) = match divider {
                     Divider::Tree => {
-                        (event.client_x() as f64, state.tree_width.get_untracked())
+                        (event.client_x() as f64, state.layout.tree_width.get_untracked())
                     }
                     Divider::Dock => {
-                        (event.client_y() as f64, state.dock_height.get_untracked())
+                        (event.client_y() as f64, state.layout.dock_height.get_untracked())
                     }
                     Divider::DebugStack => {
-                        (event.client_x() as f64, state.debug_width.get_untracked())
+                        (event.client_x() as f64, state.layout.debug_width.get_untracked())
                     }
                 };
-                state.drag_from.set((pointer, size));
-                state.dragging.set(Some(divider));
+                state.layout.drag_from.set((pointer, size));
+                state.layout.dragging.set(Some(divider));
             }
             class=move || {
-                let active = state.dragging.get() == Some(divider);
+                let active = state.layout.dragging.get() == Some(divider);
                 format!(
                     "relative z-10 flex-none bg-line transition-colors before:absolute \
                      before:content-[''] hover:bg-rust {geometry} {}",

@@ -105,7 +105,7 @@ pub fn App() -> impl IntoView {
     // A `?detach=<path>` boot means this window is one file's editor, not
     // the whole shell: no sidebar, no dock, no menu bar — the OS gives it a
     // frame, and closing it is closing it.
-    if let Some(path) = state.detached.get_untracked() {
+    if let Some(path) = state.app.detached.get_untracked() {
         let opened = RwSignal::new(false);
         let home = path.clone();
         Effect::new(move |_| {
@@ -163,7 +163,7 @@ pub fn App() -> impl IntoView {
             // Absent registration collapses the row entirely — no dead strip
             // over panels that brought no tools.
             {move || {
-                let content = state.toolbar.get()?;
+                let content = state.layout.toolbar.get()?;
                 Some(view! {
                     <div class="flex h-10 flex-none items-center gap-1.5 border-b border-line bg-content px-3">
                         {content.run(())}
@@ -177,7 +177,7 @@ pub fn App() -> impl IntoView {
                 <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
                     {move || {
                         state
-                            .error
+                            .app.error
                             .get()
                             .map(|error| {
                                 view! {
@@ -207,7 +207,7 @@ pub fn App() -> impl IntoView {
                         // `pointer-events-none` on the layer so the corner it
                         // does not fill still belongs to the editor.
                         {move || {
-                            (!settings_open.get() && state.active_panel.get() == "files")
+                            (!settings_open.get() && state.layout.panel.get() == "files")
                                 .then(|| {
                                     view! {
                                         <div class="pointer-events-none absolute inset-0">
@@ -221,7 +221,7 @@ pub fn App() -> impl IntoView {
                 </main>
                 // The assistant, VSCode-chat style: a right-hand drawer the
                 // title-bar icon toggles, beside whatever panel is active.
-                <Show when=move || state.assistant_open.get()>
+                <Show when=move || state.ai.open.get()>
                     <aside class="flex w-[400px] flex-none flex-col border-l border-line bg-sidebar">
                         <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
                             <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
@@ -231,7 +231,7 @@ pub fn App() -> impl IntoView {
                             <button
                                 type="button"
                                 title="Close"
-                                on:click=move |_| state.assistant_open.set(false)
+                                on:click=move |_| state.ai.open.set(false)
                                 class="rounded-[5px] px-1.5 text-footnote text-label-3 hover:text-label"
                             >
                                 "×"
@@ -253,7 +253,7 @@ fn Stage() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        let active = state.active_panel.get();
+        let active = state.layout.panel.get();
         let panel = panels::all()
             .into_iter()
             .find(|p| p.id == active)
@@ -271,7 +271,7 @@ fn Stage() -> impl IntoView {
                         <OpenProjectButton kind=ButtonKind::Primary />
                         // The way back to yesterday's work, one click deep.
                         {move || {
-                            let recents = state.recents.get();
+                            let recents = state.app.recents.get();
                             (!recents.is_empty())
                                 .then(|| {
                                     view! {
@@ -363,7 +363,7 @@ fn Sidebar() -> impl IntoView {
                                     let icon = panel.icon;
                                     let needs_project = panel.needs_project;
                                     let selected = Signal::derive(move || {
-                                        state.active_panel.get() == id
+                                        state.layout.panel.get() == id
                                     });
                                     let disabled = Signal::derive(move || {
                                         needs_project && !state.has_project()
@@ -385,7 +385,7 @@ fn Sidebar() -> impl IntoView {
                                                 let SettingsOpen(settings) =
                                                     expect_context::<SettingsOpen>();
                                                 settings.set(false);
-                                                state.active_panel.set(id.to_string());
+                                                state.layout.panel.set(id.to_string());
                                             }
                                             class=move || {
                                                 let base = "grid size-8 place-items-center rounded-[6px] \
@@ -443,7 +443,8 @@ fn Sidebar() -> impl IntoView {
 fn Status(
     #[prop(into)] text: String,
     /// A dim prefix naming what the value is.
-    #[prop(optional, into)] label: Option<String>,
+    #[prop(optional, into)]
+    label: Option<String>,
     #[prop(optional)] tone: Option<Tone>,
     #[prop(optional, into)] title: Option<String>,
     #[prop(optional)] on_click: Option<Callback<()>>,
@@ -670,7 +671,7 @@ fn SwitchChip(
             // mechanical within one, so the list says which rows are a switch
             // and which are a new project — before the click, not after it.
             let ours = state
-                .chips
+                .project.chips
                 .get()
                 .into_iter()
                 .find(|chip| chip.id == current)
@@ -678,7 +679,7 @@ fn SwitchChip(
             view! {
                 <div class="max-h-56 overflow-y-auto py-0.5">
                     {state
-                        .chips
+                        .project.chips
                         .get()
                         .into_iter()
                         .filter(|chip| chip.id != current)
@@ -750,7 +751,7 @@ fn StatusBar() -> impl IntoView {
                 // Absence explains itself: no chip means the status has nothing
                 // to say, but a missing language server looks like "the editor
                 // is broken" unless something names it.
-                let lsp = state.lsp_status.get();
+                let lsp = state.lsp.status.get();
                 (state.has_project() && lsp != crate::state::LspStatus::Off)
                     .then(|| {
                         let (text, tone) = match lsp {
@@ -783,11 +784,11 @@ fn StatusBar() -> impl IntoView {
             // guess — this is the first thing a Vim user's eye goes to.
             {move || {
                 state
-                    .vim_on
+                    .editor.vim_on
                     .get()
                     .then(|| {
                         let (label, hint) = state
-                            .vim
+                            .editor.vim
                             .with(|vim| (vim.mode.label(), vim.hint()));
                         let tone = match label {
                             "INSERT" => Tone::Patina,
@@ -835,7 +836,7 @@ fn StatusBar() -> impl IntoView {
 
             {move || {
                 state
-                    .project
+                    .project.detected
                     .get()
                     .map(|project| {
                         let chip = project.chip.clone().unwrap_or_else(|| "no chip".into());
@@ -867,7 +868,7 @@ fn StatusBar() -> impl IntoView {
 
             {move || {
                 state
-                    .workspace
+                    .project.workspace
                     .get()
                     .map(|report| {
                         view! {
@@ -881,7 +882,7 @@ fn StatusBar() -> impl IntoView {
             // Doubles as proof the IPC bridge is alive: these numbers can only
             // be non-zero if a command round-tripped.
             {move || {
-                let boards = state.boards.with(Vec::len);
+                let boards = state.project.boards.with(Vec::len);
                 view! {
                     <span
                         class="flex h-full items-center border-l border-line px-3"

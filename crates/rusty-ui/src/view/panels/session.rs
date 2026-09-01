@@ -41,13 +41,13 @@ pub fn Session() -> impl IntoView {
             controller::scan_devices(state);
         }
         // All three are read so the effect re-runs when any changes.
-        let _ = state.transport.get();
+        let _ = state.device.transport.get();
         let _ = state.current_firmware();
         controller::plan_session(state, mode.get());
     });
 
     move || {
-        if state.firmware.with(Vec::is_empty) {
+        if state.project.firmware.with(Vec::is_empty) {
             return view! {
                 <Empty
                     title="Nothing built yet"
@@ -118,8 +118,8 @@ pub fn Devices() -> impl IntoView {
         </div>
 
         {move || {
-            let ports = state.ports.get();
-            let probes = state.probes.get();
+            let ports = state.device.ports.get();
+            let probes = state.device.probes.get();
 
             if ports.is_empty() && probes.is_empty() {
                 return view! {
@@ -132,7 +132,7 @@ pub fn Devices() -> impl IntoView {
                     .into_any();
             }
 
-            let current = state.transport.get();
+            let current = state.device.transport.get();
 
             view! {
                 <div class="px-2 py-1.5">
@@ -162,7 +162,7 @@ pub fn Devices() -> impl IntoView {
                                     detail=described
                                     badge=(!port.likely_board).then(|| "probably not a board".to_string())
                                     on_pick=Callback::new(move |_| {
-                                        state.transport.set(Some(Transport::Serial { port: name.clone() }))
+                                        state.device.transport.set(Some(Transport::Serial { port: name.clone() }))
                                     })
                                 />
                             }
@@ -187,7 +187,7 @@ pub fn Devices() -> impl IntoView {
                                     badge=Some("debug probe".to_string())
                                     on_pick=Callback::new(move |_| {
                                         state
-                                            .transport
+                                            .device.transport
                                             .set(Some(Transport::Probe { identifier: Some(id.clone()) }))
                                     })
                                 />
@@ -241,7 +241,7 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
     view! {
         <SectionLabel label="Command" />
         {move || {
-            let running = state.session_running.get();
+            let running = state.app.session_running.get();
             // The button names what this mode does, and the Output channel
             // follows it — `FlashAndMonitor` is not a verb anyone says.
             let (verb, channel) = match mode.get() {
@@ -249,10 +249,10 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
                 _ => ("Flash and monitor", "flash"),
             };
 
-            let Some(plan) = state.plan.get() else {
+            let Some(plan) = state.device.plan.get() else {
                 // Say which half is missing. "Cannot flash" with no reason is
                 // the failure mode this whole workbench exists to avoid.
-                let reason = if state.transport.with(Option::is_none) {
+                let reason = if state.device.transport.with(Option::is_none) {
                     "Choose a device above."
                 } else {
                     "No build selected — the Memory panel lists what this project has built."
@@ -316,16 +316,16 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
                         <Button
                             label=verb
                             kind=ButtonKind::Primary
-                            disabled=Signal::derive(move || state.session_running.get())
+                            disabled=Signal::derive(move || state.app.session_running.get())
                             on_click=Callback::new(move |_| {
-                                if let Some(plan) = state.plan.get_untracked() {
+                                if let Some(plan) = state.device.plan.get_untracked() {
                                     controller::run_session(state, plan, channel);
                                 }
                             })
                         />
                         <Button
                             label="Stop"
-                            disabled=Signal::derive(move || !state.session_running.get())
+                            disabled=Signal::derive(move || !state.app.session_running.get())
                             on_click=Callback::new(move |_| controller::stop_session(state))
                         />
                         {running

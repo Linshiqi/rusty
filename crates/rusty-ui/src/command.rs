@@ -172,7 +172,11 @@ pub fn all(state: AppState) -> Vec<Command> {
     ));
     out.push(view(Action::ResetLayout, "Reset panel sizes", None));
     out.push(view(Action::NavBack, "Back", chord(Action::NavBack)));
-    out.push(view(Action::NavForward, "Forward", chord(Action::NavForward)));
+    out.push(view(
+        Action::NavForward,
+        "Forward",
+        chord(Action::NavForward),
+    ));
     out.push(view(Action::ToggleVim, "Vim keys in the editor", None));
 
     for theme in Theme::ALL {
@@ -230,8 +234,8 @@ impl Requires {
         match self {
             Requires::Nothing => true,
             Requires::Project => state.has_project(),
-            Requires::NavBack => state.nav.with(|nav| nav.can_go_back()),
-            Requires::NavForward => state.nav.with(|nav| nav.can_go_forward()),
+            Requires::NavBack => state.editor.nav.with(|nav| nav.can_go_back()),
+            Requires::NavForward => state.editor.nav.with(|nav| nav.can_go_forward()),
         }
     }
 }
@@ -264,12 +268,7 @@ fn entry(action: Action, label: &str, shortcut: Option<String>) -> Item {
     entry_when(Requires::Nothing, action, label, shortcut)
 }
 
-fn entry_when(
-    requires: Requires,
-    action: Action,
-    label: &str,
-    shortcut: Option<String>,
-) -> Item {
+fn entry_when(requires: Requires, action: Action, label: &str, shortcut: Option<String>) -> Item {
     Item::Entry {
         action,
         label: label.to_string(),
@@ -324,7 +323,12 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         // switch is not a *look*, and navigation certainly is not. The
         // symptom was exactly what you would expect: "I cannot turn Vim on",
         // from someone looking in every reasonable place.
-        entry_when(Requires::NavBack, Action::NavBack, "Back", chord(Action::NavBack)),
+        entry_when(
+            Requires::NavBack,
+            Action::NavBack,
+            "Back",
+            chord(Action::NavBack),
+        ),
         entry_when(
             Requires::NavForward,
             Action::NavForward,
@@ -369,7 +373,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                         chord(Action::OpenProject),
                     ),
                 ];
-                let recents = state.recents.get_untracked();
+                let recents = state.app.recents.get_untracked();
                 if !recents.is_empty() {
                     let recent_items = recents
                         .iter()
@@ -431,10 +435,14 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 Item::Submenu {
                     label: "Add C interop",
                     items: vec![
-                        project_entry(Action::ToggleComment, "Comment or uncomment", chord(Action::ToggleComment)),
-                project_entry(Action::Rename, "Rename symbol…", chord(Action::Rename)),
-                Item::Separator,
-                project_entry(Action::ScaffoldC("rust-calls-c"), "Rust calls C…", None),
+                        project_entry(
+                            Action::ToggleComment,
+                            "Comment or uncomment",
+                            chord(Action::ToggleComment),
+                        ),
+                        project_entry(Action::Rename, "Rename symbol…", chord(Action::Rename)),
+                        Item::Separator,
+                        project_entry(Action::ScaffoldC("rust-calls-c"), "Rust calls C…", None),
                         project_entry(Action::ScaffoldC("c-calls-rust"), "C calls Rust…", None),
                     ],
                 },
@@ -478,7 +486,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
 /// Carry out an action.
 pub fn run(action: Action, state: AppState, chrome: Chrome) {
     match action {
-        Action::ShowPanel("assistant") => state.assistant_open.set(true),
+        Action::ShowPanel("assistant") => state.ai.open.set(true),
         Action::ShowPanel(id) => {
             // Silently ignoring a blocked panel would leave the palette looking
             // broken; the sidebar already explains the requirement.
@@ -487,12 +495,13 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                 .find(|p| p.id == id)
                 .is_some_and(|p| !p.needs_project || state.has_project());
             if allowed {
-                state.active_panel.set(id.to_string());
+                state.layout.panel.set(id.to_string());
             }
         }
         Action::OpenProject => controller::choose_project(state),
         Action::OpenRecent(index) => {
             if let Some(path) = state
+                .app
                 .recents
                 .with_untracked(|list| list.get(index).cloned())
             {
@@ -525,7 +534,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::RefreshToolchain => controller::refresh_toolchain(state),
         Action::ReloadCatalog => controller::load_catalog(state),
         Action::ScanDevices => controller::scan_devices(state),
-        Action::ToggleDock => state.dock_open.update(|open| *open = !*open),
+        Action::ToggleDock => state.layout.dock_open.update(|open| *open = !*open),
         Action::ShowDock(tab) => state.show_dock(tab),
         Action::OpenPalette => chrome.palette_open.set(true),
         Action::OpenSettings => chrome.settings_open.set(true),
@@ -536,14 +545,14 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::NavBack => controller::nav_back(state),
         Action::NavForward => controller::nav_forward(state),
         Action::ToggleVim => {
-            let on = !state.vim_on.get_untracked();
+            let on = !state.editor.vim_on.get_untracked();
             controller::set_vim(state, on);
         }
         Action::SetTheme(theme) => theme::set(theme),
         Action::ScaffoldC(direction) => controller::scaffold_c_interop(state, direction),
         Action::ResetLayout => {
-            state.tree_width.set(240.0);
-            state.dock_height.set(196.0);
+            state.layout.tree_width.set(240.0);
+            state.layout.dock_height.set(196.0);
             remember_size(Divider::Tree, 240.0);
             remember_size(Divider::Dock, 196.0);
         }

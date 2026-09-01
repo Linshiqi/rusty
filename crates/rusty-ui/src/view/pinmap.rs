@@ -51,7 +51,7 @@ pub fn PinMap() -> impl IntoView {
     });
 
     move || {
-        let report = state.pins.get()?;
+        let report = state.project.pins.get()?;
         let chip = report.chip.to_uppercase();
         Some(if open.get() {
             view! {

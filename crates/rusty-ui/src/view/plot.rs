@@ -88,7 +88,7 @@ fn Signals() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        let plot = state.plot.get();
+        let plot = state.sim.plot.get();
         if plot.channels.is_empty() {
             return view! {
                 <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -113,7 +113,7 @@ println!(\"[rusty:param] pid_roll_p={} 0..50\", gain);   // announce a tunable"
         }
 
         let clock = plot.clock;
-        let shown = state.plot_shown.get();
+        let shown = state.sim.plot_shown.get();
         let drawn: Vec<Drawn> = plot
             .channels
             .iter()
@@ -231,7 +231,7 @@ fn Legend(channels: Vec<String>) -> impl IntoView {
                     // a 50% swing look identical, which is the whole question
                     // when you are asking whether a loop has settled.
                     let latest = move || {
-                        state.plot.with(|plot| {
+                        state.sim.plot.with(|plot| {
                             let Some((_, points)) = plot
                                 .channels
                                 .iter()
@@ -255,7 +255,7 @@ fn Legend(channels: Vec<String>) -> impl IntoView {
                         let name = pick.clone();
                         move || {
                             state
-                                .plot_shown
+                                .sim.plot_shown
                                 .with(|shown| !shown.is_empty() && !shown.contains(&name))
                         }
                     };
@@ -264,7 +264,7 @@ fn Legend(channels: Vec<String>) -> impl IntoView {
                             type="button"
                             on:click=move |_| {
                                 state
-                                    .plot_shown
+                                    .sim.plot_shown
                                     .update(|shown| {
                                         if shown.as_slice() == [pick.clone()] {
                                             shown.clear();
@@ -305,13 +305,13 @@ fn Link() -> impl IntoView {
     // reading `ports` here and scanning when it is empty re-triggers itself
     // for ever on a machine that genuinely has no serial ports.
     Effect::new(move |ran: Option<()>| {
-        if ran.is_none() && state.ports.with_untracked(Vec::is_empty) {
+        if ran.is_none() && state.device.ports.with_untracked(Vec::is_empty) {
             controller::scan_devices(state);
         }
     });
 
     move || {
-        if let Some(port) = state.link_port.get() {
+        if let Some(port) = state.sim.link_port.get() {
             return view! {
                 <div class="flex items-center justify-between gap-2 px-3 pb-2">
                     <span class="min-w-0 truncate font-mono text-caption text-label-2">{port}</span>
@@ -328,8 +328,8 @@ fn Link() -> impl IntoView {
             .into_any();
         }
 
-        let ports = state.ports.get();
-        let busy = state.session_running.get();
+        let ports = state.device.ports.get();
+        let busy = state.app.session_running.get();
         // What Connect would open: the explicit choice, or the first port that
         // looks like a board. Derived rather than written into `picked` on the
         // way past — writing a signal while rendering the view that reads it is
@@ -408,12 +408,12 @@ fn Tunables() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        let params = state.params.get();
+        let params = state.sim.params.get();
         // Writable only over a port rusty holds. A spawned `espflash monitor`
         // is a running session whose stdin the board never sees, so gating on
         // "something is running" would offer a slider that silently does
         // nothing — read as firmware ignoring the change.
-        let running = state.link_port.with(Option::is_some);
+        let running = state.sim.link_port.with(Option::is_some);
         view! {
             <div class="w-[17rem] shrink-0 overflow-y-auto">
                 <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">

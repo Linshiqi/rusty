@@ -66,11 +66,14 @@ pub fn Wizard() -> impl IntoView {
 
     Effect::new(move |first: Option<()>| {
         if first.is_none() {
-            if state.wizard_options.with(Vec::is_empty) {
+            if state.wizard.options.with(Vec::is_empty) {
                 controller::load_wizard_options(state);
             }
-            if state.wizard_choice.with(Option::is_none)
-                && let Some(chip) = state.chips.with(|c| c.first().map(|c| c.id.clone()))
+            if state.wizard.choice.with(Option::is_none)
+                && let Some(chip) = state
+                    .project
+                    .chips
+                    .with(|c| c.first().map(|c| c.id.clone()))
             {
                 controller::choose(
                     state,
@@ -86,7 +89,7 @@ pub fn Wizard() -> impl IntoView {
     });
 
     move || {
-        let Some(choice) = state.wizard_choice.get() else {
+        let Some(choice) = state.wizard.choice.get() else {
             return view! {
                 <p class="p-6 text-callout text-label-2">"Loading the chip catalogue…"</p>
             }
@@ -203,7 +206,7 @@ fn Footer(step: RwSignal<Step>) -> impl IntoView {
 /// alternative is four copies of the same clone-mutate-resubmit, and the day
 /// one of them forgets to re-explain is the day the wizard lies.
 fn amend(state: AppState, edit: impl FnOnce(&mut WizardChoice)) {
-    if let Some(mut next) = state.wizard_choice.get_untracked() {
+    if let Some(mut next) = state.wizard.choice.get_untracked() {
         edit(&mut next);
         controller::choose(state, next);
     }
@@ -225,9 +228,9 @@ fn turn_on(choice: &mut WizardChoice, id: &str) {
 
 /// Turn an option off, and anything that needed it.
 fn turn_off(choice: &mut WizardChoice, id: &str) {
-    choice.options.retain(|option| {
-        option != id && !wizard_requirements(option).iter().any(|r| r == id)
-    });
+    choice
+        .options
+        .retain(|option| option != id && !wizard_requirements(option).iter().any(|r| r == id));
 }
 
 /// What an option needs, from the catalogue the backend sent.
@@ -236,7 +239,7 @@ fn turn_off(choice: &mut WizardChoice, id: &str) {
 /// is no second traversal here to disagree with the one the generator's plan is
 /// checked against.
 fn wizard_requirements(id: &str) -> Vec<String> {
-    AppState::expect().wizard_options.with(|options| {
+    AppState::expect().wizard.options.with(|options| {
         options
             .iter()
             .find(|option| option.id == id)
@@ -274,8 +277,12 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
     let selected = choice.chip.clone();
 
     let chosen = Signal::derive(move || {
-        let id = state.wizard_choice.with(|c| c.as_ref().map(|c| c.chip.clone()));
+        let id = state
+            .wizard
+            .choice
+            .with(|c| c.as_ref().map(|c| c.chip.clone()));
         state
+            .project
             .chips
             .with(|chips| chips.iter().find(|c| Some(&c.id) == id.as_ref()).cloned())
     });
@@ -290,7 +297,7 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                 let needle = query.get().to_lowercase();
                 let current = selected.clone();
                 state
-                    .chips
+                    .project.chips
                     .get()
                     .into_iter()
                     .filter(|chip| {
@@ -405,8 +412,11 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     // failing at the end is the "plausible answer, wrong path" failure this
     // whole workbench exists to avoid.
     let available = Signal::derive(move || {
-        let chip = state.wizard_choice.with(|c| c.as_ref().map(|c| c.chip.clone()));
-        state.chips.with(|chips| {
+        let chip = state
+            .wizard
+            .choice
+            .with(|c| c.as_ref().map(|c| c.chip.clone()));
+        state.project.chips.with(|chips| {
             chips
                 .iter()
                 .find(|c| Some(&c.id) == chip.as_ref())
@@ -490,7 +500,7 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
         {move || {
                 let chosen = chosen.clone();
                 state
-                    .wizard_options
+                    .wizard.options
                     .get()
                     .into_iter()
                     .map(|option| {
@@ -561,7 +571,7 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
     let detail = view! {
         {move || {
                 let id = focused.get();
-                let option = state.wizard_options.with(|options| {
+                let option = state.wizard.options.with(|options| {
                     id.as_ref()
                         .and_then(|id| options.iter().find(|o| &o.id == id))
                         .cloned()
@@ -638,7 +648,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
             </div>
 
             {move || {
-                let explanations = state.wizard_explanations.get();
+                let explanations = state.wizard.explanations.get();
                 (!explanations.is_empty())
                     .then(|| {
                         view! {
@@ -673,7 +683,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
             }}
 
             {move || {
-                let Some(plan) = state.wizard_plan.get() else {
+                let Some(plan) = state.wizard.plan.get() else {
                     return view! {
                         <p class="text-callout text-label-2">
                             "This combination has no generator command — the terminal below says \
@@ -682,9 +692,9 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                     }
                         .into_any();
                 };
-                let busy = state.session_running.get();
+                let busy = state.app.session_running.get();
                 let named = state
-                    .wizard_choice
+                    .wizard.choice
                     .with(|c| c.as_ref().is_some_and(|c| !c.name.trim().is_empty()));
 
                 // Check the generator is there *before* offering the button.
@@ -692,7 +702,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                 // so this costs nothing — and finding out after choosing a
                 // folder is finding out one step too late.
                 let generator = plan.program.clone();
-                let missing = state.toolchain.with(|report| {
+                let missing = state.project.toolchain.with(|report| {
                     report.as_ref().and_then(|report| {
                         report
                             .status
@@ -742,7 +752,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                             kind=ButtonKind::Primary
                             disabled=Signal::derive(move || busy || !named)
                             on_click=Callback::new(move |_| {
-                                if let Some(choice) = state.wizard_choice.get_untracked() {
+                                if let Some(choice) = state.wizard.choice.get_untracked() {
                                     controller::create_project(state, choice);
                                 }
                             })

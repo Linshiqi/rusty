@@ -29,13 +29,13 @@ pub fn Assistant() -> impl IntoView {
     let state = AppState::expect();
 
     Effect::new(move |first: Option<()>| {
-        if first.is_none() && state.ai_tools.with(Vec::is_empty) {
+        if first.is_none() && state.ai.tools.with(Vec::is_empty) {
             controller::load_assistant(state);
         }
     });
 
     move || {
-        if state.ai_config.with(Option::is_none) {
+        if state.ai.config.with(Option::is_none) {
             return view! { <NotConfigured /> }.into_any();
         }
 
@@ -70,7 +70,7 @@ fn NotConfigured() -> impl IntoView {
             </div>
             <p class="mt-3 max-w-[52ch] text-callout text-label-3">
                 {move || {
-                    let count = state.ai_tools.with(Vec::len);
+                    let count = state.ai.tools.with(Vec::len);
                     if count == 0 {
                         String::new()
                     } else {
@@ -92,8 +92,8 @@ fn Transcript() -> impl IntoView {
     view! {
         <div class="min-h-0 flex-1 overflow-y-auto">
             {move || {
-                let conversation = state.conversation.get();
-                if conversation.is_empty() && !state.ai_streaming.get() {
+                let conversation = state.ai.conversation.get();
+                if conversation.is_empty() && !state.ai.streaming.get() {
                     return view! { <Suggestions /> }.into_any();
                 }
 
@@ -123,12 +123,12 @@ fn Streaming() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        if !state.ai_streaming.get() {
+        if !state.ai.streaming.get() {
             return ().into_any();
         }
 
-        let pending = state.ai_pending.get();
-        let activity = state.ai_activity.get();
+        let pending = state.ai.pending.get();
+        let activity = state.ai.activity.get();
 
         view! {
             <div class="flex flex-col gap-2">
@@ -270,7 +270,7 @@ fn Suggestions() -> impl IntoView {
                     .collect_view()}
             </div>
             {move || {
-                let tools = state.ai_tools.get();
+                let tools = state.ai.tools.get();
                 (!tools.is_empty())
                     .then(|| {
                         view! {
@@ -304,7 +304,7 @@ fn Composer() -> impl IntoView {
 
     let send = move || {
         let question = draft.get_untracked().trim().to_string();
-        if question.is_empty() || state.ai_streaming.get_untracked() {
+        if question.is_empty() || state.ai.streaming.get_untracked() {
             return;
         }
         draft.set(String::new());
@@ -336,7 +336,7 @@ fn Composer() -> impl IntoView {
                     label="Ask"
                     kind=ButtonKind::Primary
                     disabled=Signal::derive(move || {
-                        state.ai_streaming.get() || draft.with(|d| d.trim().is_empty())
+                        state.ai.streaming.get() || draft.with(|d| d.trim().is_empty())
                     })
                     on_click=Callback::new(move |_| send())
                 />
@@ -345,7 +345,7 @@ fn Composer() -> impl IntoView {
             <div class="mt-1.5 flex items-center gap-3 text-footnote text-label-3">
                 {move || {
                     state
-                        .ai_config
+                        .ai.config
                         .get()
                         .map(|config| {
                             view! { <span class="font-mono">{config.model}</span> }
@@ -353,7 +353,7 @@ fn Composer() -> impl IntoView {
                 }}
                 {move || {
                     state
-                        .ai_usage
+                        .ai.usage
                         .get()
                         .map(|(input, output)| {
                             view! {
@@ -363,7 +363,7 @@ fn Composer() -> impl IntoView {
                 }}
                 <span class="flex-1" />
                 {move || {
-                    (!state.conversation.with(Vec::is_empty))
+                    (!state.ai.conversation.with(Vec::is_empty))
                         .then(|| {
                             view! {
                                 <button

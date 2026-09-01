@@ -54,7 +54,7 @@ pub fn WavesTab() -> impl IntoView {
     // One framing routine for the button and the context menu — two copies
     // would drift the day one of them learns about margins.
     let fit = move || {
-        let trace = state.sim_trace.get_untracked();
+        let trace = state.sim.trace.get_untracked();
         let (Some(first), Some(last)) = (trace.events.first(), trace.events.last()) else {
             return;
         };
@@ -74,7 +74,7 @@ pub fn WavesTab() -> impl IntoView {
         >
             <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
                 {move || {
-                    let trace = state.sim_trace.get();
+                    let trace = state.sim.trace.get();
                     let clock = match trace.clock {
                         Some(TraceClock::Firmware) => "clock: firmware systimer (µs)",
                         Some(TraceClock::Host) => "clock: host arrival time — firmware sent no stamps",
@@ -123,7 +123,7 @@ pub fn WavesTab() -> impl IntoView {
                     type="button"
                     title="Write target/rusty-sim/trace.vcd for PulseView"
                     class="rounded-[5px] px-2 py-0.5 text-footnote text-label-3 ring-1 ring-line hover:text-label"
-                    disabled=move || state.sim_trace.with(|t| t.events.is_empty())
+                    disabled=move || state.sim.trace.with(|t| t.events.is_empty())
                     on:click=move |_| controller::export_vcd(state)
                 >
                     "Export VCD"
@@ -177,7 +177,7 @@ pub fn WavesTab() -> impl IntoView {
                 }
             >
                 {move || {
-                    let trace = state.sim_trace.get();
+                    let trace = state.sim.trace.get();
                     if trace.events.is_empty() {
                         return view! {
                             <p class="px-4 py-3 text-footnote text-label-3">
@@ -375,7 +375,7 @@ pub fn WavesTab() -> impl IntoView {
                 } else {
                     "Follow newest edge"
                 };
-                let no_trace = state.sim_trace.with_untracked(|t| t.events.is_empty());
+                let no_trace = state.sim.trace.with_untracked(|t| t.events.is_empty());
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>

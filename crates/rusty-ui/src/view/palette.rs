@@ -107,13 +107,14 @@ pub fn defaults() -> Vec<Binding> {
 
 /// The bindings with overrides applied: what the keyboard actually does.
 pub fn effective(state: AppState) -> Vec<(Binding, String)> {
-    let overrides = state.keybinds.get_untracked();
+    let overrides = state.app.keybinds.get_untracked();
     defaults()
         .into_iter()
         .map(|binding| {
-            let chord = overrides.get(&binding.id).cloned().unwrap_or_else(|| {
-                binding.default.clone()
-            });
+            let chord = overrides
+                .get(&binding.id)
+                .cloned()
+                .unwrap_or_else(|| binding.default.clone());
             (binding, chord)
         })
         .collect()
@@ -132,9 +133,8 @@ pub fn chord_of(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<String>
     // A function key is a chord on its own: nothing types F2, and every
     // editor binds them bare — F2 to rename, F5 to run. Requiring Ctrl would
     // make those defaults unreachable.
-    let function = key.len() >= 2
-        && key.starts_with('F')
-        && key[1..].chars().all(|c| c.is_ascii_digit());
+    let function =
+        key.len() >= 2 && key.starts_with('F') && key[1..].chars().all(|c| c.is_ascii_digit());
     if !ctrl && !alt_named && !function {
         return None;
     }
@@ -185,13 +185,16 @@ pub fn install(state: AppState, chrome: Chrome) {
 
         // While Settings is capturing a new chord, the keyboard belongs to
         // the capture box, not to the bindings being edited.
-        if state.keybind_capture.get_untracked().is_some() {
+        if state.app.capturing.get_untracked().is_some() {
             return;
         }
 
-        let Some(chord) =
-            chord_of(event.ctrl_key() || event.meta_key(), event.shift_key(), event.alt_key(), &key)
-        else {
+        let Some(chord) = chord_of(
+            event.ctrl_key() || event.meta_key(),
+            event.shift_key(),
+            event.alt_key(),
+            &key,
+        ) else {
             return;
         };
         let Some((binding, _)) = effective(state)
@@ -365,7 +368,6 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
         </Show>
     }
 }
-
 
 #[cfg(test)]
 mod chord_tests {

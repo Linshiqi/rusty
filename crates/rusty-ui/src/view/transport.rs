@@ -22,7 +22,7 @@ pub fn DebugTransport() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        let debug = state.debug.get()?;
+        let debug = state.debug.session.get()?;
         let running = debug.running;
         let step = move |action: &'static str, icon, title: &'static str| {
             view! {

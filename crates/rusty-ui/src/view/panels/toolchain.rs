@@ -88,12 +88,12 @@ pub fn Toolchain() -> impl IntoView {
         .into_any()
     });
     Effect::new(move |_| {
-        state.toolbar.set(Some(toolbar));
+        state.layout.toolbar.set(Some(toolbar));
     });
-    on_cleanup(move || state.toolbar.set(None));
+    on_cleanup(move || state.layout.toolbar.set(None));
 
     move || {
-        let Some(report) = state.toolchain.get() else {
+        let Some(report) = state.project.toolchain.get() else {
             return view! {
                 <div class="flex flex-1 items-center justify-center p-10">
                     <span class="text-body text-label-2">"Reading the toolchain…"</span>
@@ -232,7 +232,7 @@ pub fn Toolchain() -> impl IntoView {
                                                     let name = name.clone();
                                                     Signal::derive(move || {
                                                         state
-                                                            .sim_install_failed
+                                                            .sim.install_failed
                                                             .with(|f| f.contains(&name))
                                                     })
                                                 };
@@ -241,7 +241,7 @@ pub fn Toolchain() -> impl IntoView {
                                                         <button
                                                             type="button"
                                                             disabled=move || {
-                                                                state.session_running.get()
+                                                                state.app.session_running.get()
                                                             }
                                                             on:click={
                                                                 let name = name.clone();
@@ -258,7 +258,7 @@ pub fn Toolchain() -> impl IntoView {
                                                         </button>
                                                         {move || {
                                                             state
-                                                                .session_running
+                                                                .app.session_running
                                                                 .get()
                                                                 .then(|| {
                                                                     view! {

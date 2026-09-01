@@ -388,11 +388,43 @@ pub fn carried_provider() -> Option<ProviderConfig> {
 /// through, and the oldest are the least interesting.
 const LOG_CAPACITY: usize = 10_000;
 
-/// Everything the panels read. `Copy`, because Leptos signals are handles.
+/// Everything the window knows, grouped by what it is about.
+///
+/// It was 112 signals in one flat struct, which is a struct nobody can read
+/// and a boundary nothing enforces: any component could reach the debugger's
+/// breakpoints from inside the wizard. The groups below are the concerns the
+/// rest of the frontend is already organised by, so a field now says where it
+/// belongs — and the `find_`, `search_`, `ai_`, `sim_` prefixes are gone,
+/// because they were the group's name written into every field for want of a
+/// group to put them in.
+///
+/// Still `Copy`, and still one context: a group is a handful of `RwSignal`s,
+/// which are themselves `Copy` handles into the reactive graph. Grouping costs
+/// nothing at run time and buys a name at every call site.
 #[derive(Clone, Copy)]
 pub struct AppState {
+    pub project: Project,
+    pub device: Device,
+    pub wizard: Wizard,
+    pub ai: Assistant,
+    pub editor: Editor,
+    pub find: Find,
+    pub search: Search,
+    pub lsp: Lsp,
+    pub sim: Sim,
+    pub debug: Debug,
+    pub term: Terminal,
+    pub layout: Layout,
+    pub dock: Dock,
+    pub app: Workbench,
+}
+
+/// What is open: the detection, the Cargo analysis, and the panels that
+/// read them.
+#[derive(Clone, Copy)]
+pub struct Project {
     /// The open project, once a folder has been chosen.
-    pub project: RwSignal<Option<EmbeddedProject>>,
+    pub detected: RwSignal<Option<EmbeddedProject>>,
     /// Cargo analysis. Absent when `cargo metadata` failed — which is normal
     /// for a misconfigured embedded project, and exactly when its diagnosis
     /// matters most, so the app opens anyway.
@@ -402,7 +434,6 @@ pub struct AppState {
     /// The part's pins and what the source names, for the editor's pin map.
     pub pins: RwSignal<Option<rusty_embed::PinReport>>,
     pub boards: RwSignal<Vec<Board>>,
-
     /// Binaries this project has built, newest first.
     ///
     /// Shared rather than owned by the memory panel: flashing and monitoring
@@ -412,7 +443,6 @@ pub struct AppState {
     /// Path of the build being worked with, if one has been chosen.
     pub selected_firmware: RwSignal<Option<String>>,
     pub memory: RwSignal<Option<MemoryReport>>,
-
     /// The feature selection being simulated, once a member has been picked.
     ///
     /// Held rather than derived from the switches because it is exactly what
@@ -421,7 +451,15 @@ pub struct AppState {
     pub feature_selection: RwSignal<Option<FeatureSelection>>,
     pub feature_rows: RwSignal<Vec<FeatureRow>>,
     pub feature_impact: RwSignal<Option<FeatureImpact>>,
+    /// Board and chip files that would not parse, for the Catalogue screen.
+    pub catalog_problems: RwSignal<Vec<rusty_embed::CatalogProblem>>,
+    /// Direct dependencies against crates.io, when the Crates panel asked.
+    pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
+}
 
+/// What is plugged in, and the command that would talk to it.
+#[derive(Clone, Copy)]
+pub struct Device {
     /// Devices currently attached. Shared by the Flash panel, the Monitor panel
     /// and the dock's Devices tab — three places that must never disagree about
     /// what is plugged in.
@@ -431,44 +469,66 @@ pub struct AppState {
     pub transport: RwSignal<Option<Transport>>,
     /// The command that would run, shown before it does.
     pub plan: RwSignal<Option<CommandPlan>>,
+}
+
+/// Starting a new project.
+#[derive(Clone, Copy)]
+pub struct Wizard {
     /// The new-project wizard: what the generator offers, what has been chosen,
     /// what that choice commits the user to, and the command it produces.
     ///
     /// The explanation is the reason this panel exists, so it is state rather
     /// than something computed at the end — it updates while the choice is
     /// still being made, which is the only time it can change a decision.
-    pub wizard_options: RwSignal<Vec<WizardOption>>,
-    pub wizard_choice: RwSignal<Option<WizardChoice>>,
-    pub wizard_explanations: RwSignal<Vec<Explanation>>,
-    pub wizard_plan: RwSignal<Option<CommandPlan>>,
+    pub options: RwSignal<Vec<WizardOption>>,
+    pub choice: RwSignal<Option<WizardChoice>>,
+    pub explanations: RwSignal<Vec<Explanation>>,
+    pub plan: RwSignal<Option<CommandPlan>>,
+}
 
+/// The conversation and the provider behind it. The key itself is never
+/// here — it lives in the OS credential store and never enters the WebView.
+#[derive(Clone, Copy)]
+pub struct Assistant {
     /// The assistant.
     ///
     /// The transcript lives here, not in the backend: the backend takes a
     /// history and returns the updated one, so closing the panel cannot strand a
     /// conversation and nothing has to be cleaned up when it is reopened.
-    pub ai_config: RwSignal<Option<ProviderConfig>>,
-    pub ai_presets: RwSignal<Vec<Preset>>,
-    pub ai_tools: RwSignal<Vec<ToolDef>>,
+    pub config: RwSignal<Option<ProviderConfig>>,
+    pub presets: RwSignal<Vec<Preset>>,
+    pub tools: RwSignal<Vec<ToolDef>>,
     pub conversation: RwSignal<Vec<Message>>,
     /// Prose from the answer in flight, before it becomes a `Message`.
-    pub ai_pending: RwSignal<String>,
+    pub pending: RwSignal<String>,
     /// Tools the current answer has called, in order, with whether each
     /// finished cleanly. Shown live: a model that goes quiet for ten seconds
     /// while resolving a dependency graph looks broken unless it says so.
-    pub ai_activity: RwSignal<Vec<ToolRun>>,
-    pub ai_streaming: RwSignal<bool>,
+    pub activity: RwSignal<Vec<ToolRun>>,
+    pub streaming: RwSignal<bool>,
     /// Tokens the last answer cost, when the provider reported them. Surfaced
     /// because with bring-your-own keys every token is the user's money.
-    pub ai_usage: RwSignal<Option<(u32, u32)>>,
+    pub usage: RwSignal<Option<(u32, u32)>>,
+    /// Whether the assistant profile has a key in the OS credential store.
+    /// The key itself never comes back here — only whether one exists.
+    pub key_stored: RwSignal<bool>,
+    /// The assistant drawer on the right, toggled from the title bar.
+    pub open: RwSignal<bool>,
+}
 
+/// The document in front of you and everything that follows the caret.
+///
+/// `draft` is the truth while typing; `document` is what the backend last
+/// sent. They differ by exactly the unsaved edits.
+#[derive(Clone, Copy)]
+pub struct Editor {
     /// The project's files, and the one being looked at.
     ///
     /// The draft is held apart from the document so an unsaved edit survives
     /// re-highlighting: the highlighted lines come from the backend and are
     /// replaced wholesale, and folding the text into them would lose whatever
     /// had been typed since.
-    pub file_tree: RwSignal<Vec<Entry>>,
+    pub tree: RwSignal<Vec<Entry>>,
     pub document: RwSignal<Option<Document>>,
     pub draft: RwSignal<String>,
     /// The lines being painted, live. Seeded from the opened document, patched
@@ -482,9 +542,6 @@ pub struct AppState {
     /// Bumped on every keystroke; a re-highlight result is dropped unless the
     /// generation it was requested at is still current.
     pub pulse_gen: RwSignal<u64>,
-
-    /// What the compiler and rust-analyzer think is wrong, by file.
-    pub diagnostics: RwSignal<HashMap<String, Vec<FileDiagnostic>>>,
     /// What the server said about the position under the mouse: path, the
     /// token's range, and the prose. The range is what keeps the card up while
     /// the pointer moves within the same token.
@@ -493,60 +550,6 @@ pub struct AppState {
     pub completion: RwSignal<Option<CompletionPopup>>,
     /// The signature card: which file and line it hangs over, and what it says.
     pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
-    /// The in-file find bar. Survives tab switches, as every editor's does;
-    /// resets with the project.
-    pub find_open: RwSignal<bool>,
-    pub find_replace_open: RwSignal<bool>,
-    pub find_query: RwSignal<String>,
-    pub find_case: RwSignal<bool>,
-    pub find_replace: RwSignal<String>,
-    /// Which match is current, clamped to the match count at use.
-    pub find_index: RwSignal<usize>,
-    /// Board and chip files that would not parse, for the Catalogue screen.
-    pub catalog_problems: RwSignal<Vec<rusty_embed::CatalogProblem>>,
-    /// Whether the assistant profile has a key in the OS credential store.
-    /// The key itself never comes back here — only whether one exists.
-    pub ai_key_stored: RwSignal<bool>,
-    /// Direct dependencies against crates.io, when the Crates panel asked.
-    pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
-    /// The global toolbar's content, registered by whatever the workspace
-    /// currently shows. A slot rather than a switch: each panel mounts its
-    /// own tools and clears them on unmount, so the row always answers to
-    /// the work on screen and a new panel needs no central edit to join.
-    pub toolbar: RwSignal<Option<Callback<(), AnyView>>>,
-    /// The assistant drawer on the right, toggled from the title bar.
-    pub assistant_open: RwSignal<bool>,
-    /// What the firmware last printed to the `[rusty:disp]` channel.
-    pub sim_display: RwSignal<String>,
-    /// The waveform capture for the current simulation run.
-    pub sim_trace: RwSignal<SimTrace>,
-    /// Named numeric channels the firmware is printing, for the Plot panel.
-    pub plot: RwSignal<Plot>,
-    /// Which channels are drawn. Empty means all of them — a firmware with
-    /// forty channels needs a filter, one with three does not.
-    pub plot_shown: RwSignal<Vec<String>>,
-    /// Tunables the firmware announced, newest value per name.
-    pub params: RwSignal<Vec<rusty_embed::protocol::Param>>,
-    /// The port rusty is holding open in both directions, if any. Distinct
-    /// from a session merely running: a spawned `espflash monitor` is a
-    /// session and cannot be written to, and a tunable that silently went
-    /// nowhere would read as firmware ignoring it.
-    pub link_port: RwSignal<Option<String>>,
-    /// Pin levels for the board view, from whichever source [`sim_pin_source`]
-    /// names.
-    pub sim_gpio: RwSignal<std::collections::HashMap<u8, bool>>,
-    /// Where those levels came from, as announced by the run that started.
-    ///
-    /// `Firmware` until a run says otherwise, because that is what every
-    /// emulator did until rusty shipped one that keeps pin state — and a
-    /// caption claiming register-level truth over a stock QEMU would send a
-    /// user with a dark LED to check their wiring instead of their `println!`.
-    pub sim_pin_source: RwSignal<rusty_embed::PinSource>,
-    /// The simulation plan for the open project, when the panel asked.
-    pub sim_plan: RwSignal<Option<rusty_embed::SimPlan>>,
-    /// Tools whose one-click install failed — those cards reveal the manual
-    /// instructions, which stay hidden while the button still deserves trust.
-    pub sim_install_failed: RwSignal<Vec<String>>,
     /// Quick fixes offered at the caret, when the user asked (Ctrl+.).
     pub actions: RwSignal<Option<(String, u32, Vec<rusty_lsp::CodeActionFix>)>>,
     /// Semantic colouring for the active document, as rust-analyzer sees it.
@@ -565,6 +568,15 @@ pub struct AppState {
     /// A rename waiting for its new name: where the symbol is, and what it
     /// is called now. `None` when no rename is being typed.
     pub rename: RwSignal<Option<(String, u32, u32, String)>>,
+    /// Somewhere the editor should go — the result of goto-definition. Kept in
+    /// state because the target file may still be opening when it is decided.
+    pub reveal: RwSignal<Option<rusty_lsp::Location>>,
+    /// Directories the user has opened. Collapsed by default, because a tree
+    /// that unfolds everything is a list.
+    pub expanded: RwSignal<Vec<String>>,
+    /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
+    /// the editor derives from it.
+    pub zoom: RwSignal<f64>,
     /// Modal editing: whether it is on, and where it currently is.
     ///
     /// The switch belongs in `workbench.toml` rather than here — a second
@@ -573,85 +585,100 @@ pub struct AppState {
     /// of Escape.
     pub vim_on: RwSignal<bool>,
     pub vim: RwSignal<crate::vim::Vim>,
+}
+
+/// Find and replace *within* the open document — the bar, not the panel.
+#[derive(Clone, Copy)]
+pub struct Find {
+    /// The in-file find bar. Survives tab switches, as every editor's does;
+    /// resets with the project.
+    pub open: RwSignal<bool>,
+    pub replace_open: RwSignal<bool>,
+    pub query: RwSignal<String>,
+    pub case: RwSignal<bool>,
+    pub replace: RwSignal<String>,
+    /// Which match is current, clamped to the match count at use.
+    pub index: RwSignal<usize>,
+}
+
+/// Project-wide search. Separate from [`Find`] because they are different
+/// questions asked of different things, and sharing a query string made one
+/// of them clobber the other.
+#[derive(Clone, Copy)]
+pub struct Search {
     /// Project search. Kept here rather than in the panel so the results
     /// survive switching away and back.
-    pub search_query: RwSignal<String>,
-    pub search_case: RwSignal<bool>,
-    pub search_word: RwSignal<bool>,
-    pub search_regex: RwSignal<bool>,
+    pub query: RwSignal<String>,
+    pub case: RwSignal<bool>,
+    pub word: RwSignal<bool>,
+    pub regex: RwSignal<bool>,
     /// `*.rs, src/**` — gitignore-style globs, as the boxes in the panel.
-    pub search_include: RwSignal<String>,
-    pub search_exclude: RwSignal<String>,
-    /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
-    /// the editor derives from it.
-    pub editor_zoom: RwSignal<f64>,
-    pub search_results: RwSignal<Option<rusty_edit::SearchResults>>,
+    pub include: RwSignal<String>,
+    pub exclude: RwSignal<String>,
+    pub results: RwSignal<Option<rusty_edit::SearchResults>>,
     /// Which search is current; a stale reply is dropped, and the debounce
     /// timer checks it before firing.
-    pub search_gen: RwSignal<u64>,
-    /// Somewhere the editor should go — the result of goto-definition. Kept in
-    /// state because the target file may still be opening when it is decided.
-    pub reveal: RwSignal<Option<rusty_lsp::Location>>,
-    pub lsp_status: RwSignal<LspStatus>,
+    pub generation: RwSignal<u64>,
+}
+
+/// The language server: whether it is up, which session is live, and what
+/// it has said about each file.
+#[derive(Clone, Copy)]
+pub struct Lsp {
+    pub status: RwSignal<LspStatus>,
     /// Which start_lsp call owns the event channel; stale channels' events are
     /// dropped rather than fighting the new server over the status signal.
-    pub lsp_session: RwSignal<u64>,
-    /// Directories the user has opened. Collapsed by default, because a tree
-    /// that unfolds everything is a list.
-    pub expanded: RwSignal<Vec<String>>,
+    pub session: RwSignal<u64>,
+    /// What the compiler and rust-analyzer think is wrong, by file.
+    pub diagnostics: RwSignal<HashMap<String, Vec<FileDiagnostic>>>,
+}
 
-    /// The terminal's latest frame, when a shell is open.
+/// A running simulation: the board, the plot, the trace, the tunables.
+#[derive(Clone, Copy)]
+pub struct Sim {
+    /// What the firmware last printed to the `[rusty:disp]` channel.
+    pub display: RwSignal<String>,
+    /// The waveform capture for the current simulation run.
+    pub trace: RwSignal<SimTrace>,
+    /// Named numeric channels the firmware is printing, for the Plot panel.
+    pub plot: RwSignal<Plot>,
+    /// Which channels are drawn. Empty means all of them — a firmware with
+    /// forty channels needs a filter, one with three does not.
+    pub plot_shown: RwSignal<Vec<String>>,
+    /// Tunables the firmware announced, newest value per name.
+    pub params: RwSignal<Vec<rusty_embed::protocol::Param>>,
+    /// The port rusty is holding open in both directions, if any. Distinct
+    /// from a session merely running: a spawned `espflash monitor` is a
+    /// session and cannot be written to, and a tunable that silently went
+    /// nowhere would read as firmware ignoring it.
+    pub link_port: RwSignal<Option<String>>,
+    /// Pin levels for the board view, from whichever source [`sim_pin_source`]
+    /// names.
+    pub gpio: RwSignal<std::collections::HashMap<u8, bool>>,
+    /// Where those levels came from, as announced by the run that started.
     ///
-    /// Whole screens rather than an append-only log: a pty is a screen, and
-    /// programs that redraw — every progress bar, every prompt redraw after a
-    /// backspace — overwrite what is there rather than adding to it.
-    pub terminal: RwSignal<Option<TermScreen>>,
+    /// `Firmware` until a run says otherwise, because that is what every
+    /// emulator did until rusty shipped one that keeps pin state — and a
+    /// caption claiming register-level truth over a stock QEMU would send a
+    /// user with a dark LED to check their wiring instead of their `println!`.
+    pub pin_source: RwSignal<rusty_embed::PinSource>,
+    /// The simulation plan for the open project, when the panel asked.
+    pub plan: RwSignal<Option<rusty_embed::SimPlan>>,
+    /// Tools whose one-click install failed — those cards reveal the manual
+    /// instructions, which stay hidden while the button still deserves trust.
+    pub install_failed: RwSignal<Vec<String>>,
+}
 
-    /// Whether a flash or monitor session is attached right now.
-    ///
-    /// One at a time by construction: the backend stops the previous session
-    /// when a new one starts, because two readers on one serial port produce an
-    /// access-denied that reads like a driver fault.
-    pub session_running: RwSignal<bool>,
-
-    pub active_panel: RwSignal<String>,
-    /// Projects opened before, newest first — from the backend's
-    /// workbench.toml, so the list survives restarts and belongs to the data
-    /// directory rather than to this window.
-    pub recents: RwSignal<Vec<String>>,
-
-    /// Sidebar width and dock height, in pixels, remembered across sessions.
-    ///
-    /// A fixed-size panel is the first thing anyone tries to drag, and finding
-    /// that they cannot is the moment a tool starts feeling rigid.
-    /// `Some(path)` when this window was booted with `?detach=<path>` — a
-    /// single file's editor, not the shell. Panels that show project-wide
-    /// chrome (the tree, the tab strip) check it; so does everything that
-    /// would write session state a one-file window has no business writing.
-    pub detached: RwSignal<Option<String>>,
-    /// Shortcut overrides from workbench.toml: action id → chord.
-    pub keybinds: RwSignal<HashMap<String, String>>,
-    /// The action id Settings is currently capturing a chord for. While set,
-    /// the global shortcut handler stands down.
-    pub keybind_capture: RwSignal<Option<String>>,
-    /// Whole-interface scale, browser-zoom style. 1.0 is native.
-    pub ui_zoom: RwSignal<f64>,
-    /// What shell the terminal will start, from the backend.
-    /// Which terminal session is current. Bumped by every open; a session's
-    /// frame and completion callbacks compare before writing, so a replaced
-    /// session's late "the shell is gone" cannot blank the one that
-    /// replaced it — which looked like the terminal flickering for ever.
-    pub terminal_epoch: RwSignal<u64>,
-    pub shell_info: RwSignal<Option<rusty_embed::ShellInfo>>,
-    /// The last update check's answer. `None` while one is in flight.
-    pub update_status: RwSignal<Option<rusty_embed::UpdateStatus>>,
+/// The debug session, its breakpoints, and the chip's registers.
+#[derive(Clone, Copy)]
+pub struct Debug {
     /// The live debug session's state, or `None` when nothing is being
     /// debugged. Everything the gutter, the toolbar and the Debug panel
     /// draw comes from this one value.
-    pub debug: RwSignal<Option<rusty_dbg::DebugState>>,
+    pub session: RwSignal<Option<rusty_dbg::DebugState>>,
     /// Which session's frames are current — the same generation guard the
     /// terminal needed, for the same reason.
-    pub debug_epoch: RwSignal<u64>,
+    pub epoch: RwSignal<u64>,
     /// Breakpoints the user has set, as `(file, zero-based line)`.
     ///
     /// Editor state, not session state: every debugger lets you place
@@ -666,9 +693,33 @@ pub struct AppState {
     pub registers: RwSignal<Option<Option<rusty_embed::RegisterMap>>>,
     /// Which peripheral the register view is showing.
     pub peripheral: RwSignal<Option<String>>,
+}
+
+/// The shell, and which shell it is.
+#[derive(Clone, Copy)]
+pub struct Terminal {
+    /// The terminal's latest frame, when a shell is open.
+    ///
+    /// Whole screens rather than an append-only log: a pty is a screen, and
+    /// programs that redraw — every progress bar, every prompt redraw after a
+    /// backspace — overwrite what is there rather than adding to it.
+    pub screen: RwSignal<Option<TermScreen>>,
+    /// What shell the terminal will start, from the backend.
+    /// Which terminal session is current. Bumped by every open; a session's
+    /// frame and completion callbacks compare before writing, so a replaced
+    /// session's late "the shell is gone" cannot blank the one that
+    /// replaced it — which looked like the terminal flickering for ever.
+    pub epoch: RwSignal<u64>,
+    pub info: RwSignal<Option<rusty_embed::ShellInfo>>,
     /// What the shell picker offers: the built-in plus every shell the
     /// backend actually found on this machine.
-    pub shell_choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
+    pub choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
+}
+
+/// Where the dividers sit and what is on screen. Sizes are the one thing
+/// here that survives a reload, in localStorage.
+#[derive(Clone, Copy)]
+pub struct Layout {
     pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
     /// How much of the Debug tab the call stack gets.
@@ -681,11 +732,23 @@ pub struct AppState {
     /// know about every bar between the divider and the window edge, and got
     /// it wrong by exactly their sum.
     pub drag_from: RwSignal<(f64, f64)>,
-
     /// The bottom dock. Open by default: a build or flash that writes into a
     /// hidden drawer is a build whose failure the user finds out about later.
     pub dock_open: RwSignal<bool>,
     pub dock_tab: RwSignal<DockTab>,
+    /// The global toolbar's content, registered by whatever the workspace
+    /// currently shows. A slot rather than a switch: each panel mounts its
+    /// own tools and clears them on unmount, so the row always answers to
+    /// the work on screen and a new panel needs no central edit to join.
+    pub toolbar: RwSignal<Option<Callback<(), AnyView>>>,
+    pub panel: RwSignal<String>,
+    /// Whole-interface scale, browser-zoom style. 1.0 is native.
+    pub zoom: RwSignal<f64>,
+}
+
+/// The output dock: everything any tool has said, and how it is filtered.
+#[derive(Clone, Copy)]
+pub struct Dock {
     /// Everything spawned tools have printed, oldest first.
     ///
     /// Lives here rather than in the Flash panel so it survives switching
@@ -694,19 +757,51 @@ pub struct AppState {
     /// Device and tool output, each line tagged with the channel that was
     /// speaking — build, flash, simulate — so the Output panel can show one
     /// conversation at a time, the way VSCode's channel picker does.
-    pub log: RwSignal<Vec<(&'static str, LogLine)>>,
+    pub lines: RwSignal<Vec<(&'static str, LogLine)>>,
     /// Which channel new lines belong to. Sessions set it on start;
     /// `note_exit` drops it back to "app", where one-off notices live.
-    pub log_source: RwSignal<&'static str>,
+    pub source: RwSignal<&'static str>,
     /// The channel the Output panel shows; "all" shows everything.
-    pub log_pick: RwSignal<&'static str>,
+    pub pick: RwSignal<&'static str>,
     /// Substring filter over shown lines. Space-separated terms must all
     /// match; a `!` prefix excludes instead.
-    pub log_filter: RwSignal<String>,
+    pub filter: RwSignal<String>,
     /// Whether the log view sticks to the bottom as lines arrive. Turned off
     /// automatically when the user scrolls up, which is the only way to read
     /// something in a stream that is still moving.
-    pub log_follow: RwSignal<bool>,
+    pub follow: RwSignal<bool>,
+}
+
+/// The window itself — recents, shortcuts, updates, and whether something
+/// is in flight.
+#[derive(Clone, Copy)]
+pub struct Workbench {
+    /// Projects opened before, newest first — from the backend's
+    /// workbench.toml, so the list survives restarts and belongs to the data
+    /// directory rather than to this window.
+    pub recents: RwSignal<Vec<String>>,
+    /// Sidebar width and dock height, in pixels, remembered across sessions.
+    ///
+    /// A fixed-size panel is the first thing anyone tries to drag, and finding
+    /// that they cannot is the moment a tool starts feeling rigid.
+    /// `Some(path)` when this window was booted with `?detach=<path>` — a
+    /// single file's editor, not the shell. Panels that show project-wide
+    /// chrome (the tree, the tab strip) check it; so does everything that
+    /// would write session state a one-file window has no business writing.
+    pub detached: RwSignal<Option<String>>,
+    /// Shortcut overrides from workbench.toml: action id → chord.
+    pub keybinds: RwSignal<HashMap<String, String>>,
+    /// The action id Settings is currently capturing a chord for. While set,
+    /// the global shortcut handler stands down.
+    pub capturing: RwSignal<Option<String>>,
+    /// The last update check's answer. `None` while one is in flight.
+    pub update: RwSignal<Option<rusty_embed::UpdateStatus>>,
+    /// Whether a flash or monitor session is attached right now.
+    ///
+    /// One at a time by construction: the backend stops the previous session
+    /// when a new one starts, because two readers on one serial port produce an
+    /// access-denied that reads like a driver fault.
+    pub session_running: RwSignal<bool>,
     /// Non-zero while any controller action is in flight. A counter rather than
     /// a flag so two overlapping loads cannot have the first to finish clear
     /// the indicator while the second is still running.
@@ -724,129 +819,157 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            project: RwSignal::new(None),
-            workspace: RwSignal::new(None),
-            toolchain: RwSignal::new(None),
-            chips: RwSignal::new(Vec::new()),
-            pins: RwSignal::new(None),
-            boards: RwSignal::new(Vec::new()),
-            firmware: RwSignal::new(Vec::new()),
-            selected_firmware: RwSignal::new(None),
-            memory: RwSignal::new(None),
-            feature_selection: RwSignal::new(None),
-            feature_rows: RwSignal::new(Vec::new()),
-            feature_impact: RwSignal::new(None),
-            ports: RwSignal::new(Vec::new()),
-            probes: RwSignal::new(Vec::new()),
-            transport: RwSignal::new(None),
-            plan: RwSignal::new(None),
-            wizard_options: RwSignal::new(Vec::new()),
-            wizard_choice: RwSignal::new(None),
-            wizard_explanations: RwSignal::new(Vec::new()),
-            wizard_plan: RwSignal::new(None),
-            // Loaded from workbench.toml by the controller on boot;
-            // `carried_provider` hands over anything this window still holds
-            // from before it was a file.
-            ai_config: RwSignal::new(None),
-            ai_presets: RwSignal::new(Vec::new()),
-            ai_tools: RwSignal::new(Vec::new()),
-            conversation: RwSignal::new(Vec::new()),
-            ai_pending: RwSignal::new(String::new()),
-            ai_activity: RwSignal::new(Vec::new()),
-            ai_streaming: RwSignal::new(false),
-            ai_usage: RwSignal::new(None),
-            file_tree: RwSignal::new(Vec::new()),
-            document: RwSignal::new(None),
-            draft: RwSignal::new(String::new()),
-            highlighted: RwSignal::new(Vec::new()),
-            echo_text: RwSignal::new(String::new()),
-            pulse_gen: RwSignal::new(0),
-            diagnostics: RwSignal::new(HashMap::new()),
-            hover: RwSignal::new(None),
-            completion: RwSignal::new(None),
-            signature: RwSignal::new(None),
-            semantic: RwSignal::new(None),
-            actions: RwSignal::new(None),
-            catalog_problems: RwSignal::new(Vec::new()),
-            ai_key_stored: RwSignal::new(false),
-            crate_rows: RwSignal::new(None),
-            toolbar: RwSignal::new(None),
-            assistant_open: RwSignal::new(false),
-            sim_display: RwSignal::new(String::new()),
-            sim_trace: RwSignal::new(SimTrace::default()),
-            plot: RwSignal::new(Plot::default()),
-            plot_shown: RwSignal::new(Vec::new()),
-            params: RwSignal::new(Vec::new()),
-            link_port: RwSignal::new(None),
-            sim_gpio: RwSignal::new(std::collections::HashMap::new()),
-            sim_pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
-            sim_plan: RwSignal::new(None),
-            sim_install_failed: RwSignal::new(Vec::new()),
-            find_open: RwSignal::new(false),
-            find_replace_open: RwSignal::new(false),
-            find_query: RwSignal::new(String::new()),
-            find_case: RwSignal::new(false),
-            find_replace: RwSignal::new(String::new()),
-            find_index: RwSignal::new(0),
-            tabs: RwSignal::new(Vec::new()),
-            parked: RwSignal::new(Vec::new()),
-            history: RwSignal::new(EditHistory::default()),
-            nav: RwSignal::new(NavHistory::default()),
-            rename: RwSignal::new(None),
-            vim_on: RwSignal::new(false),
-            vim: RwSignal::new(crate::vim::Vim::default()),
-            search_query: RwSignal::new(String::new()),
-            search_case: RwSignal::new(false),
-            search_word: RwSignal::new(false),
-            search_regex: RwSignal::new(false),
-            search_include: RwSignal::new(String::new()),
-            search_exclude: RwSignal::new(String::new()),
-            editor_zoom: RwSignal::new(stored_zoom()),
-            search_results: RwSignal::new(None),
-            search_gen: RwSignal::new(0),
-            reveal: RwSignal::new(None),
-            lsp_status: RwSignal::new(LspStatus::Off),
-            lsp_session: RwSignal::new(0),
-            expanded: RwSignal::new(Vec::new()),
-            terminal: RwSignal::new(None),
-            session_running: RwSignal::new(false),
-            active_panel: RwSignal::new("files".to_string()),
-            recents: RwSignal::new(Vec::new()),
-            detached: RwSignal::new(detached_path()),
-            keybinds: RwSignal::new(HashMap::new()),
-            keybind_capture: RwSignal::new(None),
-            ui_zoom: RwSignal::new(stored_ui_zoom()),
-            terminal_epoch: RwSignal::new(0),
-            shell_info: RwSignal::new(None),
-            update_status: RwSignal::new(None),
-            debug: RwSignal::new(None),
-            debug_epoch: RwSignal::new(0),
-            breakpoints: RwSignal::new(Vec::new()),
-            registers: RwSignal::new(None),
-            peripheral: RwSignal::new(None),
-            shell_choices: RwSignal::new(Vec::new()),
-            tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
-            dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
-            debug_width: RwSignal::new(stored_size(Divider::DebugStack, 420.0)),
-            dragging: RwSignal::new(None),
-            drag_from: RwSignal::new((0.0, 0.0)),
-            dock_open: RwSignal::new(true),
-            dock_tab: RwSignal::new(DockTab::Problems),
-            log: RwSignal::new(Vec::new()),
-            log_source: RwSignal::new("app"),
-            log_pick: RwSignal::new("all"),
-            log_filter: RwSignal::new(String::new()),
-            log_follow: RwSignal::new(true),
-            in_flight: RwSignal::new(0),
-            error: RwSignal::new(None),
+            project: Project {
+                detected: RwSignal::new(None),
+                workspace: RwSignal::new(None),
+                toolchain: RwSignal::new(None),
+                chips: RwSignal::new(Vec::new()),
+                pins: RwSignal::new(None),
+                boards: RwSignal::new(Vec::new()),
+                firmware: RwSignal::new(Vec::new()),
+                selected_firmware: RwSignal::new(None),
+                memory: RwSignal::new(None),
+                feature_selection: RwSignal::new(None),
+                feature_rows: RwSignal::new(Vec::new()),
+                feature_impact: RwSignal::new(None),
+                catalog_problems: RwSignal::new(Vec::new()),
+                crate_rows: RwSignal::new(None),
+            },
+            device: Device {
+                ports: RwSignal::new(Vec::new()),
+                probes: RwSignal::new(Vec::new()),
+                transport: RwSignal::new(None),
+                plan: RwSignal::new(None),
+            },
+            wizard: Wizard {
+                options: RwSignal::new(Vec::new()),
+                choice: RwSignal::new(None),
+                explanations: RwSignal::new(Vec::new()),
+                plan: RwSignal::new(None),
+            },
+            ai: Assistant {
+                // Loaded from workbench.toml by the controller on boot;
+                // `carried_provider` hands over anything this window still holds
+                // from before it was a file.
+                config: RwSignal::new(None),
+                presets: RwSignal::new(Vec::new()),
+                tools: RwSignal::new(Vec::new()),
+                conversation: RwSignal::new(Vec::new()),
+                pending: RwSignal::new(String::new()),
+                activity: RwSignal::new(Vec::new()),
+                streaming: RwSignal::new(false),
+                usage: RwSignal::new(None),
+                key_stored: RwSignal::new(false),
+                open: RwSignal::new(false),
+            },
+            editor: Editor {
+                tree: RwSignal::new(Vec::new()),
+                document: RwSignal::new(None),
+                draft: RwSignal::new(String::new()),
+                highlighted: RwSignal::new(Vec::new()),
+                echo_text: RwSignal::new(String::new()),
+                pulse_gen: RwSignal::new(0),
+                hover: RwSignal::new(None),
+                completion: RwSignal::new(None),
+                signature: RwSignal::new(None),
+                actions: RwSignal::new(None),
+                semantic: RwSignal::new(None),
+                tabs: RwSignal::new(Vec::new()),
+                parked: RwSignal::new(Vec::new()),
+                history: RwSignal::new(EditHistory::default()),
+                nav: RwSignal::new(NavHistory::default()),
+                rename: RwSignal::new(None),
+                reveal: RwSignal::new(None),
+                expanded: RwSignal::new(Vec::new()),
+                zoom: RwSignal::new(stored_zoom()),
+                vim_on: RwSignal::new(false),
+                vim: RwSignal::new(crate::vim::Vim::default()),
+            },
+            find: Find {
+                open: RwSignal::new(false),
+                replace_open: RwSignal::new(false),
+                query: RwSignal::new(String::new()),
+                case: RwSignal::new(false),
+                replace: RwSignal::new(String::new()),
+                index: RwSignal::new(0),
+            },
+            search: Search {
+                query: RwSignal::new(String::new()),
+                case: RwSignal::new(false),
+                word: RwSignal::new(false),
+                regex: RwSignal::new(false),
+                include: RwSignal::new(String::new()),
+                exclude: RwSignal::new(String::new()),
+                results: RwSignal::new(None),
+                generation: RwSignal::new(0),
+            },
+            lsp: Lsp {
+                status: RwSignal::new(LspStatus::Off),
+                session: RwSignal::new(0),
+                diagnostics: RwSignal::new(HashMap::new()),
+            },
+            sim: Sim {
+                display: RwSignal::new(String::new()),
+                trace: RwSignal::new(SimTrace::default()),
+                plot: RwSignal::new(Plot::default()),
+                plot_shown: RwSignal::new(Vec::new()),
+                params: RwSignal::new(Vec::new()),
+                link_port: RwSignal::new(None),
+                gpio: RwSignal::new(std::collections::HashMap::new()),
+                pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
+                plan: RwSignal::new(None),
+                install_failed: RwSignal::new(Vec::new()),
+            },
+            debug: Debug {
+                session: RwSignal::new(None),
+                epoch: RwSignal::new(0),
+                breakpoints: RwSignal::new(Vec::new()),
+                registers: RwSignal::new(None),
+                peripheral: RwSignal::new(None),
+            },
+            term: Terminal {
+                screen: RwSignal::new(None),
+                epoch: RwSignal::new(0),
+                info: RwSignal::new(None),
+                choices: RwSignal::new(Vec::new()),
+            },
+            layout: Layout {
+                tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
+                dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
+                debug_width: RwSignal::new(stored_size(Divider::DebugStack, 420.0)),
+                dragging: RwSignal::new(None),
+                drag_from: RwSignal::new((0.0, 0.0)),
+                dock_open: RwSignal::new(true),
+                dock_tab: RwSignal::new(DockTab::Problems),
+                toolbar: RwSignal::new(None),
+                panel: RwSignal::new("files".to_string()),
+                zoom: RwSignal::new(stored_ui_zoom()),
+            },
+            dock: Dock {
+                lines: RwSignal::new(Vec::new()),
+                source: RwSignal::new("app"),
+                pick: RwSignal::new("all"),
+                filter: RwSignal::new(String::new()),
+                follow: RwSignal::new(true),
+            },
+            app: Workbench {
+                recents: RwSignal::new(Vec::new()),
+                detached: RwSignal::new(detached_path()),
+                keybinds: RwSignal::new(HashMap::new()),
+                capturing: RwSignal::new(None),
+                update: RwSignal::new(None),
+                session_running: RwSignal::new(false),
+                in_flight: RwSignal::new(0),
+                error: RwSignal::new(None),
+            },
         }
     }
 
     /// Append device output, trimming the oldest once past capacity. The
     /// line lands in whichever channel is speaking right now.
     pub fn push_log(&self, line: LogLine) {
-        let source = self.log_source.get_untracked();
-        self.log.update(|lines| {
+        let source = self.dock.source.get_untracked();
+        self.dock.lines.update(|lines| {
             if lines.len() >= LOG_CAPACITY {
                 // Drain a batch rather than one at a time: removing from the
                 // front of a Vec is O(n), and doing that per line on a chatty
@@ -858,8 +981,8 @@ impl AppState {
     }
 
     pub fn clear_log(&self) {
-        self.log.update(Vec::clear);
-        self.log_follow.set(true);
+        self.dock.lines.update(Vec::clear);
+        self.dock.follow.set(true);
     }
 
     /// Put it in context once, at the root, so panels registered elsewhere can
@@ -873,11 +996,11 @@ impl AppState {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.in_flight.get() > 0
+        self.app.in_flight.get() > 0
     }
 
     pub fn has_project(&self) -> bool {
-        self.project.with(Option::is_some)
+        self.project.detected.with(Option::is_some)
     }
 
     /// Every problem, from both sources, worst first.
@@ -887,12 +1010,12 @@ impl AppState {
     /// chances for them to disagree about how many problems there are.
     pub fn problems(&self) -> Vec<Problem> {
         let mut all = Vec::new();
-        self.project.with(|p| {
+        self.project.detected.with(|p| {
             if let Some(p) = p {
                 all.extend(p.problems.iter().cloned());
             }
         });
-        self.toolchain.with(|t| {
+        self.project.toolchain.with(|t| {
             if let Some(t) = t {
                 all.extend(t.problems.iter().cloned());
             }
@@ -923,8 +1046,8 @@ impl AppState {
     /// A selection that no longer exists — the usual outcome of a `cargo clean`
     /// — falls back to the default rather than leaving the panel empty.
     pub fn current_firmware(&self) -> Option<Firmware> {
-        let selected = self.selected_firmware.get();
-        self.firmware.with(|all| {
+        let selected = self.project.selected_firmware.get();
+        self.project.firmware.with(|all| {
             selected
                 .and_then(|path| all.iter().find(|f| f.path == path))
                 .or_else(|| all.iter().find(|f| f.matches_configured_target))
@@ -937,7 +1060,7 @@ impl AppState {
     /// about. The dock badge and the status bar both read this — one derivation
     /// so they cannot disagree.
     pub fn diag_counts(&self) -> (usize, usize) {
-        self.diagnostics.with(|by_file| {
+        self.lsp.diagnostics.with(|by_file| {
             let mut errors = 0;
             let mut warnings = 0;
             for diagnostic in by_file.values().flatten() {
@@ -953,8 +1076,8 @@ impl AppState {
 
     /// Bring a dock tab forward, opening the dock if it was collapsed.
     pub fn show_dock(&self, tab: DockTab) {
-        self.dock_tab.set(tab);
-        self.dock_open.set(true);
+        self.layout.dock_tab.set(tab);
+        self.layout.dock_open.set(true);
     }
 }
 

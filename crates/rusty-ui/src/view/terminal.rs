@@ -56,7 +56,9 @@ pub fn TerminalView() -> impl IntoView {
         let rect = element.get_bounding_client_rect();
         let cell = cell_w.get_untracked().max(1.0);
         let col = (((client_x - rect.left()) - 8.0) / cell).floor().max(0.0) as usize;
-        let row = (((client_y - rect.top()) - 4.0) / LINE_HEIGHT).floor().max(0.0) as usize;
+        let row = (((client_y - rect.top()) - 4.0) / LINE_HEIGHT)
+            .floor()
+            .max(0.0) as usize;
         (row, col)
     };
 
@@ -69,7 +71,7 @@ pub fn TerminalView() -> impl IntoView {
         } else {
             ((br, bc), (ar, ac))
         };
-        let screen = state.terminal.get_untracked()?;
+        let screen = state.term.screen.get_untracked()?;
         let mut out = Vec::new();
         for (row_index, row) in screen.rows.iter().enumerate() {
             if row_index < start.0 || row_index > end.0 {
@@ -77,9 +79,23 @@ pub fn TerminalView() -> impl IntoView {
             }
             let text: String = row.spans.iter().map(|span| span.text.as_str()).collect();
             let chars: Vec<char> = text.chars().collect();
-            let from = if row_index == start.0 { start.1.min(chars.len()) } else { 0 };
-            let to = if row_index == end.0 { end.1.min(chars.len()) } else { chars.len() };
-            out.push(chars[from..to].iter().collect::<String>().trim_end().to_string());
+            let from = if row_index == start.0 {
+                start.1.min(chars.len())
+            } else {
+                0
+            };
+            let to = if row_index == end.0 {
+                end.1.min(chars.len())
+            } else {
+                chars.len()
+            };
+            out.push(
+                chars[from..to]
+                    .iter()
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string(),
+            );
         }
         let joined = out.join("\n");
         (!joined.is_empty()).then_some(joined)
@@ -104,7 +120,7 @@ pub fn TerminalView() -> impl IntoView {
             return;
         }
         sent.set((cols, rows));
-        if state.terminal.with_untracked(Option::is_some) {
+        if state.term.screen.with_untracked(Option::is_some) {
             controller::terminal_resize(cols, rows);
         } else {
             controller::open_terminal(state, cols, rows);
@@ -115,7 +131,7 @@ pub fn TerminalView() -> impl IntoView {
     // while being drawn in 120 wraps its own prompt in the wrong place, which
     // looks like a corrupted terminal rather than a stale size.
     Effect::new(move |_| {
-        let _ = state.dock_height.get();
+        let _ = state.layout.dock_height.get();
         if let Some(element) = host.get() {
             measure();
             // Focus on open, so the shell takes keystrokes without a click
@@ -140,7 +156,7 @@ pub fn TerminalView() -> impl IntoView {
     // this effect also firing there started a SECOND session whose epoch
     // orphaned the first, and the two shells fought over one screen.
     Effect::new(move |prev: Option<bool>| {
-        let is_none = state.terminal.with(Option::is_none);
+        let is_none = state.term.screen.with(Option::is_none);
         if is_none && prev == Some(false) {
             let (cols, rows) = sent.get_untracked();
             if cols > 0 && host.get_untracked().is_some() {
@@ -173,7 +189,8 @@ pub fn TerminalView() -> impl IntoView {
         // A key on an exited shell starts a fresh one — the final screen
         // stays readable until then, instead of vanishing mid-glance.
         if state
-            .terminal
+            .term
+            .screen
             .with_untracked(|t| t.as_ref().is_some_and(|s| s.exited.is_some()))
         {
             event.prevent_default();
@@ -299,7 +316,7 @@ pub fn TerminalView() -> impl IntoView {
                         return None;
                     }
                     let cols = state
-                        .terminal
+                        .term.screen
                         .with(|t| t.as_ref().map(|s| s.cols as usize))
                         .unwrap_or(0);
                     let (start, end) = if (ar, ac) <= (br, bc) {
@@ -328,7 +345,7 @@ pub fn TerminalView() -> impl IntoView {
                     )
                 }}
                 {move || {
-                    match state.terminal.get() {
+                    match state.term.screen.get() {
                         Some(screen) => view! { <Grid screen=screen /> }.into_any(),
                         None => {
                             view! {
@@ -449,9 +466,15 @@ fn Grid(screen: Screen) -> impl IntoView {
 /// Inline styles, because a cell's colour is data rather than a class.
 fn inline_style(style: &Style) -> String {
     let (fg, bg) = if style.inverse {
-        (colour(style.bg, "var(--content)"), colour(style.fg, "var(--label)"))
+        (
+            colour(style.bg, "var(--content)"),
+            colour(style.fg, "var(--label)"),
+        )
     } else {
-        (colour(style.fg, "var(--label)"), colour(style.bg, "transparent"))
+        (
+            colour(style.fg, "var(--label)"),
+            colour(style.bg, "transparent"),
+        )
     };
 
     let mut css = format!("color:{fg};background:{bg}");
@@ -572,6 +595,9 @@ mod tests {
     #[test]
     fn the_greyscale_ramp_runs_from_eight() {
         assert_eq!(colour(Colour::Indexed { index: 232 }, "x"), "rgb(8 8 8)");
-        assert_eq!(colour(Colour::Indexed { index: 255 }, "x"), "rgb(238 238 238)");
+        assert_eq!(
+            colour(Colour::Indexed { index: 255 }, "x"),
+            "rgb(238 238 238)"
+        );
     }
 }

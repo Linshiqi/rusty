@@ -42,9 +42,9 @@ pub fn SearchPanel() -> impl IntoView {
                             placeholder="Search the project…"
                             autocomplete="off"
                             spellcheck="false"
-                            prop:value=move || state.search_query.get()
+                            prop:value=move || state.search.query.get()
                             on:input=move |event: ev::Event| {
-                                state.search_query.set(event_target_value(&event));
+                                state.search.query.set(event_target_value(&event));
                                 controller::schedule_search(state);
                             }
                             class="min-w-0 flex-1 rounded-[6px] bg-sunken px-2.5 py-1.5 font-mono text-footnote text-label placeholder:text-label-3"
@@ -52,32 +52,32 @@ pub fn SearchPanel() -> impl IntoView {
                         <Toggle
                             label="Aa"
                             help="Match case"
-                            on=state.search_case
+                            on=state.search.case
                         />
                         <Toggle
                             label="ab"
                             help="Whole word only"
-                            on=state.search_word
+                            on=state.search.word
                         />
                         <Toggle
                             label=".*"
                             help="Regular expression"
-                            on=state.search_regex
+                            on=state.search.regex
                         />
                     </div>
                     <GlobBox
                         placeholder="files to include, e.g. *.rs, src/**"
-                        value=state.search_include
+                        value=state.search.include
                     />
                     <GlobBox
                         placeholder="files to exclude"
-                        value=state.search_exclude
+                        value=state.search.exclude
                     />
                 </div>
 
                 <div class="min-h-0 flex-1 overflow-auto px-1 py-1">
                     {move || {
-                        let Some(results) = state.search_results.get() else {
+                        let Some(results) = state.search.results.get() else {
                             return view! {
                                 <p class="px-3 py-2 text-footnote text-label-3">
                                     "Matches appear as you type."
@@ -193,7 +193,11 @@ fn GlobBox(placeholder: &'static str, value: RwSignal<String>) -> impl IntoView 
 
 /// One file's matches: a header row with the count, folding its hits.
 #[component]
-fn FileGroup(path: String, hits: Vec<SearchHit>, collapsed: RwSignal<Vec<String>>) -> impl IntoView {
+fn FileGroup(
+    path: String,
+    hits: Vec<SearchHit>,
+    collapsed: RwSignal<Vec<String>>,
+) -> impl IntoView {
     let (name, dir) = match path.rsplit_once('/') {
         Some((dir, name)) => (name.to_string(), dir.to_string()),
         None => (path.clone(), String::new()),

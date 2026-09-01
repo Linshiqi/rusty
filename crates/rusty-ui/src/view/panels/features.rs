@@ -29,8 +29,9 @@ pub fn Features() -> impl IntoView {
     // pick a package before seeing anything would mean the panel's first screen
     // is a dropdown, which explains nothing about what the panel is for.
     Effect::new(move |_| {
-        if state.feature_selection.with(Option::is_none)
+        if state.project.feature_selection.with(Option::is_none)
             && let Some(first) = state
+                .project
                 .workspace
                 .with(|w| w.as_ref().and_then(|w| w.members.first().cloned()))
         {
@@ -46,7 +47,7 @@ pub fn Features() -> impl IntoView {
     });
 
     move || {
-        let Some(workspace) = state.workspace.get() else {
+        let Some(workspace) = state.project.workspace.get() else {
             return view! {
                 <Empty
                     title="No Cargo analysis"
@@ -65,7 +66,7 @@ pub fn Features() -> impl IntoView {
                 <PackagePicker members=members />
                 {move || {
                     state
-                        .feature_impact
+                        .project.feature_impact
                         .get()
                         .map(|impact| view! { <Impact impact=impact /> })
                 }}
@@ -81,7 +82,10 @@ pub fn Features() -> impl IntoView {
 fn PackagePicker(members: Vec<rusty_core::MemberInfo>) -> impl IntoView {
     let state = AppState::expect();
     let current = Signal::derive(move || {
-        state.feature_selection.with(|s| s.as_ref().map(|s| s.package.clone()))
+        state
+            .project
+            .feature_selection
+            .with(|s| s.as_ref().map(|s| s.package.clone()))
     });
 
     view! {
@@ -228,8 +232,8 @@ fn Matrix() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        let rows = state.feature_rows.get();
-        let Some(selection) = state.feature_selection.get() else {
+        let rows = state.project.feature_rows.get();
+        let Some(selection) = state.project.feature_selection.get() else {
             return ().into_any();
         };
 
@@ -350,12 +354,12 @@ fn FeatureSwitch(row: FeatureRow, selection: FeatureSelection) -> impl IntoView 
 /// platform reserves checkboxes for choices that need confirming.
 #[component]
 fn Switch(on: bool, toggle: Callback<()>) -> impl IntoView {
-    let track = if on {
-        "bg-rust"
+    let track = if on { "bg-rust" } else { "bg-line-strong" };
+    let knob = if on {
+        "translate-x-[14px]"
     } else {
-        "bg-line-strong"
+        "translate-x-0"
     };
-    let knob = if on { "translate-x-[14px]" } else { "translate-x-0" };
 
     view! {
         <button

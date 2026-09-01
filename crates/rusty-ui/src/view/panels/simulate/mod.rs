@@ -16,6 +16,7 @@
 
 use leptos::{ev, prelude::*};
 
+mod edit;
 mod geometry;
 mod library;
 
@@ -50,7 +51,7 @@ pub fn Simulate() -> impl IntoView {
             }
             .into_any();
         }
-        let Some(plan) = state.sim_plan.get() else {
+        let Some(plan) = state.sim.plan.get() else {
             return view! {
                 <p class="px-5 py-4 text-callout text-label-3">"Working out the plan…"</p>
             }
@@ -75,7 +76,7 @@ pub fn Simulate() -> impl IntoView {
         if let Some(tool) = plan.debug_tool.clone() {
             missing.push(tool);
         }
-        let running = state.session_running;
+        let running = state.app.session_running;
 
         view! {
             <div class="flex min-h-0 flex-1 flex-col">
@@ -96,7 +97,7 @@ pub fn Simulate() -> impl IntoView {
                                             let name = name.clone();
                                             Signal::derive(move || {
                                                 state
-                                                    .sim_install_failed
+                                                    .sim.install_failed
                                                     .with(|f| f.contains(&name))
                                             })
                                         };
@@ -179,7 +180,7 @@ fn BoardEditor(
     user_parts: Vec<rusty_embed::PartDef>,
 ) -> impl IntoView {
     let state = AppState::expect();
-    let running = state.session_running;
+    let running = state.app.session_running;
     let chip = board.chip.clone();
     let chip_label = board.chip.to_uppercase();
 
@@ -191,6 +192,7 @@ fn BoardEditor(
         let chip = chip.clone();
         Memo::new(move |_| {
             let gpio = state
+                .project
                 .chips
                 .get()
                 .into_iter()
@@ -225,12 +227,7 @@ fn BoardEditor(
     let history = RwSignal::new(Vec::<Snapshot>::new());
     let future = RwSignal::new(Vec::<Snapshot>::new());
     let checkpoint = move || {
-        history.update(|h| {
-            h.push((parts.get_untracked(), kit_pos.get_untracked()));
-            if h.len() > 100 {
-                h.remove(0);
-            }
-        });
+        history.update(|h| edit::remember(h, (parts.get_untracked(), kit_pos.get_untracked())));
         future.set(Vec::new());
     };
     let undo = move || {
@@ -263,33 +260,7 @@ fn BoardEditor(
 
     let drop_part = move |kind: PartKind, label_stub: String, x: f64, y: f64| {
         checkpoint();
-        parts.update(|list| {
-            let label = match &kind {
-                PartKind::Led { .. } => "GPIO —".to_string(),
-                PartKind::Button => "BTN —".to_string(),
-                PartKind::Rgb => {
-                    if label_stub.is_empty() {
-                        "RGB".to_string()
-                    } else {
-                        label_stub.clone()
-                    }
-                }
-                PartKind::Seven => "7SEG".to_string(),
-                PartKind::Display => "DISPLAY".to_string(),
-                PartKind::Pot => "POT —".to_string(),
-            };
-            list.push(EditPart {
-                kind,
-                pins: [UNWIRED; 7],
-                label,
-                x,
-                y,
-                waypoints: Default::default(),
-                rot: 0,
-                flip: false,
-            });
-            selected.set(Some(list.len() - 1));
-        });
+        parts.update(|list| selected.set(Some(edit::add(list, kind, &label_stub, x, y))));
         dirty.set(true);
     };
     let add_part = move |kind: PartKind, label_stub: String| {
@@ -316,16 +287,12 @@ fn BoardEditor(
 
     let rotate_part = move |index: usize| {
         checkpoint();
-        parts.update(|list| {
-            if let Some(p) = list.get_mut(index) {
-                p.rot = (p.rot + 90) % 360;
-                // The stubs have moved, so hand-drawn routes to them are
-                // about a shape that no longer exists.
-                for route in &mut p.waypoints {
-                    route.clear();
-                }
-            }
-        });
+        parts.update(|list| edit::rotate(list, index));
+        dirty.set(true);
+    };
+    let flip_part = move |index: usize| {
+        checkpoint();
+        parts.update(|list| edit::flip(list, index));
         dirty.set(true);
     };
     let nudge = move |dx: f64, dy: f64| {
@@ -333,12 +300,7 @@ fn BoardEditor(
             return;
         };
         checkpoint();
-        parts.update(|list| {
-            if let Some(p) = list.get_mut(index) {
-                p.x += dx;
-                p.y += dy;
-            }
-        });
+        parts.update(|list| edit::nudge(list, index, dx, dy));
         dirty.set(true);
     };
     // Frame everything the sheet holds, the way every canvas tool's F does.
@@ -347,15 +309,8 @@ fn BoardEditor(
             return;
         };
         let rect = element.get_bounding_client_rect();
-        let (kx, ky) = kit_pos.get_untracked();
-        let mut min = (kx, ky);
-        let mut max = (kx + KIT_W, ky + kit_height(rows.get_untracked().len()));
-        for part in parts.get_untracked() {
-            min.0 = min.0.min(part.x);
-            min.1 = min.1.min(part.y);
-            max.0 = max.0.max(part.x + part.kind.width());
-            max.1 = max.1.max(part.y + part.kind.height());
-        }
+        let kit_size = (KIT_W, kit_height(rows.get_untracked().len()));
+        let (min, max) = edit::bounds(&parts.get_untracked(), kit_pos.get_untracked(), kit_size);
         let (w, h) = (max.0 - min.0 + 80.0, max.1 - min.1 + 80.0);
         if w <= 0.0 || h <= 0.0 {
             return;
@@ -366,81 +321,37 @@ fn BoardEditor(
 
     let straighten = move |part_index: usize, slot: usize| {
         checkpoint();
-        parts.update(|list| {
-            if let Some(p) = list.get_mut(part_index) {
-                p.waypoints[slot].clear();
-            }
-        });
+        parts.update(|list| edit::straighten(list, part_index, slot));
         dirty.set(true);
     };
     let disconnect = move |part_index: usize, slot: usize| {
         checkpoint();
-        parts.update(|list| {
-            if let Some(p) = list.get_mut(part_index) {
-                p.pins[slot] = UNWIRED;
-                p.waypoints[slot].clear();
-                if p.kind.wires() == 1 {
-                    p.label = single_pin_label(&p.kind, UNWIRED);
-                }
-            }
-        });
+        parts.update(|list| edit::disconnect(list, part_index, slot));
         selected_wire.set(None);
         dirty.set(true);
     };
     let remove_part = move |index: usize| {
         checkpoint();
-        parts.update(|list| {
-            if index < list.len() {
-                list.remove(index);
-            }
-        });
+        parts.update(|list| edit::remove(list, index));
         selected.set(None);
         selected_wire.set(None);
         dirty.set(true);
     };
     let duplicate_part = move |index: usize| {
         checkpoint();
-        parts.update(|list| {
-            let Some(original) = list.get(index).cloned() else {
-                return;
-            };
-            // Same pins — two lamps on one GPIO is legal wiring — but its
-            // own routes, because the copy sits somewhere else.
-            list.push(EditPart {
-                x: original.x + 24.0,
-                y: original.y + 24.0,
-                waypoints: Default::default(),
-                ..original
-            });
-            selected.set(Some(list.len() - 1));
-        });
+        parts.update(|list| selected.set(edit::duplicate(list, index)));
         dirty.set(true);
     };
 
-    // Disconnect the selected wire, or remove the selected part.
+    // Disconnect the selected wire, or remove the selected part — through the
+    // same two commands the menu uses, rather than a third copy of each. The
+    // copies had already drifted: this one never cleared `selected_wire` on
+    // the delete path.
     let delete_selection = move || {
         if let Some((part, slot)) = selected_wire.get_untracked() {
-            checkpoint();
-            parts.update(|list| {
-                if let Some(p) = list.get_mut(part) {
-                    p.pins[slot] = UNWIRED;
-                    p.waypoints[slot].clear();
-                    if p.kind.wires() == 1 {
-                        p.label = single_pin_label(&p.kind, UNWIRED);
-                    }
-                }
-            });
-            selected_wire.set(None);
-            dirty.set(true);
+            disconnect(part, slot);
         } else if let Some(index) = selected.get_untracked() {
-            checkpoint();
-            parts.update(|list| {
-                if index < list.len() {
-                    list.remove(index);
-                }
-            });
-            selected.set(None);
-            dirty.set(true);
+            remove_part(index);
         }
     };
 
@@ -590,7 +501,7 @@ fn BoardEditor(
                     // itself. A user whose LED stays dark needs to know which,
                     // or they check their wiring when the bug is a missing
                     // `println!` — or the reverse.
-                    let (label, detail) = match state.sim_pin_source.get() {
+                    let (label, detail) = match state.sim.pin_source.get() {
                         rusty_embed::PinSource::Emulator => (
                             "running — pins from the emulator",
                             "Pin levels are read from the chip's GPIO registers, so they are \
@@ -632,12 +543,12 @@ fn BoardEditor(
         .into_any()
     });
     Effect::new(move |_| {
-        state.toolbar.set(Some(toolbar));
+        state.layout.toolbar.set(Some(toolbar));
     });
     // Unconditional clear is safe because the stage drops the old panel
     // before building the next: our cleanup always runs before a successor
     // registers.
-    on_cleanup(move || state.toolbar.set(None));
+    on_cleanup(move || state.layout.toolbar.set(None));
 
     view! {
         <div class="flex min-h-0 flex-1 flex-col">
@@ -669,6 +580,14 @@ fn BoardEditor(
                                 if let Some(index) = selected.get_untracked() {
                                     event.prevent_default();
                                     rotate_part(index);
+                                }
+                            }
+                            // KiCad's key for it, and the reason it is not
+                            // just another rotation is in `edit::flip`.
+                            "x" | "X" if !event.ctrl_key() => {
+                                if let Some(index) = selected.get_untracked() {
+                                    event.prevent_default();
+                                    flip_part(index);
                                 }
                             }
                             "f" | "F" if !event.ctrl_key() => {
@@ -1170,7 +1089,7 @@ fn BoardEditor(
                                         Signal::derive(move || selected.get() == Some(index));
                                     let level = move |pin: u8| {
                                         state
-                                            .sim_gpio
+                                            .sim.gpio
                                             .with(|gpio| {
                                                 gpio.get(&pin).copied().unwrap_or(false)
                                             })
@@ -1235,7 +1154,7 @@ fn BoardEditor(
                                                 style=readable
                                             >
                                                 {move || {
-                                                    let text = state.sim_display.get();
+                                                    let text = state.sim.display.get();
                                                     if text.is_empty() {
                                                         "········".to_string()
                                                     } else {
@@ -1797,6 +1716,18 @@ fn BoardEditor(
                                             menu.set(None);
                                         })
                                     />
+                                    // Mirroring, not a second rotation: a part
+                                    // on the chip's right wants its stubs on
+                                    // the near edge *in the same order*, and
+                                    // turning it 180° reverses them.
+                                    <MenuItem
+                                        label="Mirror"
+                                        shortcut="X"
+                                        on_select=Callback::new(move |_| {
+                                            flip_part(index);
+                                            menu.set(None);
+                                        })
+                                    />
                                     <MenuItem
                                         label="Duplicate"
                                         on_select=Callback::new(move |_| {
@@ -1849,7 +1780,7 @@ fn BoardEditor(
                                     />
                                     <MenuSeparator />
                                     {state
-                                        .sim_plan
+                                        .sim.plan
                                         .with_untracked(|plan| {
                                             plan.as_ref()
                                                 .and_then(|p| p.debug.as_ref())

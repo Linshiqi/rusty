@@ -28,12 +28,12 @@ pub fn Crates() -> impl IntoView {
         .into_any()
     });
     Effect::new(move |_| {
-        state.toolbar.set(Some(toolbar));
+        state.layout.toolbar.set(Some(toolbar));
     });
-    on_cleanup(move || state.toolbar.set(None));
+    on_cleanup(move || state.layout.toolbar.set(None));
 
     Effect::new(move |first: Option<()>| {
-        if first.is_none() && state.crate_rows.with(Option::is_none) {
+        if first.is_none() && state.project.crate_rows.with(Option::is_none) {
             controller::load_crate_report(state);
         }
     });
@@ -59,7 +59,7 @@ pub fn Crates() -> impl IntoView {
                 <div class="min-h-0 flex-1 overflow-y-auto">
                     <div class="px-5 py-3">
                     {move || {
-                        let Some(rows) = state.crate_rows.get() else {
+                        let Some(rows) = state.project.crate_rows.get() else {
                             return view! {
                                 <p class="text-callout text-label-3">
                                     "Asking crates.io about each dependency…"
@@ -76,7 +76,7 @@ pub fn Crates() -> impl IntoView {
                             }
                             .into_any();
                         }
-                        let running = state.session_running;
+                        let running = state.app.session_running;
                         rows.into_iter()
                             .map(|row| {
                                 let behind = row

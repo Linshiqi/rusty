@@ -13,8 +13,7 @@ use leptos::prelude::*;
 use rusty_embed::{CrateSize, Firmware, MemoryReport, SectionKindDto};
 
 use crate::{
-    controller,
-    format,
+    controller, format,
     state::AppState,
     view::components::{Button, ButtonKind, CommandLine, Empty, Pill, Readout, SectionLabel, Tone},
 };
@@ -51,7 +50,7 @@ pub fn Memory() -> impl IntoView {
             .into_any();
         }
 
-        let builds = state.firmware.get();
+        let builds = state.project.firmware.get();
         if builds.is_empty() {
             return view! {
                 <Empty
@@ -72,7 +71,7 @@ pub fn Memory() -> impl IntoView {
                 <BuildPicker builds=builds />
                 {move || {
                     state
-                        .memory
+                        .project.memory
                         .get()
                         .map(|report| view! { <Report report=report /> })
                 }}
@@ -112,7 +111,7 @@ fn BuildPicker(builds: Vec<Firmware>) -> impl IntoView {
                         <button
                             type="button"
                             title=build.path.clone()
-                            on:click=move |_| state.selected_firmware.set(Some(path.clone()))
+                            on:click=move |_| state.project.selected_firmware.set(Some(path.clone()))
                             class=move || {
                                 let base = "flex items-center gap-2 rounded-[6px] px-2.5 py-1 \
                                             text-callout transition-colors";
@@ -160,7 +159,11 @@ fn Report(report: MemoryReport) -> impl IntoView {
     };
     let ram_hint = match (ram_fraction, report.totals.ram_capacity) {
         (Some(f), Some(capacity)) => {
-            format!("{} of {} nominal", format::percent(f), format::bytes(capacity as u64))
+            format!(
+                "{} of {} nominal",
+                format::percent(f),
+                format::bytes(capacity as u64)
+            )
         }
         _ => "chip capacity unknown".to_string(),
     };
