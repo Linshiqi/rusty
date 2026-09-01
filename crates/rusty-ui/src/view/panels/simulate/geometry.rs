@@ -5,13 +5,15 @@
 //! wrong three times in a row while none of it was testable, so this half
 //! lives where a test can reach it.
 
-use rusty_embed::SimBoard;
+use rusty_embed::{Placement, SimBoard};
 
 /// One thing on the canvas, whatever its kind — the editor edits these and
 /// splits them back into the wire model on save.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PartKind {
-    Led { color: String },
+    Led {
+        color: String,
+    },
     Button,
     Rgb,
     /// pins are segments a..g.
@@ -80,6 +82,48 @@ pub(super) struct EditPart {
     pub(super) waypoints: [Vec<(f64, f64)>; 7],
 }
 
+impl EditPart {
+    /// A part from the wire model's shared half. `fallback` is where one with
+    /// no recorded position goes — a hand-written board file has none.
+    ///
+    /// One conversion for all six kinds, in each direction. They used to be
+    /// six copies each way, and a field added to five of them and missed on
+    /// the sixth is invisible until somebody uses that part.
+    fn placed(
+        kind: PartKind,
+        pins: [u8; 7],
+        label: &str,
+        place: &Placement,
+        fallback: (f64, f64),
+    ) -> Self {
+        EditPart {
+            kind,
+            pins,
+            label: label.to_string(),
+            x: place.x.unwrap_or(fallback.0),
+            y: place.y.unwrap_or(fallback.1),
+            waypoints: waypoints_of(&place.routes),
+            rot: place.rot,
+            flip: place.flip,
+        }
+    }
+
+    /// The shared half, back on the wire.
+    ///
+    /// The wire count comes from the kind rather than from the caller: it is
+    /// a property of what the part *is*, and passing it in is one more place
+    /// to write 3 where a seven-segment wanted 7.
+    fn place(&self) -> Placement {
+        Placement {
+            x: Some(self.x),
+            y: Some(self.y),
+            routes: routes_of(&self.waypoints, self.kind.wires()),
+            rot: self.rot,
+            flip: self.flip,
+        }
+    }
+}
+
 pub(super) fn pins3(a: u8, b: u8, c: u8) -> [u8; 7] {
     [a, b, c, 0, 0, 0, 0]
 }
@@ -107,78 +151,62 @@ pub(super) fn routes_of(waypoints: &[Vec<(f64, f64)>; 7], wires: usize) -> Vec<V
 pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
     let mut out = Vec::new();
     for (index, led) in board.leds.iter().enumerate() {
-        out.push(EditPart {
-            kind: PartKind::Led {
+        out.push(EditPart::placed(
+            PartKind::Led {
                 color: led.color.clone(),
             },
-            pins: pins3(led.pin, 0, 0),
-            label: led.label.clone(),
-            x: led.x.unwrap_or(60.0),
-            y: led.y.unwrap_or(40.0 + index as f64 * 56.0),
-            waypoints: waypoints_of(&led.routes),
-            rot: led.rot,
-            flip: led.flip,
-        });
+            pins3(led.pin, 0, 0),
+            &led.label,
+            &led.place,
+            // Stacked down the left edge, so a hand-written file with several
+            // LEDs and no positions does not pile them all in one spot.
+            (60.0, 40.0 + index as f64 * 56.0),
+        ));
     }
     for button in &board.buttons {
-        out.push(EditPart {
-            kind: PartKind::Button,
-            pins: pins3(button.pin, 0, 0),
-            label: button.label.clone(),
-            x: button.x.unwrap_or(60.0),
-            y: button.y.unwrap_or(180.0),
-            waypoints: waypoints_of(&button.routes),
-            rot: button.rot,
-            flip: button.flip,
-        });
+        out.push(EditPart::placed(
+            PartKind::Button,
+            pins3(button.pin, 0, 0),
+            &button.label,
+            &button.place,
+            (60.0, 180.0),
+        ));
     }
     for rgb in &board.rgbs {
-        out.push(EditPart {
-            kind: PartKind::Rgb,
-            pins: pins3(rgb.r, rgb.g, rgb.b),
-            label: rgb.label.clone(),
-            x: rgb.x.unwrap_or(60.0),
-            y: rgb.y.unwrap_or(240.0),
-            waypoints: waypoints_of(&rgb.routes),
-            rot: rgb.rot,
-            flip: rgb.flip,
-        });
+        out.push(EditPart::placed(
+            PartKind::Rgb,
+            pins3(rgb.r, rgb.g, rgb.b),
+            &rgb.label,
+            &rgb.place,
+            (60.0, 240.0),
+        ));
     }
     for seven in &board.sevens {
-        out.push(EditPart {
-            kind: PartKind::Seven,
-            pins: seven.pins,
-            label: seven.label.clone(),
-            x: seven.x.unwrap_or(160.0),
-            y: seven.y.unwrap_or(60.0),
-            waypoints: waypoints_of(&seven.routes),
-            rot: seven.rot,
-            flip: seven.flip,
-        });
+        out.push(EditPart::placed(
+            PartKind::Seven,
+            seven.pins,
+            &seven.label,
+            &seven.place,
+            (160.0, 60.0),
+        ));
     }
     for display in &board.displays {
-        out.push(EditPart {
-            kind: PartKind::Display,
-            pins: [display.sda, display.scl, 0, 0, 0, 0, 0],
-            label: display.label.clone(),
-            x: display.x.unwrap_or(160.0),
-            y: display.y.unwrap_or(160.0),
-            waypoints: waypoints_of(&display.routes),
-            rot: display.rot,
-            flip: display.flip,
-        });
+        out.push(EditPart::placed(
+            PartKind::Display,
+            [display.sda, display.scl, 0, 0, 0, 0, 0],
+            &display.label,
+            &display.place,
+            (160.0, 160.0),
+        ));
     }
     for pot in &board.pots {
-        out.push(EditPart {
-            kind: PartKind::Pot,
-            pins: pins3(pot.pin, 0, 0),
-            label: pot.label.clone(),
-            x: pot.x.unwrap_or(60.0),
-            y: pot.y.unwrap_or(280.0),
-            waypoints: waypoints_of(&pot.routes),
-            rot: pot.rot,
-            flip: pot.flip,
-        });
+        out.push(EditPart::placed(
+            PartKind::Pot,
+            pins3(pot.pin, 0, 0),
+            &pot.label,
+            &pot.place,
+            (60.0, 280.0),
+        ));
     }
     out
 }
@@ -196,64 +224,41 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
         pots: Vec::new(),
     };
     for part in parts {
+        let place = part.place();
         match &part.kind {
             PartKind::Led { color } => board.leds.push(rusty_embed::SimLed {
                 pin: part.pins[0],
                 color: color.clone(),
                 label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 1),
-                rot: part.rot,
-                flip: part.flip,
+                place,
             }),
             PartKind::Button => board.buttons.push(rusty_embed::SimButton {
                 pin: part.pins[0],
                 label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 1),
-                rot: part.rot,
-                flip: part.flip,
+                place,
             }),
             PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
                 r: part.pins[0],
                 g: part.pins[1],
                 b: part.pins[2],
                 label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 3),
-                rot: part.rot,
-                flip: part.flip,
+                place,
             }),
             PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
                 pins: part.pins,
                 label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 7),
-                rot: part.rot,
-                flip: part.flip,
+                place,
             }),
             PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
                 label: part.label.clone(),
                 sda: part.pins[0],
                 scl: part.pins[1],
-                x: Some(part.x),
-                y: Some(part.y),
-                rot: part.rot,
-                flip: part.flip,
-                routes: routes_of(&part.waypoints, 2),
+                place,
             }),
             PartKind::Pot => board.pots.push(rusty_embed::SimPot {
                 pin: part.pins[0],
                 label: part.label.clone(),
-                x: Some(part.x),
-                y: Some(part.y),
-                routes: routes_of(&part.waypoints, 1),
-                rot: part.rot,
-                flip: part.flip,
+                place,
             }),
         }
     }
@@ -280,12 +285,24 @@ pub(super) fn lamp_classes(color: &str, lit: bool) -> &'static str {
 pub(super) fn rgb_style(r: bool, g: bool, b: bool) -> &'static str {
     match (r, g, b) {
         (false, false, false) => "background: #2a2d33",
-        (true, false, false) => "background: #ff5c5c; box-shadow: 0 0 12px 3px rgba(255,92,92,0.55)",
-        (false, true, false) => "background: #3ddc84; box-shadow: 0 0 12px 3px rgba(61,220,132,0.55)",
-        (false, false, true) => "background: #4aa8ff; box-shadow: 0 0 12px 3px rgba(74,168,255,0.55)",
-        (true, true, false) => "background: #ffd75c; box-shadow: 0 0 12px 3px rgba(255,215,92,0.55)",
-        (true, false, true) => "background: #d97cff; box-shadow: 0 0 12px 3px rgba(217,124,255,0.55)",
-        (false, true, true) => "background: #5ce8e8; box-shadow: 0 0 12px 3px rgba(92,232,232,0.55)",
+        (true, false, false) => {
+            "background: #ff5c5c; box-shadow: 0 0 12px 3px rgba(255,92,92,0.55)"
+        }
+        (false, true, false) => {
+            "background: #3ddc84; box-shadow: 0 0 12px 3px rgba(61,220,132,0.55)"
+        }
+        (false, false, true) => {
+            "background: #4aa8ff; box-shadow: 0 0 12px 3px rgba(74,168,255,0.55)"
+        }
+        (true, true, false) => {
+            "background: #ffd75c; box-shadow: 0 0 12px 3px rgba(255,215,92,0.55)"
+        }
+        (true, false, true) => {
+            "background: #d97cff; box-shadow: 0 0 12px 3px rgba(217,124,255,0.55)"
+        }
+        (false, true, true) => {
+            "background: #5ce8e8; box-shadow: 0 0 12px 3px rgba(92,232,232,0.55)"
+        }
         (true, true, true) => "background: #f4f4f4; box-shadow: 0 0 12px 3px rgba(255,255,255,0.5)",
     }
 }
@@ -305,11 +322,22 @@ pub(super) enum Drag {
         /// to itself (see [`follow_first_bend`]).
         axes: [Option<bool>; 7],
     },
-    Kit { dx: f64, dy: f64 },
+    Kit {
+        dx: f64,
+        dy: f64,
+    },
     /// Panning the sheet: screen-space start of view translation.
-    Pan { start_tx: f64, start_ty: f64, px: f64, py: f64 },
+    Pan {
+        start_tx: f64,
+        start_ty: f64,
+        px: f64,
+        py: f64,
+    },
     /// Pulling a new connection out of a part's pin stub.
-    Wire { part: usize, slot: usize },
+    Wire {
+        part: usize,
+        slot: usize,
+    },
     /// Pushing one segment of a wire sideways, the way a schematic editor
     /// moves a corner: the segment keeps its direction and the two bends at
     /// its ends follow it.
@@ -619,11 +647,7 @@ pub(super) fn first_leg_axis(stub: (f64, f64), first: (f64, f64)) -> Option<bool
 /// and only changes length. Without this, a planted bend at the old stub
 /// height makes the route run out, all the way back up to where the part
 /// used to be, and down again — a wall of wire the user never drew.
-pub(super) fn follow_first_bend(
-    stub: (f64, f64),
-    axis: Option<bool>,
-    first: &mut (f64, f64),
-) {
+pub(super) fn follow_first_bend(stub: (f64, f64), axis: Option<bool>, first: &mut (f64, f64)) {
     match axis {
         Some(true) => first.1 = stub.1,
         Some(false) => first.0 = stub.0,
@@ -644,7 +668,6 @@ pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
         format!("{base}{pin}")
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -784,7 +807,8 @@ mod tests {
     fn a_wire_runs_only_in_right_angles_and_ends_on_its_pin() {
         let part = led(60.0, 40.0, 26);
         let kit = (460.0, 40.0);
-        let path = wire_path(&part, 0, kit, &kit_rows("esp32", &esp32_gpio())).expect("a wired pin has a path");
+        let path = wire_path(&part, 0, kit, &kit_rows("esp32", &esp32_gpio()))
+            .expect("a wired pin has a path");
 
         assert_eq!(path[0], stub_point(&part, 0), "starts at the stub");
         assert_eq!(
@@ -818,7 +842,8 @@ mod tests {
     fn user_bends_survive_the_orthogonal_pass() {
         let mut part = led(60.0, 40.0, 26);
         part.waypoints[0] = vec![(200.0, 54.0), (200.0, 168.0)];
-        let path = wire_path(&part, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).expect("path");
+        let path =
+            wire_path(&part, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).expect("path");
         assert!(path.contains(&(200.0, 54.0)));
         assert!(path.contains(&(200.0, 168.0)));
         // Idempotent: a path already square gains no extra corners.
@@ -841,16 +866,21 @@ mod tests {
         assert_eq!(row_under(kit, n, (kit.0 - 200.0, py)), None);
     }
 
+    /// Every field that can be non-default *is* non-default here. The old
+    /// fixture set `rot` and left `flip` alone, and a `flip` that never
+    /// crossed the wire looked exactly like one that did.
     #[test]
     fn parts_survive_the_round_trip_through_the_wire_model() {
         let mut part = led(60.0, 40.0, 26);
         part.rot = 90;
+        part.flip = true;
         part.waypoints[0] = vec![(200.0, 54.0)];
         let board = board_of("esp32", (460.0, 40.0), &[part.clone()]);
 
         assert_eq!(board.leds.len(), 1);
-        assert_eq!(board.leds[0].rot, 90);
-        assert_eq!(board.leds[0].routes, vec![vec![(200.0, 54.0)]]);
+        assert_eq!(board.leds[0].place.rot, 90);
+        assert!(board.leds[0].place.flip, "a mirrored part reaches the wire");
+        assert_eq!(board.leds[0].place.routes, vec![vec![(200.0, 54.0)]]);
         assert_eq!(board.kit_x, Some(460.0));
 
         let back = parts_of(&board);
@@ -862,12 +892,7 @@ mod tests {
     fn aligned_segments_merge_into_one() {
         // Two horizontal runs at the same height, joined by a redundant
         // bend: the bend must go, leaving one segment.
-        let route = vec![
-            (0.0, 10.0),
-            (40.0, 10.0),
-            (80.0, 10.0),
-            (80.0, 50.0),
-        ];
+        let route = vec![(0.0, 10.0), (40.0, 10.0), (80.0, 10.0), (80.0, 50.0)];
         assert_eq!(
             simplify_route(route),
             vec![(0.0, 10.0), (80.0, 10.0), (80.0, 50.0)],
@@ -904,8 +929,26 @@ mod tests {
             flip: false,
         };
         assert_eq!(display.kind.wires(), 2);
-        assert!(wire_path(&display, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_some(), "sda routes");
-        assert!(wire_path(&display, 1, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_some(), "scl routes");
+        assert!(
+            wire_path(
+                &display,
+                0,
+                (460.0, 40.0),
+                &kit_rows("esp32", &esp32_gpio())
+            )
+            .is_some(),
+            "sda routes"
+        );
+        assert!(
+            wire_path(
+                &display,
+                1,
+                (460.0, 40.0),
+                &kit_rows("esp32", &esp32_gpio())
+            )
+            .is_some(),
+            "scl routes"
+        );
     }
 
     #[test]
@@ -945,8 +988,8 @@ mod tests {
 
         // And the rendered route must have no U-turn: no two consecutive
         // segments on the same axis in opposite directions.
-        let route = wire_path(&part, 0, (560.0, 96.0), &kit_rows("esp32", &esp32_gpio()))
-            .expect("wired");
+        let route =
+            wire_path(&part, 0, (560.0, 96.0), &kit_rows("esp32", &esp32_gpio())).expect("wired");
         for window in route.windows(3) {
             let (a, b, c) = (window[0], window[1], window[2]);
             let vertical = (a.0 - b.0).abs() < 0.01 && (b.0 - c.0).abs() < 0.01;
