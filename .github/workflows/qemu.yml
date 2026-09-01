@@ -509,6 +509,11 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
 
       - name: espflash, for the flash image
+        env:
+          # Unauthenticated, binstall's GitHub API calls are rate limited and
+          # it falls through to the `||` — compiling espflash from source for
+          # no reason. Same fix as release.yml.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo binstall --no-confirm espflash || cargo install --locked espflash
 
       - name: Build blinky and make its image

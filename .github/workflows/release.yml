@@ -78,8 +78,36 @@ jobs:
 
       - uses: cargo-bins/cargo-binstall@main
 
+      # Prebuilt or nothing, and the token is what makes that possible.
+      #
+      # binstall resolves a release through the GitHub API, and unauthenticated
+      # that is sixty requests an hour shared across every runner on the same
+      # egress — so it gets refused, falls back to `compile`, and spends ten
+      # minutes building trunk from source. That build then failed on macOS
+      # with a bare `exit status: 101`, which reads as "trunk is broken" rather
+      # than "the download was rate limited". `trunk-aarch64-apple-darwin.tar.gz`
+      # was there the whole time.
+      #
+      # `--disable-strategies compile` says the same thing the comment at the
+      # top of this file already claimed: prebuilt or nothing. A genuinely
+      # missing binary now fails here, immediately, naming the crate — instead
+      # of surfacing ten minutes later as somebody else's dependency error.
+      #
+      # Versions are pinned for the reason `Trunk.toml` pins tailwind: a tool
+      # taken from "whatever is latest" is not a version, and two releases cut
+      # a month apart would be built by different tools with nothing recording
+      # which. `tauri-cli` is a `~` requirement rather than an exact one — it
+      # has its own patch train (there is no `tauri-cli` 2.11.5 to match the
+      # `tauri` 2.11.5 in `crates/rusty-app/Cargo.toml`), and what has to
+      # match is the *minor*: a CLI from a different one bundles against a
+      # config schema it does not share.
       - name: Install trunk and tauri-cli (prebuilt)
-        run: cargo binstall --no-confirm trunk tauri-cli
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          cargo binstall --no-confirm
+          --disable-strategies compile
+          trunk@0.21.14 tauri-cli@~2.11
 
       # The tag is the version. Stamping it here means a release is one
       # gesture — the tag — not a version-bump commit plus a matching tag.
