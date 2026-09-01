@@ -8,10 +8,7 @@
 
 use std::sync::OnceLock;
 
-use crate::{
-    catalog::Catalog,
-    model::Chip,
-};
+use crate::{catalog::Catalog, model::Chip};
 
 fn builtin() -> &'static Catalog {
     // Parsed once. The table is small, but this is called from inside loops
@@ -126,7 +123,10 @@ mod tests {
         // silently mislabel half the projects that use it.
         let shared = chips_for_target("riscv32imc-unknown-none-elf");
         let ids: Vec<_> = shared.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"esp32c2") && ids.contains(&"esp32c3"), "{ids:?}");
+        assert!(
+            ids.contains(&"esp32c2") && ids.contains(&"esp32c3"),
+            "{ids:?}"
+        );
 
         let unique = chips_for_target("xtensa-esp32s3-none-elf");
         assert_eq!(unique.len(), 1);

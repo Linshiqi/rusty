@@ -69,13 +69,22 @@ fn every_tool_is_read_only_for_now() {
         "a tool needing approval was added without an approval flow"
     );
     assert!(registry.defs().iter().all(|d| !d.description.is_empty()));
-    assert!(registry.defs().iter().all(|d| d.source == ToolSource::Builtin));
+    assert!(
+        registry
+            .defs()
+            .iter()
+            .all(|d| d.source == ToolSource::Builtin)
+    );
 }
 
 #[test]
 fn tool_schemas_are_well_formed() {
     for def in ToolRegistry::workbench().defs() {
-        assert_eq!(def.input_schema["type"], "object", "{} must take an object", def.name);
+        assert_eq!(
+            def.input_schema["type"], "object",
+            "{} must take an object",
+            def.name
+        );
         assert!(
             def.input_schema.get("properties").is_some(),
             "{} is missing properties",
@@ -148,16 +157,37 @@ fn third_party_tools_cannot_shadow_builtins() {
 #[test]
 fn capabilities_drive_the_approval_decision() {
     assert!(!Capabilities::READ_ONLY.needs_approval());
-    assert!(Capabilities { writes_workspace: true, ..Capabilities::READ_ONLY }.needs_approval());
-    assert!(Capabilities { runs_commands: true, ..Capabilities::READ_ONLY }.needs_approval());
+    assert!(
+        Capabilities {
+            writes_workspace: true,
+            ..Capabilities::READ_ONLY
+        }
+        .needs_approval()
+    );
+    assert!(
+        Capabilities {
+            runs_commands: true,
+            ..Capabilities::READ_ONLY
+        }
+        .needs_approval()
+    );
     // Network alone reads nothing and changes nothing on disk.
-    assert!(!Capabilities { network: true, ..Capabilities::READ_ONLY }.needs_approval());
-    assert_eq!(Capabilities::default(), Capabilities {
-        reads_workspace: false,
-        writes_workspace: false,
-        network: false,
-        runs_commands: false,
-    });
+    assert!(
+        !Capabilities {
+            network: true,
+            ..Capabilities::READ_ONLY
+        }
+        .needs_approval()
+    );
+    assert_eq!(
+        Capabilities::default(),
+        Capabilities {
+            reads_workspace: false,
+            writes_workspace: false,
+            network: false,
+            runs_commands: false,
+        }
+    );
 }
 
 // ─── embedded tools ──────────────────────────────────────────────────────────
@@ -195,7 +225,10 @@ fn toolchain_status_works_with_no_project_open() {
 
     assert!(value["status"]["tools"].is_array());
     assert!(value["status"]["hasEspToolchain"].is_boolean());
-    assert_eq!(value["needsEspToolchain"], false, "no project, nothing required");
+    assert_eq!(
+        value["needsEspToolchain"], false,
+        "no project, nothing required"
+    );
 }
 
 #[test]
@@ -213,15 +246,26 @@ fn chip_catalogue_answers_without_a_project_and_admits_ignorance() {
     let chips = all["chips"].as_array().unwrap();
     assert!(chips.len() >= 8);
 
-    let c3 = call("chip_catalogue", json!({ "chip": "esp32c3" }), &ToolContext::empty());
+    let c3 = call(
+        "chip_catalogue",
+        json!({ "chip": "esp32c3" }),
+        &ToolContext::empty(),
+    );
     assert_eq!(c3["arch"], "riscV");
-    assert_eq!(c3["toolchain"], "stock", "C3 is RISC-V and needs no forked toolchain");
+    assert_eq!(
+        c3["toolchain"], "stock",
+        "C3 is RISC-V and needs no forked toolchain"
+    );
     assert_eq!(c3["bareMetalTarget"], "riscv32imc-unknown-none-elf");
 
     // An unknown part must come back as unknown. A model that gets silence here
     // will describe the chip from memory, which is exactly the failure mode
     // this tool exists to prevent.
-    let unknown = call("chip_catalogue", json!({ "chip": "nrf52840" }), &ToolContext::empty());
+    let unknown = call(
+        "chip_catalogue",
+        json!({ "chip": "nrf52840" }),
+        &ToolContext::empty(),
+    );
     assert_eq!(unknown["known"], false);
     assert!(unknown["note"].as_str().unwrap().contains("from memory"));
 }
@@ -237,7 +281,10 @@ fn tools_say_what_is_missing_rather_than_failing_opaquely() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("firmware"), "{err}");
-    assert!(err.contains("build"), "the model needs to know what to ask for: {err}");
+    assert!(
+        err.contains("build"),
+        "the model needs to know what to ask for: {err}"
+    );
 
     let err = registry
         .call("project_status", &json!({}), &empty)
@@ -257,7 +304,11 @@ fn tools_say_what_is_missing_rather_than_failing_opaquely() {
 #[test]
 fn workspace_report_returns_the_real_graph() {
     let workspace = lab();
-    let value = call("workspace_report", json!({}), &ToolContext::with_workspace(&workspace));
+    let value = call(
+        "workspace_report",
+        json!({}),
+        &ToolContext::with_workspace(&workspace),
+    );
 
     assert_eq!(value["vitals"]["workspaceCrates"], 1);
     assert_eq!(value["members"][0]["name"], "feature-lab");
@@ -280,7 +331,9 @@ fn simulate_features_reports_a_real_delta() {
     );
     let removed = value["removed"].as_array().unwrap();
     assert!(
-        removed.iter().any(|r| r.as_str().unwrap().starts_with("serde ")),
+        removed
+            .iter()
+            .any(|r| r.as_str().unwrap().starts_with("serde ")),
         "serde was gated by a default feature: {removed:?}"
     );
 }
@@ -313,7 +366,11 @@ fn explain_duplicate_is_honest_when_there_is_no_duplicate() {
     let workspace = lab();
     let ctx = ToolContext::with_workspace(&workspace);
 
-    let value = call("explain_duplicate", json!({ "crate": "definitely-not-here" }), &ctx);
+    let value = call(
+        "explain_duplicate",
+        json!({ "crate": "definitely-not-here" }),
+        &ctx,
+    );
     assert_eq!(value["duplicated"], false);
 
     // With no argument it lists what is duplicated, so the model can pick.
@@ -355,7 +412,10 @@ fn api_keys_survive_a_keychain_round_trip() {
     assert_eq!(secrets::load(PROFILE).unwrap(), None);
 
     secrets::store(PROFILE, "sk-not-a-real-key").unwrap();
-    assert_eq!(secrets::load(PROFILE).unwrap().as_deref(), Some("sk-not-a-real-key"));
+    assert_eq!(
+        secrets::load(PROFILE).unwrap().as_deref(),
+        Some("sk-not-a-real-key")
+    );
     assert!(secrets::is_configured(PROFILE));
 
     secrets::delete(PROFILE).unwrap();

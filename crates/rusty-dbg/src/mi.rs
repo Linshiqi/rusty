@@ -28,12 +28,15 @@ impl Value {
     /// this workbench reads out of MI is a string one level down.
     pub fn field(&self, key: &str) -> Option<&str> {
         match self {
-            Value::Tuple(fields) => fields.iter().find(|(name, _)| name == key).and_then(
-                |(_, value)| match value {
-                    Value::Str(text) => Some(text.as_str()),
-                    _ => None,
-                },
-            ),
+            Value::Tuple(fields) => {
+                fields
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .and_then(|(_, value)| match value {
+                        Value::Str(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+            }
             _ => None,
         }
     }
@@ -88,7 +91,10 @@ pub enum Record {
         class: String,
         fields: Vec<(String, Value)>,
     },
-    Stream { stream: Stream, text: String },
+    Stream {
+        stream: Stream,
+        text: String,
+    },
     /// `(gdb)` — everything before it has arrived.
     Prompt,
 }
@@ -307,9 +313,9 @@ mod tests {
     /// called `{begin` and losing the read.
     #[test]
     fn a_list_of_tuples_is_not_a_list_of_fields() {
-        let Some(Record::Result { fields, .. }) = parse(
-            r#"^done,memory=[{begin="0x3ff44004",end="0x3ff44008",contents="0400000f"}]"#,
-        ) else {
+        let Some(Record::Result { fields, .. }) =
+            parse(r#"^done,memory=[{begin="0x3ff44004",end="0x3ff44008",contents="0400000f"}]"#)
+        else {
             panic!("not a result");
         };
         let value = Value::Tuple(fields);
@@ -321,11 +327,16 @@ mod tests {
 
     #[test]
     fn console_output_is_unescaped_text() {
-        let Some(Record::Stream { stream, text }) = parse(r#"~"Breakpoint 1 at 0x400d1a2c: file src/bin/main.rs, line 68.\n""#) else {
+        let Some(Record::Stream { stream, text }) =
+            parse(r#"~"Breakpoint 1 at 0x400d1a2c: file src/bin/main.rs, line 68.\n""#)
+        else {
             panic!("not a stream record");
         };
         assert_eq!(stream, Stream::Console);
-        assert!(text.ends_with("line 68.\n"), "the \\n became a newline: {text:?}");
+        assert!(
+            text.ends_with("line 68.\n"),
+            "the \\n became a newline: {text:?}"
+        );
     }
 
     #[test]

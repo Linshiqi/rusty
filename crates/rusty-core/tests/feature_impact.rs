@@ -102,9 +102,7 @@ fn coupled_features_only_pay_off_when_both_are_off() {
     );
 
     // Both off together is the selection that actually pays.
-    let both_off = workspace
-        .feature_impact(&select(&["json"], false))
-        .unwrap();
+    let both_off = workspace.feature_impact(&select(&["json"], false)).unwrap();
     assert!(
         mentions(&both_off.removed, "camino"),
         "dropping migrations and paths together should free camino: {:?}",

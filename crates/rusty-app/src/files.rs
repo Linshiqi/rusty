@@ -82,10 +82,12 @@ pub async fn reattach_editor_window(
 ) -> Result<(), CommandError> {
     use tauri::{Emitter, Manager};
 
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| CommandError::new("The main window is gone, so there is nowhere to \
-                                          put this file back."))?;
+    let main = app.get_webview_window("main").ok_or_else(|| {
+        CommandError::new(
+            "The main window is gone, so there is nowhere to \
+                                          put this file back.",
+        )
+    })?;
     main.emit("rusty://reattach", path)
         .map_err(|error| CommandError::new(format!("could not hand the file over: {error}")))?;
     let _ = main.set_focus();

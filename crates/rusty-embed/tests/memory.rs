@@ -32,11 +32,7 @@ fn synthetic_elf() -> Vec<u8> {
     let data = obj.add_section(Vec::new(), b".data".to_vec(), SectionKind::Data);
     obj.append_section_data(data, &vec![0x01; DATA_BYTES], 4);
 
-    let bss = obj.add_section(
-        Vec::new(),
-        b".bss".to_vec(),
-        SectionKind::UninitializedData,
-    );
+    let bss = obj.add_section(Vec::new(), b".bss".to_vec(), SectionKind::UninitializedData);
     obj.append_section_bss(bss, BSS_BYTES, 4);
 
     // Debug info is in the file but never loaded; if it leaks into the totals
@@ -58,17 +54,41 @@ fn synthetic_elf() -> Vec<u8> {
     };
 
     // esp_hal: 2 KB of code plus 256 B of constants.
-    symbol(b"_ZN7esp_hal4gpio5Input3new17h0000000000000001E", 2048, 0, text, SymbolKind::Text);
-    symbol(b"_ZN7esp_hal4gpio9PIN_TABLE17h0000000000000002E", 256, 0, rodata, SymbolKind::Data);
+    symbol(
+        b"_ZN7esp_hal4gpio5Input3new17h0000000000000001E",
+        2048,
+        0,
+        text,
+        SymbolKind::Text,
+    );
+    symbol(
+        b"_ZN7esp_hal4gpio9PIN_TABLE17h0000000000000002E",
+        256,
+        0,
+        rodata,
+        SymbolKind::Data,
+    );
     // core: 1 KB of code.
-    symbol(b"_ZN4core3fmt5write17h0000000000000003E", 1024, 2048, text, SymbolKind::Text);
+    symbol(
+        b"_ZN4core3fmt5write17h0000000000000003E",
+        1024,
+        2048,
+        text,
+        SymbolKind::Text,
+    );
     // A C symbol from the ROM — must not be attributed to any crate.
     symbol(b"esp_rom_printf", 512, 3072, text, SymbolKind::Text);
     // A buffer in .bss, which costs RAM and no flash.
     // The legacy mangling encodes each path segment's byte length, so
     // `RX_BUFFER` must be prefixed with 9 — get it wrong and the symbol simply
     // fails to demangle and silently lands in the unattributed bucket.
-    symbol(b"_ZN7esp_hal3dma9RX_BUFFER17h0000000000000004E", 4096, 0, bss, SymbolKind::Data);
+    symbol(
+        b"_ZN7esp_hal3dma9RX_BUFFER17h0000000000000004E",
+        4096,
+        0,
+        bss,
+        SymbolKind::Data,
+    );
 
     obj.write().expect("write synthetic ELF")
 }

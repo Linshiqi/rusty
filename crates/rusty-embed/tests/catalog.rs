@@ -106,12 +106,21 @@ flash_bytes = 8388608
 fn a_malformed_file_is_reported_without_losing_the_rest() {
     let dir = project_with_boards(&[
         ("good.toml", CUSTOM_BOARD),
-        ("broken.toml", "[[board]]\nid = \"oops\"\n# no name, no chip\n"),
+        (
+            "broken.toml",
+            "[[board]]\nid = \"oops\"\n# no name, no chip\n",
+        ),
     ]);
     let catalog = Catalog::load(Some(dir.path()));
 
-    assert!(catalog.board("acme-sensor-node").is_some(), "good file still loaded");
-    assert!(catalog.board("esp32c3-devkitm-1").is_some(), "built-ins survive");
+    assert!(
+        catalog.board("acme-sensor-node").is_some(),
+        "good file still loaded"
+    );
+    assert!(
+        catalog.board("esp32c3-devkitm-1").is_some(),
+        "built-ins survive"
+    );
 
     let problem = catalog
         .problems()

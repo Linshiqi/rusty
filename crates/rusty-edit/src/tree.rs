@@ -72,12 +72,16 @@ pub fn read(root: &Path) -> Result<Vec<Entry>> {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| relative.clone());
 
-        insert(&mut top, &relative, Entry {
-            name,
-            path: relative.clone(),
-            is_dir,
-            children: Vec::new(),
-        });
+        insert(
+            &mut top,
+            &relative,
+            Entry {
+                name,
+                path: relative.clone(),
+                is_dir,
+                children: Vec::new(),
+            },
+        );
     }
 
     sort(&mut top);
@@ -177,7 +181,9 @@ mod tests {
         let tree = read(dir.path()).unwrap();
 
         let names: Vec<_> = tree.iter().map(|e| e.name.as_str()).collect();
-        let first_file = names.iter().position(|n| !n.starts_with('.') && n.contains('.'));
+        let first_file = names
+            .iter()
+            .position(|n| !n.starts_with('.') && n.contains('.'));
         let last_dir = tree.iter().rposition(|e| e.is_dir);
         assert!(
             last_dir < first_file.or(Some(usize::MAX)),

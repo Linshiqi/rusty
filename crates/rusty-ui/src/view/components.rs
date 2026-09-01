@@ -326,7 +326,11 @@ pub fn MenuItem(
     #[prop(optional)] disabled: bool,
     on_select: Callback<()>,
 ) -> impl IntoView {
-    let tone = if danger { "text-crimson" } else { "text-label-2" };
+    let tone = if danger {
+        "text-crimson"
+    } else {
+        "text-label-2"
+    };
     view! {
         <button
             type="button"

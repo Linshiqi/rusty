@@ -97,14 +97,24 @@ pub enum Content {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ChatEvent {
     /// A chunk of assistant prose.
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// The model has decided to call a tool. Arguments stream in separately
     /// because both providers emit them as partial JSON.
     #[serde(rename_all = "camelCase")]
-    ToolCallStart { id: String, name: String },
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
     #[serde(rename_all = "camelCase")]
-    ToolCallDelta { id: String, partial_json: String },
-    ToolCallEnd { id: String },
+    ToolCallDelta {
+        id: String,
+        partial_json: String,
+    },
+    ToolCallEnd {
+        id: String,
+    },
     /// Token counts, when the provider reports them. Shown to the user because
     /// with BYO keys, every token is money out of their pocket.
     #[serde(rename_all = "camelCase")]
@@ -112,7 +122,9 @@ pub enum ChatEvent {
         input_tokens: u32,
         output_tokens: u32,
     },
-    Done { stop: StopReason },
+    Done {
+        stop: StopReason,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,7 +174,9 @@ pub enum AgentEvent {
 pub enum ToolSource {
     Builtin,
     /// An MCP server the user connected. See `docs/extensibility.md`.
-    Mcp { server: String },
+    Mcp {
+        server: String,
+    },
 }
 
 /// What a tool is allowed to do.
@@ -274,6 +288,10 @@ pub struct Preset {
 /// Deliberately includes domestic Chinese providers and local runtimes, because
 /// "bring your own LLM" is useless if the list assumes everyone can reach
 /// api.openai.com.
+// A table, and it reads as one: label, dialect, endpoint, model, local. One
+// provider per line is the whole point — rustfmt would give each of these
+// eleven entries six lines and turn a list anyone can scan into three screens.
+#[rustfmt::skip]
 pub fn presets() -> Vec<Preset> {
     use ProviderKind::*;
     let p = |label: &str, kind, base_url: &str, model: &str, local| Preset {

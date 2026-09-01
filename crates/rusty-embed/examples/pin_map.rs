@@ -50,11 +50,7 @@ fn main() {
             .collect::<Vec<_>>()
             .join(", ");
         let flag = if pin.claims.is_empty() { " " } else { "*" };
-        println!(
-            "{flag} GPIO{:<3} {:<34} {used}",
-            pin.gpio,
-            marks.join(", "),
-        );
+        println!("{flag} GPIO{:<3} {:<34} {used}", pin.gpio, marks.join(", "),);
     }
     for claim in &report.unknown {
         println!(

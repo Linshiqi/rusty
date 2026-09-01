@@ -91,11 +91,13 @@ impl<'a> ToolContext<'a> {
     }
 
     pub fn require_firmware(&self) -> Result<&Path> {
-        self.firmware.as_deref().ok_or_else(|| Error::MissingContext {
-            needed: "a built firmware ELF".into(),
-            hint: "The project has not been built yet, or the build failed. \
+        self.firmware
+            .as_deref()
+            .ok_or_else(|| Error::MissingContext {
+                needed: "a built firmware ELF".into(),
+                hint: "The project has not been built yet, or the build failed. \
                    Suggest building before asking about memory use."
-                .into(),
-        })
+                    .into(),
+            })
     }
 }

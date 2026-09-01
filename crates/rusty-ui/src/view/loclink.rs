@@ -122,20 +122,26 @@ mod tests {
     fn cargo_arrow_line_with_backslashes_becomes_a_link() {
         // Verbatim from a Windows build — the exact line the panel shows.
         let pieces = split_locations("  --> src\\bin\\main.rs:62:33");
-        assert_eq!(pieces, vec![
-            Piece::Text("  --> ".to_string()),
-            loc("src\\bin\\main.rs:62:33", "src/bin/main.rs", 62, 33),
-        ]);
+        assert_eq!(
+            pieces,
+            vec![
+                Piece::Text("  --> ".to_string()),
+                loc("src\\bin\\main.rs:62:33", "src/bin/main.rs", 62, 33),
+            ]
+        );
     }
 
     #[test]
     fn a_location_without_a_column_still_links() {
         let pieces = split_locations("note: src/main.rs:12 has the answer");
-        assert_eq!(pieces, vec![
-            Piece::Text("note: ".to_string()),
-            loc("src/main.rs:12", "src/main.rs", 12, 0),
-            Piece::Text(" has the answer".to_string()),
-        ]);
+        assert_eq!(
+            pieces,
+            vec![
+                Piece::Text("note: ".to_string()),
+                loc("src/main.rs:12", "src/main.rs", 12, 0),
+                Piece::Text(" has the answer".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -156,11 +162,14 @@ mod tests {
     #[test]
     fn two_locations_in_one_line_both_link() {
         let pieces = split_locations("src/a.rs:1:2 and src/b.rs:3:4");
-        assert_eq!(pieces, vec![
-            loc("src/a.rs:1:2", "src/a.rs", 1, 2),
-            Piece::Text(" and ".to_string()),
-            loc("src/b.rs:3:4", "src/b.rs", 3, 4),
-        ]);
+        assert_eq!(
+            pieces,
+            vec![
+                loc("src/a.rs:1:2", "src/a.rs", 1, 2),
+                Piece::Text(" and ".to_string()),
+                loc("src/b.rs:3:4", "src/b.rs", 3, 4),
+            ]
+        );
     }
 
     #[test]

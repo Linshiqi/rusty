@@ -86,7 +86,12 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         }
     }
 
-    for extra in ["memory.x", "partitions.csv", "sdkconfig.defaults", "build.rs"] {
+    for extra in [
+        "memory.x",
+        "partitions.csv",
+        "sdkconfig.defaults",
+        "build.rs",
+    ] {
         if root.join(extra).is_file() {
             evidence.push(extra.to_string());
         }
@@ -157,7 +162,9 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
                         chip.name,
                         runtime.label()
                     ),
-                    fix_command: Some(format!("# set target = \"{expected}\" in .cargo/config.toml")),
+                    fix_command: Some(format!(
+                        "# set target = \"{expected}\" in .cargo/config.toml"
+                    )),
                 });
             }
             None => {
@@ -208,11 +215,16 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
             }),
             None => problems.push(Problem {
                 severity: Severity::Warning,
-                title: format!("{} needs the `esp` toolchain, and none is pinned", chip.name),
+                title: format!(
+                    "{} needs the `esp` toolchain, and none is pinned",
+                    chip.name
+                ),
                 detail: "Builds will use whatever toolchain happens to be default. Pin \
                          it so the project builds the same way on every machine."
                     .into(),
-                fix_command: Some("# add [toolchain] channel = \"esp\" to rust-toolchain.toml".into()),
+                fix_command: Some(
+                    "# add [toolchain] channel = \"esp\" to rust-toolchain.toml".into(),
+                ),
             }),
         }
     } else if project.configured_toolchain.as_deref() == Some("esp") {
@@ -327,12 +339,15 @@ fn chip_from_dependency_table(deps: &toml::Value, known: &[String]) -> Option<(S
     // the one carrying the chip — keep looking.
     let scan = |crate_name: &str, spec: &toml::Value| -> Option<(String, String)> {
         let features = spec.get("features")?.as_array()?;
-        features.iter().filter_map(|f| f.as_str()).find_map(|feature| {
-            let normalized = chip::normalize(feature);
-            known
-                .contains(&normalized)
-                .then(|| (normalized, format!("{crate_name} feature `{feature}`")))
-        })
+        features
+            .iter()
+            .filter_map(|f| f.as_str())
+            .find_map(|feature| {
+                let normalized = chip::normalize(feature);
+                known
+                    .contains(&normalized)
+                    .then(|| (normalized, format!("{crate_name} feature `{feature}`")))
+            })
     };
 
     for vendor in VENDORS {
@@ -418,9 +433,18 @@ fn detect_c_interop(
     const KNOWN: &[(&str, &str)] = &[
         ("cc", "C sources compiled into the crate by build.rs"),
         ("cmake", "a CMake project built by build.rs"),
-        ("bindgen", "C headers turned into Rust declarations at build time"),
-        ("cbindgen", "a C header generated from this crate's public API"),
-        ("esp-idf-sys", "the ESP-IDF — a C framework — wrapped for Rust"),
+        (
+            "bindgen",
+            "C headers turned into Rust declarations at build time",
+        ),
+        (
+            "cbindgen",
+            "a C header generated from this crate's public API",
+        ),
+        (
+            "esp-idf-sys",
+            "the ESP-IDF — a C framework — wrapped for Rust",
+        ),
     ];
     for (name, purpose) in KNOWN {
         if deps.iter().any(|d| d == name) {
@@ -435,12 +459,15 @@ fn detect_c_interop(
         .and_then(|lib| lib.get("crate-type"))
         .and_then(toml::Value::as_array)
     {
-        let exports = kinds.iter().filter_map(toml::Value::as_str).any(|kind| {
-            kind == "staticlib" || kind == "cdylib"
-        });
+        let exports = kinds
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .any(|kind| kind == "staticlib" || kind == "cdylib");
         if exports {
             interop.exports_to_c = true;
-            interop.evidence.push("Cargo.toml [lib] crate-type".to_string());
+            interop
+                .evidence
+                .push("Cargo.toml [lib] crate-type".to_string());
         }
     }
 

@@ -199,7 +199,10 @@ pub fn create(root: &Path, relative: &str, dir: bool) -> Result<()> {
 fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
     let candidate = Path::new(relative);
     let escapes = candidate.components().any(|component| {
-        matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
     });
     if escapes || candidate.is_absolute() {
         return Err(Error::Outside {
@@ -229,7 +232,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(dir.path().join("firmware.elf"), [0x7f, b'E', b'L', b'F', 0, 1]).unwrap();
+        std::fs::write(
+            dir.path().join("firmware.elf"),
+            [0x7f, b'E', b'L', b'F', 0, 1],
+        )
+        .unwrap();
         dir
     }
 

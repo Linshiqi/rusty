@@ -16,7 +16,9 @@ fn main() {
         ];
     }
     // RUSTY_PROBE_CWD reproduces the app's working-directory choice.
-    let cwd = std::env::var("RUSTY_PROBE_CWD").ok().map(std::path::PathBuf::from);
+    let cwd = std::env::var("RUSTY_PROBE_CWD")
+        .ok()
+        .map(std::path::PathBuf::from);
     let (terminal, updates) =
         rusty_term::Terminal::spawn(cwd.as_deref(), 100, 24, Some(&argv)).expect("spawn");
 
@@ -28,7 +30,11 @@ fn main() {
     std::thread::sleep(std::time::Duration::from_millis(1500));
 
     let screen = terminal.screen();
-    println!("--- exited: {:?}  (after {:?})", screen.exited, start.elapsed());
+    println!(
+        "--- exited: {:?}  (after {:?})",
+        screen.exited,
+        start.elapsed()
+    );
     for row in &screen.rows {
         let text: String = row.spans.iter().map(|s| s.text.as_str()).collect();
         if !text.trim().is_empty() {

@@ -81,7 +81,11 @@ fn the_claimed_chords_are_exactly_five() {
     for (key, expected) in claimed {
         let step = vim.feed(&Key::ctrl(key), "hello", 0);
         assert!(step.handled, "Ctrl+{key} should be Vim's");
-        assert_eq!(step.ask, Some(expected), "Ctrl+{key} asked for the wrong thing");
+        assert_eq!(
+            step.ask,
+            Some(expected),
+            "Ctrl+{key} asked for the wrong thing"
+        );
     }
 }
 
@@ -198,7 +202,11 @@ fn semicolon_repeats_a_find_and_comma_reverses_it() {
 
 #[test]
 fn percent_matches_the_bracket_and_finds_one_on_the_line() {
-    assert_eq!(go("%", "if (a) {}").1, 5, "from before the pair, the next one");
+    assert_eq!(
+        go("%", "if (a) {}").1,
+        5,
+        "from before the pair, the next one"
+    );
     assert_eq!(go("f)%", "if (a) {}").1, 3, "and back again");
     assert_eq!(go("%", "fn(nested(x))").1, 12, "depth is counted");
 }
@@ -456,7 +464,10 @@ fn the_keys_vim_cannot_answer_are_asked_for_rather_than_reimplemented() {
 #[test]
 fn zz_saves_and_closes() {
     let mut vim = Vim::default();
-    assert!(vim.feed(&Key::new("Z"), "x", 0).ask.is_none(), "still pending");
+    assert!(
+        vim.feed(&Key::new("Z"), "x", 0).ask.is_none(),
+        "still pending"
+    );
     assert_eq!(
         vim.feed(&Key::new("Z"), "x", 0).ask,
         Some(Ask::SaveAndClose)
@@ -540,7 +551,10 @@ fn a_colon_line_is_finished_by_enter_not_by_its_length() {
     // asked only to save.
     let mut vim = Vim::default();
     assert!(vim.feed(&Key::new(":"), "x", 0).ask.is_none());
-    assert!(vim.feed(&Key::new("w"), "x", 0).ask.is_none(), ":w has not run yet");
+    assert!(
+        vim.feed(&Key::new("w"), "x", 0).ask.is_none(),
+        ":w has not run yet"
+    );
     assert!(vim.feed(&Key::new("q"), "x", 0).ask.is_none());
     assert_eq!(
         vim.feed(&Key::new("Enter"), "x", 0).ask,
@@ -638,7 +652,10 @@ fn star_and_hash_ask_for_the_word_under_the_cursor() {
 #[test]
 fn z_commands_ask_where_to_put_the_view() {
     let mut vim = Vim::default();
-    assert!(vim.feed(&Key::new("z"), "x", 0).ask.is_none(), "still pending");
+    assert!(
+        vim.feed(&Key::new("z"), "x", 0).ask.is_none(),
+        "still pending"
+    );
     assert_eq!(
         vim.feed(&Key::new("z"), "x", 0).ask,
         Some(Ask::Centre { at: View::Middle }),
@@ -646,7 +663,10 @@ fn z_commands_ask_where_to_put_the_view() {
     for (key, at) in [("t", View::Top), ("b", View::Bottom)] {
         let mut vim = Vim::default();
         vim.feed(&Key::new("z"), "x", 0);
-        assert_eq!(vim.feed(&Key::new(key), "x", 0).ask, Some(Ask::Centre { at }));
+        assert_eq!(
+            vim.feed(&Key::new(key), "x", 0).ask,
+            Some(Ask::Centre { at })
+        );
     }
 }
 

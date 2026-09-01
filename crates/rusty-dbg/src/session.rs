@@ -347,19 +347,12 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
                         changed = true;
                     }
                     if let Some(memory) = value.get("memory") {
-                        state.memory = memory
-                            .items()
-                            .iter()
-                            .filter_map(memory_of)
-                            .collect();
+                        state.memory = memory.items().iter().filter_map(memory_of).collect();
                         changed = true;
                     }
                     if let Some(variables) = value.get("variables") {
-                        state.variables = variables
-                            .items()
-                            .iter()
-                            .filter_map(variable_of)
-                            .collect();
+                        state.variables =
+                            variables.items().iter().filter_map(variable_of).collect();
                         changed = true;
                     }
                     if class == "connected" {
@@ -403,7 +396,10 @@ fn reason_of(reason: &str) -> StopReason {
 /// gdb's frame tuple, in this workbench's terms.
 fn frame_of(frame: &Value, root: &Path) -> Option<StackFrame> {
     Some(StackFrame {
-        level: frame.field("level").and_then(|l| l.parse().ok()).unwrap_or(0),
+        level: frame
+            .field("level")
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(0),
         function: frame.field("func").unwrap_or("??").to_string(),
         file: frame
             .field("fullname")
@@ -524,11 +520,7 @@ mod tests {
         let mut state = DebugState::default();
         let root = root();
 
-        assert!(apply(
-            &mut state,
-            &mi::parse("^running").unwrap(),
-            &root,
-        ));
+        assert!(apply(&mut state, &mi::parse("^running").unwrap(), &root,));
         assert!(state.running, "running is what ^running means");
 
         let stop = mi::parse(
@@ -639,7 +631,11 @@ mod tests {
             }],
             ..DebugState::default()
         };
-        apply(&mut state, &mi::parse("*running,thread-id=\"all\"").unwrap(), &root());
+        apply(
+            &mut state,
+            &mi::parse("*running,thread-id=\"all\"").unwrap(),
+            &root(),
+        );
         assert!(state.stack.is_empty(), "a stack read mid-flight is a lie");
         assert!(state.variables.is_empty());
     }
@@ -658,7 +654,8 @@ mod tests {
         assert_eq!(
             read.data,
             vec![0x04, 0x00, 0x00, 0x0F],
-            "hex pairs decode in order; the little-endian assembly is the              panel's job, not the transport's",
+            "hex pairs decode in order; the little-endian assembly is the panel's job, \
+             not the transport's",
         );
     }
 

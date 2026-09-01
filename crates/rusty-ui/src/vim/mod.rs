@@ -127,24 +127,37 @@ pub enum Ask {
     Redo,
     /// `/` and `?` — the editor's own find bar, rather than a second search
     /// implementation that would drift from it.
-    Search { backwards: bool },
+    Search {
+        backwards: bool,
+    },
     SearchNext,
     SearchPrevious,
     /// Half a screen, which only the editor knows the height of.
-    Scroll { down: bool },
+    Scroll {
+        down: bool,
+    },
     /// `Ctrl+O` / `Ctrl+I`, answered by the editor's navigation history.
-    Jump { back: bool },
+    Jump {
+        back: bool,
+    },
     /// `*` and `#`: search for the word under the cursor. The editor pulls
     /// the word out, because it is already the thing holding the caret.
-    SearchWord { backwards: bool },
+    SearchWord {
+        backwards: bool,
+    },
     /// `zz` `zt` `zb` — only the editor knows how tall the view is.
-    Centre { at: View },
+    Centre {
+        at: View,
+    },
     /// `:s/…` — the replace bar that already exists, rather than a second
     /// substitution engine that would disagree with it about escaping.
     Replace,
     /// `gc` and `gcc`, over the lines a motion covered. Comment syntax is
     /// the document's language, which the editor knows and this does not.
-    Comment { from: usize, to: usize },
+    Comment {
+        from: usize,
+        to: usize,
+    },
 }
 
 /// Where `zz`, `zt` and `zb` put the cursor's line.
@@ -360,26 +373,15 @@ impl Vim {
         self.consumed(text, span.cursor)
     }
 
-    fn operate(
-        &mut self,
-        op: Op,
-        target: Target,
-        count: usize,
-        text: &str,
-        cursor: usize,
-    ) -> Step {
+    fn operate(&mut self, op: Op, target: Target, count: usize, text: &str, cursor: usize) -> Step {
         // `cw` is `ce`, which is Vim's one deliberate inconsistency and one
         // every user relies on: changing a word must not eat the space after
         // it, or every rename needs a space typed back.
         let target = match (op, target) {
-            (Op::Change, Target::Motion(Motion::WordForward))
-                if !on_blank(text, cursor) =>
-            {
+            (Op::Change, Target::Motion(Motion::WordForward)) if !on_blank(text, cursor) => {
                 Target::Motion(Motion::WordEnd)
             }
-            (Op::Change, Target::Motion(Motion::BigWordForward))
-                if !on_blank(text, cursor) =>
-            {
+            (Op::Change, Target::Motion(Motion::BigWordForward)) if !on_blank(text, cursor) => {
                 Target::Motion(Motion::WordEnd)
             }
             (_, target) => target,
@@ -427,9 +429,11 @@ impl Vim {
         // `>j` shifts both lines, not the characters between the two carets.
         if matches!(op, Op::Indent | Op::Outdent | Op::Comment) {
             let first = motion::line_start(text, start);
-            let last = motion::line_end(text, end.max(start).saturating_sub(
-                usize::from(range.linewise && end > start),
-            ));
+            let last = motion::line_end(
+                text,
+                end.max(start)
+                    .saturating_sub(usize::from(range.linewise && end > start)),
+            );
             return match op {
                 Op::Comment => {
                     let mut step = self.consumed(text, start);
@@ -975,11 +979,7 @@ fn shift(text: &str, from: usize, to: usize, deeper: bool) -> String {
                     out.push_str(&" ".repeat(SHIFT));
                     out.push_str(&line);
                 } else {
-                    let drop = line
-                        .chars()
-                        .take(SHIFT)
-                        .take_while(|c| *c == ' ')
-                        .count();
+                    let drop = line.chars().take(SHIFT).take_while(|c| *c == ' ').count();
                     out.push_str(&line[drop..]);
                 }
             } else {

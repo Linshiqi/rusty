@@ -178,12 +178,7 @@ fn render(items: &[Item], indent: usize, width: usize, out: &mut String) {
                     for (nth, element) in inner.iter().enumerate() {
                         out.push('\n');
                         out.push_str(&" ".repeat(indent + 2));
-                        render(
-                            core::slice::from_ref(element),
-                            indent + 2,
-                            width,
-                            out,
-                        );
+                        render(core::slice::from_ref(element), indent + 2, width, out);
                         if nth + 1 < inner.len() {
                             out.push(',');
                         }
@@ -265,10 +260,7 @@ mod tests {
     /// A `&str` local can hold any delimiter there is.
     #[test]
     fn a_quoted_string_is_opaque() {
-        let value = format!(
-            "{{name: \"a, b {{c}} <d>\", padding: {}}}",
-            "y".repeat(80),
-        );
+        let value = format!("{{name: \"a, b {{c}} <d>\", padding: {}}}", "y".repeat(80),);
         let laid_out = pretty(&value, 40);
         assert!(
             laid_out.contains("\"a, b {c} <d>\""),
@@ -280,10 +272,7 @@ mod tests {
     /// otherwise every leaf ends up on its own line and the shape is lost.
     #[test]
     fn an_inner_group_that_fits_stays_on_one_line() {
-        let value = format!(
-            "{{small: {{a: 1, b: 2}}, big: {}}}",
-            "z".repeat(90),
-        );
+        let value = format!("{{small: {{a: 1, b: 2}}, big: {}}}", "z".repeat(90),);
         let laid_out = pretty(&value, 50);
         assert!(
             laid_out.contains("small: {a: 1, b: 2}"),

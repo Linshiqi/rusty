@@ -53,8 +53,9 @@ pub fn blocks(text: &str) -> Vec<Block> {
             .or_else(|| trimmed.strip_prefix("# "))
         {
             out.push(Block::Heading(rest.to_string()));
-        } else if let Some(rest) =
-            trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* "))
+        } else if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
         {
             match out.last_mut() {
                 Some(Block::Bullets(items)) => items.push(rest.to_string()),
@@ -229,43 +230,55 @@ mod tests {
     fn the_shapes_hover_text_actually_has() {
         // Verbatim constructs from an esp-hal hover card.
         let got = blocks("`Dm` = `Blocking`\n\n## Errors\n\nSee below.");
-        assert_eq!(got, vec![
-            Block::Para("`Dm` = `Blocking`".to_string()),
-            Block::Heading("Errors".to_string()),
-            Block::Para("See below.".to_string()),
-        ]);
+        assert_eq!(
+            got,
+            vec![
+                Block::Para("`Dm` = `Blocking`".to_string()),
+                Block::Heading("Errors".to_string()),
+                Block::Para("See below.".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn fences_bullets_and_rules_split_cleanly() {
         let got = blocks("```rust\nfn x() {}\n```\n- one\n- two\n---\ntail");
-        assert_eq!(got, vec![
-            Block::Code("fn x() {}".to_string()),
-            Block::Bullets(vec!["one".to_string(), "two".to_string()]),
-            Block::Rule,
-            Block::Para("tail".to_string()),
-        ]);
+        assert_eq!(
+            got,
+            vec![
+                Block::Code("fn x() {}".to_string()),
+                Block::Bullets(vec!["one".to_string(), "two".to_string()]),
+                Block::Rule,
+                Block::Para("tail".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn inline_finds_code_bold_and_links() {
         let got = inline("**esp** toolchain, [`RxError`](https://docs.rs/x) since `read`.");
-        assert_eq!(got, vec![
-            Inline::Bold("esp".to_string()),
-            Inline::Text(" toolchain, ".to_string()),
-            Inline::Link {
-                label: "`RxError`".to_string(),
-                url: "https://docs.rs/x".to_string(),
-            },
-            Inline::Text(" since ".to_string()),
-            Inline::Code("read".to_string()),
-            Inline::Text(".".to_string()),
-        ]);
+        assert_eq!(
+            got,
+            vec![
+                Inline::Bold("esp".to_string()),
+                Inline::Text(" toolchain, ".to_string()),
+                Inline::Link {
+                    label: "`RxError`".to_string(),
+                    url: "https://docs.rs/x".to_string(),
+                },
+                Inline::Text(" since ".to_string()),
+                Inline::Code("read".to_string()),
+                Inline::Text(".".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn unclosed_markers_stay_text() {
         // A stray backtick must not eat the rest of the message.
-        assert_eq!(inline("a ` b ** c ["), vec![Inline::Text("a ` b ** c [".to_string())]);
+        assert_eq!(
+            inline("a ` b ** c ["),
+            vec![Inline::Text("a ` b ** c [".to_string())]
+        );
     }
 }

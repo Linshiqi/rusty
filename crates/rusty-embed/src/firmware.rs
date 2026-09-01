@@ -68,7 +68,9 @@ pub fn list(root: &Path, configured_target: Option<&str>) -> Vec<Firmware> {
                     profile: profile.to_string(),
                     target: triple.to_string(),
                     bytes: metadata.as_ref().map_or(0, |m| m.len()),
-                    modified: metadata.and_then(|m| m.modified().ok()).and_then(epoch_secs),
+                    modified: metadata
+                        .and_then(|m| m.modified().ok())
+                        .and_then(epoch_secs),
                     matches_configured_target: configured_target == Some(triple),
                 });
             }
@@ -77,7 +79,11 @@ pub fn list(root: &Path, configured_target: Option<&str>) -> Vec<Firmware> {
 
     // Newest first: "the one I just built" is what anyone opening this means,
     // and it is the only ordering that stays right as a project gains binaries.
-    found.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.name.cmp(&b.name)));
+    found.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     found
 }
 
@@ -144,7 +150,10 @@ mod tests {
 
         // The riscv build is the newer one. The xtensa build is older, and in
         // the tests below it is the one the project is configured for.
-        elf(&root.join("target/xtensa-esp32-none-elf/debug/blinky"), 1_000);
+        elf(
+            &root.join("target/xtensa-esp32-none-elf/debug/blinky"),
+            1_000,
+        );
         elf(
             &root.join("target/riscv32imc-unknown-none-elf/release/blinky"),
             2_000,
@@ -166,7 +175,10 @@ mod tests {
     fn the_newest_build_is_listed_first() {
         let dir = scratch();
         let found = list(dir.path(), None);
-        assert_eq!(found.first().map(|f| f.target.as_str()), Some("riscv32imc-unknown-none-elf"));
+        assert_eq!(
+            found.first().map(|f| f.target.as_str()),
+            Some("riscv32imc-unknown-none-elf")
+        );
     }
 
     #[test]
@@ -203,7 +215,9 @@ mod tests {
         // user most needs to be shown — silently omitting it turns "why is my
         // board behaving strangely" into an unanswerable question.
         assert!(
-            found.iter().any(|f| f.target == "riscv32imc-unknown-none-elf"),
+            found
+                .iter()
+                .any(|f| f.target == "riscv32imc-unknown-none-elf"),
             "a mismatched build must still be listed",
         );
     }

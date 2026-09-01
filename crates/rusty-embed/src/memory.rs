@@ -188,7 +188,9 @@ fn crate_of(symbol: &str) -> Option<String> {
 
     // Strip the trailing hash the legacy scheme appends, e.g.
     // `core::fmt::write::h9f3a...`, before splitting.
-    let path = demangled.split_once('<').map_or(demangled.as_str(), |(head, _)| head);
+    let path = demangled
+        .split_once('<')
+        .map_or(demangled.as_str(), |(head, _)| head);
     let first = path.split("::").next()?.trim();
 
     if first.is_empty() || first.contains(' ') {

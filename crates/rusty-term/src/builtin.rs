@@ -45,8 +45,7 @@ mod console {
     use windows_sys::Win32::System::Console::{
         CTRL_C_EVENT, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
         ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode,
-        GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler,
-        SetConsoleMode,
+        GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler, SetConsoleMode,
     };
 
     unsafe extern "system" fn swallow_ctrl_c(kind: u32) -> i32 {
@@ -69,8 +68,7 @@ mod console {
                 // and nothing needs setting.
                 return None;
             }
-            let raw = (mode
-                & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT))
+            let raw = (mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT))
                 | ENABLE_VIRTUAL_TERMINAL_INPUT;
             SetConsoleMode(stdin, raw);
 
@@ -81,7 +79,10 @@ mod console {
             }
 
             SetConsoleCtrlHandler(Some(swallow_ctrl_c), 1);
-            Some(Console { stdin: stdin as isize, raw })
+            Some(Console {
+                stdin: stdin as isize,
+                raw,
+            })
         }
     }
 
@@ -149,16 +150,19 @@ async fn repl() -> i32 {
         console.interactive();
     }
 
-    let builtins = brush_builtins::default_builtins::<
-        brush_core::extensions::DefaultShellExtensions,
-    >(brush_builtins::BuiltinSet::BashMode);
+    let builtins = brush_builtins::default_builtins::<brush_core::extensions::DefaultShellExtensions>(
+        brush_builtins::BuiltinSet::BashMode,
+    );
     let mut shell = match brush_core::Shell::builder()
         .builtins(builtins)
         // The one coreutil navigation cannot live without, and the bash set
         // does not carry: our own, identical on every OS.
         .builtin(
             "ls",
-            brush_core::builtins::builtin::<LsCommand, brush_core::extensions::DefaultShellExtensions>(),
+            brush_core::builtins::builtin::<
+                LsCommand,
+                brush_core::extensions::DefaultShellExtensions,
+            >(),
         )
         .build()
         .await
@@ -285,8 +289,12 @@ fn read_line(
             // history, everything else is dropped rather than echoed as
             // garbage.
             0x1b => {
-                let Some(Ok(b'[')) = bytes.next() else { continue };
-                let Some(Ok(code)) = bytes.next() else { continue };
+                let Some(Ok(b'[')) = bytes.next() else {
+                    continue;
+                };
+                let Some(Ok(code)) = bytes.next() else {
+                    continue;
+                };
                 let replacement = match code {
                     b'A' if at > 0 => {
                         at -= 1;
@@ -382,7 +390,11 @@ impl brush_core::builtins::Command for LsCommand {
         for (index, target) in targets.iter().enumerate() {
             let dir = {
                 let candidate = std::path::PathBuf::from(target);
-                if candidate.is_absolute() { candidate } else { base.join(candidate) }
+                if candidate.is_absolute() {
+                    candidate
+                } else {
+                    base.join(candidate)
+                }
             };
             if many {
                 if index > 0 {

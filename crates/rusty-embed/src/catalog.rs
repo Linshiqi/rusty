@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::model::{CatalogProblem, 
-    Arch, Board, CatalogSource, Chip, Flasher, PinAssignment, ToolchainRequirement, UsbMatch,
-    Vendor,
+use crate::model::{
+    Arch, Board, CatalogProblem, CatalogSource, Chip, Flasher, PinAssignment, ToolchainRequirement,
+    UsbMatch, Vendor,
 };
 
 const BUILTIN_CHIPS: &str = include_str!("../data/chips.toml");
@@ -56,7 +56,11 @@ impl Catalog {
         // here is right — but only in debug, so a shipped binary degrades to an
         // empty catalogue rather than refusing to start.
         catalog.absorb_chips(BUILTIN_CHIPS, "<builtin>/chips.toml");
-        catalog.absorb_boards(BUILTIN_BOARDS, "<builtin>/boards.toml", CatalogSource::Builtin);
+        catalog.absorb_boards(
+            BUILTIN_BOARDS,
+            "<builtin>/boards.toml",
+            CatalogSource::Builtin,
+        );
         debug_assert!(
             catalog.problems.is_empty(),
             "built-in catalogue is malformed: {:?}",

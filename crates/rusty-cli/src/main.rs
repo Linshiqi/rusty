@@ -95,8 +95,8 @@ enum Command {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Check { path, json } => {
-            let detected = project::detect(&path)
-                .with_context(|| format!("inspecting {}", path.display()))?;
+            let detected =
+                project::detect(&path).with_context(|| format!("inspecting {}", path.display()))?;
             let toolchain = toolchain::report(Some(&detected));
 
             if json {
@@ -267,7 +267,10 @@ fn print_check(project: &EmbeddedProject, toolchain: &ToolchainReport) {
             .map(|r| r.label())
             .unwrap_or("runtime unknown"),
         project.configured_target.as_deref().unwrap_or("unset"),
-        project.configured_toolchain.as_deref().unwrap_or("unpinned"),
+        project
+            .configured_toolchain
+            .as_deref()
+            .unwrap_or("unpinned"),
     );
     if let Some(source) = &project.chip_source {
         println!("  (chip from {source})");
@@ -378,7 +381,11 @@ fn print_deps(report: &WorkspaceReport) {
                     source.package,
                     source.version,
                     source.req,
-                    if source.is_workspace_member { "  [yours]" } else { "" }
+                    if source.is_workspace_member {
+                        "  [yours]"
+                    } else {
+                        ""
+                    }
                 );
             }
         }

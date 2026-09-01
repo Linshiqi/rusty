@@ -217,7 +217,12 @@ fn pair(chars: &[char], cursor: usize, open: char, inside: bool) -> Option<(usiz
 /// Quotes cannot be scanned by depth — the same character opens and closes —
 /// so they are counted from the start of the line, which is what Vim does and
 /// what makes `ci"` land on the string the cursor is inside.
-fn quoted(chars: &[char], cursor: usize, quote: char, inside: bool) -> Option<(usize, usize, bool)> {
+fn quoted(
+    chars: &[char],
+    cursor: usize,
+    quote: char,
+    inside: bool,
+) -> Option<(usize, usize, bool)> {
     let from = line_start(chars, cursor);
     let to = line_end(chars, cursor);
 

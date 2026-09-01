@@ -54,8 +54,7 @@ pub fn data_dir() -> Option<PathBuf> {
 pub fn location() -> Option<StorageLocation> {
     let env_override = std::env::var_os("RUSTY_CONFIG_DIR").is_some();
     let data = data_dir()?;
-    let is_default = !env_override
-        && anchor_dir().is_some_and(|anchor| same_dir(&anchor, &data));
+    let is_default = !env_override && anchor_dir().is_some_and(|anchor| same_dir(&anchor, &data));
     Some(StorageLocation {
         path: data.display().to_string(),
         is_default,
@@ -212,12 +211,7 @@ pub fn record_tabs(root: &str, tabs: Vec<String>, active: Option<String>) {
 
 /// The list discipline, separate from storage so it is testable — the same
 /// shape `push_recent` has, and for the same reason.
-fn push_tabs(
-    list: &mut Vec<ProjectTabs>,
-    root: &str,
-    tabs: Vec<String>,
-    active: Option<String>,
-) {
+fn push_tabs(list: &mut Vec<ProjectTabs>, root: &str, tabs: Vec<String>, active: Option<String>) {
     list.retain(|known| !same_dir(Path::new(&known.root), Path::new(root)));
     list.insert(
         0,
@@ -466,20 +460,37 @@ mod tests {
             std::fs::read_to_string(&kept).unwrap().contains("E:/work"),
             "the list survives where somebody can get it back",
         );
-        assert!(!path.exists(), "and a save now creates a file rather than clobbering one");
+        assert!(
+            !path.exists(),
+            "and a save now creates a file rather than clobbering one"
+        );
     }
 
     #[test]
     fn tabs_are_kept_per_directory_and_the_list_is_capped() {
         let mut list = Vec::new();
-        push_tabs(&mut list, "E:/work/blinky", vec!["src/main.rs".into()], None);
+        push_tabs(
+            &mut list,
+            "E:/work/blinky",
+            vec!["src/main.rs".into()],
+            None,
+        );
 
         // The trap the WebView copy fell into: it keyed on the path as typed,
         // so opening the same project by another spelling silently had no
         // tabs. `recent_projects` learned this already; this shares the fix.
-        push_tabs(&mut list, "E:\\work\\blinky", vec!["src/lib.rs".into()], None);
+        push_tabs(
+            &mut list,
+            "E:\\work\\blinky",
+            vec!["src/lib.rs".into()],
+            None,
+        );
         assert_eq!(list.len(), 1, "a different spelling is the same project");
-        assert_eq!(list[0].tabs, vec!["src/lib.rs".to_string()], "and it replaces");
+        assert_eq!(
+            list[0].tabs,
+            vec!["src/lib.rs".to_string()],
+            "and it replaces"
+        );
 
         for n in 0..TABS_KEPT + 5 {
             push_tabs(&mut list, &format!("E:/p{n}"), vec!["a.rs".into()], None);
@@ -489,7 +500,11 @@ mod tests {
             TABS_KEPT,
             "one key per project ever opened is what this replaced",
         );
-        assert_eq!(list[0].root, format!("E:/p{}", TABS_KEPT + 4), "newest first");
+        assert_eq!(
+            list[0].root,
+            format!("E:/p{}", TABS_KEPT + 4),
+            "newest first"
+        );
     }
 
     #[test]

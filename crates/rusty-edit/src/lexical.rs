@@ -20,16 +20,16 @@ use crate::model::{Span, Token};
 /// buffer where `u64` reads as an ordinary variable looks broken next to
 /// either editor.
 const PRIMITIVES: &[&str] = &[
-    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32",
-    "i64", "i128", "isize", "f32", "f64",
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+    "i128", "isize", "f32", "f64",
 ];
 
 /// Rust's keywords, for contexts where no grammar has run (hover snippets).
 const KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-    "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
-    "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true",
-    "type", "unsafe", "use", "where", "while",
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while",
 ];
 
 /// Split every plain span by lexical convention; leave styled spans alone.
@@ -167,19 +167,36 @@ mod tests {
     fn screaming_case_is_not_a_type_and_numbers_are_numbers() {
         let spans = spans_of("peripherals.TIMG0, size: 98768");
         assert!(
-            !spans.iter().any(|(text, token)| text == "TIMG0" && *token == Token::Type),
+            !spans
+                .iter()
+                .any(|(text, token)| text == "TIMG0" && *token == Token::Type),
             "{spans:?}"
         );
-        assert!(spans.contains(&("98768".to_string(), Token::Number)), "{spans:?}");
+        assert!(
+            spans.contains(&("98768".to_string(), Token::Number)),
+            "{spans:?}"
+        );
     }
 
     #[test]
     fn keywords_and_macros_survive_without_a_grammar() {
         let spans = spans_of("let x = vec![1]; fn main()");
-        assert!(spans.contains(&("let".to_string(), Token::Keyword)), "{spans:?}");
-        assert!(spans.contains(&("vec".to_string(), Token::Macro)), "{spans:?}");
-        assert!(spans.contains(&("fn".to_string(), Token::Keyword)), "{spans:?}");
-        assert!(spans.contains(&("main".to_string(), Token::Function)), "{spans:?}");
+        assert!(
+            spans.contains(&("let".to_string(), Token::Keyword)),
+            "{spans:?}"
+        );
+        assert!(
+            spans.contains(&("vec".to_string(), Token::Macro)),
+            "{spans:?}"
+        );
+        assert!(
+            spans.contains(&("fn".to_string(), Token::Keyword)),
+            "{spans:?}"
+        );
+        assert!(
+            spans.contains(&("main".to_string(), Token::Function)),
+            "{spans:?}"
+        );
     }
 
     #[test]
@@ -187,13 +204,19 @@ mod tests {
         // The user's screenshot: `from_millis(val: u64)` with u64 in plain
         // white beside a highlighted buffer.
         let spans = spans_of("pub const fn from_millis(val: u64) -> Self");
-        assert!(spans.contains(&("u64".to_string(), Token::Type)), "{spans:?}");
+        assert!(
+            spans.contains(&("u64".to_string(), Token::Type)),
+            "{spans:?}"
+        );
         assert!(
             spans.contains(&("from_millis".to_string(), Token::Function)),
             "{spans:?}"
         );
         let spans = spans_of("can_unwind: bool,");
-        assert!(spans.contains(&("bool".to_string(), Token::Type)), "{spans:?}");
+        assert!(
+            spans.contains(&("bool".to_string(), Token::Type)),
+            "{spans:?}"
+        );
     }
 
     #[test]
@@ -209,6 +232,9 @@ mod tests {
     #[test]
     fn cjk_text_stays_plain_and_unsplit_boundaries_hold() {
         let spans = spans_of("// 中文注释 CpuClock 之后");
-        assert!(spans.contains(&("CpuClock".to_string(), Token::Type)), "{spans:?}");
+        assert!(
+            spans.contains(&("CpuClock".to_string(), Token::Type)),
+            "{spans:?}"
+        );
     }
 }

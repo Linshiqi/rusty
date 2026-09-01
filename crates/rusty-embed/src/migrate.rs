@@ -378,9 +378,8 @@ fn boundaries<'a>(text: &'a str, word: &'a str) -> impl Iterator<Item = usize> +
     text.match_indices(word).filter_map(move |(at, _)| {
         let before = text[..at].chars().next_back();
         let after = text[at + word.len()..].chars().next();
-        let joined = |c: Option<char>| {
-            c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        };
+        let joined =
+            |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
         (!joined(before) && !joined(after)).then_some(at)
     })
 }
@@ -486,12 +485,14 @@ fn build_std_line(config: &str) -> Option<String> {
         .iter()
         .rposition(|line| line.trim_start().starts_with('['));
     let alone = header.is_some_and(|header| {
-        lines[header] .trim() == "[unstable]"
+        lines[header].trim() == "[unstable]"
             && lines[header + 1..at]
                 .iter()
-                .chain(lines[at + 1..].iter().take_while(|line| {
-                    !line.trim_start().starts_with('[')
-                }))
+                .chain(
+                    lines[at + 1..]
+                        .iter()
+                        .take_while(|line| !line.trim_start().starts_with('[')),
+                )
                 .all(|line| line.trim().is_empty())
     });
 
@@ -563,8 +564,11 @@ mod tests {
              build-std = [\"core\"]\n",
         )
         .unwrap();
-        std::fs::write(dir.join("rust-toolchain.toml"), "[toolchain]\nchannel = \"esp\"\n")
-            .unwrap();
+        std::fs::write(
+            dir.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"esp\"\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             "[dependencies]\n\
@@ -597,8 +601,14 @@ mod tests {
         apply(dir.path(), &migration).expect("applied");
 
         let config = std::fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap();
-        assert!(config.contains("[target.riscv32imc-unknown-none-elf]"), "{config}");
-        assert!(config.contains("target = \"riscv32imc-unknown-none-elf\""), "{config}");
+        assert!(
+            config.contains("[target.riscv32imc-unknown-none-elf]"),
+            "{config}"
+        );
+        assert!(
+            config.contains("target = \"riscv32imc-unknown-none-elf\""),
+            "{config}"
+        );
         assert!(config.contains("--chip esp32c3"), "{config}");
         assert!(
             !config.contains("build-std"),
@@ -617,7 +627,10 @@ mod tests {
         assert!(toolchain.contains("channel = \"stable\""), "{toolchain}");
 
         let manifest = std::fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-        assert!(manifest.contains("features = [\"esp32c3\", \"unstable\"]"), "{manifest}");
+        assert!(
+            manifest.contains("features = [\"esp32c3\", \"unstable\"]"),
+            "{manifest}"
+        );
         assert!(
             manifest.contains("# the chip feature picks the part"),
             "comments survive, because this edits text rather than reserialising: {manifest}",
@@ -637,7 +650,10 @@ mod tests {
             "xtensa-esp32-none-elf",
             "the id is embedded in the triple; the triple is replaced whole or not at all",
         );
-        assert_eq!(replace_word("--chip esp32\"", "esp32", "esp32c3"), "--chip esp32c3\"");
+        assert_eq!(
+            replace_word("--chip esp32\"", "esp32", "esp32c3"),
+            "--chip esp32c3\""
+        );
         assert_eq!(
             replace_word("features = [\"esp32\"]", "esp32", "esp32c3"),
             "features = [\"esp32c3\"]",
@@ -670,7 +686,10 @@ mod tests {
         apply(dir.path(), &migration).expect("applied");
 
         let config = std::fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap();
-        assert!(config.contains("target = \"xtensa-esp32-none-elf\""), "{config}");
+        assert!(
+            config.contains("target = \"xtensa-esp32-none-elf\""),
+            "{config}"
+        );
         assert!(config.contains("build-std = [\"core\"]"), "{config}");
         let toolchain = std::fs::read_to_string(dir.path().join("rust-toolchain.toml")).unwrap();
         assert!(toolchain.contains("channel = \"esp\""), "{toolchain}");
@@ -707,7 +726,10 @@ mod tests {
             .find(|note| note.contains("compiler driver"))
             .expect("the flags are named");
 
-        assert!(note.contains(".cargo/config.toml:3 -nostartfiles"), "{note}");
+        assert!(
+            note.contains(".cargo/config.toml:3 -nostartfiles"),
+            "{note}"
+        );
         assert!(
             note.contains("build.rs:3 -Wl,"),
             "including the one in generated build.rs, which is the half nobody reads: {note}",
@@ -735,7 +757,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         project(dir.path());
 
-        let stm = chip_with("stm32f103", "thumbv7m-none-eabi", false, Some("stm32f1xx-hal"));
+        let stm = chip_with(
+            "stm32f103",
+            "thumbv7m-none-eabi",
+            false,
+            Some("stm32f1xx-hal"),
+        );
         let migration = plan(dir.path(), &esp32(), &stm);
         let blocker = migration.blocker.expect("refused");
         assert!(

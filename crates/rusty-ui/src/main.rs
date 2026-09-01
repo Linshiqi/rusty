@@ -17,8 +17,8 @@ mod format;
 mod ipc;
 mod state;
 mod theme;
-mod vim;
 mod view;
+mod vim;
 
 use leptos::prelude::*;
 

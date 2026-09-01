@@ -94,7 +94,12 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
                 });
             }
 
-            let mut args = vec!["--chip".into(), request.chip_id.clone(), "--port".into(), port.clone()];
+            let mut args = vec![
+                "--chip".into(),
+                request.chip_id.clone(),
+                "--port".into(),
+                port.clone(),
+            ];
             if let Some(baud) = request.baud {
                 args.push("--baud".into());
                 args.push(baud.to_string());
@@ -173,7 +178,7 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
         args,
         display,
         rationale: rationale.to_string(),
-            warning: None,
+        warning: None,
     })
 }
 
@@ -197,8 +202,14 @@ mod tests {
         let candidates = vec!["esp32c3".to_string(), "esp32c6".to_string()];
 
         let warning = chip_mismatch("esp32", &candidates).expect("a mismatch");
-        assert!(warning.contains("esp32"), "names the project's chip: {warning}");
-        assert!(warning.contains("esp32c3"), "names what is plugged in: {warning}");
+        assert!(
+            warning.contains("esp32"),
+            "names the project's chip: {warning}"
+        );
+        assert!(
+            warning.contains("esp32c3"),
+            "names what is plugged in: {warning}"
+        );
 
         assert_eq!(
             chip_mismatch("esp32c3", &candidates),
@@ -283,7 +294,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("STM32F411"), "{err}");
-        assert!(err.contains("probe"), "the message has to point at the fix: {err}");
+        assert!(
+            err.contains("probe"),
+            "the message has to point at the fix: {err}"
+        );
     }
 
     #[test]

@@ -84,7 +84,11 @@ pub fn apply(
             // The last character, not the newline: normal mode's cursor sits
             // on a character. Inclusive, so `d$` still takes that character.
             let end = line_end_at(&chars, at);
-            (end.saturating_sub(1).max(line_start_at(&chars, at)), true, false)
+            (
+                end.saturating_sub(1).max(line_start_at(&chars, at)),
+                true,
+                false,
+            )
         }
         Motion::WordForward => (word_forward(&chars, cursor, count, false), false, false),
         Motion::BigWordForward => (word_forward(&chars, cursor, count, true), false, false),
@@ -436,17 +440,15 @@ fn match_pair(chars: &[char], cursor: usize) -> Option<usize> {
             .any(|(open, close)| chars[*index] == *open || chars[*index] == *close)
     })?;
     let here = chars[at];
-    let (open, close, forward) = PAIRS
-        .iter()
-        .find_map(|(open, close)| {
-            if here == *open {
-                Some((*open, *close, true))
-            } else if here == *close {
-                Some((*open, *close, false))
-            } else {
-                None
-            }
-        })?;
+    let (open, close, forward) = PAIRS.iter().find_map(|(open, close)| {
+        if here == *open {
+            Some((*open, *close, true))
+        } else if here == *close {
+            Some((*open, *close, false))
+        } else {
+            None
+        }
+    })?;
 
     let mut depth = 0i32;
     if forward {

@@ -49,7 +49,11 @@ pub fn lines(syntaxes: &SyntaxSet, path: &str, text: &str) -> (Vec<Line>, Option
     // file people actually open, where all-grey next to coloured Rust reads
     // as broken highlighting rather than as a plain file.
     if extension.eq_ignore_ascii_case("toml") || extension.eq_ignore_ascii_case("lock") {
-        return (source.map(toml_line).collect(), Some("TOML".into()), truncated);
+        return (
+            source.map(toml_line).collect(),
+            Some("TOML".into()),
+            truncated,
+        );
     }
 
     let Some(syntax) = syntax else {
@@ -309,13 +313,17 @@ void blinky_tick(void);
         let spans = tokens("main.rs", "// hi\nfn main() { let s = \"x\"; }\n");
 
         assert!(
-            spans.iter().any(|(t, k)| t.contains("hi") && *k == Token::Comment),
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("hi") && *k == Token::Comment),
             "the comment must be a comment: {spans:?}",
         );
         assert_eq!(token_of(&spans, "fn"), Some(Token::Keyword));
         assert_eq!(token_of(&spans, "main"), Some(Token::Function));
         assert!(
-            spans.iter().any(|(t, k)| t.contains('x') && *k == Token::Str),
+            spans
+                .iter()
+                .any(|(t, k)| t.contains('x') && *k == Token::Str),
             "the string literal must be a string: {spans:?}",
         );
     }
@@ -358,11 +366,15 @@ void blinky_tick(void);
         assert_eq!(token_of(&spans, "[build]"), Some(Token::Type));
         assert_eq!(token_of(&spans, "target"), Some(Token::Variable));
         assert!(
-            spans.iter().any(|(t, k)| t.contains("riscv32") && *k == Token::Str),
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("riscv32") && *k == Token::Str),
             "{spans:?}",
         );
         assert!(
-            spans.iter().any(|(t, k)| t.trim() == "true" && *k == Token::Keyword),
+            spans
+                .iter()
+                .any(|(t, k)| t.trim() == "true" && *k == Token::Keyword),
             "{spans:?}",
         );
     }
@@ -372,10 +384,13 @@ void blinky_tick(void);
     #[test]
     fn cargo_lock_is_highlighted_as_toml() {
         let syntaxes = SyntaxSet::load_defaults_newlines();
-        let (lines, language, _) =
-            lines(&syntaxes, "Cargo.lock", "[[package]]
+        let (lines, language, _) = lines(
+            &syntaxes,
+            "Cargo.lock",
+            "[[package]]
 name = \"serde\"
-");
+",
+        );
         assert_eq!(language.as_deref(), Some("TOML"));
         assert_eq!(lines[0].spans[0].token, Token::Type);
     }
@@ -387,13 +402,16 @@ name = \"serde\"
         let spans = tokens("Cargo.toml", "repo = \"https://x/y#frag\"  # real one\n");
 
         assert!(
-            spans.iter().any(|(t, k)| t.contains("#frag") && *k == Token::Str),
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("#frag") && *k == Token::Str),
             "the fragment belongs to the string: {spans:?}",
         );
         assert!(
-            spans.iter().any(|(t, k)| t.contains("real one") && *k == Token::Comment),
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("real one") && *k == Token::Comment),
             "{spans:?}",
         );
     }
 }
-

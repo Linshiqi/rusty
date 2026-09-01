@@ -157,11 +157,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
 
     let (program, args, rationale) = match choice.runtime {
         Runtime::BareMetal => {
-            let mut args = vec![
-                "--headless".to_string(),
-                "--chip".into(),
-                chip.id.clone(),
-            ];
+            let mut args = vec!["--headless".to_string(), "--chip".into(), chip.id.clone()];
             for option in &choice.options {
                 args.push("-o".into());
                 args.push(option.clone());
@@ -198,7 +194,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         args,
         display,
         rationale: rationale.to_string(),
-            warning: None,
+        warning: None,
     })
 }
 
@@ -220,15 +216,17 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
     out.push(Explanation {
         topic: format!("{} is {}", chip.name, chip.arch.label()),
         detail: match chip.toolchain {
-            ToolchainRequirement::EspXtensa =>
+            ToolchainRequirement::EspXtensa => {
                 "Upstream Rust cannot target Xtensa. You will need the `esp` \
                  toolchain, which ships a forked LLVM and takes a while to \
                  install."
-                    .to_string(),
-            ToolchainRequirement::Stock =>
+                    .to_string()
+            }
+            ToolchainRequirement::Stock => {
                 "Stock Rust supports this target. No forked toolchain, and \
                  anyone cloning the project can build it with plain rustup."
-                    .to_string(),
+                    .to_string()
+            }
         },
         consequence: chip
             .toolchain
@@ -240,17 +238,15 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
     out.push(Explanation {
         topic: format!("{} on {}", choice.runtime.label(), chip.name),
         detail: match choice.runtime {
-            Runtime::BareMetal =>
-                "No operating system and no C framework. Fast builds, small \
+            Runtime::BareMetal => "No operating system and no C framework. Fast builds, small \
                  binaries, and only the peripherals the HAL exposes — no \
                  threads, no filesystem, no sockets unless you add a stack."
-                    .to_string(),
-            Runtime::EspIdf =>
-                "Links Espressif's C framework, so you get `std`: threads, \
+                .to_string(),
+            Runtime::EspIdf => "Links Espressif's C framework, so you get `std`: threads, \
                  sockets, a filesystem, and every ESP-IDF component. The first \
                  build downloads and compiles that framework, which takes \
                  minutes rather than seconds."
-                    .to_string(),
+                .to_string(),
         },
         consequence: Some(format!("Builds for `{target}`.")),
     });
@@ -313,7 +309,12 @@ mod tests {
 
     #[test]
     fn bare_metal_uses_esp_generate_with_the_chip_and_options() {
-        let plan = plan(&choice("esp32c3", Runtime::BareMetal, &["embassy", "alloc"])).unwrap();
+        let plan = plan(&choice(
+            "esp32c3",
+            Runtime::BareMetal,
+            &["embassy", "alloc"],
+        ))
+        .unwrap();
 
         assert_eq!(plan.program, "esp-generate");
         assert!(plan.args.contains(&"--chip".to_string()));
@@ -375,7 +376,10 @@ mod tests {
 
         let std = explain(&choice("esp32c3", Runtime::EspIdf, &[]));
         assert!(std[1].consequence.as_deref().unwrap().contains("espidf"));
-        assert!(std[1].detail.contains("minutes"), "the build cost is the surprise");
+        assert!(
+            std[1].detail.contains("minutes"),
+            "the build cost is the surprise"
+        );
     }
 
     #[test]
@@ -391,15 +395,28 @@ mod tests {
 
     #[test]
     fn defmt_without_a_probe_gets_the_extra_warning() {
-        let with_probe = explain(&choice("esp32c3", Runtime::BareMetal, &["defmt", "probe-rs"]));
-        assert!(!with_probe.iter().any(|e| e.topic.contains("without a probe")));
+        let with_probe = explain(&choice(
+            "esp32c3",
+            Runtime::BareMetal,
+            &["defmt", "probe-rs"],
+        ));
+        assert!(
+            !with_probe
+                .iter()
+                .any(|e| e.topic.contains("without a probe"))
+        );
 
         let serial_only = explain(&choice("esp32c3", Runtime::BareMetal, &["defmt"]));
         let note = serial_only
             .iter()
             .find(|e| e.topic.contains("without a probe"))
             .expect("serial defmt needs the decoder note");
-        assert!(note.consequence.as_deref().unwrap().contains("--log-format defmt"));
+        assert!(
+            note.consequence
+                .as_deref()
+                .unwrap()
+                .contains("--log-format defmt")
+        );
     }
 
     #[test]

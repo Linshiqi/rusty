@@ -90,9 +90,7 @@ impl IpcError {
             };
         }
         IpcError {
-            message: value
-                .as_string()
-                .unwrap_or_else(|| format!("{value:?}")),
+            message: value.as_string().unwrap_or_else(|| format!("{value:?}")),
             causes: Vec::new(),
         }
     }

@@ -184,9 +184,7 @@ impl Assistant {
                 let event = event?;
                 match &event {
                     ChatEvent::TextDelta { text: delta } => text.push_str(delta),
-                    ChatEvent::ToolCallStart { id, name } => {
-                        calls.start(id.clone(), name.clone())
-                    }
+                    ChatEvent::ToolCallStart { id, name } => calls.start(id.clone(), name.clone()),
                     ChatEvent::ToolCallDelta { id, partial_json } => calls.push(id, partial_json),
                     ChatEvent::Done { stop: reason } => stop = *reason,
                     _ => {}

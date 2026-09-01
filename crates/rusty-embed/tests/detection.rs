@@ -207,7 +207,10 @@ esp-idf-hal = "0.45"
             ".cargo/config.toml",
             "[build]\ntarget = \"riscv32imc-esp-espidf\"\n",
         ),
-        ("sdkconfig.defaults", "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000\n"),
+        (
+            "sdkconfig.defaults",
+            "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000\n",
+        ),
     ]);
     let project = detect(dir.path());
 
@@ -216,7 +219,12 @@ esp-idf-hal = "0.45"
     // back to the triple must still land on a single chip only when it can.
     assert!(project.chip.is_none() || project.chip.as_deref() == Some("esp32c3"));
     assert!(project.evidence.iter().any(|e| e == "sdkconfig.defaults"));
-    assert!(project.frameworks.iter().any(|f| f.starts_with("esp-idf-svc")));
+    assert!(
+        project
+            .frameworks
+            .iter()
+            .any(|f| f.starts_with("esp-idf-svc"))
+    );
 }
 
 /// Embedded manifests routinely gate the HAL behind a target cfg; detection
@@ -310,12 +318,21 @@ cc = "1"
 bindgen = "0.70"
 "#,
         ),
-        ("src/lib.rs", "#![no_std]
-"),
-        ("csrc/driver.c", "int driver_init(void) { return 0; }
-"),
-        ("csrc/driver.h", "int driver_init(void);
-"),
+        (
+            "src/lib.rs",
+            "#![no_std]
+",
+        ),
+        (
+            "csrc/driver.c",
+            "int driver_init(void) { return 0; }
+",
+        ),
+        (
+            "csrc/driver.h",
+            "int driver_init(void);
+",
+        ),
     ]);
     let project = detect(dir.path());
     let interop = &project.c_interop;
@@ -353,8 +370,11 @@ version = \"0.1.0\"
 esp-hal = \"0.23\"
 ",
         ),
-        ("src/main.rs", "fn main() {}
-"),
+        (
+            "src/main.rs",
+            "fn main() {}
+",
+        ),
     ]);
     assert!(
         detect(plain.path()).c_interop.is_empty(),

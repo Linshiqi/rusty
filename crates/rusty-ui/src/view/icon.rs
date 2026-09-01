@@ -45,23 +45,31 @@ impl Icon {
             Icon::Search => "M8.7 3.2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM12.8 12.8 17 17",
             // A toolbox — the wrench read as Settings, which every other
             // app taught people a wrench means.
-            Icon::Toolchain => "M3.5 8.5h13v7h-13zM8 8.5V7.2a2 2 0 0 1 4 0v1.3M3.5 11.5h5M11.5 11.5h5M8.5 10.5h3v2h-3z",
+            Icon::Toolchain => {
+                "M3.5 8.5h13v7h-13zM8 8.5V7.2a2 2 0 0 1 4 0v1.3M3.5 11.5h5M11.5 11.5h5M8.5 10.5h3v2h-3z"
+            }
             // A RAM chip: body, legs, a window — three bare lines read as
             // a text list, not as silicon.
-            Icon::Memory => "M4.5 6.5h11v7h-11zM7 6.5V4.2M10 6.5V4.2M13 6.5V4.2M7 13.5v2.3M10 13.5v2.3M13 13.5v2.3M7.5 9h5v2h-5z",
+            Icon::Memory => {
+                "M4.5 6.5h11v7h-11zM7 6.5V4.2M10 6.5V4.2M13 6.5V4.2M7 13.5v2.3M10 13.5v2.3M13 13.5v2.3M7.5 9h5v2h-5z"
+            }
             // A bolt.
             Icon::Flash => "M11 2.5 4.5 11.5H9l-1 6 6.5-9H10z",
             // A play triangle in a rounded frame — run, without hardware.
             Icon::Simulate => "M4 4.5h12v11H4zM8.5 7.5l4 2.5-4 2.5z",
             // A gear — teeth and a bore, generated from the geometry, because
             // the earlier circle-with-rays read as a sun.
-            Icon::Settings => "M8.8 4.7 L9.2 2.4 L10.8 2.4 L11.2 4.7 L12.9 5.5 L14.8 4.1 L15.9 5.2 L14.5 7.1 L15.3 8.8 L17.6 9.2 L17.6 10.8 L15.3 11.2 L14.5 12.9 L15.9 14.8 L14.8 15.9 L12.9 14.5 L11.2 15.3 L10.8 17.6 L9.2 17.6 L8.8 15.3 L7.1 14.5 L5.2 15.9 L4.1 14.8 L5.5 12.9 L4.7 11.2 L2.4 10.8 L2.4 9.2 L4.7 8.8 L5.5 7.1 L4.1 5.2 L5.2 4.1 L7.1 5.5 Z M12.4 10a2.4 2.4 0 1 1 -4.8 0a2.4 2.4 0 1 1 4.8 0",
+            Icon::Settings => {
+                "M8.8 4.7 L9.2 2.4 L10.8 2.4 L11.2 4.7 L12.9 5.5 L14.8 4.1 L15.9 5.2 L14.5 7.1 L15.3 8.8 L17.6 9.2 L17.6 10.8 L15.3 11.2 L14.5 12.9 L15.9 14.8 L14.8 15.9 L12.9 14.5 L11.2 15.3 L10.8 17.6 L9.2 17.6 L8.8 15.3 L7.1 14.5 L5.2 15.9 L4.1 14.8 L5.5 12.9 L4.7 11.2 L2.4 10.8 L2.4 9.2 L4.7 8.8 L5.5 7.1 L4.1 5.2 L5.2 4.1 L7.1 5.5 Z M12.4 10a2.4 2.4 0 1 1 -4.8 0a2.4 2.4 0 1 1 4.8 0"
+            }
             // A play triangle.
             Icon::Play => "M6 3.5 16 10 6 16.5z",
             // A stop square.
             Icon::Stop => "M5 5h10v10H5z",
             // A bug: body, head, legs.
-            Icon::Bug => "M10 6.5a3.5 3.5 0 0 1 3.5 3.5v3a3.5 3.5 0 1 1-7 0v-3A3.5 3.5 0 0 1 10 6.5zM8 6.8 6.2 4.6M12 6.8l1.8-2.2M6.5 10H3.4M16.6 10h-3.1M7 13.5l-2.4 1.8M13 13.5l2.4 1.8",
+            Icon::Bug => {
+                "M10 6.5a3.5 3.5 0 0 1 3.5 3.5v3a3.5 3.5 0 1 1-7 0v-3A3.5 3.5 0 0 1 10 6.5zM8 6.8 6.2 4.6M12 6.8l1.8-2.2M6.5 10H3.4M16.6 10h-3.1M7 13.5l-2.4 1.8M13 13.5l2.4 1.8"
+            }
             // A floppy disk, the save glyph two generations still read.
             Icon::Save => "M4 4h9l3 3v9H4zM7 4v4h5V4M6.8 16v-4.5h6.4V16",
             // A hammer.
@@ -71,13 +79,21 @@ impl Icon {
             // A grid.
             Icon::Grid => "M3.5 3.5h13v13h-13zM3.5 7.8h13M3.5 12.2h13M7.8 3.5v13M12.2 3.5v13",
             // Circular arrows.
-            Icon::Refresh => "M16.5 8A6.6 6.6 0 0 0 4.4 6.1M3.5 3v3.5H7M3.5 12a6.6 6.6 0 0 0 12.1 1.9M16.5 17v-3.5H13",
+            Icon::Refresh => {
+                "M16.5 8A6.6 6.6 0 0 0 4.4 6.1M3.5 3v3.5H7M3.5 12a6.6 6.6 0 0 0 12.1 1.9M16.5 17v-3.5H13"
+            }
             // An arc hopping over a dot — step over the call on this line.
-            Icon::StepOver => "M4.5 8.5a5.5 5.5 0 0 1 11 0M15.5 8.5V5M15.5 8.5H12M10 14.5a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0",
+            Icon::StepOver => {
+                "M4.5 8.5a5.5 5.5 0 0 1 11 0M15.5 8.5V5M15.5 8.5H12M10 14.5a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0"
+            }
             // An arrow diving into the dot — step into the call.
-            Icon::StepInto => "M10 3v7.5M6.8 7.6 10 10.8l3.2-3.2M11.6 15a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0",
+            Icon::StepInto => {
+                "M10 3v7.5M6.8 7.6 10 10.8l3.2-3.2M11.6 15a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0"
+            }
             // An arrow leaving upward — step out of this frame.
-            Icon::StepOut => "M10 10.5V3M6.8 6.2 10 3l3.2 3.2M11.6 15a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0",
+            Icon::StepOut => {
+                "M10 10.5V3M6.8 6.2 10 3l3.2 3.2M11.6 15a1.6 1.6 0 1 1-3.2 0a1.6 1.6 0 1 1 3.2 0"
+            }
             // Two bars.
             Icon::Pause => "M7 4.5v11M13 4.5v11",
             // A chevron pointing down; callers rotate it for the other ways.
@@ -87,7 +103,9 @@ impl Icon {
             // A plus in a rounded square.
             Icon::Wizard => "M4 4.5h12v11H4zM10 7.5v5M7.5 10h5",
             // A speech outline.
-            Icon::Assistant => "M3.5 5.2a1.7 1.7 0 0 1 1.7-1.7h9.6a1.7 1.7 0 0 1 1.7 1.7v6.4a1.7 1.7 0 0 1-1.7 1.7H8.2L4.6 16.7v-3.4a1.7 1.7 0 0 1-1.1-1.7z",
+            Icon::Assistant => {
+                "M3.5 5.2a1.7 1.7 0 0 1 1.7-1.7h9.6a1.7 1.7 0 0 1 1.7 1.7v6.4a1.7 1.7 0 0 1-1.7 1.7H8.2L4.6 16.7v-3.4a1.7 1.7 0 0 1-1.1-1.7z"
+            }
         }
     }
 
@@ -100,7 +118,11 @@ impl Icon {
 
 #[component]
 pub fn IconView(icon: Icon, #[prop(default = 17)] size: u32) -> impl IntoView {
-    let fill = if icon.filled() { "currentColor" } else { "none" };
+    let fill = if icon.filled() {
+        "currentColor"
+    } else {
+        "none"
+    };
     view! {
         <svg
             width=size

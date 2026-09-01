@@ -138,7 +138,7 @@ pub fn parse_pin_source(line: &str) -> Option<PinSource> {
     // the dock. An unknown word is not "firmware" — it is a newer rusty
     // talking to an older frontend, and guessing would put a confident wrong
     // caption under the board.
-    match rest.trim().split_whitespace().next()? {
+    match rest.split_whitespace().next()? {
         "emulator" => Some(PinSource::Emulator),
         "firmware" => Some(PinSource::Firmware),
         _ => None,

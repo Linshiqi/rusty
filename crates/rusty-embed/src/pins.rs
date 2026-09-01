@@ -271,12 +271,29 @@ mod tests {
              { pin = 18, analog = { 0 = \"USB_DM\" } },\n\
              { pin = 5, functions = { 2 = \"FSPIWP\" } },\n",
         );
-        let reserved: Vec<Option<String>> =
-            file.device.gpio.pins.iter().map(PinEntry::reserved).collect();
+        let reserved: Vec<Option<String>> = file
+            .device
+            .gpio
+            .pins
+            .iter()
+            .map(PinEntry::reserved)
+            .collect();
 
-        assert!(reserved[0].as_deref().is_some_and(|r| r.contains("SPI flash")));
-        assert!(reserved[1].as_deref().is_some_and(|r| r.contains("SPI flash")));
-        assert!(reserved[2].as_deref().is_some_and(|r| r.contains("console")));
+        assert!(
+            reserved[0]
+                .as_deref()
+                .is_some_and(|r| r.contains("SPI flash"))
+        );
+        assert!(
+            reserved[1]
+                .as_deref()
+                .is_some_and(|r| r.contains("SPI flash"))
+        );
+        assert!(
+            reserved[2]
+                .as_deref()
+                .is_some_and(|r| r.contains("console"))
+        );
         assert!(reserved[3].as_deref().is_some_and(|r| r.contains("USB")));
         assert_eq!(
             reserved[4], None,
@@ -305,7 +322,10 @@ mod tests {
             vec![5, 21],
             "the comment and the string are not claims: {found:?}",
         );
-        assert_eq!(found[0].line, 1, "zero-based, like every line that crosses the wire");
+        assert_eq!(
+            found[0].line, 1,
+            "zero-based, like every line that crosses the wire"
+        );
         assert!(found[0].text.starts_with("let led ="));
     }
 
@@ -334,7 +354,10 @@ mod tests {
     fn the_locked_version_is_read_rather_than_the_newest_on_the_machine() {
         let lock = "[[package]]\nname = \"esp-hal\"\nversion = \"1.1.2\"\n\n\
                     [[package]]\nname = \"esp-metadata\"\nversion = \"0.8.0\"\n";
-        assert_eq!(locked_version(lock, "esp-metadata").as_deref(), Some("0.8.0"));
+        assert_eq!(
+            locked_version(lock, "esp-metadata").as_deref(),
+            Some("0.8.0")
+        );
         assert_eq!(locked_version(lock, "nothing-here"), None);
     }
 }

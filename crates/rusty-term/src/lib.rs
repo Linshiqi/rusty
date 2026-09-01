@@ -15,11 +15,11 @@ pub mod model;
 pub use model::*;
 
 #[cfg(feature = "backend")]
+pub mod builtin;
+#[cfg(feature = "backend")]
 mod error;
 #[cfg(feature = "backend")]
 pub mod pty;
-#[cfg(feature = "backend")]
-pub mod builtin;
 
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
