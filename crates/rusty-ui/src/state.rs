@@ -680,6 +680,20 @@ pub struct Sim {
     pub sensor_values: RwSignal<std::collections::HashMap<String, Vec<f32>>>,
     /// Raw ADC counts the panel is holding on each pin.
     pub analog: RwSignal<std::collections::HashMap<u8, u16>>,
+    /// The simulated aircraft, when the physical loop is closed.
+    ///
+    /// Injecting a rate proves the controller *responds*; it cannot show
+    /// whether the loop settles, because the rate never changed in answer to
+    /// the motors. This is the integrator that closes it: motor duties in,
+    /// body rates out, fed back as the sample the firmware reads.
+    pub plant: RwSignal<rusty_embed::Plant>,
+    /// Whether that feedback is running. Off by default — a panel that
+    /// started injecting on its own would make a firmware that reads its own
+    /// IMU see two sources disagreeing.
+    pub plant_closed: RwSignal<bool>,
+    /// Guards the plant's timer against a stale one from a previous run, the
+    /// way the editor's pulse does.
+    pub plant_gen: RwSignal<u64>,
     /// Where those levels came from, as announced by the run that started.
     ///
     /// `Firmware` until a run says otherwise, because that is what every
@@ -945,6 +959,9 @@ impl AppState {
                 sensors: RwSignal::new(Vec::new()),
                 sensor_values: RwSignal::new(std::collections::HashMap::new()),
                 analog: RwSignal::new(std::collections::HashMap::new()),
+                plant: RwSignal::new(rusty_embed::Plant::default()),
+                plant_closed: RwSignal::new(false),
+                plant_gen: RwSignal::new(0),
                 pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
                 plan: RwSignal::new(None),
                 install_failed: RwSignal::new(Vec::new()),

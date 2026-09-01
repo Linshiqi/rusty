@@ -198,6 +198,122 @@ pub fn sim_sensor(state: AppState, name: String, values: Vec<f32>) {
     });
 }
 
+/// How often the plant steps and injects. 50 Hz.
+///
+/// Far slower than the loop it feeds, and deliberately: the firmware runs at
+/// 200 Hz and will read the same sample four times, which is fine because the
+/// aircraft's own dynamics are slower than either. Injecting at the loop rate
+/// would put 200 lines a second on the same serial line the console shares,
+/// for no more truth.
+const PLANT_PERIOD: std::time::Duration = std::time::Duration::from_millis(20);
+const PLANT_DT: f32 = 0.02;
+
+/// Close the physical loop, or open it again.
+///
+/// Off by default and never self-starting. Firmware that reads a real IMU
+/// *and* accepts injection would otherwise see two sources disagreeing, and
+/// the resulting drift would be blamed on the sensor.
+pub fn set_plant_closed(state: AppState, closed: bool) {
+    let generation = state.sim.plant_gen.get_untracked() + 1;
+    state.sim.plant_gen.set(generation);
+    state.sim.plant_closed.set(closed);
+    // A plant left spinning would hand the next run a rate nobody commanded.
+    state.sim.plant.update(rusty_embed::Plant::reset);
+    if closed {
+        plant_step(state, generation);
+    }
+}
+
+/// One step of the simulated aircraft, then schedule the next.
+///
+/// Stops on its own when the flag clears or a newer generation exists, which
+/// is the editor pulse's rule and for the same reason: a timer that outlives
+/// what started it keeps injecting into a session that has moved on.
+fn plant_step(state: AppState, generation: u64) {
+    if !state.sim.plant_closed.get_untracked() || state.sim.plant_gen.get_untracked() != generation
+    {
+        return;
+    }
+
+    // Four motors, in pin order — the quad-X order `Plant::step` mixes for.
+    let mut motors: Vec<(u8, f32)> = state
+        .sim
+        .pwm
+        .with_untracked(|pwm| pwm.iter().map(|(p, d)| (*p, *d)).collect());
+    motors.sort_by_key(|(pin, _)| *pin);
+
+    // Fewer than four driven pins is not an aircraft. Waiting rather than
+    // padding with zeros: a firmware that has not reported all four yet
+    // would otherwise be flown as though half its motors were dead.
+    if motors.len() >= 4 {
+        let duties = [motors[0].1, motors[1].1, motors[2].1, motors[3].1];
+        let stepped = state.sim.plant.try_update(|plant| {
+            plant.step(duties, PLANT_DT);
+            (plant.rate(), plant.accelerometer())
+        });
+        if let Some((rate, accel)) = stepped {
+            for (name, feed) in plant_feeds(state) {
+                let sample = match feed {
+                    Feed::Rates => rate,
+                    Feed::Accelerometer => accel,
+                };
+                sim_sensor(state, name, sample.to_vec());
+            }
+        }
+    }
+
+    set_timeout(move || plant_step(state, generation), PLANT_PERIOD);
+}
+
+/// What the plant has to offer a sensor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Feed {
+    /// Body rates, what a gyro reads.
+    Rates,
+    /// Gravity in body coordinates, what an accelerometer reads at rest.
+    Accelerometer,
+}
+
+impl Feed {
+    pub fn label(self) -> &'static str {
+        match self {
+            Feed::Rates => "rates",
+            Feed::Accelerometer => "gravity",
+        }
+    }
+}
+
+/// Which declared sensors the plant can fill, and with what.
+///
+/// **Matched by name, and the panel says so.** A sensor called `gyro` gets
+/// rates and one called `accel` gets gravity, because those are what firmware
+/// calls them — but it is a convention shown on screen rather than a rule
+/// hidden in here, and anything the plant does not recognise is left alone.
+/// Inventing a meaning for a sensor called `range` is how a panel starts
+/// feeding a loop numbers nobody asked for.
+///
+/// Only three-component sensors: the plant has nothing sensible to put in a
+/// single number, and padding one out would be the same invention.
+pub fn plant_feeds(state: AppState) -> Vec<(String, Feed)> {
+    state.sim.sensors.with_untracked(|sensors| {
+        sensors
+            .iter()
+            .filter(|def| def.components == 3)
+            .filter_map(|def| {
+                let lower = def.name.to_lowercase();
+                let feed = if lower.contains("gyro") || lower.contains("rate") {
+                    Feed::Rates
+                } else if lower.contains("acc") {
+                    Feed::Accelerometer
+                } else {
+                    return None;
+                };
+                Some((def.name.clone(), feed))
+            })
+            .collect()
+    })
+}
+
 /// Put a raw ADC count on a pin — a battery, a divider, any analog source.
 pub fn sim_analog(state: AppState, pin: u8, count: u16) {
     sim_send(state, rusty_embed::analog_line(pin, count));

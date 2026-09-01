@@ -13,9 +13,12 @@
 //! commanded. Where a channel is missing the panel says so rather than
 //! drawing a level horizon, because a level horizon is a claim.
 
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 
 use super::*;
+use crate::controller;
 
 /// Channel names this panel will use for the three axes without being told.
 ///
@@ -100,14 +103,18 @@ pub(super) fn FlightTab() -> impl IntoView {
                     </p>
                 </Show>
                 <Show when=move || !nothing>
-                    <div class="flex gap-6">
-                        <Horizon roll=roll.clone() pitch=pitch.clone() />
-                        <div class="flex flex-col gap-2">
-                            <Readout label="roll" axis=roll.clone() />
-                            <Readout label="pitch" axis=pitch.clone() />
-                            <Readout label="yaw" axis=yaw.clone() />
+                    <div class="flex flex-col gap-3">
+                        <div class="flex gap-6">
+                            <Craft />
+                            <Horizon roll=roll.clone() pitch=pitch.clone() />
+                            <div class="flex flex-col gap-2">
+                                <Readout label="roll" axis=roll.clone() />
+                                <Readout label="pitch" axis=pitch.clone() />
+                                <Readout label="yaw" axis=yaw.clone() />
+                            </div>
+                            <Motors motors=motors.clone() />
                         </div>
-                        <Motors motors=motors.clone() />
+                        <ClosedLoop />
                     </div>
                 </Show>
             </div>
@@ -227,5 +234,195 @@ fn Motors(motors: Vec<(u8, f32)>) -> impl IntoView {
                     .collect::<Vec<_>>()}
             </div>
         </div>
+    }
+}
+
+/// The switch that makes this a simulator rather than a readout.
+///
+/// Open, the panel shows what the firmware commanded and the gyro reads
+/// whatever a person last dragged. Closed, a rigid body stands between them:
+/// the motors turn it, and it answers with the rate a gyro bolted to it would
+/// report. That is the difference between proving a loop *responds* and
+/// watching whether it *settles*.
+///
+/// Off by default and never self-starting, for a reason worth stating: a
+/// firmware reading a real IMU as well would see two sources disagreeing, and
+/// the drift would be blamed on the sensor.
+#[component]
+fn ClosedLoop() -> impl IntoView {
+    let state = AppState::expect();
+
+    move || {
+        let closed = state.sim.plant_closed.get();
+        let feeds = controller::plant_feeds(state);
+        let motors = state.sim.pwm.with(HashMap::len);
+        // Both are required and neither can be invented: without a declared
+        // three-axis sensor there is nowhere to inject, and without four
+        // driven pins there is no aircraft to model.
+        let blocker = if feeds.is_empty() {
+            Some(
+                "no sensor the plant recognises — the firmware has to print \
+                 [rusty:sensor] gyro=3 (or accel=3) before anything can be fed to it"
+                    .to_string(),
+            )
+        } else if motors < 4 {
+            Some(format!(
+                "{motors} motor pins reported, four needed — the plant mixes quad-X",
+            ))
+        } else {
+            None
+        };
+        let ready = blocker.is_none();
+
+        view! {
+            <div class="flex flex-col gap-1 border-t border-line pt-3">
+                <label class="flex items-center gap-2">
+                    <input
+                        type="checkbox"
+                        prop:checked=closed
+                        disabled=!ready
+                        on:change=move |event| {
+                            controller::set_plant_closed(state, event_target_checked(&event))
+                        }
+                        class="accent-rust disabled:opacity-40"
+                    />
+                    <span class="text-callout text-label">"Close the loop"</span>
+                    <Show when=move || closed>
+                        <span class="font-mono text-caption text-rust">
+                            {feeds
+                                .iter()
+                                .map(|(name, feed)| format!("{name}←{}", feed.label()))
+                                .collect::<Vec<_>>()
+                                .join("  ")}
+                        </span>
+                    </Show>
+                </label>
+                <p class="max-w-[46rem] text-caption leading-relaxed text-label-3">
+                    {blocker
+                        .clone()
+                        .unwrap_or_else(|| {
+                            "A rigid body between the motors and the gyro, so the loop can be \
+                             watched settling rather than only answering. It is a model: no \
+                             gravity, no attitude, and constants that describe a small brushed \
+                             quad rather than yours. What transfers is the sign of each axis, \
+                             the motor order, and whether the loop is stable in shape — not \
+                             the gains."
+                                .to_string()
+                        })}
+                </p>
+            </div>
+        }
+    }
+}
+
+/// The aircraft, drawn where it is actually pointing.
+///
+/// **This is for axes and signs, not for looking at.** Tilt the board right
+/// and watch the model go left and a reversed axis is obvious in one second;
+/// the same mistake read off three changing numbers is nearly invisible, and
+/// it is the mistake that ends a first flight. It also shows yaw, which an
+/// artificial horizon structurally cannot.
+///
+/// Two sources, and it always says which. Closed-loop, the plant's own
+/// orientation — unambiguous, because it *is* an attitude. Open, whatever
+/// telemetry channels look like angles, **read as degrees** and shown beside
+/// the drawing: firmware publishing radians makes a craft that barely moves
+/// next to a number reading 0.31, which is its own diagnosis.
+///
+/// Rotation order is yaw, then pitch, then roll — the aerospace convention,
+/// and stated because Euler angles have no meaning without it.
+#[component]
+fn Craft() -> impl IntoView {
+    let state = AppState::expect();
+
+    move || {
+        let closed = state.sim.plant_closed.get();
+        let (angles, source) = if closed {
+            let radians = state.sim.plant.with(rusty_embed::Plant::attitude);
+            (
+                Some([
+                    radians[0].to_degrees(),
+                    radians[1].to_degrees(),
+                    radians[2].to_degrees(),
+                ]),
+                "from the plant".to_string(),
+            )
+        } else {
+            let pick = |names: &[&str]| {
+                preferred(state, names).and_then(|n| latest(state, &n).map(|v| (n, v)))
+            };
+            match (
+                pick(&["att_roll", "roll"]),
+                pick(&["att_pitch", "pitch", "pit"]),
+                pick(&["att_yaw", "yaw"]),
+            ) {
+                (Some((rn, r)), Some((_, p)), Some((_, y))) => (
+                    Some([r, p, y]),
+                    format!("from {rn} and friends, read as degrees"),
+                ),
+                _ => (None, String::new()),
+            }
+        };
+
+        let Some([roll, pitch, yaw]) = angles else {
+            return view! {
+                <div class="grid size-[132px] shrink-0 place-items-center rounded-[8px] border border-line bg-sunken px-3 text-center text-caption leading-relaxed text-label-3">
+                    "No attitude. Close the loop, or publish roll/pitch/yaw as telemetry — \
+                     rates are not angles and this will not pretend they are."
+                </div>
+            }
+                .into_any();
+        };
+
+        let arm = |degrees: f64, colour: &'static str| {
+            view! {
+                <div
+                    class="absolute top-1/2 left-1/2 h-[3px] w-[56px] origin-left rounded-full"
+                    style=format!(
+                        "transform: rotate({degrees}deg) translateY(-1.5px); background: {colour}",
+                    )
+                >
+                    <div
+                        class="absolute top-1/2 right-0 size-[22px] -translate-y-1/2 translate-x-1/2 rounded-full opacity-70"
+                        style=format!("background: {colour}")
+                    />
+                </div>
+            }
+        };
+
+        view! {
+            <div class="flex shrink-0 flex-col items-center gap-1">
+                <div
+                    class="grid size-[132px] place-items-center rounded-[8px] border border-line bg-sunken"
+                    style="perspective: 420px"
+                >
+                    <div
+                        class="relative size-[112px] transition-transform duration-75"
+                        style=format!(
+                            "transform-style: preserve-3d; transform: rotateX(58deg) \
+                             rotateZ({:.1}deg) rotateY({:.1}deg) rotateX({:.1}deg)",
+                            -yaw,
+                            roll,
+                            -pitch,
+                        )
+                    >
+                        // Front pair rust, rear pair grey: without a nose the
+                        // drawing is symmetric and yaw becomes unreadable.
+                        {arm(-135.0, "var(--color-rust, #d97757)")}
+                        {arm(-45.0, "var(--color-rust, #d97757)")}
+                        {arm(45.0, "var(--color-label-3, #8a8a8a)")}
+                        {arm(135.0, "var(--color-label-3, #8a8a8a)")}
+                        <div class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-[3px] bg-label-2" />
+                    </div>
+                </div>
+                <span class="font-mono text-caption text-label-2">
+                    {format!("{roll:+.0}° {pitch:+.0}° {yaw:+.0}°")}
+                </span>
+                <span class="max-w-[132px] text-center text-caption leading-tight text-label-3">
+                    {source}
+                </span>
+            </div>
+        }
+            .into_any()
     }
 }
