@@ -8,6 +8,9 @@
 //! render the part list in the project wizard before any backend call happens.
 
 pub mod model;
+// The plant is arithmetic and no IO, like `protocol` — the frontend runs
+// it on a timer, so it compiles to wasm with the model types.
+pub mod plant;
 pub mod protocol;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
@@ -17,6 +20,7 @@ pub mod protocol;
 pub mod chip;
 
 pub use model::*;
+pub use plant::{Plant, PlantConfig};
 pub use protocol::{
     GpioReport, PinSource, PwmReport, SensorDef, analog_line, parse_display_report,
     parse_gpio_report, parse_pin_source, parse_pwm_report, parse_sensor_def, sensor_line, to_vcd,
