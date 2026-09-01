@@ -262,15 +262,17 @@ fn rust_analyzer_end_to_end() {
     // Apply to a copy the way the frontend does: bottom-up splices.
     let mut patched = text.clone();
     let mut edits = import.edits.clone();
-    edits.sort_by_key(|edit| {
-        std::cmp::Reverse((edit.range.start_line, edit.range.start_col))
-    });
+    edits.sort_by_key(|edit| std::cmp::Reverse((edit.range.start_line, edit.range.start_col)));
     for edit in edits {
         let offset = |line: u32, col: u32| -> usize {
             let mut at = 0;
             for (index, l) in patched.split('\n').enumerate() {
                 if index as u32 == line {
-                    return at + l.chars().take(col as usize).map(char::len_utf8).sum::<usize>();
+                    return at
+                        + l.chars()
+                            .take(col as usize)
+                            .map(char::len_utf8)
+                            .sum::<usize>();
                 }
                 at += l.len() + 1;
             }

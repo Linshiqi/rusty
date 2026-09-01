@@ -43,9 +43,7 @@ use crate::{
         ActionEdit, CodeActionFix, CompletionItem, DiagSeverity, EditRange, FileDiagnostic,
         HoverInfo, Location, LspEvent, SemanticSpan, SignatureInfo,
     },
-    positions::{
-        Encoding, character_to_scalar, content_change, scalar_to_character,
-    },
+    positions::{Encoding, character_to_scalar, content_change, scalar_to_character},
     rpc,
 };
 
@@ -134,7 +132,7 @@ impl LspClient {
             docs: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             encoding: OnceLock::new(),
-        semantic_legend: OnceLock::new(),
+            semantic_legend: OnceLock::new(),
             root: root.to_path_buf(),
             events: events_tx,
         });
@@ -270,18 +268,19 @@ impl LspClient {
 
         // A hundred is more than any popup shows and keeps a `use`-everything
         // completion reply from shipping megabytes over the bridge.
-        Ok(items.iter().take(100).map(|item| {
-            let label = item["label"].as_str().unwrap_or_default().to_string();
-            let edit = item["textEdit"].as_object();
-            let insert = edit
-                .and_then(|e| e.get("newText"))
-                .or_else(|| item.get("insertText"))
-                .and_then(Value::as_str)
-                .unwrap_or(&label)
-                .to_string();
-            let range = edit
-                .and_then(|e| e.get("range"))
-                .and_then(|range| {
+        Ok(items
+            .iter()
+            .take(100)
+            .map(|item| {
+                let label = item["label"].as_str().unwrap_or_default().to_string();
+                let edit = item["textEdit"].as_object();
+                let insert = edit
+                    .and_then(|e| e.get("newText"))
+                    .or_else(|| item.get("insertText"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(&label)
+                    .to_string();
+                let range = edit.and_then(|e| e.get("range")).and_then(|range| {
                     let scalar = |position: &Value| -> Option<(u32, u32)> {
                         let line = position["line"].as_u64()? as u32;
                         let character = position["character"].as_u64()? as u32;
@@ -298,14 +297,15 @@ impl LspClient {
                     })
                 });
 
-            CompletionItem {
-                label,
-                kind: item["kind"].as_u64().map(kind_name).map(str::to_string),
-                detail: item["detail"].as_str().map(str::to_string),
-                insert,
-                edit: range,
-            }
-        }).collect())
+                CompletionItem {
+                    label,
+                    kind: item["kind"].as_u64().map(kind_name).map(str::to_string),
+                    detail: item["detail"].as_str().map(str::to_string),
+                    insert,
+                    edit: range,
+                }
+            })
+            .collect())
     }
 
     /// What the thing under this position is, as prose, and how much text the
@@ -395,7 +395,12 @@ impl LspClient {
             .or_else(|| result.get("activeParameter").and_then(Value::as_u64));
 
         let span = active_param
-            .and_then(|index| signature["parameters"].as_array()?.get(index as usize).cloned())
+            .and_then(|index| {
+                signature["parameters"]
+                    .as_array()?
+                    .get(index as usize)
+                    .cloned()
+            })
             .and_then(|parameter| match &parameter["label"] {
                 // A substring of the label. `find` is what the spec intends;
                 // a parameter text that appears twice in one signature would
@@ -493,13 +498,7 @@ impl LspClient {
     /// and an unsaved buffer would be overwritten by its own stale bytes on
     /// the next save. Returns the paths that changed, newest knowledge for
     /// whoever has them open.
-    pub fn rename(
-        &self,
-        path: &str,
-        line: u32,
-        col: u32,
-        new_name: &str,
-    ) -> Result<Vec<String>> {
+    pub fn rename(&self, path: &str, line: u32, col: u32, new_name: &str) -> Result<Vec<String>> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/rename",
@@ -516,7 +515,10 @@ impl LspClient {
             let Some(list) = edits.as_array() else {
                 return;
             };
-            match by_file.iter_mut().find(|(known, _)| same_file_uri(known, uri)) {
+            match by_file
+                .iter_mut()
+                .find(|(known, _)| same_file_uri(known, uri))
+            {
                 Some((_, existing)) => existing.extend(list.iter().cloned()),
                 None => by_file.push((uri.to_string(), list.clone())),
             }
@@ -536,7 +538,8 @@ impl LspClient {
                 let Some(uri) = change["textDocument"]["uri"].as_str() else {
                     return Err(Error::Server {
                         method: "textDocument/rename".into(),
-                        message: "this rename also moves a file, which rusty cannot apply yet                                   — rename the module in the file tree instead"
+                        message: "this rename also moves a file, which rusty cannot apply \
+                                  yet — rename the module in the file tree instead"
                             .into(),
                     });
                 };
@@ -815,7 +818,13 @@ impl Shared {
     }
 
     fn poke_all_open(&self) {
-        let open: Vec<String> = self.docs.lock().expect("lsp docs").keys().cloned().collect();
+        let open: Vec<String> = self
+            .docs
+            .lock()
+            .expect("lsp docs")
+            .keys()
+            .cloned()
+            .collect();
         for path in open {
             self.poke_pull(&path);
         }
@@ -856,7 +865,10 @@ impl Shared {
                 if let Some(error) = response.get("error") {
                     Err(Error::Server {
                         method: method.to_string(),
-                        message: error["message"].as_str().unwrap_or("unknown error").to_string(),
+                        message: error["message"]
+                            .as_str()
+                            .unwrap_or("unknown error")
+                            .to_string(),
                     })
                 } else {
                     Ok(response.get("result").cloned().unwrap_or(Value::Null))
@@ -960,17 +972,17 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     };
     let _ = shared.encoding.set(encoding);
 
-    let legend: Vec<String> = reply["capabilities"]["semanticTokensProvider"]["legend"]
-        ["tokenTypes"]
-        .as_array()
-        .map(|types| {
-            types
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    let legend: Vec<String> =
+        reply["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"]
+            .as_array()
+            .map(|types| {
+                types
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
     let _ = shared.semantic_legend.set(legend);
 
     shared.notify("initialized", json!({}))
@@ -1010,9 +1022,7 @@ fn dispatch(shared: &Shared, message: Value) {
                 return;
             }
             let result = if method == "workspace/configuration" {
-                let asked = message["params"]["items"]
-                    .as_array()
-                    .map_or(0, Vec::len);
+                let asked = message["params"]["items"].as_array().map_or(0, Vec::len);
                 Value::Array(vec![Value::Null; asked])
             } else {
                 Value::Null
@@ -1078,7 +1088,10 @@ fn pull(shared: &Shared, path: &str) -> Result<Vec<FileDiagnostic>> {
     )?;
     // A "full" report carries items; "unchanged" cannot happen because no
     // previousResultId is ever sent.
-    let items = report.get("items").cloned().unwrap_or(Value::Array(Vec::new()));
+    let items = report
+        .get("items")
+        .cloned()
+        .unwrap_or(Value::Array(Vec::new()));
     Ok(convert_items(shared, path, &items))
 }
 
@@ -1487,8 +1500,13 @@ mod rename_tests {
         let text = "// 中文注释
 let radio = 1;";
         let out = apply_text_edits(text, &[edit(1, 4, 9, "tuner")], Encoding::Utf8);
-        assert_eq!(out.as_deref(), Some("// 中文注释
-let tuner = 1;"));
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                "// 中文注释
+let tuner = 1;"
+            )
+        );
     }
 
     #[test]
@@ -1531,7 +1549,10 @@ mod tests {
             "file:///e:/proj/src/lib.rs",
         ));
         // The path half stays case-sensitive — only the drive folds.
-        assert!(!same_file_uri("file:///E:/Proj/a.rs", "file:///e:/proj/a.rs"));
+        assert!(!same_file_uri(
+            "file:///E:/Proj/a.rs",
+            "file:///e:/proj/a.rs"
+        ));
         assert!(same_file_uri("file:///home/x/a.rs", "file:///home/x/a.rs"));
     }
 
@@ -1551,10 +1572,7 @@ mod tests {
             Some("src/main.rs"),
         );
         // A dependency's source is not in the project.
-        assert_eq!(
-            uri_to_relative("file:///E:/other/place/lib.rs", root),
-            None,
-        );
+        assert_eq!(uri_to_relative("file:///E:/other/place/lib.rs", root), None,);
     }
 
     #[test]

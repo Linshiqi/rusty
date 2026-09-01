@@ -12,6 +12,14 @@
 //! A `// 中文注释` before the error line is enough to shift every diagnostic on
 //! it by a third under the wrong system, which is why the tests here are mostly
 //! non-ASCII.
+//!
+//! **Two boundaries, one set of arithmetic.** The client converts here, and so
+//! does the editor — a textarea's `selectionStart` is a UTF-16 index, which is
+//! the same conversion under a different name. The editor had its own copy of
+//! four of these functions; two copies of encoding arithmetic is two chances to
+//! get a surrogate pair wrong, and only one of them had tests. Compiled
+//! unconditionally for that reason: there is no IO in this module, and the
+//! frontend needs it as much as the client does.
 
 /// The unit the server counts `character` in, from the `initialize` handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +38,7 @@ impl Encoding {
 }
 
 /// A byte offset in `text` as an LSP `(line, character)`.
-fn offset_to_position(text: &str, offset: usize, encoding: Encoding) -> (u32, u32) {
+pub fn offset_to_position(text: &str, offset: usize, encoding: Encoding) -> (u32, u32) {
     let offset = offset.min(text.len());
     let before = &text[..offset];
     let line = before.bytes().filter(|b| *b == b'\n').count() as u32;
@@ -72,13 +80,53 @@ pub fn scalar_to_character(line: &str, scalar: u32, encoding: Encoding) -> u32 {
         .sum::<usize>() as u32
 }
 
+/// A `character` count as a byte offset into `text`.
+///
+/// What the editor needs at the DOM boundary: a textarea reports its selection
+/// in UTF-16 units, and slicing a Rust string with one panics on the first CJK
+/// comment. Clamped to the end, like every other conversion here.
+pub fn byte_of_character(text: &str, character: usize, encoding: Encoding) -> usize {
+    let mut budget = character;
+    for (offset, ch) in text.char_indices() {
+        if budget == 0 {
+            return offset;
+        }
+        let cost = encoding.cost(ch);
+        if budget < cost {
+            return offset;
+        }
+        budget -= cost;
+    }
+    text.len()
+}
+
+/// An LSP `(line, scalar column)` as a `character` offset into the whole text.
+///
+/// The inverse of [`offset_to_position`] in the unit a textarea's
+/// `selectionStart` counts: lines cost their own length plus one for the
+/// newline, and the newline is one unit in every encoding here.
+pub fn position_to_character(text: &str, line: u32, col: u32, encoding: Encoding) -> u32 {
+    let mut offset = 0u32;
+    for (index, content) in text.split('\n').enumerate() {
+        if index as u32 == line {
+            return offset + scalar_to_character(content, col, encoding);
+        }
+        offset += scalar_to_character(content, content.chars().count() as u32, encoding) + 1;
+    }
+    offset
+}
+
 /// The smallest single-range edit that turns `old` into `new`, as LSP wants it:
 /// start position, end position (both in `old`), and the replacement text.
 ///
 /// Common prefix and suffix are stripped so a keystroke travels as a keystroke
 /// rather than the whole file — rust-analyzer re-checks on every change, and
 /// feeding it full documents makes typing latency track file size.
-pub fn content_change(old: &str, new: &str, encoding: Encoding) -> ((u32, u32), (u32, u32), String) {
+pub fn content_change(
+    old: &str,
+    new: &str,
+    encoding: Encoding,
+) -> ((u32, u32), (u32, u32), String) {
     let old_bytes = old.as_bytes();
     let new_bytes = new.as_bytes();
 
@@ -122,7 +170,10 @@ mod tests {
         let (l8, c8) = offset_to_position(&text, 3 + offset, Encoding::Utf8);
         let (l16, c16) = offset_to_position(&text, 3 + offset, Encoding::Utf16);
         assert_eq!((l8, l16), (1, 1));
-        assert_eq!(c8, offset as u32, "utf-8 characters are bytes: let␣=4 + 中文=6 + ␣=1");
+        assert_eq!(
+            c8, offset as u32,
+            "utf-8 characters are bytes: let␣=4 + 中文=6 + ␣=1"
+        );
         assert_eq!(c16, 7, "utf-16 units: let␣=4 + 中文=2 + ␣=1");
 
         // And back to scalars: both encodings land on the same column.
@@ -146,6 +197,31 @@ mod tests {
     fn positions_clamp_rather_than_panic() {
         assert_eq!(offset_to_position("ab", 99, Encoding::Utf8), (0, 2));
         assert_eq!(character_to_scalar("ab", 99, Encoding::Utf16), 2);
+        assert_eq!(byte_of_character("ab", 99, Encoding::Utf16), 2);
+    }
+
+    /// The editor's half of the same arithmetic: a textarea index is a UTF-16
+    /// index, and slicing a Rust string with one is a panic waiting for the
+    /// first CJK comment.
+    #[test]
+    fn the_dom_boundary_converts_the_same_way() {
+        let text = "// 中文\nfn main() {}\n";
+
+        // "// 中文" is 5 UTF-16 units, +1 for the newline; then three scalars
+        // into line 1 costs three more.
+        assert_eq!(position_to_character(text, 1, 3, Encoding::Utf16), 6 + 3);
+        // Line 0 in bytes instead. `// 中文` is five scalars; the first three
+        // are one byte each and the two CJK ones are three.
+        assert_eq!(position_to_character(text, 0, 5, Encoding::Utf8), 3 + 3 + 3);
+        assert_eq!(position_to_character(text, 0, 5, Encoding::Utf16), 3 + 2);
+
+        // A UTF-16 index back to a byte offset, which is what slicing needs.
+        assert_eq!(byte_of_character("a🦀b", 3, Encoding::Utf16), 5);
+        assert_eq!(
+            byte_of_character("a🦀b", 2, Encoding::Utf16),
+            1,
+            "mid-surrogate stops before the pair rather than splitting it",
+        );
     }
 
     #[test]
