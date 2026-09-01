@@ -1,0 +1,110 @@
+//! Which shell the terminal runs.
+
+use leptos::prelude::*;
+
+use crate::{
+    controller,
+    state::AppState,
+    view::components::{Pill, Tone},
+};
+
+use super::*;
+
+#[component]
+pub(super) fn TerminalShell() -> impl IntoView {
+    let state = AppState::expect();
+    Effect::new(move |first: Option<()>| {
+        if first.is_none() {
+            controller::load_shell_info(state);
+        }
+    });
+    let custom = RwSignal::new(String::new());
+
+    view! {
+        <Field
+            label="Shell"
+            help="Auto is rusty's own built-in shell: bash syntax — pipes, redirection, \
+                  variables, globs — compiled into the app, starting the instant the \
+                  terminal opens and reading the same on every OS. Changing this restarts \
+                  the shell."
+        >
+            {move || {
+                let Some(info) = state.term.info.get() else {
+                    return view! {
+                        <p class="text-callout text-label-3">"Asking the backend…"</p>
+                    }
+                        .into_any();
+                };
+                let preference = info.preference.clone();
+                let is_auto = preference.is_none();
+                let is_system = preference.as_deref() == Some("system");
+                let is_custom = !is_auto && !is_system;
+                if is_custom && custom.get_untracked().is_empty() {
+                    custom.set(preference.clone().unwrap_or_default());
+                }
+                let active = info.active.clone();
+                view! {
+                    <div class="flex flex-col gap-3">
+                        <div class="inline-flex self-start rounded-[7px] bg-sunken p-0.5">
+                            {[
+                                ("Auto", "auto", is_auto),
+                                ("System shell", "system", is_system),
+                            ]
+                                .into_iter()
+                                .map(|(label, value, selected)| {
+                                    view! {
+                                        <button
+                                            type="button"
+                                            on:click=move |_| {
+                                                controller::set_terminal_shell(
+                                                    state,
+                                                    Some(value.to_string()),
+                                                );
+                                            }
+                                            class=if selected {
+                                                "rounded-[6px] bg-content px-3 py-1 text-callout font-medium shadow-sm"
+                                            } else {
+                                                "rounded-[6px] px-3 py-1 text-callout text-label-2 hover:text-label"
+                                            }
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                })
+                                .collect_view()}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input
+                                placeholder="or a program: nu, fish, C:\\tools\\zsh.exe"
+                                class="w-72 rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
+                                prop:value=move || custom.get()
+                                on:input=move |event| custom.set(event_target_value(&event))
+                                on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                                    if event.key() == "Enter" {
+                                        let value = custom.get_untracked();
+                                        let value = value.trim();
+                                        if !value.is_empty() {
+                                            controller::set_terminal_shell(
+                                                state,
+                                                Some(value.to_string()),
+                                            );
+                                        }
+                                    }
+                                }
+                            />
+                            {is_custom
+                                .then(|| view! { <Pill label="in use" tone=Tone::Rust /> })}
+                        </div>
+                        <div class="flex items-center gap-2 text-callout text-label-2">
+                            <span class="text-label-3">"Next shell:"</span>
+                            <code class="rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote">
+                                {active}
+                            </code>
+                        </div>
+                    </div>
+                }
+                    .into_any()
+            }}
+        </Field>
+    }
+}
