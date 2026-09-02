@@ -12,6 +12,10 @@ pub mod model;
 // it on a timer, so it compiles to wasm with the model types.
 pub mod plant;
 pub mod protocol;
+// What a fresh machine is missing, derived from the toolchain report. Pure,
+// and unconditional so the setup screen can reason about a report it already
+// holds rather than asking the backend what it just told it.
+pub mod setup;
 
 // Chip lookups need the TOML parser, so unlike `model` they are backend-only.
 // The frontend gets the catalogue over IPC instead — which is correct anyway,

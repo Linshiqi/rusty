@@ -155,7 +155,11 @@ pub fn run_command(state: AppState, line: String) {
     run_command_then(state, line, |_| {});
 }
 
-fn run_command_then(state: AppState, line: String, after: impl FnOnce(Option<i32>) + 'static) {
+pub(super) fn run_command_then(
+    state: AppState,
+    line: String,
+    after: impl FnOnce(Option<i32>) + 'static,
+) {
     state.dock.source.set("commands");
     let mut parts = line.split_whitespace().map(str::to_string);
     let Some(program) = parts.next() else {

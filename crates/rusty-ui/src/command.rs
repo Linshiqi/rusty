@@ -42,6 +42,8 @@ pub enum Action {
     ShowDock(DockTab),
     OpenPalette,
     OpenSettings,
+    /// The environment check, on purpose rather than because it interrupted.
+    CheckEnvironment,
     SetTheme(Theme),
     ResetLayout,
     /// Scaffold C interop, in whichever direction.
@@ -469,6 +471,12 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         Menu {
             title: "Help",
             items: vec![
+                // First in Help because it is the first question a fresh
+                // install raises, and because the automatic check only
+                // appears when something is missing — somebody who wants to
+                // look anyway needs a way in.
+                entry(Action::CheckEnvironment, "Check my environment…", None),
+                Item::Separator,
                 entry(Action::OpenSettings, "Keyboard shortcuts", None),
                 entry(Action::ShowPanel("assistant"), "Ask the assistant", None),
                 Item::Separator,
@@ -486,6 +494,13 @@ pub fn menus(state: AppState) -> Vec<Menu> {
 /// Carry out an action.
 pub fn run(action: Action, state: AppState, chrome: Chrome) {
     match action {
+        Action::CheckEnvironment => {
+            // Re-probe first: the report may be from before somebody
+            // installed something in a terminal, and a screen that says a
+            // tool is missing when it is not is worse than no screen.
+            controller::refresh_toolchain(state);
+            controller::open_setup(state);
+        }
         Action::ShowPanel("assistant") => state.ai.open.set(true),
         Action::ShowPanel(id) => {
             // Silently ignoring a blocked panel would leave the palette looking

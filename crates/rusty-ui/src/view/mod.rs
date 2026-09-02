@@ -20,6 +20,7 @@ pub mod panels;
 pub mod pinmap;
 pub mod plot;
 pub mod settings;
+mod setup;
 pub mod split;
 pub mod terminal;
 pub mod transport;
@@ -168,6 +169,10 @@ pub fn App() -> impl IntoView {
             <div class="relative flex min-h-0 flex-1">
 
                 <palette::Palette open=palette_open chrome=chrome />
+                // The environment check. Anchored to the working area like
+                // every other overlay, so it cannot cover the title bar and
+                // leave a window with no way out.
+                <setup::SetupSheet />
                 <Sidebar />
                 <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
                     {move || {

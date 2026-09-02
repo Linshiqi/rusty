@@ -352,6 +352,37 @@ with a batch.
   re-checked *after* the round trip too, because typing is synchronous and the
   read is not.
 
+## The first run
+
+A freshly installed workbench on a machine with no Rust could do nothing, and
+said so only if somebody found the Toolchain panel and worked out which of six
+buttons to press first. Every piece needed to fix that already existed — the
+probe, the recipes, the archive downloads — and none of it ran unless asked.
+
+- **`rusty_embed::setup::plan` is the one derivation of "what is missing".**
+  The Toolchain panel and the setup screen read the same
+  `ToolchainReport` through it, so they cannot disagree; it is pure, so the
+  ordering rules are tests rather than something discovered on a laptop.
+- **Order is not cosmetic.** Without `rustup` nothing else can install, so
+  that case collapses to one item and a link. `espup` comes before the Xtensa
+  target it provides, because `rustup target add xtensa-…` without it fails
+  complaining about an unknown target. Everything blocking comes before
+  anything optional, so a queue somebody interrupts halfway has fixed the
+  parts that mattered.
+- **The queue is sequential and stops at the first failure.** Two `cargo
+  install`s at once fight over the package-cache lock — the same collision
+  Trunk hits — and a queue that carried on past a failure would end by
+  reporting a ready machine that is not.
+- **It says where each thing lands, before running anything.** Three homes are
+  involved and only one is rusty's: `~/.cargo/bin` is cargo's (redirecting it
+  with `--root` puts espflash where flashing cannot find it), rustup's home is
+  rustup's, and the data directory is the one the user may move.
+- **It only appears when the machine cannot build.** An optional tool missing
+  is worth offering, not worth a dialog. A first-run check that shows up on a
+  working machine is one people dismiss without reading, and then dismiss the
+  time it mattered. Help ▸ "Check my environment…" is the way in when nothing
+  interrupted.
+
 ## The gutter, and one line height
 
 The margin now carries three things beside each line — a run arrow for a

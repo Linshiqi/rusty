@@ -328,7 +328,13 @@ pub fn refresh_toolchain(state: AppState) {
     track(
         state,
         ipc::get::<ToolchainReport>(cmd::toolchain::REPORT),
-        move |report| state.project.toolchain.set(Some(report)),
+        move |report| {
+            state.project.toolchain.set(Some(report));
+            // The check rides on the report rather than on startup: it needs
+            // the chip to know whether the Xtensa toolchain is even relevant,
+            // and the chip arrives with the project.
+            check_environment(state);
+        },
     );
 }
 

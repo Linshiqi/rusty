@@ -114,7 +114,31 @@
   // Tree paths are project-relative and /-separated, exactly as the real
   // tree.rs builds them — the paths are identities the reveal flow compares.
   const MAIN = "src/main.rs";
-  window.__mock = { completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
+  const tool = (name, purpose, installed, required, install) => ({
+    name, purpose, version: installed ? `${name} 1.0.0` : null,
+    path: installed ? `C:/Users/mock/.cargo/bin/${name}.exe` : null,
+    installCommand: install, installable: name !== "rustup", required,
+  });
+  const TOOLCHAIN = {
+    status: {
+      toolchains: [{ name: "stable", isDefault: true, isEsp: false }],
+      installedTargets: ["x86_64-pc-windows-msvc"],
+      tools: [
+        tool("rustup", "Manages Rust toolchains and targets", true, true, "https://rustup.rs"),
+        tool("espflash", "Flashes and monitors over USB serial", false, true, "cargo install espflash --locked"),
+        tool("rust-analyzer", "Completion, diagnostics and navigation", true, true, "rustup component add rust-analyzer"),
+        tool("probe-rs", "Flashes and debugs through a JTAG/SWD probe", false, false, "cargo install probe-rs-tools --locked"),
+        tool("qemu-system-riscv32", "Runs the firmware without a board", false, false, "downloaded by rusty"),
+      ],
+      hasEspToolchain: false,
+    },
+    requiredTarget: "riscv32imc-unknown-none-elf",
+    requiredTargetInstalled: false,
+    needsEspToolchain: false,
+    problems: [],
+  };
+
+  window.__mock = { toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
 
   const handlers = {
     recent_projects: () => [ROOT],
@@ -155,6 +179,19 @@
     // hand — `__mock.watchChannel.send({changed: ["src/main.rs"], tree: false})`
     // is how the follow-the-disk path is exercised without a disk.
     watch_project: (a) => { window.__mock.watchChannel = a.onChange; return new Promise(() => {}); },
+    // The environment check's queue runs one of these per missing tool and
+    // chains on the exit code, so a resolved promise is the contract here —
+    // unlike the streams above, this one *must* end. `__mock.installs`
+    // records the order, which is the thing worth asserting.
+    install_sim_tool: (a) => {
+      window.__mock.installs.push(a.name);
+      a.onLine.send({ stream: "stdout", text: `$ installing ${a.name}`, level: null });
+      // Mark it present, so the re-probe afterwards reflects the install and
+      // the screen empties the way it would against a real machine.
+      const found = window.__mock.toolchain.status.tools.find((t) => t.name === a.name);
+      if (found) found.path = `C:/Users/mock/.cargo/bin/${a.name}.exe`;
+      return 0;
+    },
     lsp_open: () => null,
     lsp_saved: () => null,
     lsp_change: (a) => { window.__mock.changes.push(a); return null; },
@@ -225,6 +262,17 @@
     // exercised: the ` --> path:line:col` must render as a click-to-open.
     run_command: (a) => new Promise((resolve) => {
       const send = (text) => a.onLine.send({ stream: "stderr", text, level: null });
+      // `rustup target add` is the one command whose effect the next probe
+      // has to see: without it the environment check installs everything,
+      // re-probes, and still lists the target — which is the mock lying
+      // about a flow that works.
+      if (a.program === "rustup" && a.args[0] === "target") {
+        window.__mock.toolchain.status.installedTargets.push(a.args[2]);
+        window.__mock.toolchain.requiredTargetInstalled = true;
+        send(`info: installing component for ${a.args[2]}`);
+        resolve(0);
+        return;
+      }
       send("warning: unused variable: `state`");
       send("  --> src\\bin\\main.rs:62:33");
       resolve(0);
@@ -272,7 +320,11 @@
       if (m.linkResolve) { m.linkResolve(null); m.linkResolve = null; }
       return null;
     },
-    toolchain_report: () => ({ tools: [], targets: [], problems: [] }),
+    // The real shape, and a machine with holes in it — the empty stub here
+    // never matched `ToolchainReport` at all, so the Toolchain panel and the
+    // environment check both failed to decode it and showed nothing.
+    // `__mock.toolchain` is swappable, so a ready machine can be tested too.
+    toolchain_report: () => window.__mock.toolchain,
     serial_ports: () => [{ name: "COM3", bridge: "CP210x", boards: ["ESP32 DevKit"], likelyBoard: true, usb: null }],
     debug_probes: () => [],
     firmware_list: () => [{

@@ -417,6 +417,7 @@ pub struct AppState {
     pub wizard: Wizard,
     pub ai: Assistant,
     pub editor: Editor,
+    pub setup: Setup,
     pub find: Find,
     pub search: Search,
     pub lsp: Lsp,
@@ -609,6 +610,36 @@ pub struct Editor {
     /// of Escape.
     pub vim_on: RwSignal<bool>,
     pub vim: RwSignal<crate::vim::Vim>,
+}
+
+/// The first-run environment check, and the install queue it drives.
+///
+/// Separate from the Toolchain panel's own state on purpose: that panel
+/// answers "what is on this machine" whenever somebody asks, and this answers
+/// "can you build anything at all" without being asked. They read the same
+/// report — `rusty_embed::setup::plan` is the one derivation — but only this
+/// one interrupts.
+#[derive(Clone, Copy)]
+pub struct Setup {
+    /// The screen is up.
+    pub open: RwSignal<bool>,
+    /// What is missing, newest report first.
+    pub steps: RwSignal<Vec<rusty_embed::setup::SetupStep>>,
+    /// Which step the queue is on, when it is running one.
+    pub running: RwSignal<Option<usize>>,
+    /// Tools that finished in this run, so a tick can appear beside them
+    /// without waiting for the whole queue and a re-probe.
+    pub installed: RwSignal<Vec<String>>,
+    /// And the ones that did not, with nothing hidden: a queue that reports
+    /// success for a step that failed is worse than one that stops.
+    pub failed: RwSignal<Vec<String>>,
+    /// True once the check has run at least once this session, so opening a
+    /// second project does not reopen a screen the user has dismissed.
+    pub checked: RwSignal<bool>,
+    /// Where downloaded tools land, as an actual path. Shown rather than
+    /// described: "the data directory" is not an answer to "where is this
+    /// gigabyte going".
+    pub data_dir: RwSignal<Option<String>>,
 }
 
 /// Find and replace *within* the open document — the bar, not the panel.
@@ -946,6 +977,15 @@ impl AppState {
                 zoom: RwSignal::new(stored_zoom()),
                 vim_on: RwSignal::new(false),
                 vim: RwSignal::new(crate::vim::Vim::default()),
+            },
+            setup: Setup {
+                open: RwSignal::new(false),
+                steps: RwSignal::new(Vec::new()),
+                running: RwSignal::new(None),
+                installed: RwSignal::new(Vec::new()),
+                failed: RwSignal::new(Vec::new()),
+                checked: RwSignal::new(false),
+                data_dir: RwSignal::new(None),
             },
             find: Find {
                 open: RwSignal::new(false),
