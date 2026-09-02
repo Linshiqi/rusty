@@ -2,6 +2,8 @@
 
 use leptos::{ev, html, prelude::*};
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::{controller, state::AppState};
 
@@ -147,7 +149,7 @@ pub(super) fn FindBar(
                     <input
                         node_ref=input
                         type="text"
-                        placeholder="Find"
+                        placeholder=t!("find.find")
                         autocomplete="off"
                         spellcheck="false"
                         prop:value=move || state.find.query.get()
@@ -181,7 +183,7 @@ pub(super) fn FindBar(
                     />
                     <button
                         type="button"
-                        title="Match case"
+                        title=t!("find.match-case")
                         on:click=move |_| {
                             state.find.case.update(|case| *case = !*case);
                             state.find.index.set(0);
@@ -202,7 +204,7 @@ pub(super) fn FindBar(
                     </span>
                     <button
                         type="button"
-                        title="Previous (Shift+Enter)"
+                        title=t!("find.previous")
                         on:click=move |_| find_jump(state, scroller, -1)
                         class=small
                     >
@@ -210,7 +212,7 @@ pub(super) fn FindBar(
                     </button>
                     <button
                         type="button"
-                        title="Next (Enter)"
+                        title=t!("find.next")
                         on:click=move |_| find_jump(state, scroller, 1)
                         class=small
                     >
@@ -218,7 +220,7 @@ pub(super) fn FindBar(
                     </button>
                     <button
                         type="button"
-                        title="Replace…"
+                        title=t!("find.replace-toggle")
                         on:click=move |_| {
                             state.find.replace_open.update(|open| *open = !*open)
                         }
@@ -228,7 +230,7 @@ pub(super) fn FindBar(
                     </button>
                     <button
                         type="button"
-                        title="Close (Esc)"
+                        title=t!("find.close")
                         on:click=move |_| {
                             state.find.open.set(false);
                             state.find.replace_open.set(false);
@@ -242,7 +244,7 @@ pub(super) fn FindBar(
                     <div class="flex items-center gap-1">
                         <input
                             type="text"
-                            placeholder="Replace with"
+                            placeholder=t!("find.replace-with")
                             autocomplete="off"
                             spellcheck="false"
                             prop:value=move || state.find.replace.get()
@@ -256,14 +258,14 @@ pub(super) fn FindBar(
                             on:click=move |_| find_replace(state, area, false)
                             class="rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
                         >
-                            "Replace"
+                            {t!("find.replace")}
                         </button>
                         <button
                             type="button"
                             on:click=move |_| find_replace(state, area, true)
                             class="rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
                         >
-                            "All"
+                            {t!("find.replace-all")}
                         </button>
                     </div>
                 </Show>

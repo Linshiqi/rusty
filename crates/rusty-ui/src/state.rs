@@ -18,6 +18,8 @@ use rusty_term::Screen as TermScreen;
 
 use std::collections::HashMap;
 
+use rusty_i18n::t;
+
 use crate::ipc::IpcError;
 
 /// Whose clock the trace timestamps are on.
@@ -251,17 +253,17 @@ impl DockTab {
         DockTab::Devices,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            DockTab::Problems => "Problems",
-            DockTab::Output => "Output",
-            DockTab::Terminal => "Terminal",
-            DockTab::Waves => "Waves",
-            DockTab::Plot => "Plot",
-            DockTab::Devices => "Devices",
-            DockTab::Debug => "Debug",
-            DockTab::Registers => "Registers",
-            DockTab::Flight => "Flight",
+            DockTab::Problems => t!("dock.tab.problems"),
+            DockTab::Output => t!("dock.tab.output"),
+            DockTab::Terminal => t!("dock.tab.terminal"),
+            DockTab::Waves => t!("dock.tab.waves"),
+            DockTab::Plot => t!("dock.tab.plot"),
+            DockTab::Devices => t!("dock.tab.devices"),
+            DockTab::Debug => t!("dock.tab.debug"),
+            DockTab::Registers => t!("dock.tab.registers"),
+            DockTab::Flight => t!("dock.tab.flight"),
         }
     }
 }

@@ -13,6 +13,7 @@
 use leptos::prelude::*;
 
 use rusty_embed::Severity;
+use rusty_i18n::t;
 
 /// Semantic colour. Separate from the accent: the accent marks what is
 /// interactive, these mark what is true.
@@ -232,7 +233,7 @@ pub fn CommandLine(#[prop(into)] command: String) -> impl IntoView {
             <code class="min-w-0 flex-1 truncate font-mono text-footnote select-text">{command}</code>
             <button
                 type="button"
-                title="Copy"
+                title=t!("window.copy")
                 on:click=copy
                 class="shrink-0 rounded-[4px] px-1.5 py-0.5 text-footnote text-label-3 transition-colors hover:bg-raised hover:text-label"
             >

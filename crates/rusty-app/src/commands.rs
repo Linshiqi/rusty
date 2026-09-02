@@ -164,6 +164,27 @@ pub async fn set_vim(enabled: bool) -> Answer<()> {
     Ok(())
 }
 
+/// The stored display language, or `None` for "follow the system".
+///
+/// Read at startup by every window, like `vim_enabled`: two windows in two
+/// languages is not a shrug.
+#[tauri::command]
+pub async fn display_locale() -> Answer<Option<String>> {
+    Ok(storage::workbench().locale)
+}
+
+/// Choose the display language, for good and for every window.
+#[tauri::command]
+pub async fn set_display_locale(tag: Option<String>) -> Answer<()> {
+    let mut state = storage::workbench();
+    state.locale = match tag.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(tag) => Some(tag.to_string()),
+    };
+    storage::save_workbench(&state).map_err(CommandError::from)?;
+    Ok(())
+}
+
 /// Override one shortcut, or clear the override (chord = null) so the
 /// built-in default applies again.
 #[tauri::command]

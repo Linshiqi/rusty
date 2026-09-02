@@ -1,0 +1,698 @@
+# The source text. Every other catalogue is checked against this one, so a
+# key added here without a translation fails `every_language_has_exactly_the_
+# english_keys` rather than reaching a screen.
+#
+# Not in here, deliberately — see the crate header: command lines, tool names,
+# chip ids, target triples, the dock's output, and the assistant's prompts.
+
+[menu.bar]
+# The six titles on the bar itself. Its items are the sections below, one per
+# menu — `menu.file` cannot be both a string and a table.
+file = "File"
+edit = "Edit"
+project = "Project"
+view = "View"
+device = "Device"
+help = "Help"
+
+[menu.file]
+new-project = "New project…"
+open-project = "Open project…"
+open-recent = "Open Recent"
+settings = "Settings…"
+exit = "Exit"
+
+[menu.edit]
+undo = "Undo"
+redo = "Redo"
+cut = "Cut"
+copy = "Copy"
+paste = "Paste"
+search = "Search in project"
+
+[menu.project]
+recheck = "Re-check project"
+rescan-toolchain = "Re-scan toolchain"
+reload-catalogue = "Reload chips and boards"
+c-interop = "Add C interop"
+comment = "Comment or uncomment"
+rename = "Rename symbol…"
+rust-calls-c = "Rust calls C…"
+c-calls-rust = "C calls Rust…"
+
+[menu.view]
+palette = "Command palette…"
+appearance = "Appearance"
+theme-system = "Theme: System"
+theme-light = "Theme: Light"
+theme-dark = "Theme: Dark"
+reset-layout = "Reset panel sizes"
+back = "Back"
+forward = "Forward"
+vim = "Vim keys in the editor"
+panel-below = "Panel below"
+
+[menu.device]
+rescan = "Re-scan ports and probes"
+flash = "Flash and monitor…"
+memory = "Memory report"
+
+[menu.help]
+check-environment = "Check my environment…"
+shortcuts = "Keyboard shortcuts"
+assistant = "Ask the assistant"
+report = "Report a problem…"
+releases = "Downloads and releases"
+
+[palette]
+# The palette says things in full where a menu says them short: it is searched
+# by typing, so "Show problems" is findable and "Problems" alone is not.
+group-panels = "Panels"
+group-project = "Project"
+group-view = "View"
+group-settings = "Settings"
+group-help = "Help"
+toggle-dock = "Toggle the panel below"
+show-problems = "Show problems"
+show-output = "Show output"
+show-terminal = "Show terminal"
+show-waves = "Show waves"
+show-devices = "Show devices"
+theme = "Theme: {name}"
+settings = "Settings"
+
+[context]
+# Right-click menus. Every dock surface answers a right-click with its own
+# menu or not at all — the browser's default menu is always a bug.
+tree-new-file = "New file…"
+tree-new-folder = "New folder…"
+tree-refresh = "Refresh"
+tree-open = "Open"
+tree-toggle = "Expand or collapse"
+tree-search-scope = "Search in this scope"
+tree-open-window = "Open in new window"
+tree-copy-path = "Copy path"
+tab-close = "Close"
+tab-new-window = "Move to new window"
+tab-close-others = "Close others"
+tab-copy-path = "Copy path"
+editor-cut = "Cut"
+editor-copy = "Copy"
+editor-paste = "Paste"
+editor-definition = "Go to definition"
+editor-quick-fix = "Quick fix"
+editor-fold-all = "Fold all"
+editor-unfold-all = "Unfold all"
+editor-save = "Format and save"
+editor-find = "Find in file"
+output-copy-line = "Copy line"
+output-copy-all = "Copy all"
+output-follow = "Follow new output"
+output-stop-following = "Stop following"
+output-clear = "Clear"
+problems-open = "Open in the editor"
+problems-copy = "Copy message"
+terminal-copy = "Copy selection"
+terminal-paste = "Paste"
+terminal-restart = "Restart shell"
+waves-fit = "Fit the whole capture"
+waves-follow = "Follow newest edge"
+waves-stop-following = "Stop following"
+waves-export = "Export VCD"
+devices-rescan = "Rescan devices"
+devices-reload = "Reload catalogue"
+
+[panel]
+files = "Files"
+search = "Search"
+toolchain = "Toolchain"
+memory = "Memory"
+crates = "Crates"
+simulate = "Simulate"
+wizard = "New project"
+assistant = "Assistant"
+# Appended to a panel's tooltip when it is disabled, so the tooltip says why
+# rather than the button just refusing.
+needs-project = "{panel} — open a project first"
+
+[dock.tab]
+# The tab strip. Its own table because the panels below each need one of
+# their own — `dock.output` cannot be both a tab name and a section.
+problems = "Problems"
+output = "Output"
+terminal = "Terminal"
+waves = "Waves"
+plot = "Plot"
+devices = "Devices"
+debug = "Debug"
+registers = "Registers"
+flight = "Flight"
+
+[problems]
+none = "Nothing wrong that rusty can see."
+no-project = "Open a project to see what would stop it building."
+
+[files]
+no-project-title = "No project open"
+no-project-detail = "Open a folder to browse and edit what is in it."
+choose = "Choose a file."
+unsaved = "Unsaved"
+stale = "Changed on disk. Saving overwrites that change."
+close = "Close"
+breakpoint = "Click to set a breakpoint"
+fold = "Click to collapse the range"
+unfold = "Click to expand the range"
+run-test = "Run {name}"
+run-module = "Run the tests in {name}"
+
+[toolbar]
+save = "Format and save (Ctrl+S)"
+build = "Build — cargo build --release, output in the dock"
+flash = "Flash the board…"
+debug = "Debug — boot frozen, stop at your breakpoints"
+run = "Build and run in the simulator"
+settings = "Settings (Ctrl+,)"
+
+[setup]
+# The environment check. Its own section because it is the first thing a new
+# user reads, and the one screen where a mistranslation costs somebody a
+# gigabyte of the wrong download.
+ready-title = "This machine is ready"
+ready-body = "Everything rusty needs to build, flash and simulate is installed."
+missing-title = "A few things are missing"
+missing-body = "rusty can install {count} of these for you, in this order. Every command runs in the dock where you can read it."
+slow = "takes several minutes"
+installing = "installing…"
+install-all = "Install everything"
+installing-button = "Installing…"
+not-now = "Not now"
+done = "Done"
+change-downloads = "Change where downloads go…"
+change-downloads-hint = "Downloaded emulators, debuggers and compilers live here"
+open-rustup = "Open rustup.rs"
+
+[setup.where]
+cargo-bin = "~/.cargo/bin — where cargo puts binaries and where flashing looks for them"
+rustup-home = "rustup's own directory, with the toolchains"
+data-fallback = "rusty's data directory"
+manual = "nowhere rusty can reach — this one is yours"
+
+[settings]
+language = "Display language"
+language-hint = "rusty reloads to change language, as VS Code restarts for it — a half-translated window is worse than an English one."
+language-system = "Follow the system"
+[settings.category]
+# The overlay's own sidebar. Short nouns, because they sit in a narrow column
+# above a one-line summary that does the explaining.
+appearance = "Appearance"
+editor = "Editor"
+keyboard = "Keyboard"
+terminal = "Terminal"
+language = "Language"
+assistant = "Assistant"
+catalogue = "Catalogue"
+storage = "Storage"
+network = "Network"
+updates = "Updates"
+
+[settings.summary]
+appearance = "Theme and interface scale"
+editor = "Modal editing, text size"
+keyboard = "Shortcuts"
+terminal = "Which shell runs"
+language = "Interface language"
+assistant = "Model and credentials"
+catalogue = "Chips and boards"
+storage = "Where rusty keeps its data"
+network = "How downloads reach the internet"
+updates = "Version and what is published"
+[chrome]
+# The window frame: the torn-off window's way home, the assistant drawer, and
+# the screen shown before a project is open.
+back-to-main = "↩ Back to the main window"
+back-to-main-hint = "Close this window and reopen the file in the main one"
+assistant = "Assistant"
+close = "Close"
+no-project-title = "No project open"
+no-project-detail = "Choose a folder containing a Cargo.toml. rusty reads the project's four configuration files and cross-checks them, so it can open — and diagnose — a project that does not build."
+recent = "Recent"
+
+[status]
+# The bottom bar. Every entry answers a question asked while working, so each
+# stays short enough to read without stopping.
+working = "working"
+ready = "ready"
+lsp-hint = "The language server behind the editor"
+lsp-starting = "rust-analyzer starting"
+lsp-missing = "rust-analyzer missing"
+lsp-errors = "{count} errors"
+vim-hint = "Modal editing. Escape returns to normal mode."
+blocking = "{count} blocking"
+notes = "{count} notes"
+problems-hint = "Show them in the panel below"
+deps = "{count} deps"
+boards = "{count} boards"
+boards-hint = "Boards known, after your own and the project's files are layered in"
+built-for-hint = "What this project builds for — click for the target and toolchain"
+chip = "chip"
+no-chip = "no chip"
+no-target = "no target"
+unpinned = "unpinned"
+target = "target"
+target-note = "target triple, from .cargo/config.toml"
+toolchain = "toolchain"
+toolchain-note = "channel, from rust-toolchain.toml"
+
+[migrate]
+# Moving a project to another chip. The wording has to keep "mechanical" and
+# "a new project" apart — that distinction is the whole feature.
+pick = "Switch this project to another chip…"
+switch = "Switch"
+cancel = "Cancel"
+different-hal = "{arch} · different HAL — a new project, not a switch"
+different-hal-hint = "Every call your firmware makes to the HAL differs. The wizard creates a project for this part."
+[settings.editor]
+vim = "Vim keys"
+vim-help = "Modal editing in the editor: normal, insert and visual modes, with the mode shown in the status bar. Remembered across launches and shared by every window. Chords stay with the editor — Ctrl+S saves, Ctrl+A selects all, Ctrl+C copies — and insert mode behaves exactly as it does with this off, so nothing you already know stops working."
+off = "Off"
+on = "On"
+text-size = "Text size"
+text-size-help = "The editor's own zoom, separate from the interface scale in Appearance. Ctrl+= and Ctrl+- change it from the editor too."
+reset = "Reset"
+
+[settings.keyboard]
+shortcuts = "Shortcuts"
+shortcuts-help = "Click a key to change it: press the new combination, Esc cancels, Backspace restores the default. Two commands on one chord — the lower one wins — show in amber. Esc itself closes whatever is in front and cannot be rebound."
+rebind = "Click, then press the new combination"
+restore = "Restore the default"
+
+[settings.terminal]
+shell = "Shell"
+shell-help = "Auto is rusty's own built-in shell: bash syntax — pipes, redirection, variables, globs — compiled into the app, starting the instant the terminal opens and reading the same on every OS. Changing this restarts the shell."
+auto = "Auto"
+system = "System shell"
+custom-placeholder = "or a program: nu, fish, C:\\tools\\zsh.exe"
+in-use = "in use"
+
+[settings.assistant]
+start-from = "Start from"
+start-from-help = "Local runtimes are first-class: nothing leaves the machine and no key is needed. Picking one only fills the fields below — nothing is sent."
+endpoint = "Endpoint"
+base-url = "Base URL"
+model = "Model"
+profile = "Profile"
+list-models = "List models"
+list-models-note = "Names drift faster than any list rusty could ship."
+api-key = "API key"
+api-key-help = "Stored in the operating system's credential store and read only by the Rust side at the moment of a request. It is never sent back to this window, which is why there is nothing here to show you once it is saved."
+api-key-placeholder = "paste, save, and it leaves this window"
+save-key = "Save key"
+stored = "stored"
+remove = "Remove"
+none-saved = "none saved"
+use-it = "Use it"
+save = "Save"
+test = "Test"
+test-help = "Check the endpoint, the key and the model name before a conversation depends on them"
+none-configured = "None configured"
+tools = "What it can call"
+tools-help = "The assistant does not read your configuration files and theorise; it calls these and gets the actual answer. Each one reports what it is missing rather than guessing, so a wrong answer is a bug and not a coin flip."
+
+in-use = "in use: {model} at {url}"
+[settings.catalogue]
+sources = "Where definitions come from"
+sources-help = "Later layers win, so you can correct a built-in entry without forking anything, and a team can check its boards into the repository."
+built-in = "built in"
+broken = "Files that would not load"
+broken-help = "A malformed file is kept out of the catalogue rather than blanking it — so the board simply never appears, which is why the reason belongs here."
+loaded = "Loaded"
+
+[settings.storage]
+data-directory = "Data directory"
+data-directory-help = "Board definitions and the workbench's memory live here, as plain files. Point it at a synced folder and every machine sees the same boards. API keys are not in it — they stay in the operating system's credential store and never sync."
+env-override = "Set by the RUSTY_CONFIG_DIR environment variable — a move made here would be silently outvoted, so the button below is disabled."
+move-it = "Move it"
+move-it-help = "Everything is copied to the folder you pick, then rusty switches over. The old files stay where they were until you delete them yourself — a migration that deletes its own fallback cannot be undone."
+choose = "Choose a new folder…"
+already-has-data = "That folder already holds rusty data. Use what is there instead of copying?"
+use-existing = "Use the folder's existing data"
+
+[settings.network]
+proxy = "Proxy"
+proxy-help = "Used by the QEMU installer and the Crates panel. Detect follows the environment variables, then the system proxy — the one the browser uses. cargo and rustup keep their own proxy settings."
+
+[settings.update]
+version = "Version"
+version-help = "Installing a new one is a download today. In-place updates need the release to be signed; the release workflow emits the signed feed as soon as the keypair exists."
+check = "Check for updates"
+open-release = "Open the release"
+unreachable = "Could not reach GitHub — "
+
+[settings.appearance]
+theme-system = "System"
+theme-light = "Light"
+theme-dark = "Dark"
+scale = "Interface scale"
+scale-help = "Browser-style zoom over the whole window, 70% to 160%. Applies when you release the slider; the editor's own Ctrl+wheel text zoom is separate."
+theme = "Theme"
+theme-help = "System follows your desktop, including when you change it while rusty is open."
+[dock.chrome]
+# The strip along the top of the panel below, and the command line at its foot.
+channel = "Show one output channel"
+filter = "filter (!word excludes)"
+filter-hint = "Space-separated terms all must match; !term excludes"
+collapse = "Collapse panel"
+expand = "Expand panel"
+stop = "Stop"
+command-placeholder = "cargo build --release"
+command-needs-project = "open a project first — commands run in its root"
+
+[dock.output]
+all-hidden = "All {total} lines are hidden by the current channel and filter."
+hidden = "… {count} lines hidden by the filter"
+empty = "Output from flashing, monitoring and anything you run below lands here, and stays while you work in other panels."
+open-in-editor = "Open in the editor"
+
+[dock.debug]
+idle = "Nothing is being debugged. The Simulate panel's Debug button boots the firmware frozen and attaches here."
+running = "Running — pause or hit a breakpoint to read the stack."
+call-stack = "Call stack"
+variables = "Variables"
+show-whole = "Show the whole value"
+
+[dock.registers]
+reading = "Reading the chip's SVD…"
+no-svd = "No SVD for this chip on this machine. rusty will not guess register addresses — fetch the vendor's description, or drop one in the project at .rusty/svd/<chip>.svd."
+fetch = "Fetch the SVD"
+
+[dock.flight]
+empty-lead = "Nothing to show yet. This panel reads two things the firmware says: "
+empty-mid = " for the attitude and "
+empty-tail = " for the motors. "
+empty-end = " prints both."
+roll = "roll"
+pitch = "pitch"
+yaw = "yaw"
+motors = "Motors"
+[assistant]
+# The right-hand drawer. Its openers are questions, not features: what somebody
+# would type is what teaches them the panel calls real analyses.
+no-model-title = "No model configured"
+no-model-detail = "rusty brings no model of its own and no account. Point it at any endpoint you already have — a hosted API, or something running on this machine, in which case nothing leaves it."
+open-settings = "Open settings"
+tool-count = "{count} of rusty's analyses are wired up as tools, so the model answers from your actual project rather than from memory."
+tool-failed = " failed"
+intro = "The assistant runs rusty's own analyses rather than reading files and guessing. Ask it something it would otherwise get wrong."
+opener-build = "Why will this project not build?"
+opener-flash = "What is taking up the most flash, and what can I do about it?"
+opener-dupes = "Which of my dependencies pull in duplicate versions, and who asked for them?"
+opener-toolchain = "Is my toolchain set up correctly for this chip?"
+ask-placeholder = "Ask about this project…"
+ask = "Ask"
+clear = "Clear"
+[toolchain]
+# The Toolchain panel. Deliberately useful with no project open — "is my
+# machine set up?" is a fair question to ask before there is anything to build.
+refresh = "Probe the machine again"
+required-target = "Required target"
+target-installed = "installed"
+target-missing = "not installed"
+target-no-project = "no project open"
+xtensa = "Xtensa toolchain"
+xtensa-present = "installed"
+xtensa-absent = "absent"
+xtensa-needed = "this project needs it"
+xtensa-not-needed = "not needed here"
+tools = "Tools"
+tools-hint = "on PATH"
+required = "required"
+install = "Install"
+install-output = "output in the dock"
+install-failed = "Automatic install failed — by hand:"
+toolchains = "Toolchains"
+default = "default"
+targets = "Targets ({count})"
+move = "Move…"
+move-note = "Moving it copies everything to the new folder and leaves the originals until you delete them. Tools installed by cargo are in ~/.cargo/bin and stay there — that path is cargo's, not rusty's."
+[tool]
+rustup = "Manages Rust toolchains and targets"
+espup = "Installs the Xtensa toolchain; only needed for ESP32 / S2 / S3"
+espflash = "Flashes and monitors over USB serial — the usual path with no debug probe"
+probe-rs = "Flashes and debugs through a JTAG/SWD probe, and decodes defmt over RTT"
+esp-generate = "Generates bare-metal project templates"
+rust-analyzer = "Completion, diagnostics and navigation in the editor"
+ldproxy = "Linker shim required by ESP-IDF (std) builds"
+[memory]
+no-project-title = "No project open"
+no-project-detail = "Memory analysis reads the linked ELF a build produces, so there has to be a project to have built one."
+nothing-built-title = "Nothing built yet"
+nothing-built-detail = "rusty reads the ELF the linker produces rather than guessing at a path, so there is nothing to measure until a build has run."
+flash-image = "Flash image"
+static-ram = "Static RAM"
+unattributed = "Unattributed"
+by-crate = "By crate"
+by-section = "By section"
+show-fewer = "Show fewer"
+show-more = "{count} more ({size})"
+attributed = " attributed"
+reread = "Re-read"
+reread-hint = "Analyse the binary again, after a rebuild"
+
+[crates]
+refresh = "Ask crates.io again"
+no-project-title = "No project open"
+no-project-detail = "Open a project to see its dependencies."
+direct = "Direct dependencies"
+asking = "Asking crates.io about each dependency…"
+upgrade = "Upgrade"
+
+[search]
+no-project-title = "No project open"
+no-project-detail = "Open a folder to search what is in it."
+placeholder = "Search the project…"
+match-case = "Match case"
+whole-word = "Whole word only"
+regex = "Regular expression"
+include = "files to include, e.g. *.rs, src/**"
+exclude = "files to exclude"
+as-you-type = "Matches appear as you type."
+nothing = "Nothing matches."
+
+[features]
+no-analysis-title = "No Cargo analysis"
+no-analysis-detail = "Feature resolution runs over the whole dependency graph, which needs `cargo metadata` to have succeeded. The Problems panel says why it did not."
+resolved = "Resolved crates"
+against-defaults = "Against defaults"
+build-units = "Build units"
+pulled-in = "Pulled in"
+dropped = "Dropped"
+features = "Features"
+default = "default"
+marginal = "What changes if you flip only this switch, with every other feature held where it is. No change means another workspace member already requires it, so turning it off frees nothing."
+
+[session]
+nothing-built-title = "Nothing built yet"
+nothing-built-detail = "There has to be a binary before there is anything to put on a board."
+flash-and-monitor = "Flash and monitor"
+attach-only = "Attach only"
+attach = "Attach"
+device = "Device"
+rescan = "Re-scan"
+nothing-attached = "Nothing attached. On Windows a board with no driver enumerates as an unknown device rather than a COM port, so if the board is plugged in and not here, that is the thing to check first."
+command = "Command"
+choose-device = "Choose a device above."
+no-build = "No build selected — the Memory panel lists what this project has built."
+stop = "Stop"
+[bind]
+# Settings ▸ Keyboard lists these. Each names a command, so the wording matches
+# the menu item that runs the same action rather than paraphrasing it.
+palette = "Command palette"
+go-to = "Go to {panel}"
+open-project = "Open project"
+recheck = "Re-check project"
+comment = "Comment or uncomment"
+rename = "Rename symbol"
+back = "Back"
+forward = "Forward"
+search = "Search in project"
+toggle-dock = "Toggle the panel below"
+settings = "Settings"
+type-command = "Type a command…"
+no-match = "No match"
+
+[window]
+minimise = "Minimise"
+maximise = "Maximise"
+close = "Close"
+copy = "Copy"
+
+[debugger]
+pause = "Pause the target"
+continue = "Continue (F5)"
+stop = "Stop debugging and the run it started"
+
+[terminal]
+exited = "The shell exited with status {code}."
+[find]
+find = "Find"
+match-case = "Match case"
+previous = "Previous (Shift+Enter)"
+next = "Next (Enter)"
+replace-toggle = "Replace…"
+close = "Close (Esc)"
+replace-with = "Replace with"
+replace = "Replace"
+replace-all = "All"
+
+[tabs]
+read-only = "read-only"
+read-only-hint = "A dependency's source. rusty will not edit the shared registry cache — a fix made here would bleed into every project on the machine and vanish on the next update."
+
+[tree]
+files = "Files"
+refresh = "Re-read the project"
+
+[pinmap]
+hide = "Hide the pin map"
+show = "Show the chip's pins"
+
+[waves]
+follow = "Follow"
+fit = "Fit"
+fit-hint = "Frame the whole capture"
+export = "Export VCD"
+export-hint = "Write target/rusty-sim/trace.vcd for PulseView"
+empty = "Waveforms appear as the firmware reports pin changes — run a simulation."
+
+[plot]
+empty = "Nothing is being plotted. Firmware prints a line per loop and this draws it:"
+empty-note = "The stamp is optional and is the firmware's own clock in microseconds. Without it the panel times by arrival and says so — a plot that mixed the two silently would lie about when, which is the only thing a control loop is read for. examples/pid-tune is a working end of both lines."
+disconnect = "Disconnect"
+disconnect-hint = "Close the port"
+connect = "Connect"
+connect-hint = "Open this port for reading and writing"
+busy = "Something else is running. Its telemetry is plotted, but only a port rusty opened itself can be written to."
+own-link = "rusty opens the port itself, which is what makes a tunable writable. defmt decoding is espflash's — this mode is plain text."
+sensors = "Sensors"
+sensors-empty-lead = "None announced. Firmware prints "
+sensors-empty-mid = " and a card appears here; reading "
+sensors-empty-tail = " back off its serial input is what lets a loop run with no IMU attached. Announce on a timer, not only at boot."
+tunables = "Tunables"
+tunables-empty-lead = "None announced. Firmware prints "
+tunables-empty-tail = " and it appears here — no config file, so the panel cannot drift from the binary that is running. Print it on a timer rather than only at boot: this panel usually connects to a board that has been flying for a while, and would otherwise never hear the announcement."
+[wizard]
+# New project. Each step's detail pane exists to answer "what does this commit
+# me to" *before* the click, which is why the runtime and architecture blurbs
+# are about consequences rather than features.
+step-chip = "Chip"
+step-runtime = "Runtime"
+step-options = "Options"
+step-review = "Review"
+back = "Back"
+next = "Next"
+filter = "Filter by name, architecture or radio…"
+forked = "Upstream Rust cannot emit code for this core. Building it needs Espressif's forked LLVM, which espup installs as a separate toolchain — a download measured in gigabytes before the first build."
+stock = "Stock Rust targets this core. One `rustup target add` and it builds — no forked compiler, no extra toolchain to keep current."
+bare-metal = "No operating system and no C toolchain. Builds take seconds, the binary is small enough to reason about, and everything the chip does you call directly. No threads, no sockets, no filesystem."
+esp-idf = "Links Espressif's C framework, which brings `std`: threads, sockets, a filesystem. The cost is the whole ESP-IDF build — minutes rather than seconds — and a much larger image."
+turns-on = "Turns on "
+turns-on-tail = " as well — it does not work without them."
+point-at = "Point at an option to see what it commits the project to."
+project-name = "Project name"
+no-generator = "This combination has no generator command — the terminal below says why."
+not-installed = "`{program}` is not installed"
+install-why = "It is what generates the project. Installing it is a one-off."
+install = "Install it"
+install-runs = "runs in the terminal below"
+create = "Choose a folder and create"
+[setup.purpose]
+# The setup sheet says more about a tool than the Toolchain panel's one-liner,
+# because it is asking permission to run something. Looked up before
+# `tool.<name>`, which is the panel's shorter wording for the same binary.
+target = "The compilation target for this chip. Without it cargo builds for this machine instead, produces a binary, and nothing happens on the board."
+espup = "Installs the Xtensa compiler this chip needs. Nothing upstream ships one — a stock rustc cannot emit Xtensa at all."
+
+[setup.manual]
+rustup = "Rust itself is not installed. Everything else here rides on it, so install rustup first — https://rustup.rs — and rusty can do the rest."
+[simulate]
+# The board canvas and the run controls. The two pin-source captions are the
+# load-bearing pair: which emulator is running is never assumed, and a caption
+# promising register-level truth over a stock build would send somebody with a
+# dark LED to check their wiring when the bug is a missing println!.
+no-project-title = "No project open"
+no-project-detail = "Open a firmware project to run it in the simulator."
+tools-missing = "The simulator needs tools that are not installed."
+install = "Install"
+install-failed = "Automatic install failed — by hand:"
+stop = "Stop the simulation"
+run = "Build and simulate"
+debug = "Boot frozen with the gdbstub listening; gdb attaches in the terminal"
+debug-blocked = "Install the matching gdb first — see the tools card"
+save = "Save the board layout"
+undo = "Undo (Ctrl+Z)"
+redo = "Redo (Ctrl+Y)"
+zoom-out = "Zoom out"
+zoom-in = "Zoom in"
+fit = "Fit everything on screen (F)"
+grid = "Snap grid — click to cycle 1/4/8/16px"
+pins-emulator = "running — pins from the emulator"
+pins-emulator-detail = "Pin levels are read from the chip's GPIO registers, so they are true whether or not the firmware prints anything about itself. A button press drives the pin the firmware actually reads, and also sends `B<pin>=1` over the console for firmware written against rusty's text protocol."
+pins-firmware = "running — pins as the firmware reports them"
+pins-firmware-detail = "Pin levels are what the firmware reports over the serial line, not what the chip drove — this emulator's GPIO peripheral keeps no state, so firmware that does not print `[rusty:gpio] 0=1` tells this board nothing. Buttons travel the same way: pressing one sends `B<pin>=1` into the firmware's UART rather than driving the pin."
+stub-unwired = "Drag to a chip pin to wire this"
+stub-wired = "Drag to rewire"
+straighten = "Straighten"
+disconnect = "Disconnect"
+disconnect-del = "Disconnect (Del)"
+rotate = "Rotate 90°"
+mirror = "Mirror"
+duplicate = "Duplicate"
+disconnect-wires = "Disconnect wires"
+remove = "Remove"
+remove-del = "Remove (Del)"
+open-gdb = "Open gdb in the terminal"
+fit-contents = "Fit to contents"
+reset-view = "Reset view"
+wire = "Wire"
+nothing-selected = "Select a part or a wire. Drag a part's gold stub to a chip pin to wire it — wiring is what sets the pin. Wheel zooms, background drags, Del removes."
+[parts]
+# The simulator's parts library. Each tooltip says what the part *does on the
+# wire*, because that is what decides whether it is the one you want.
+heading = "Parts"
+custom = "Custom"
+led = "LED"
+led-hint = "Add an LED (unwired) — pick its colour in the properties panel"
+button = "button"
+button-hint = "Pressing it sends B<pin>=1/0 into the firmware's UART"
+analog = "analog in"
+analog-hint = "A voltage on a pin — battery, divider, thermistor. Sends raw ADC counts (A<pin>=<count>), because rusty does not know your divider"
+motor = "motor"
+motor-hint = "A toy car drive or a fan. Wire pwm for speed; wire in1/in2 as well for an H-bridge that can reverse and brake"
+rgb = "RGB LED"
+rgb-hint = "Three pins, additive colour"
+seven = "7-segment"
+seven-hint = "Seven segments, one GPIO each"
+display = "display"
+display-hint = "A text screen fed by [rusty:disp] serial lines"
+pot = "potentiometer"
+pot-hint = "A slider that sends P<pin>=<0..255>"
+
+[misc]
+which-shell = "Which shell the terminal runs"
+panels = "Panels"
+unsaved = "Unsaved"
+xtensa = "Xtensa"
+no-channel = "no channel"
+up-to-date = "up to date"
+default-features = "everything the package turns on when nothing is specified"
+rename-scope = "every use in the project, written to disk"
+tab-cap = "shown to 5,000 lines"
+own-parts = "your own parts: .rusty/parts/*.toml"
+canvas-hint = "drag a stub to a pin to wire · middle-drag pans · R turns · F fits"
+not-for-chip = "not available for this chip"
+wizard-runs = "rusty runs it and opens the result."
+close-front = "Close what is in front"
+proxy-detect = "Detect"
+proxy-direct = "Direct"
+proxy-manual = "Manual:"
+waves-capped = "oldest events dropped (cap)"

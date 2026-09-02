@@ -1,5 +1,7 @@
 //! Picking the terminal's shell, from the dock's own tab strip.
 
+use rusty_i18n::t;
+
 use leptos::prelude::*;
 
 use crate::{controller, state::AppState};
@@ -12,7 +14,7 @@ pub(super) fn ShellPicker() -> impl IntoView {
 
     view! {
         <select
-            title="Which shell the terminal runs"
+            title=t!("misc.which-shell")
             class="h-6 rounded-[5px] bg-sunken px-1.5 text-footnote text-label-2 outline-none"
             prop:value=move || {
                 state

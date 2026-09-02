@@ -4,6 +4,8 @@ use leptos::{ev, prelude::*};
 
 use rusty_edit::Document;
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::{
     controller,
@@ -139,7 +141,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                                             view! {
                                                 <span
                                                     class="size-1.5 shrink-0 rounded-full bg-rust"
-                                                    title="Unsaved"
+                                                    title=t!("files.unsaved")
                                                 />
                                             }
                                         })
@@ -151,7 +153,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                                             view! {
                                                 <span
                                                     class="shrink-0 leading-none text-amber"
-                                                    title="Changed on disk. Saving overwrites that change."
+                                                    title=t!("files.stale")
                                                 >
                                                     "⚠"
                                                 </span>
@@ -160,7 +162,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 }}
                                 <button
                                     type="button"
-                                    title="Close"
+                                    title=t!("files.close")
                                     on:click=close
                                     class="rounded-[4px] px-0.5 leading-none text-label-3 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-selection hover:text-label"
                                 >
@@ -181,7 +183,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                     view! {
                         <ContextMenu x=x y=y on_close=close>
                             <MenuItem
-                                label="Close"
+                                label=t!("context.tab-close")
                                 shortcut="Ctrl+W"
                                 on_select=Callback::new(move |_| {
                                     controller::close_tab(state, this.clone());
@@ -189,7 +191,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 })
                             />
                             <MenuItem
-                                label="Move to new window"
+                                label=t!("context.tab-new-window")
                                 on_select=Callback::new(move |_| {
                                     controller::detach_file(state, float.clone());
                                     // The dirty guard inside close_tab still
@@ -199,7 +201,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 })
                             />
                             <MenuItem
-                                label="Close others"
+                                label=t!("context.tab-close-others")
                                 on_select=Callback::new(move |_| {
                                     for open in state.editor.tabs.get_untracked() {
                                         if open != others {
@@ -211,7 +213,7 @@ pub(super) fn TabStrip() -> impl IntoView {
                             />
                             <MenuSeparator />
                             <MenuItem
-                                label="Copy path"
+                                label=t!("context.tab-copy-path")
                                 on_select=Callback::new(move |_| {
                                     copy_to_clipboard(&copy);
                                     menu.set(None);
@@ -240,7 +242,7 @@ pub(super) fn Header(document: Document) -> impl IntoView {
                     .get()
                     .then(|| {
                         view! {
-                            <span class="size-1.5 shrink-0 rounded-full bg-rust" title="Unsaved" />
+                            <span class="size-1.5 shrink-0 rounded-full bg-rust" title=t!("misc.unsaved") />
                         }
                     })
             }}
@@ -251,11 +253,9 @@ pub(super) fn Header(document: Document) -> impl IntoView {
                     view! {
                         <span
                             class="rounded-full bg-sunken px-2 text-footnote text-label-2"
-                            title="A dependency's source. rusty will not edit the shared \
-                                   registry cache — a fix made here would bleed into every \
-                                   project on the machine and vanish on the next update."
+                            title=t!("tabs.read-only-hint")
                         >
-                            "read-only"
+                            {t!("tabs.read-only")}
                         </span>
                     }
                 })}
@@ -264,7 +264,7 @@ pub(super) fn Header(document: Document) -> impl IntoView {
                 .then(|| {
                     view! {
                         <span class="text-footnote text-amber">
-                            "shown to 5,000 lines"
+                            {t!("misc.tab-cap")}
                         </span>
                     }
                 })}

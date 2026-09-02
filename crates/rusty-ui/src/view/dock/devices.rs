@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -42,7 +44,7 @@ pub(super) fn DevicesTab() -> impl IntoView {
                     class="rounded-[5px] px-2 py-0.5 text-footnote text-rust hover:underline"
                     on:click=move |_| controller::load_catalog(state)
                 >
-                    "Reload catalogue"
+                    {t!("context.devices-reload")}
                 </button>
             </div>
         </div>
@@ -54,14 +56,14 @@ pub(super) fn DevicesTab() -> impl IntoView {
                 view! {
                     <ContextMenu x=x y=y on_close=close>
                         <MenuItem
-                            label="Rescan devices"
+                            label=t!("context.devices-rescan")
                             on_select=Callback::new(move |_| {
                                 controller::scan_devices(state);
                                 menu.set(None);
                             })
                         />
                         <MenuItem
-                            label="Reload catalogue"
+                            label=t!("context.devices-reload")
                             on_select=Callback::new(move |_| {
                                 controller::load_catalog(state);
                                 menu.set(None);

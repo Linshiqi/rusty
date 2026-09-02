@@ -7,6 +7,8 @@
 
 use leptos::{ev, html, prelude::*};
 
+use rusty_i18n::t;
+
 use crate::{
     command::{self, Action, Chrome},
     state::AppState,
@@ -29,7 +31,7 @@ pub struct Binding {
 pub fn defaults() -> Vec<Binding> {
     let mut out = vec![Binding {
         id: "palette.open".into(),
-        label: "Command palette".into(),
+        label: t!("bind.palette"),
         default: "Ctrl+K".into(),
         action: Action::OpenPalette,
     }];
@@ -41,7 +43,7 @@ pub fn defaults() -> Vec<Binding> {
     {
         out.push(Binding {
             id: format!("panel.{}", panel.id),
-            label: format!("Go to {}", panel.title),
+            label: t!("bind.go-to", panel = panel.title),
             default: format!("Ctrl+{}", index + 1),
             action: Action::ShowPanel(panel.id),
         });
@@ -49,55 +51,55 @@ pub fn defaults() -> Vec<Binding> {
     out.extend([
         Binding {
             id: "project.open".into(),
-            label: "Open project".into(),
+            label: t!("bind.open-project"),
             default: "Ctrl+O".into(),
             action: Action::OpenProject,
         },
         Binding {
             id: "project.recheck".into(),
-            label: "Re-check project".into(),
+            label: t!("bind.recheck"),
             default: "Ctrl+R".into(),
             action: Action::RefreshProject,
         },
         Binding {
             id: "editor.comment".into(),
-            label: "Comment or uncomment".into(),
+            label: t!("bind.comment"),
             default: "Ctrl+/".into(),
             action: Action::ToggleComment,
         },
         Binding {
             id: "editor.rename".into(),
-            label: "Rename symbol".into(),
+            label: t!("bind.rename"),
             default: "F2".into(),
             action: Action::Rename,
         },
         Binding {
             id: "nav.back".into(),
-            label: "Back".into(),
+            label: t!("bind.back"),
             default: "Alt+ArrowLeft".into(),
             action: Action::NavBack,
         },
         Binding {
             id: "nav.forward".into(),
-            label: "Forward".into(),
+            label: t!("bind.forward"),
             default: "Alt+ArrowRight".into(),
             action: Action::NavForward,
         },
         Binding {
             id: "search.project".into(),
-            label: "Search in project".into(),
+            label: t!("bind.search"),
             default: "Ctrl+Shift+F".into(),
             action: Action::ShowPanel("search"),
         },
         Binding {
             id: "dock.toggle".into(),
-            label: "Toggle the panel below".into(),
+            label: t!("bind.toggle-dock"),
             default: "Ctrl+`".into(),
             action: Action::ToggleDock,
         },
         Binding {
             id: "settings.open".into(),
-            label: "Settings".into(),
+            label: t!("bind.settings"),
             default: "Ctrl+,".into(),
             action: Action::OpenSettings,
         },
@@ -269,7 +271,7 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
                     <input
                         node_ref=input
                         class="h-12 flex-none border-b border-line bg-transparent px-4 text-strong text-label outline-none placeholder:text-label-3"
-                        placeholder="Type a command…"
+                        placeholder=t!("bind.type-command")
                         on:input=move |event| {
                             query.set(event_target_value(&event));
                             highlighted.set(0);
@@ -303,7 +305,7 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
                             let commands = filtered.get();
                             if commands.is_empty() {
                                 return view! {
-                                    <p class="px-4 py-3 text-callout text-label-2">"No match"</p>
+                                    <p class="px-4 py-3 text-callout text-label-2">{t!("bind.no-match")}</p>
                                 }
                                     .into_any();
                             }

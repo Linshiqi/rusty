@@ -171,6 +171,15 @@ pub struct WorkbenchState {
     /// not a shrug — the next twenty keystrokes do something else entirely.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vim: bool,
+    /// Display language, as a BCP-47 tag. `None` means follow the system,
+    /// which is what a first run gets.
+    ///
+    /// Here rather than in the WebView's storage for the same reason `vim`
+    /// is: a second window opening in a different language is not a shrug,
+    /// and the WebView's storage is not carried when the data directory is
+    /// relocated.
+    #[serde(default)]
+    pub locale: Option<String>,
     /// Terminal shell: absent = auto (the bundled Nushell when installed,
     /// else the system shell); "system" = always the OS shell; anything
     /// else = a program to run.

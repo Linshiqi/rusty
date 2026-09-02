@@ -17,6 +17,8 @@ mod wizard;
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::view::{Panel, icon::Icon};
 
 /// The assistant's content, for the right-hand drawer.
@@ -29,7 +31,7 @@ pub fn all() -> Vec<Panel> {
     vec![
         Panel {
             id: "files",
-            title: "Files",
+            title: t!("panel.files"),
             section: "Project",
             icon: Icon::Files,
             needs_project: true,
@@ -38,7 +40,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "search",
-            title: "Search",
+            title: t!("panel.search"),
             section: "Project",
             icon: Icon::Search,
             needs_project: true,
@@ -47,7 +49,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "toolchain",
-            title: "Toolchain",
+            title: t!("panel.toolchain"),
             section: "Project",
             icon: Icon::Toolchain,
             // Answers "is my machine set up?", which is a fair question to ask
@@ -58,7 +60,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "memory",
-            title: "Memory",
+            title: t!("panel.memory"),
             section: "Project",
             icon: Icon::Memory,
             needs_project: true,
@@ -67,7 +69,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "crates",
-            title: "Crates",
+            title: t!("panel.crates"),
             section: "Project",
             icon: Icon::Crates,
             needs_project: true,
@@ -76,7 +78,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "simulate",
-            title: "Simulate",
+            title: t!("panel.simulate"),
             section: "Device",
             icon: Icon::Simulate,
             needs_project: true,
@@ -85,7 +87,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "wizard",
-            title: "New project",
+            title: t!("panel.wizard"),
             section: "",
             icon: Icon::Wizard,
             needs_project: false,
@@ -94,7 +96,7 @@ pub fn all() -> Vec<Panel> {
         },
         Panel {
             id: "assistant",
-            title: "Assistant",
+            title: t!("panel.assistant"),
             section: "",
             icon: Icon::Assistant,
             // Useful with nothing open: "which ESP32 has 802.15.4?" needs no

@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{controller, state::AppState};
 
 use super::*;
@@ -17,15 +19,11 @@ pub(super) fn EditorSettings() -> impl IntoView {
 
     view! {
         <Field
-            label="Vim keys"
-            help="Modal editing in the editor: normal, insert and visual modes, with the \
-                  mode shown in the status bar. Remembered across launches and shared by \
-                  every window. Chords stay with the editor — Ctrl+S saves, Ctrl+A selects \
-                  all, Ctrl+C copies — and insert mode behaves exactly as it does with this \
-                  off, so nothing you already know stops working."
+            label=t!("settings.editor.vim")
+            help=t!("settings.editor.vim-help")
         >
             <div class="inline-flex self-start rounded-[7px] bg-sunken p-0.5">
-                {[("Off", false), ("On", true)]
+                {[(t!("settings.editor.off"), false), (t!("settings.editor.on"), true)]
                     .into_iter()
                     .map(|(label, wanted)| {
                         let class = move || {
@@ -52,12 +50,11 @@ pub(super) fn EditorSettings() -> impl IntoView {
         </Field>
 
         <Field
-            label="Text size"
-            help="The editor's own zoom, separate from the interface scale in Appearance. \
-                  Ctrl+= and Ctrl+- change it from the editor too."
+            label=t!("settings.editor.text-size")
+            help=t!("settings.editor.text-size-help")
         >
             <div class="flex items-center gap-3">
-                {[("A-", -1.0), ("Reset", 0.0), ("A+", 1.0)]
+                {[("A-".to_string(), -1.0), (t!("settings.editor.reset"), 0.0), ("A+".to_string(), 1.0)]
                     .into_iter()
                     .map(|(label, step)| {
                         view! {

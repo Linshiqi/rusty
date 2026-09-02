@@ -17,6 +17,8 @@ use std::collections::HashMap;
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::controller;
 
@@ -93,13 +95,13 @@ pub(super) fn FlightTab() -> impl IntoView {
             <div class="flex min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-3">
                 <Show when=move || nothing>
                     <p class="text-caption leading-relaxed text-label-3">
-                        "Nothing to show yet. This panel reads two things the firmware says: "
+                        {t!("dock.flight.empty-lead")}
                         <span class="font-mono">"[rusty:tel] gyro_r=…"</span>
-                        " for the attitude and "
+                        {t!("dock.flight.empty-mid")}
                         <span class="font-mono">"[rusty:pwm] 0=0.62"</span>
-                        " for the motors. "
+                        {t!("dock.flight.empty-tail")}
                         <span class="font-mono">"examples/rate-loop"</span>
-                        " prints both."
+                        {t!("dock.flight.empty-end")}
                     </p>
                 </Show>
                 <Show when=move || !nothing>
@@ -108,9 +110,9 @@ pub(super) fn FlightTab() -> impl IntoView {
                             <Craft />
                             <Horizon roll=roll.clone() pitch=pitch.clone() />
                             <div class="flex flex-col gap-2">
-                                <Readout label="roll" axis=roll.clone() />
-                                <Readout label="pitch" axis=pitch.clone() />
-                                <Readout label="yaw" axis=yaw.clone() />
+                                <Readout label=t!("dock.flight.roll") axis=roll.clone() />
+                                <Readout label=t!("dock.flight.pitch") axis=pitch.clone() />
+                                <Readout label=t!("dock.flight.yaw") axis=yaw.clone() />
                             </div>
                             <Motors motors=motors.clone() />
                         </div>
@@ -156,7 +158,7 @@ fn Horizon(
             <div class="absolute top-1/2 left-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rust" />
             <Show when=move || !known>
                 <div class="absolute inset-0 grid place-items-center bg-content/70 text-caption text-label-3">
-                    "no channel"
+                    {t!("misc.no-channel")}
                 </div>
             </Show>
         </div>
@@ -169,7 +171,7 @@ fn Horizon(
 /// channel called `gyro_y` is worse than one showing nothing, and the only
 /// way to notice is for it to say which channel it took.
 #[component]
-fn Readout(label: &'static str, axis: Option<(String, Option<f32>)>) -> impl IntoView {
+fn Readout(label: String, axis: Option<(String, Option<f32>)>) -> impl IntoView {
     match axis {
         Some((channel, value)) => view! {
             <div class="w-[13rem]">
@@ -207,7 +209,7 @@ fn Motors(motors: Vec<(u8, f32)>) -> impl IntoView {
     view! {
         <div class="flex shrink-0 flex-col gap-1">
             <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                "Motors"
+                {t!("dock.flight.motors")}
             </span>
             <div class="flex items-end gap-2">
                 {motors

@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -62,7 +64,7 @@ pub(super) fn RegistersTab() -> impl IntoView {
     move || {
         let Some(loaded) = state.debug.registers.get() else {
             return view! {
-                <p class="px-4 py-3 text-callout text-label-2">"Reading the chip's SVD…"</p>
+                <p class="px-4 py-3 text-callout text-label-2">{t!("dock.registers.reading")}</p>
             }
             .into_any();
         };
@@ -72,12 +74,10 @@ pub(super) fn RegistersTab() -> impl IntoView {
             return view! {
                 <div class="flex flex-col items-start gap-3 px-4 py-3">
                     <p class="max-w-[70ch] text-callout leading-relaxed text-label-2">
-                        "No SVD for this chip on this machine. rusty will not guess register \
-                         addresses — fetch the vendor's description, or drop one in the \
-                         project at .rusty/svd/<chip>.svd."
+                        {t!("dock.registers.no-svd")}
                     </p>
                     <Button
-                        label="Fetch the SVD"
+                        label=t!("dock.registers.fetch")
                         kind=ButtonKind::Primary
                         on_click=Callback::new(move |_| controller::fetch_svd(state))
                     />

@@ -9,6 +9,8 @@ use leptos::{ev, prelude::*};
 
 use rusty_edit::SearchHit;
 
+use rusty_i18n::t;
+
 use super::files::Editor;
 use crate::{controller, state::AppState, view::components::Empty};
 
@@ -23,8 +25,8 @@ pub fn SearchPanel() -> impl IntoView {
         if !state.has_project() {
             return view! {
                 <Empty
-                    title="No project open"
-                    detail="Open a folder to search what is in it."
+                    title=t!("search.no-project-title")
+                    detail=t!("search.no-project-detail")
                 />
             }
             .into_any();
@@ -39,7 +41,7 @@ pub fn SearchPanel() -> impl IntoView {
                     <div class="flex items-center gap-1.5">
                         <input
                             type="text"
-                            placeholder="Search the project…"
+                            placeholder=t!("search.placeholder")
                             autocomplete="off"
                             spellcheck="false"
                             prop:value=move || state.search.query.get()
@@ -51,26 +53,26 @@ pub fn SearchPanel() -> impl IntoView {
                         />
                         <Toggle
                             label="Aa"
-                            help="Match case"
+                            help=t!("search.match-case")
                             on=state.search.case
                         />
                         <Toggle
                             label="ab"
-                            help="Whole word only"
+                            help=t!("search.whole-word")
                             on=state.search.word
                         />
                         <Toggle
                             label=".*"
-                            help="Regular expression"
+                            help=t!("search.regex")
                             on=state.search.regex
                         />
                     </div>
                     <GlobBox
-                        placeholder="files to include, e.g. *.rs, src/**"
+                        placeholder=t!("search.include")
                         value=state.search.include
                     />
                     <GlobBox
-                        placeholder="files to exclude"
+                        placeholder=t!("search.exclude")
                         value=state.search.exclude
                     />
                 </div>
@@ -80,7 +82,7 @@ pub fn SearchPanel() -> impl IntoView {
                         let Some(results) = state.search.results.get() else {
                             return view! {
                                 <p class="px-3 py-2 text-footnote text-label-3">
-                                    "Matches appear as you type."
+                                    {t!("search.as-you-type")}
                                 </p>
                             }
                             .into_any();
@@ -96,7 +98,7 @@ pub fn SearchPanel() -> impl IntoView {
                         if results.hits.is_empty() {
                             return view! {
                                 <p class="px-3 py-2 text-footnote text-label-3">
-                                    "Nothing matches."
+                                    {t!("search.nothing")}
                                 </p>
                             }
                             .into_any();
@@ -147,7 +149,7 @@ pub fn SearchPanel() -> impl IntoView {
 
 /// A small on/off square, `Aa` style.
 #[component]
-fn Toggle(label: &'static str, help: &'static str, on: RwSignal<bool>) -> impl IntoView {
+fn Toggle(label: &'static str, help: String, on: RwSignal<bool>) -> impl IntoView {
     let state = AppState::expect();
     view! {
         <button
@@ -173,7 +175,7 @@ fn Toggle(label: &'static str, help: &'static str, on: RwSignal<bool>) -> impl I
 
 /// An include/exclude pattern box.
 #[component]
-fn GlobBox(placeholder: &'static str, value: RwSignal<String>) -> impl IntoView {
+fn GlobBox(placeholder: String, value: RwSignal<String>) -> impl IntoView {
     let state = AppState::expect();
     view! {
         <input

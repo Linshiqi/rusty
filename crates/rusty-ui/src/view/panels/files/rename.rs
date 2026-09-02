@@ -1,5 +1,7 @@
 //! Renaming a symbol everywhere it is used.
 
+use rusty_i18n::t;
+
 use leptos::{ev, html, prelude::*};
 
 use crate::{controller, state::AppState};
@@ -62,7 +64,7 @@ pub(super) fn RenameBar() -> impl IntoView {
                     }
                 />
                 <span class="text-caption text-label-4">
-                    "every use in the project, written to disk"
+                    {t!("misc.rename-scope")}
                 </span>
             </div>
         })

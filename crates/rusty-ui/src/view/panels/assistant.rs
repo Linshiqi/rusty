@@ -15,6 +15,8 @@ use leptos::{ev, html, prelude::*};
 
 use rusty_ai::{Content, Message, Role};
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::{AppState, ToolRun},
@@ -56,14 +58,12 @@ fn NotConfigured() -> impl IntoView {
 
     view! {
         <Empty
-            title="No model configured"
-            detail="rusty brings no model of its own and no account. Point it at any endpoint you \
-                    already have — a hosted API, or something running on this machine, in which \
-                    case nothing leaves it."
+            title=t!("assistant.no-model-title")
+            detail=t!("assistant.no-model-detail")
         >
             <div class="mt-1 flex items-center gap-2">
                 <Button
-                    label="Open settings"
+                    label=t!("assistant.open-settings")
                     kind=ButtonKind::Primary
                     on_click=Callback::new(move |_| settings_open.set(true))
                 />
@@ -74,10 +74,7 @@ fn NotConfigured() -> impl IntoView {
                     if count == 0 {
                         String::new()
                     } else {
-                        format!(
-                            "{count} of rusty's analyses are wired up as tools, so the model \
-                             answers from your actual project rather than from memory.",
-                        )
+                        t!("assistant.tool-count", count = count)
                     }
                 }}
             </p>
@@ -163,12 +160,12 @@ fn ToolActivity(runs: Vec<ToolRun>) -> impl IntoView {
                 .into_iter()
                 .map(|run| {
                     let (tone, suffix) = match run.ok {
-                        None => (Tone::Rust, "…"),
-                        Some(true) => (Tone::Patina, ""),
+                        None => (Tone::Rust, "…".to_string()),
+                        Some(true) => (Tone::Patina, String::new()),
                         // A failed tool is not a failed answer — the model is
                         // told and usually recovers — but hiding it would leave
                         // the user unable to explain a thin answer.
-                        Some(false) => (Tone::Crimson, " failed"),
+                        Some(false) => (Tone::Crimson, t!("assistant.tool-failed")),
                     };
                     view! { <Pill label=format!("{}{suffix}", run.name) tone=tone /> }
                 })
@@ -240,27 +237,27 @@ fn Bubble(message: Message) -> impl IntoView {
 fn Suggestions() -> impl IntoView {
     let state = AppState::expect();
 
-    const OPENERS: [&str; 4] = [
-        "Why will this project not build?",
-        "What is taking up the most flash, and what can I do about it?",
-        "Which of my dependencies pull in duplicate versions, and who asked for them?",
-        "Is my toolchain set up correctly for this chip?",
+    let openers = [
+        t!("assistant.opener-build"),
+        t!("assistant.opener-flash"),
+        t!("assistant.opener-dupes"),
+        t!("assistant.opener-toolchain"),
     ];
 
     view! {
         <div class="flex flex-1 flex-col items-center justify-center gap-4 p-10">
             <p class="max-w-[52ch] text-center text-body text-label-2">
-                "The assistant runs rusty's own analyses rather than reading files and guessing. \
-                 Ask it something it would otherwise get wrong."
+                {t!("assistant.intro")}
             </p>
             <div class="flex max-w-[62ch] flex-col gap-1.5">
-                {OPENERS
+                {openers
                     .into_iter()
                     .map(|opener| {
+                        let ask = opener.clone();
                         view! {
                             <button
                                 type="button"
-                                on:click=move |_| controller::ask(state, opener.to_string())
+                                on:click=move |_| controller::ask(state, ask.clone())
                                 class="rounded-[8px] px-3 py-2 text-left text-callout text-label-2 ring-1 ring-line transition-colors hover:bg-sunken hover:text-label"
                             >
                                 {opener}
@@ -320,7 +317,7 @@ fn Composer() -> impl IntoView {
                 <textarea
                     node_ref=input
                     rows="1"
-                    placeholder="Ask about this project…"
+                    placeholder=t!("assistant.ask-placeholder")
                     class="max-h-[160px] min-h-[34px] flex-1 resize-none rounded-[8px] bg-sunken px-3 py-2 text-body outline-none ring-1 ring-line focus:ring-rust placeholder:text-label-3"
                     on:input=move |event| draft.set(event_target_value(&event))
                     on:keydown=move |event: ev::KeyboardEvent| {
@@ -333,7 +330,7 @@ fn Composer() -> impl IntoView {
                     }
                 />
                 <Button
-                    label="Ask"
+                    label=t!("assistant.ask")
                     kind=ButtonKind::Primary
                     disabled=Signal::derive(move || {
                         state.ai.streaming.get() || draft.with(|d| d.trim().is_empty())
@@ -371,7 +368,7 @@ fn Composer() -> impl IntoView {
                                     class="rounded-[5px] px-1.5 py-0.5 text-label-3 hover:text-label"
                                     on:click=move |_| controller::clear_conversation(state)
                                 >
-                                    "Clear"
+                                    {t!("assistant.clear")}
                                 </button>
                             }
                         })

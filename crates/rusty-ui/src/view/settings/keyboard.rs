@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{controller, state::AppState};
 
 use super::*;
@@ -12,10 +14,8 @@ pub(super) fn Keyboard() -> impl IntoView {
 
     view! {
         <Field
-            label="Shortcuts"
-            help="Click a key to change it: press the new combination, Esc cancels, Backspace \
-                  restores the default. Two commands on one chord — the lower one wins — show \
-                  in amber. Esc itself closes whatever is in front and cannot be rebound."
+            label=t!("settings.keyboard.shortcuts")
+            help=t!("settings.keyboard.shortcuts-help")
         >
             <div class="grid grid-cols-[max-content_1fr_max-content] items-center gap-x-4 gap-y-1.5">
                 {move || {
@@ -45,7 +45,7 @@ pub(super) fn Keyboard() -> impl IntoView {
                             view! {
                                 <button
                                     type="button"
-                                    title="Click, then press the new combination"
+                                    title=t!("settings.keyboard.rebind")
                                     on:click=move |_| {
                                         state.app.capturing.set(Some(capture_id.clone()));
                                     }
@@ -122,7 +122,7 @@ pub(super) fn Keyboard() -> impl IntoView {
                                             view! {
                                                 <button
                                                     type="button"
-                                                    title="Restore the default"
+                                                    title=t!("settings.keyboard.restore")
                                                     on:click=move |_| {
                                                         controller::save_keybind(
                                                             state,
@@ -144,7 +144,7 @@ pub(super) fn Keyboard() -> impl IntoView {
                 <kbd class="justify-self-start rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote text-label-3">
                     "Esc"
                 </kbd>
-                <span class="text-callout text-label-3">"Close what is in front"</span>
+                <span class="text-callout text-label-3">{t!("misc.close-front")}</span>
                 <span />
             </div>
         </Field>

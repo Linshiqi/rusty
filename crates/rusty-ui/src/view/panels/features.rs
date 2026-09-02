@@ -15,6 +15,8 @@ use leptos::prelude::*;
 
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection};
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -50,10 +52,8 @@ pub fn Features() -> impl IntoView {
         let Some(workspace) = state.project.workspace.get() else {
             return view! {
                 <Empty
-                    title="No Cargo analysis"
-                    detail="Feature resolution runs over the whole dependency graph, which needs \
-                            `cargo metadata` to have succeeded. The Problems panel says why it \
-                            did not."
+                    title=t!("features.no-analysis-title")
+                    detail=t!("features.no-analysis-detail")
                 />
             }
             .into_any();
@@ -166,18 +166,18 @@ fn Impact(impact: FeatureImpact) -> impl IntoView {
     view! {
         <div class="grid grid-cols-2 border-b border-line lg:grid-cols-3">
             <Readout
-                label="Resolved crates"
+                label=t!("features.resolved")
                 value=impact.resolved_crates.to_string()
                 hint=format!("{} under this package's defaults", impact.baseline_crates)
             />
             <Readout
-                label="Against defaults"
+                label=t!("features.against-defaults")
                 value=delta_label
                 tone=delta_tone
                 hint="after workspace-wide unification"
             />
             <Readout
-                label="Build units"
+                label=t!("features.build-units")
                 value=units_label
                 hint="proc-macros and build scripts — they serialize the build"
             />
@@ -188,12 +188,12 @@ fn Impact(impact: FeatureImpact) -> impl IntoView {
                 view! {
                     <div class="grid gap-x-6 border-b border-line px-4 py-3 md:grid-cols-2">
                         <CrateList
-                            label="Pulled in"
+                            label=t!("features.pulled-in")
                             names=impact.added.clone()
                             tone=Tone::Amber
                         />
                         <CrateList
-                            label="Dropped"
+                            label=t!("features.dropped")
                             names=impact.removed.clone()
                             tone=Tone::Patina
                         />
@@ -247,7 +247,7 @@ fn Matrix() -> impl IntoView {
         }
 
         view! {
-            <SectionLabel label="Features" />
+            <SectionLabel label=t!("features.features") />
             <DefaultsRow selection=selection.clone() />
 
             <div>
@@ -280,7 +280,7 @@ fn DefaultsRow(selection: FeatureSelection) -> impl IntoView {
             />
             <span class="font-mono text-footnote">"default"</span>
             <span class="text-callout text-label-2">
-                "everything the package turns on when nothing is specified"
+                {t!("misc.default-features")}
             </span>
         </label>
     }
@@ -324,14 +324,12 @@ fn FeatureSwitch(row: FeatureRow, selection: FeatureSelection) -> impl IntoView 
             <div class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-2">
                     <span class="font-mono text-footnote select-text">{name}</span>
-                    {row.in_default.then(|| view! { <Pill label="default" /> })}
+                    {row.in_default.then(|| view! { <Pill label=t!("features.default") /> })}
                     // The definition of "marginal" is what makes this number
                     // mean anything, and it is the same sentence on every row —
                     // so it hangs off the number rather than being printed once
                     // at the top where nobody reads it twice.
-                    <span title="What changes if you flip only this switch, with every other \
-                                 feature held where it is. No change means another workspace \
-                                 member already requires it, so turning it off frees nothing.">
+                    <span title=t!("features.marginal")>
                         <Pill label=cost_label tone=cost_tone />
                     </span>
                 </div>

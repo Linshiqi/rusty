@@ -12,6 +12,8 @@ use leptos::prelude::*;
 
 use rusty_embed::{CrateSize, Firmware, MemoryReport, SectionKindDto};
 
+use rusty_i18n::t;
+
 use crate::{
     controller, format,
     state::AppState,
@@ -42,9 +44,8 @@ pub fn Memory() -> impl IntoView {
         if !state.has_project() {
             return view! {
                 <Empty
-                    title="No project open"
-                    detail="Memory analysis reads the linked ELF a build produces, so there has to \
-                            be a project to have built one."
+                    title=t!("memory.no-project-title")
+                    detail=t!("memory.no-project-detail")
                 />
             }
             .into_any();
@@ -54,9 +55,8 @@ pub fn Memory() -> impl IntoView {
         if builds.is_empty() {
             return view! {
                 <Empty
-                    title="Nothing built yet"
-                    detail="rusty reads the ELF the linker produces rather than guessing at a \
-                            path, so there is nothing to measure until a build has run."
+                    title=t!("memory.nothing-built-title")
+                    detail=t!("memory.nothing-built-detail")
                 >
                     <div class="mt-1">
                         <CommandLine command="cargo build --release" />
@@ -174,29 +174,29 @@ fn Report(report: MemoryReport) -> impl IntoView {
     view! {
         <div class="grid grid-cols-2 border-b border-line lg:grid-cols-3">
             <Readout
-                label="Flash image"
+                label=t!("memory.flash-image")
                 value=flash_value
                 unit=flash_unit
                 hint="code and constants written to the device"
             />
             <Readout
-                label="Static RAM"
+                label=t!("memory.static-ram")
                 value=ram_value
                 unit=ram_unit
                 tone=ram_tone
                 hint=ram_hint
             />
             <Readout
-                label="Unattributed"
+                label=t!("memory.unattributed")
                 value=format::bytes(report.unattributed_bytes)
                 hint="assembly, C and ROM stubs — no crate to blame"
             />
         </div>
 
-        <SectionLabel label="By crate" />
+        <SectionLabel label=t!("memory.by-crate") />
         <CrateTable crates=report.crates largest=largest total=attributed />
 
-        <SectionLabel label="By section" />
+        <SectionLabel label=t!("memory.by-section") />
         <table class="w-full border-collapse text-callout">
             <thead>
                 <tr class="border-b border-line text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
@@ -345,9 +345,13 @@ fn CrateTable(crates: Vec<CrateSize>, largest: u64, total: u64) -> impl IntoView
                 .then_some({
                     move || {
                         let label = if expanded.get() {
-                            "Show fewer".to_string()
+                            t!("memory.show-fewer")
                         } else {
-                            format!("{hidden} more ({})", format::bytes(hidden_bytes))
+                            t!(
+                                "memory.show-more",
+                                count = hidden,
+                                size = format::bytes(hidden_bytes),
+                            )
                         };
                         view! {
                             <Button
@@ -359,13 +363,13 @@ fn CrateTable(crates: Vec<CrateSize>, largest: u64, total: u64) -> impl IntoView
                     }
                 })}
             <span class="tnum text-footnote text-label-3">
-                {format::bytes(total)}" attributed"
+                {format::bytes(total)}{t!("memory.attributed")}
             </span>
             <span class="flex-1" />
             <Button
-                label="Re-read"
+                label=t!("memory.reread")
                 kind=ButtonKind::Quiet
-                title="Analyse the binary again, after a rebuild"
+                title=t!("memory.reread-hint")
                 on_click=Callback::new(move |_| controller::refresh_firmware(state))
             />
         </div>

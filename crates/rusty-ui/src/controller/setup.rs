@@ -19,6 +19,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_embed::setup::{Destination, SetupStep};
+use rusty_i18n::t;
 
 use super::*;
 use crate::{
@@ -170,10 +171,8 @@ fn install_one(state: AppState, name: String, finished: impl FnOnce(bool) + 'sta
 /// anything runs.
 pub fn destination_label(step: &SetupStep, data_dir: &str) -> String {
     match step.destination {
-        Destination::CargoBin => "~/.cargo/bin — where cargo puts binaries and \
-                                  where flashing looks for them"
-            .to_string(),
-        Destination::RustupHome => "rustup's own directory, with the toolchains".to_string(),
+        Destination::CargoBin => t!("setup.where.cargo-bin"),
+        Destination::RustupHome => t!("setup.where.rustup-home"),
         Destination::DataDirectory => {
             // The separator the path already uses. A Windows path printed
             // with one of each reads as a path somebody assembled by hand,
@@ -181,6 +180,6 @@ pub fn destination_label(step: &SetupStep, data_dir: &str) -> String {
             let sep = if data_dir.contains('\\') { '\\' } else { '/' };
             format!("{data_dir}{sep}tools")
         }
-        Destination::Manual => "nowhere rusty can reach — this one is yours".to_string(),
+        Destination::Manual => t!("setup.where.manual"),
     }
 }

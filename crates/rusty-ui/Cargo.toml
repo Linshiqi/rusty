@@ -14,6 +14,9 @@ leptos = { version = "0.8.20", features = ["csr"] }
 rusty-ai = { path = "../rusty-ai", default-features = false }
 rusty-core = { path = "../rusty-core", default-features = false }
 rusty-edit = { path = "../rusty-edit", default-features = false }
+# The message catalogue. No IO, no backend half — the frontend looks a
+# string up the same way the backend will when the diagnostics move over.
+rusty-i18n = { path = "../rusty-i18n" }
 rusty-embed = { path = "../rusty-embed", default-features = false }
 rusty-ipc = { path = "../rusty-ipc" }
 rusty-lsp = { path = "../rusty-lsp", default-features = false }

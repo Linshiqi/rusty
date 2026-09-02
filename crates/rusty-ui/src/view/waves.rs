@@ -12,6 +12,8 @@
 
 use leptos::{ev, prelude::*};
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::{AppState, TraceClock},
@@ -87,7 +89,7 @@ pub fn WavesTab() -> impl IntoView {
                             .then(|| {
                                 view! {
                                     <span class="text-footnote text-amber">
-                                        "oldest events dropped (cap)"
+                                        {t!("misc.waves-capped")}
                                     </span>
                                 }
                             })}
@@ -109,24 +111,24 @@ pub fn WavesTab() -> impl IntoView {
                     }
                     on:click=move |_| follow.update(|f| *f = !*f)
                 >
-                    "Follow"
+                    {t!("waves.follow")}
                 </button>
                 <button
                     type="button"
-                    title="Frame the whole capture"
+                    title=t!("waves.fit-hint")
                     class="rounded-[5px] px-2 py-0.5 text-footnote text-label-3 ring-1 ring-line hover:text-label"
                     on:click=move |_| fit()
                 >
-                    "Fit"
+                    {t!("waves.fit")}
                 </button>
                 <button
                     type="button"
-                    title="Write target/rusty-sim/trace.vcd for PulseView"
+                    title=t!("waves.export-hint")
                     class="rounded-[5px] px-2 py-0.5 text-footnote text-label-3 ring-1 ring-line hover:text-label"
                     disabled=move || state.sim.trace.with(|t| t.events.is_empty())
                     on:click=move |_| controller::export_vcd(state)
                 >
-                    "Export VCD"
+                    {t!("waves.export")}
                 </button>
             </div>
 
@@ -181,8 +183,7 @@ pub fn WavesTab() -> impl IntoView {
                     if trace.events.is_empty() {
                         return view! {
                             <p class="px-4 py-3 text-footnote text-label-3">
-                                "Waveforms appear as the firmware reports pin changes — \
-                                 run a simulation."
+                                {t!("waves.empty")}
                             </p>
                         }
                             .into_any();
@@ -371,16 +372,16 @@ pub fn WavesTab() -> impl IntoView {
                 let (x, y) = menu.get()?;
                 let close = Callback::new(move |_| menu.set(None));
                 let follow_label = if follow.get_untracked() {
-                    "Stop following"
+                    t!("context.waves-stop-following")
                 } else {
-                    "Follow newest edge"
+                    t!("context.waves-follow")
                 };
                 let no_trace = state.sim.trace.with_untracked(|t| t.events.is_empty());
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
                             <MenuItem
-                                label="Fit the whole capture"
+                                label=t!("context.waves-fit")
                                 disabled=no_trace
                                 on_select=Callback::new(move |_| {
                                     fit();
@@ -395,7 +396,7 @@ pub fn WavesTab() -> impl IntoView {
                                 })
                             />
                             <MenuItem
-                                label="Export VCD"
+                                label=t!("context.waves-export")
                                 disabled=no_trace
                                 on_select=Callback::new(move |_| {
                                     controller::export_vcd(state);

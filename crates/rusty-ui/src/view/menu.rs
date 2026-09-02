@@ -12,6 +12,8 @@
 
 use leptos::{ev, prelude::*};
 
+use rusty_i18n::t;
+
 use crate::{
     command::{self, Chrome, Item},
     state::AppState,
@@ -127,8 +129,8 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
                 view! {
                     <button
                         type="button"
-                        aria-label="Assistant"
-                        title="Assistant"
+                        aria-label=t!("chrome.assistant")
+                        title=t!("chrome.assistant")
                         on:click=move |_| {
                             state.ai.open.update(|open| *open = !*open)
                         }
@@ -247,7 +249,7 @@ fn WindowControls() -> impl IntoView {
         <div class="ml-1 flex self-stretch">
             <button
                 type="button"
-                aria-label="Minimise"
+                aria-label=t!("window.minimise")
                 class=button
                 on:click=move |_| {
                     crate::controller::window_action(crate::ipc::cmd::window::MINIMIZE)
@@ -259,7 +261,7 @@ fn WindowControls() -> impl IntoView {
             </button>
             <button
                 type="button"
-                aria-label="Maximise"
+                aria-label=t!("window.maximise")
                 class=button
                 on:click=move |_| {
                     crate::controller::window_action(crate::ipc::cmd::window::TOGGLE_MAXIMIZE)
@@ -271,7 +273,7 @@ fn WindowControls() -> impl IntoView {
             </button>
             <button
                 type="button"
-                aria-label="Close"
+                aria-label=t!("window.close")
                 class=format!("{button} hover:!bg-crimson hover:!text-white")
                 on:click=move |_| {
                     crate::controller::window_action(crate::ipc::cmd::window::CLOSE)

@@ -23,6 +23,7 @@
 use leptos::prelude::*;
 
 use rusty_embed::setup::Destination;
+use rusty_i18n::t;
 
 use crate::{
     controller,
@@ -50,7 +51,7 @@ pub fn SetupSheet() -> impl IntoView {
             .setup
             .data_dir
             .get()
-            .unwrap_or_else(|| "rusty's data directory".to_string());
+            .unwrap_or_else(|| t!("setup.where.data-fallback"));
 
         let ready = steps.is_empty();
 
@@ -64,21 +65,18 @@ pub fn SetupSheet() -> impl IntoView {
                         <div class="min-w-0 flex-1">
                             <h2 class="text-body font-medium">
                                 {if ready {
-                                    "This machine is ready"
+                                    t!("setup.ready-title")
                                 } else {
-                                    "A few things are missing"
+                                    t!("setup.missing-title")
                                 }}
                             </h2>
                             <p class="mt-0.5 text-callout leading-relaxed text-label-2">
                                 {if ready {
-                                    "Everything rusty needs to build, flash and simulate is \
-                                     installed."
-                                        .to_string()
+                                    t!("setup.ready-body")
                                 } else {
-                                    format!(
-                                        "rusty can install {} of these for you, in this order. \
-                                         Every command runs in the dock where you can read it.",
-                                        steps.iter().filter(|s| s.manual.is_none()).count(),
+                                    t!(
+                                        "setup.missing-body",
+                                        count = steps.iter().filter(|s| s.manual.is_none()).count(),
                                     )
                                 }}
                             </p>
@@ -103,10 +101,16 @@ pub fn SetupSheet() -> impl IntoView {
                                     Tone::Neutral
                                 };
                                 let where_to = controller::destination_label(step, &data_dir);
-                                let manual = step.manual.clone();
+                                let manual = step
+                                    .manual
+                                    .as_deref()
+                                    .map(|text| crate::i18n::setup_manual(&step.tool, text));
                                 let command = step.command.clone();
                                 let name = step.tool.clone();
-                                let purpose = step.purpose.clone();
+                                let purpose = crate::i18n::setup_purpose(
+                                    &step.tool,
+                                    &step.purpose,
+                                );
                                 let slow = step.slow;
                                 view! {
                                     <div class="flex gap-2.5 border-b border-line px-5 py-3 last:border-b-0">
@@ -122,7 +126,7 @@ pub fn SetupSheet() -> impl IntoView {
                                                     .then(|| {
                                                         view! {
                                                             <span class="text-caption text-label-3">
-                                                                "takes several minutes"
+                                                                {t!("setup.slow")}
                                                             </span>
                                                         }
                                                     })}
@@ -130,7 +134,7 @@ pub fn SetupSheet() -> impl IntoView {
                                                     .then(|| {
                                                         view! {
                                                             <span class="text-caption text-amber">
-                                                                "installing…"
+                                                                {t!("setup.installing")}
                                                             </span>
                                                         }
                                                     })}
@@ -169,7 +173,7 @@ pub fn SetupSheet() -> impl IntoView {
                                                             }
                                                             class="mt-1.5 rounded-[6px] border border-line px-2.5 py-1 text-caption text-label-2 hover:bg-sunken hover:text-label"
                                                         >
-                                                            "Open rustup.rs"
+                                                            {t!("setup.open-rustup")}
                                                         </button>
                                                     }
                                                 })}
@@ -194,7 +198,7 @@ pub fn SetupSheet() -> impl IntoView {
                                         view! {
                                             <button
                                                 type="button"
-                                                title="Downloaded emulators, debuggers and compilers live here"
+                                                title=t!("setup.change-downloads-hint")
                                                 disabled=busy
                                                 on:click=move |_| {
                                                     // Settings owns relocation,
@@ -210,7 +214,7 @@ pub fn SetupSheet() -> impl IntoView {
                                                 }
                                                 class="rounded-[6px] border border-line px-2.5 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
                                             >
-                                                "Change where downloads go…"
+                                                {t!("setup.change-downloads")}
                                             </button>
                                         }
                                     })
@@ -222,7 +226,7 @@ pub fn SetupSheet() -> impl IntoView {
                             on:click=move |_| controller::close_setup(state)
                             class="rounded-[6px] px-3 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
                         >
-                            {if ready { "Done" } else { "Not now" }}
+                            {if ready { t!("setup.done") } else { t!("setup.not-now") }}
                         </button>
                         {(!ready)
                             .then(|| {
@@ -236,7 +240,7 @@ pub fn SetupSheet() -> impl IntoView {
                                                 on:click=move |_| controller::install_all(state)
                                                 class="rounded-[6px] bg-rust px-3 py-1.5 text-footnote font-medium text-canvas hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
                                             >
-                                                {if busy { "Installing…" } else { "Install everything" }}
+                                                {if busy { t!("setup.installing-button") } else { t!("setup.install-all") }}
                                             </button>
                                         }
                                     })

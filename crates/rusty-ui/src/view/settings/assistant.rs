@@ -9,6 +9,8 @@ use leptos::prelude::*;
 
 use rusty_ai::{ProviderConfig, ProviderKind};
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -64,9 +66,8 @@ pub(super) fn Assistant() -> impl IntoView {
 
     view! {
         <Field
-            label="Start from"
-            help="Local runtimes are first-class: nothing leaves the machine and no key is \
-                  needed. Picking one only fills the fields below — nothing is sent."
+            label=t!("settings.assistant.start-from")
+            help=t!("settings.assistant.start-from-help")
         >
             <div class="flex flex-wrap gap-1.5">
                 {move || {
@@ -110,20 +111,20 @@ pub(super) fn Assistant() -> impl IntoView {
             </div>
         </Field>
 
-        <Field label="Endpoint">
+        <Field label=t!("settings.assistant.endpoint")>
             <div class="flex flex-col gap-2">
                 <TextRow
-                    label="Base URL"
+                    label=t!("settings.assistant.base-url")
                     value=Signal::derive(move || draft.with(|d| d.base_url.clone()))
                     on_input=Callback::new(move |v: String| draft.update(|d| d.base_url = v))
                 />
                 <TextRow
-                    label="Model"
+                    label=t!("settings.assistant.model")
                     value=Signal::derive(move || draft.with(|d| d.model.clone()))
                     on_input=Callback::new(move |v: String| draft.update(|d| d.model = v))
                 />
                 <TextRow
-                    label="Profile"
+                    label=t!("settings.assistant.profile")
                     value=Signal::derive(move || draft.with(|d| d.profile.clone()))
                     on_input=Callback::new(move |v: String| draft.update(|d| d.profile = v))
                 />
@@ -131,13 +132,13 @@ pub(super) fn Assistant() -> impl IntoView {
 
             <div class="mt-2 flex items-center gap-2">
                 <Button
-                    label="List models"
+                    label=t!("settings.assistant.list-models")
                     on_click=Callback::new(move |_| {
                         controller::list_models(state, draft.get_untracked(), models)
                     })
                 />
                 <span class="text-footnote text-label-3">
-                    "Names drift faster than any list rusty could ship."
+                    {t!("settings.assistant.list-models-note")}
                 </span>
             </div>
 
@@ -171,20 +172,18 @@ pub(super) fn Assistant() -> impl IntoView {
         </Field>
 
         <Field
-            label="API key"
-            help="Stored in the operating system's credential store and read only by the Rust \
-                  side at the moment of a request. It is never sent back to this window, which is \
-                  why there is nothing here to show you once it is saved."
+            label=t!("settings.assistant.api-key")
+            help=t!("settings.assistant.api-key-help")
         >
             <div class="flex items-center gap-2">
                 <input
                     type="password"
-                    placeholder="paste, save, and it leaves this window"
+                    placeholder=t!("settings.assistant.api-key-placeholder")
                     class="h-[28px] w-[320px] rounded-[6px] bg-sunken px-2.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
                     on:input=move |event| api_key.set(event_target_value(&event))
                 />
                 <Button
-                    label="Save key"
+                    label=t!("settings.assistant.save-key")
                     disabled=Signal::derive(move || api_key.with(|k| k.trim().is_empty()))
                     on_click=Callback::new(move |_| {
                         controller::store_key(
@@ -204,9 +203,9 @@ pub(super) fn Assistant() -> impl IntoView {
                     if state.ai.key_stored.get() {
                         view! {
                             <>
-                                <Pill label="stored" tone=Tone::Patina />
+                                <Pill label=t!("settings.assistant.stored") tone=Tone::Patina />
                                 <Button
-                                    label="Remove"
+                                    label=t!("settings.assistant.remove")
                                     on_click=Callback::new(move |_| {
                                         crate::controller::delete_key(
                                             state,
@@ -218,25 +217,24 @@ pub(super) fn Assistant() -> impl IntoView {
                         }
                             .into_any()
                     } else {
-                        view! { <Pill label="none saved" tone=Tone::Neutral /> }.into_any()
+                        view! { <Pill label=t!("settings.assistant.none-saved") tone=Tone::Neutral /> }.into_any()
                     }
                 }}
             </div>
         </Field>
 
-        <Field label="Use it">
+        <Field label=t!("settings.assistant.use-it")>
             <div class="flex items-center gap-2">
                 <Button
-                    label="Save"
+                    label=t!("settings.assistant.save")
                     kind=ButtonKind::Primary
                     on_click=Callback::new(move |_| {
                         controller::set_provider(state, draft.get_untracked())
                     })
                 />
                 <Button
-                    label="Test"
-                    title="Check the endpoint, the key and the model name before a conversation \
-                           depends on them"
+                    label=t!("settings.assistant.test")
+                    title=t!("settings.assistant.test-help")
                     on_click=Callback::new(move |_| {
                         controller::check_provider(state, draft.get_untracked(), verdict)
                     })
@@ -265,18 +263,20 @@ pub(super) fn Assistant() -> impl IntoView {
                         state
                             .ai.config
                             .get()
-                            .map(|c| format!("in use: {} at {}", c.model, c.base_url))
-                            .unwrap_or_else(|| "None configured".to_string())
+                            .map(|c| t!(
+                                "settings.assistant.in-use",
+                                model = c.model,
+                                url = c.base_url,
+                            ))
+                            .unwrap_or_else(|| t!("settings.assistant.none-configured"))
                     }}
                 </span>
             </div>
         </Field>
 
         <Field
-            label="What it can call"
-            help="The assistant does not read your configuration files and theorise; it calls \
-                  these and gets the actual answer. Each one reports what it is missing rather \
-                  than guessing, so a wrong answer is a bug and not a coin flip."
+            label=t!("settings.assistant.tools")
+            help=t!("settings.assistant.tools-help")
         >
             <div class="flex flex-wrap gap-1.5">
                 {move || {

@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::{AppState, Divider},
@@ -24,8 +26,7 @@ pub(super) fn DebugTab() -> impl IntoView {
         let Some(debug) = state.debug.session.get() else {
             return view! {
                 <p class="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-callout text-label-2">
-                    "Nothing is being debugged. The Simulate panel's Debug button boots the \
-                     firmware frozen and attaches here."
+                    {t!("dock.debug.idle")}
                 </p>
             }
             .into_any();
@@ -33,7 +34,7 @@ pub(super) fn DebugTab() -> impl IntoView {
         if debug.running {
             return view! {
                 <p class="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-callout text-label-2">
-                    "Running — pause or hit a breakpoint to read the stack."
+                    {t!("dock.debug.running")}
                 </p>
             }
             .into_any();
@@ -47,7 +48,7 @@ pub(super) fn DebugTab() -> impl IntoView {
                     style:width=move || format!("{}px", state.layout.debug_width.get())
                 >
                     <div class="px-4 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                        "Call stack"
+                        {t!("dock.debug.call-stack")}
                     </div>
                     {debug
                         .stack
@@ -100,7 +101,7 @@ pub(super) fn DebugTab() -> impl IntoView {
                 <split::Handle divider=Divider::DebugStack />
                 <div class="min-w-0 flex-1 overflow-y-auto">
                     <div class="px-4 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                        "Variables"
+                        {t!("dock.debug.variables")}
                     </div>
                     {debug
                         .variables
@@ -135,7 +136,7 @@ pub(super) fn DebugTab() -> impl IntoView {
                                 <div class="flex items-baseline gap-2 px-4 py-1 font-mono text-footnote">
                                     <button
                                         type="button"
-                                        title=if long { "Show the whole value" } else { "" }
+                                        title=if long { t!("dock.debug.show-whole") } else { String::new() }
                                         disabled=!long
                                         on:click=move |_| {
                                             expanded

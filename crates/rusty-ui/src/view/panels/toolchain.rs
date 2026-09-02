@@ -9,6 +9,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::view::icon::{Icon, IconView};
 use crate::{
     controller,
@@ -56,14 +58,12 @@ fn Downloads() -> impl IntoView {
                         }
                         class="shrink-0 rounded-[6px] px-2 py-0.5 text-footnote text-rust transition-colors hover:bg-sunken"
                     >
-                        "Move…"
+                        {t!("toolchain.move")}
                     </button>
                 </div>
                 <p class="mt-0.5 font-mono text-caption text-label-4 select-text">{location.path}</p>
                 <p class="mt-1 max-w-[70ch] text-caption leading-relaxed text-label-3">
-                    "Moving it copies everything to the new folder and leaves the originals \
-                     until you delete them. Tools installed by cargo are in ~/.cargo/bin and \
-                     stay there — that path is cargo's, not rusty's."
+                    {t!("toolchain.move-note")}
                 </p>
             </div>
         })
@@ -78,7 +78,7 @@ pub fn Toolchain() -> impl IntoView {
         view! {
             <button
                 type="button"
-                title="Probe the machine again"
+                title=t!("toolchain.refresh")
                 on:click=move |_| controller::refresh_toolchain(state)
                 class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
@@ -116,9 +116,9 @@ pub fn Toolchain() -> impl IntoView {
             (None, _) => Tone::Neutral,
         };
         let target_hint = match (&report.required_target, report.required_target_installed) {
-            (Some(_), true) => "installed".to_string(),
-            (Some(_), false) => "not installed".to_string(),
-            (None, _) => "no project open".to_string(),
+            (Some(_), true) => t!("toolchain.target-installed"),
+            (Some(_), false) => t!("toolchain.target-missing"),
+            (None, _) => t!("toolchain.target-no-project"),
         };
 
         // Xtensa targets ship *inside* the espup toolchain rather than through
@@ -133,39 +133,39 @@ pub fn Toolchain() -> impl IntoView {
             Tone::Neutral
         };
         let esp_value = if status.has_esp_toolchain {
-            "installed"
+            t!("toolchain.xtensa-present")
         } else {
-            "absent"
+            t!("toolchain.xtensa-absent")
         };
         let esp_hint = if report.needs_esp_toolchain {
-            "this project needs it"
+            t!("toolchain.xtensa-needed")
         } else {
-            "not needed here"
+            t!("toolchain.xtensa-not-needed")
         };
 
         view! {
             <div class="flex-1 overflow-y-auto">
                 <div class="grid grid-cols-2 border-b border-line lg:grid-cols-3">
                     <Readout
-                        label="Required target"
+                        label=t!("toolchain.required-target")
                         value=required_target
                         tone=target_tone
                         hint=target_hint
                     />
                     <Readout
-                        label="Xtensa toolchain"
+                        label=t!("toolchain.xtensa")
                         value=esp_value
                         tone=esp_tone
                         hint=esp_hint
                     />
                     <Readout
-                        label="Tools"
+                        label=t!("toolchain.tools")
                         value=format!("{installed}/{total}")
-                        hint="on PATH"
+                        hint=t!("toolchain.tools-hint")
                     />
                 </div>
 
-                <SectionLabel label="Tools" />
+                <SectionLabel label=t!("toolchain.tools") />
                 <div>
                     {status
                         .tools
@@ -192,10 +192,10 @@ pub fn Toolchain() -> impl IntoView {
                                                     }
                                                 })}
                                             {(!present && tool.required)
-                                                .then(|| view! { <Pill label="required" tone=Tone::Crimson /> })}
+                                                .then(|| view! { <Pill label=t!("toolchain.required") tone=Tone::Crimson /> })}
                                         </div>
                                         <p class="mt-0.5 max-w-[70ch] text-callout text-label-2">
-                                            {tool.purpose.clone()}
+                                            {crate::i18n::tool_purpose(&tool.name, &tool.purpose)}
                                         </p>
                                         // Where it actually is. Answers the two
                                         // questions every one of these raises —
@@ -254,7 +254,7 @@ pub fn Toolchain() -> impl IntoView {
                                                             }
                                                             class="rounded-[6px] bg-rust px-2.5 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
                                                         >
-                                                            "Install"
+                                                            {t!("toolchain.install")}
                                                         </button>
                                                         {move || {
                                                             state
@@ -263,7 +263,7 @@ pub fn Toolchain() -> impl IntoView {
                                                                 .then(|| {
                                                                     view! {
                                                                         <span class="text-footnote text-label-3">
-                                                                            "output in the dock"
+                                                                            {t!("toolchain.install-output")}
                                                                         </span>
                                                                     }
                                                                 })
@@ -279,7 +279,7 @@ pub fn Toolchain() -> impl IntoView {
                                                                 view! {
                                                                     <div class="mt-1.5">
                                                                         <p class="mb-1 text-footnote text-label-2">
-                                                                            "Automatic install failed — by hand:"
+                                                                            {t!("toolchain.install-failed")}
                                                                         </p>
                                                                         <CommandLine command=command />
                                                                     </div>
@@ -302,7 +302,7 @@ pub fn Toolchain() -> impl IntoView {
                 // Settings page nobody visits until the disk is full.
                 <Downloads />
 
-                <SectionLabel label="Toolchains" />
+                <SectionLabel label=t!("toolchain.toolchains") />
                 <div class="px-4 pb-2">
                     {status
                         .toolchains
@@ -314,17 +314,17 @@ pub fn Toolchain() -> impl IntoView {
                                     <span class="font-mono text-callout select-text">
                                         {toolchain.name.clone()}
                                     </span>
-                                    {toolchain.is_default.then(|| view! { <Pill label="default" /> })}
+                                    {toolchain.is_default.then(|| view! { <Pill label=t!("toolchain.default") /> })}
                                     {toolchain
                                         .is_esp
-                                        .then(|| view! { <Pill label="Xtensa" tone=Tone::Rust /> })}
+                                        .then(|| view! { <Pill label=t!("misc.xtensa") tone=Tone::Rust /> })}
                                 </div>
                             }
                         })
                         .collect_view()}
                 </div>
 
-                <SectionLabel label=format!("Targets ({})", status.installed_targets.len()) />
+                <SectionLabel label=t!("toolchain.targets", count = status.installed_targets.len()) />
                 <div class="flex flex-wrap gap-1.5 px-4 pb-6 select-text">
                     {status
                         .installed_targets

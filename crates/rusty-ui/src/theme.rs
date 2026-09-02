@@ -8,6 +8,8 @@
 //! in `style/input.css`, so a theme change is a CSS variable swap rather than a
 //! re-render.
 
+use rusty_i18n::t;
+
 const STORAGE_KEY: &str = "rusty.theme";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -20,11 +22,11 @@ pub enum Theme {
 impl Theme {
     pub const ALL: [Theme; 3] = [Theme::System, Theme::Light, Theme::Dark];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Theme::System => "System",
-            Theme::Light => "Light",
-            Theme::Dark => "Dark",
+            Theme::System => t!("settings.appearance.theme-system"),
+            Theme::Light => t!("settings.appearance.theme-light"),
+            Theme::Dark => t!("settings.appearance.theme-dark"),
         }
     }
 

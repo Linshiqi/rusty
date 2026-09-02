@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     state::AppState,
     view::components::{Dot, Tone},
@@ -21,12 +23,11 @@ pub(super) fn CatalogueSettings() -> impl IntoView {
 
     view! {
         <Field
-            label="Where definitions come from"
-            help="Later layers win, so you can correct a built-in entry without forking anything, \
-                  and a team can check its boards into the repository."
+            label=t!("settings.catalogue.sources")
+            help=t!("settings.catalogue.sources-help")
         >
             <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 font-mono text-footnote select-text">
-                <dt class="text-label-3">"built in"</dt>
+                <dt class="text-label-3">{t!("settings.catalogue.built-in")}</dt>
                 <dd class="m-0 text-label-2">"compiled into rusty"</dd>
                 <dt class="text-label-3">"yours"</dt>
                 <dd class="m-0">"%APPDATA%\\rusty\\boards\\*.toml"</dd>
@@ -40,10 +41,8 @@ pub(super) fn CatalogueSettings() -> impl IntoView {
                 .then(|| {
                     view! {
                         <Field
-                            label="Files that would not load"
-                            help="A malformed file is kept out of the catalogue rather than \
-                                  blanking it — so the board simply never appears, which is \
-                                  why the reason belongs here."
+                            label=t!("settings.catalogue.broken")
+                            help=t!("settings.catalogue.broken-help")
                         >
                             <div class="flex flex-col gap-1.5">
                                 {problems
@@ -66,7 +65,7 @@ pub(super) fn CatalogueSettings() -> impl IntoView {
                     }
                 })
         }}
-        <Field label="Loaded">
+        <Field label=t!("settings.catalogue.loaded")>
             <div class="flex items-center gap-2">
                 <Dot tone=Tone::Patina />
                 <span class="tnum text-callout text-label-2">

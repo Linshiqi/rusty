@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::state::AppState;
 
@@ -13,7 +15,7 @@ pub(crate) fn Editor() -> impl IntoView {
         let Some(document) = state.editor.document.get() else {
             return view! {
                 <div class="flex min-w-0 flex-1 items-center justify-center">
-                    <p class="text-callout text-label-3">"Choose a file."</p>
+                    <p class="text-callout text-label-3">{t!("files.choose")}</p>
                 </div>
             }
             .into_any();

@@ -5408,6 +5408,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty-i18n"
+version = "0.3.0"
+dependencies = [
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
 name = "rusty-ipc"
 version = "0.3.0"
 
@@ -5450,6 +5457,7 @@ dependencies = [
  "rusty-dbg",
  "rusty-edit",
  "rusty-embed",
+ "rusty-i18n",
  "rusty-ipc",
  "rusty-lsp",
  "rusty-term",

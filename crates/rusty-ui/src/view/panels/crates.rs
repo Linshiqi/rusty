@@ -7,6 +7,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::view::icon::{Icon, IconView};
 use crate::{controller, state::AppState, view::components::Empty};
 
@@ -18,7 +20,7 @@ pub fn Crates() -> impl IntoView {
         view! {
             <button
                 type="button"
-                title="Ask crates.io again"
+                title=t!("crates.refresh")
                 on:click=move |_| controller::load_crate_report(state)
                 class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
@@ -42,8 +44,8 @@ pub fn Crates() -> impl IntoView {
         if !state.has_project() {
             return view! {
                 <Empty
-                    title="No project open"
-                    detail="Open a project to see its dependencies."
+                    title=t!("crates.no-project-title")
+                    detail=t!("crates.no-project-detail")
                 />
             }
             .into_any();
@@ -53,7 +55,7 @@ pub fn Crates() -> impl IntoView {
             <div class="flex min-h-0 flex-1 flex-col">
                 <div class="flex items-center gap-2 border-b border-line px-5 py-2">
                     <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                        "Direct dependencies"
+                        {t!("crates.direct")}
                     </span>
                 </div>
                 <div class="min-h-0 flex-1 overflow-y-auto">
@@ -62,7 +64,7 @@ pub fn Crates() -> impl IntoView {
                         let Some(rows) = state.project.crate_rows.get() else {
                             return view! {
                                 <p class="text-callout text-label-3">
-                                    "Asking crates.io about each dependency…"
+                                    {t!("crates.asking")}
                                 </p>
                             }
                             .into_any();
@@ -111,14 +113,14 @@ pub fn Crates() -> impl IntoView {
                                                         }
                                                         class="rounded-[6px] bg-rust px-2 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
                                                     >
-                                                        "Upgrade"
+                                                        {t!("crates.upgrade")}
                                                     </button>
                                                 }
                                                     .into_any()
                                             }
                                             (Some(_), _) => view! {
                                                 <span class="text-footnote text-patina">
-                                                    "up to date"
+                                                    {t!("misc.up-to-date")}
                                                 </span>
                                             }
                                                 .into_any(),

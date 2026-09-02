@@ -9,6 +9,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -43,7 +45,7 @@ pub fn DebugTransport() -> impl IntoView {
                 view! {
                     <button
                         type="button"
-                        title="Pause the target"
+                        title=t!("debugger.pause")
                         on:click=move |_| controller::debug_control(state, "pause")
                         class="grid size-8 place-items-center rounded-[6px] text-amber hover:bg-sunken"
                     >
@@ -55,7 +57,7 @@ pub fn DebugTransport() -> impl IntoView {
                 view! {
                     <button
                         type="button"
-                        title="Continue (F5)"
+                        title=t!("debugger.continue")
                         on:click=move |_| controller::debug_control(state, "resume")
                         class="grid size-8 place-items-center rounded-[6px] text-patina hover:bg-sunken"
                     >
@@ -72,7 +74,7 @@ pub fn DebugTransport() -> impl IntoView {
             // an orphaned QEMU nothing in the window could reach.
             <button
                 type="button"
-                title="Stop debugging and the run it started"
+                title=t!("debugger.stop")
                 on:click=move |_| controller::debug_stop(state)
                 class="grid size-8 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
             >

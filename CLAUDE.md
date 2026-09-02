@@ -84,6 +84,7 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 | `rusty-dbg` | Debugging: gdb's machine interface parsed, folded into a session state — breakpoints, stepping, stack, variables |
 | `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
+| `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface |
@@ -409,6 +410,55 @@ a layout mistake.
   the run arrow left of the breakpoint dot. Each is its own click target,
   because one glyph that means two things depending on where you hit it is how
   you set a breakpoint when you meant to run a test.
+
+## Languages
+
+`rusty-i18n` is one TOML catalogue per language plus a `t!` macro. English is
+the source; every other file is checked against it, so a key added without a
+translation fails a test rather than reaching a screen.
+
+- **The setting is `workbench.toml`; `localStorage` is a cache of it.** The
+  backend reads the setting and a second window has to agree with the first, so
+  it cannot be WebView-local — but it arrives over IPC and the language has to
+  be picked *before the first paint*. So `crate::i18n` reads a cache
+  synchronously at boot and reconciles with the file a moment later. Losing the
+  cache costs one reload and heals, which is the storage rule's actual test.
+- **Changing language reloads, and reloading must happen at most once.** The
+  first version applied the system language, read the file, and reloaded on
+  disagreement — and `set_locale` writes an atomic in wasm memory that the
+  reload destroys, so every boot rediscovered the same disagreement. A window
+  that never finished loading, with no error anywhere. Writing the cache
+  *before* reloading is what terminates it, and is the whole reason the cache
+  exists. (VS Code restarts for this too; a half-translated window is worse
+  than the language you did not want, because you cannot tell which half is
+  stale.)
+- **Backend text is translated by its key, not by its English.** A tool's
+  purpose comes over the wire as prose; the *name* beside it is the stable
+  half, so the frontend looks up `tool.<name>` and falls back to what the
+  backend said when there is no entry. Refuse-rather-than-guess applied to
+  translation: no entry means no claim. `rusty_i18n::translate` is the Option
+  form that makes the fallback possible — `lookup` asserts on a missing key,
+  which is right for `t!` and wrong here.
+- **One binary can need two wordings.** The Toolchain panel says what a tool
+  is; the setup sheet is asking permission to run it and says more. `espup` has
+  a different sentence in each, so `setup.purpose.<name>` is tried before
+  `tool.<name>`. One wording silently answering for the other is a
+  mistranslation nobody would notice.
+- **A scalar key and a table cannot share a name.** `[dock]` held the tab
+  titles and the panels below then needed sections of their own, so the tabs
+  moved to `[dock.tab]`; `menu.file` became `menu.bar.file` for the same
+  reason. TOML rejects the collision, and the test that parses every catalogue
+  is where it surfaces.
+- **Two tests carry it.** One asserts every language has exactly English's
+  keys. The other scans the frontend source for `t!("…")` and asserts each key
+  exists — the macro cannot check that at expansion time, and `lookup`'s debug
+  assertion only fires if somebody opens the screen the key is on.
+- Not translated, deliberately: command lines, tool names, chip ids, target
+  triples, and the dock's output. Users retype them, search them, and paste
+  them into issues.
+- **`t!` returns `String`.** A `&'static str` prop or return type on the path
+  to a label has to widen. That is most of the work in a new file and all of
+  the compile errors.
 
 ## UI conventions
 

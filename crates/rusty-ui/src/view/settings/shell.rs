@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use super::*;
 
 #[component]
@@ -15,7 +17,7 @@ pub fn Settings() -> impl IntoView {
                 // sidebar. A button that only closes teaches people to
                 // wonder what it commits.
                 <header class="flex h-10 flex-none items-center gap-3 border-b border-line px-4">
-                    <span class="text-strong font-semibold tracking-tight">"Settings"</span>
+                    <span class="text-strong font-semibold tracking-tight">{t!("palette.settings")}</span>
                 </header>
 
                 <div class="flex min-h-0 flex-1">

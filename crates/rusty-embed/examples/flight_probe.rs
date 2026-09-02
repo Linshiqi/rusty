@@ -262,7 +262,7 @@ fn main() {
         }
         None => {
             eprintln!(
-                "x the firmware never published att_roll, so there is no estimate to                  check.
+                "x the firmware never published att_roll, so there is no estimate to check.
   A fused attitude has to be reported for anything to read it."
             );
             std::process::exit(1);
@@ -271,8 +271,8 @@ fn main() {
 
     if calm.settled > GUST * 0.25 {
         eprintln!(
-            "x the loop never recovered from a {GUST} rad/s gust at its own gains (ended              at {:.3}).
-  Either the controller is not holding, or the plant is not being              fed.",
+            "x the loop never recovered from a {GUST} rad/s gust at its own gains (ended at {:.3}).
+  Either the controller is not holding, or the plant is not being fed.",
             calm.settled,
         );
         std::process::exit(1);

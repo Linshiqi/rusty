@@ -37,35 +37,35 @@ impl Category {
         Category::Updates,
     ];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Category::Appearance => "Appearance",
-            Category::Editor => "Editor",
-            Category::Keyboard => "Keyboard",
-            Category::Terminal => "Terminal",
-            Category::Language => "Language",
-            Category::Assistant => "Assistant",
-            Category::Catalogue => "Catalogue",
-            Category::Storage => "Storage",
-            Category::Network => "Network",
-            Category::Updates => "Updates",
+            Category::Appearance => t!("settings.category.appearance"),
+            Category::Editor => t!("settings.category.editor"),
+            Category::Keyboard => t!("settings.category.keyboard"),
+            Category::Terminal => t!("settings.category.terminal"),
+            Category::Language => t!("settings.category.language"),
+            Category::Assistant => t!("settings.category.assistant"),
+            Category::Catalogue => t!("settings.category.catalogue"),
+            Category::Storage => t!("settings.category.storage"),
+            Category::Network => t!("settings.category.network"),
+            Category::Updates => t!("settings.category.updates"),
         }
     }
 
     /// One line under the title in the list, so a category can be chosen
     /// without opening it first.
-    fn summary(self) -> &'static str {
+    fn summary(self) -> String {
         match self {
-            Category::Appearance => "Theme",
-            Category::Editor => "Modal editing, text size",
-            Category::Keyboard => "Shortcuts",
-            Category::Terminal => "Which shell runs",
-            Category::Language => "Interface language",
-            Category::Assistant => "Model and credentials",
-            Category::Catalogue => "Chips and boards",
-            Category::Storage => "Where rusty keeps its data",
-            Category::Network => "How downloads reach the internet",
-            Category::Updates => "Version and what is published",
+            Category::Appearance => t!("settings.summary.appearance"),
+            Category::Editor => t!("settings.summary.editor"),
+            Category::Keyboard => t!("settings.summary.keyboard"),
+            Category::Terminal => t!("settings.summary.terminal"),
+            Category::Language => t!("settings.summary.language"),
+            Category::Assistant => t!("settings.summary.assistant"),
+            Category::Catalogue => t!("settings.summary.catalogue"),
+            Category::Storage => t!("settings.summary.storage"),
+            Category::Network => t!("settings.summary.network"),
+            Category::Updates => t!("settings.summary.updates"),
         }
     }
 }
@@ -81,6 +81,8 @@ mod shell;
 mod storage;
 mod terminal;
 mod update;
+
+use rusty_i18n::t;
 
 pub use shell::Settings;
 // `Field` and `TextRow` are the two rows every category is built from.

@@ -10,6 +10,8 @@ use leptos::{ev, html, prelude::*};
 use rusty_edit::Document;
 use rusty_lsp::CompletionItem;
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::{
     controller,
@@ -91,7 +93,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
         view! {
             <button
                 type="button"
-                title="Format and save (Ctrl+S)"
+                title=t!("toolbar.save")
                 disabled=read_only
                 on:click=move |_| format_and_save(state, area)
                 class="grid size-8 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
@@ -100,7 +102,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
             </button>
             <button
                 type="button"
-                title="Build — cargo build --release, output in the dock"
+                title=t!("toolbar.build")
                 disabled=move || running.get()
                 on:click=move |_| controller::build_project(state)
                 class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
@@ -110,7 +112,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
             <span class="my-1 h-px w-5 bg-line" />
             <button
                 type="button"
-                title="Flash the board…"
+                title=t!("toolbar.flash")
                 on:click=move |_| state.show_dock(crate::state::DockTab::Devices)
                 class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
             >
@@ -128,7 +130,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                     view! {
                         <button
                             type="button"
-                            title="Debug — boot frozen, stop at your breakpoints"
+                            title=t!("toolbar.debug")
                             disabled=move || running.get()
                             on:click=move |_| {
                                 state.layout.panel.set("simulate".to_string());
@@ -146,7 +148,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
             // the board is on screen while the build streams to the dock.
             <button
                 type="button"
-                title="Build and run in the simulator"
+                title=t!("toolbar.run")
                 disabled=move || running.get()
                 on:click=move |_| {
                     state.layout.panel.set("simulate".to_string());
@@ -365,7 +367,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         view! {
                             <ContextMenu x=x y=y on_close=close>
                                 <MenuItem
-                                    label="Cut"
+                                    label=t!("context.editor-cut")
                                     shortcut="Ctrl+X"
                                     disabled=!has_selection || read_only
                                     on_select=Callback::new(move |_| {
@@ -390,7 +392,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     })
                                 />
                                 <MenuItem
-                                    label="Copy"
+                                    label=t!("context.editor-copy")
                                     shortcut="Ctrl+C"
                                     disabled=!has_selection
                                     on_select=Callback::new(move |_| {
@@ -406,7 +408,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     })
                                 />
                                 <MenuItem
-                                    label="Paste"
+                                    label=t!("context.editor-paste")
                                     shortcut="Ctrl+V"
                                     disabled=read_only
                         // Normal and visual mode cannot type, and this is
@@ -432,7 +434,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 />
                                 <MenuSeparator />
                                 <MenuItem
-                                    label="Go to definition"
+                                    label=t!("context.editor-definition")
                                     shortcut="Ctrl+Click"
                                     disabled=!is_rust
                                     on_select=Callback::new(move |_| {
@@ -451,7 +453,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     })
                                 />
                                 <MenuItem
-                                    label="Quick fix"
+                                    label=t!("context.editor-quick-fix")
                                     shortcut="Ctrl+."
                                     disabled=!is_rust
                                     on_select=Callback::new(move |_| {
@@ -471,14 +473,14 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 />
                                 <MenuSeparator />
                                 <MenuItem
-                                    label="Fold all"
+                                    label=t!("context.editor-fold-all")
                                     on_select=Callback::new(move |_| {
                                         fold_all(state);
                                         editor_menu.set(None);
                                     })
                                 />
                                 <MenuItem
-                                    label="Unfold all"
+                                    label=t!("context.editor-unfold-all")
                                     on_select=Callback::new(move |_| {
                                         unfold_all(state);
                                         editor_menu.set(None);
@@ -486,7 +488,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 />
                                 <MenuSeparator />
                                 <MenuItem
-                                    label="Format and save"
+                                    label=t!("context.editor-save")
                                     shortcut="Ctrl+S"
                                     disabled=read_only
                                     on_select=Callback::new(move |_| {
@@ -495,7 +497,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     })
                                 />
                                 <MenuItem
-                                    label="Find in file"
+                                    label=t!("context.editor-find")
                                     shortcut="Ctrl+F"
                                     on_select=Callback::new(move |_| {
                                         state.find.open.set(true);
@@ -613,10 +615,10 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                             .map(|r| {
                                                 let label = match r.kind {
                                                     rusty_edit::RunnableKind::Module => {
-                                                        format!("Run the tests in {}", r.name)
+                                                        t!("files.run-module", name = r.name)
                                                     }
                                                     rusty_edit::RunnableKind::Test => {
-                                                        format!("Run {}", r.name)
+                                                        t!("files.run-test", name = r.name)
                                                     }
                                                 };
                                                 let filter = r.filter.clone();
@@ -667,9 +669,9 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                      group-hover:text-label-3"
                                                 };
                                                 let title = if collapsed {
-                                                    "Click to expand the range"
+                                                    t!("files.unfold")
                                                 } else {
-                                                    "Click to collapse the range"
+                                                    t!("files.fold")
                                                 };
                                                 view! {
                                                     <button
@@ -698,7 +700,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                         line,
                                                     )
                                                 }
-                                                title="Click to set a breakpoint"
+                                                title=t!("files.breakpoint")
                                                 class="group flex cursor-pointer items-center justify-end gap-1.5"
                                             >
                                                 {runs_column

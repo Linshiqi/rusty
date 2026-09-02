@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -21,10 +23,8 @@ pub(super) fn UpdateSettings() -> impl IntoView {
 
     view! {
         <Field
-            label="Version"
-            help="Installing a new one is a download today. In-place updates need the \
-                  release to be signed; the release workflow emits the signed feed as \
-                  soon as the keypair exists."
+            label=t!("settings.update.version")
+            help=t!("settings.update.version-help")
         >
             <div class="flex flex-col gap-3">
                 <div class="flex items-center gap-3">
@@ -32,7 +32,7 @@ pub(super) fn UpdateSettings() -> impl IntoView {
                         {env!("CARGO_PKG_VERSION")}
                     </code>
                     <Button
-                        label="Check for updates"
+                        label=t!("settings.update.check")
                         kind=ButtonKind::Normal
                         on_click=Callback::new(move |_| controller::check_update(state))
                     />
@@ -46,7 +46,7 @@ pub(super) fn UpdateSettings() -> impl IntoView {
                             <div class="flex items-center gap-3">
                                 <Pill label=format!("{version} available") tone=Tone::Rust />
                                 <Button
-                                    label="Open the release"
+                                    label=t!("settings.update.open-release")
                                     kind=ButtonKind::Primary
                                     on_click=Callback::new(move |_| {
                                         controller::open_url(state, url.clone())
@@ -60,7 +60,7 @@ pub(super) fn UpdateSettings() -> impl IntoView {
                         // is the normal state of a workbench on a bench.
                         view! {
                             <p class="max-w-[70ch] text-callout text-label-3">
-                                "Could not reach GitHub — "{note}
+                                {t!("settings.update.unreachable")}{note}
                             </p>
                         }
                             .into_any()

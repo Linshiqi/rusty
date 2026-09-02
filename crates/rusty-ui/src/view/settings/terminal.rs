@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -22,11 +24,8 @@ pub(super) fn TerminalShell() -> impl IntoView {
 
     view! {
         <Field
-            label="Shell"
-            help="Auto is rusty's own built-in shell: bash syntax — pipes, redirection, \
-                  variables, globs — compiled into the app, starting the instant the \
-                  terminal opens and reading the same on every OS. Changing this restarts \
-                  the shell."
+            label=t!("settings.terminal.shell")
+            help=t!("settings.terminal.shell-help")
         >
             {move || {
                 let Some(info) = state.term.info.get() else {
@@ -47,8 +46,8 @@ pub(super) fn TerminalShell() -> impl IntoView {
                     <div class="flex flex-col gap-3">
                         <div class="inline-flex self-start rounded-[7px] bg-sunken p-0.5">
                             {[
-                                ("Auto", "auto", is_auto),
-                                ("System shell", "system", is_system),
+                                (t!("settings.terminal.auto"), "auto", is_auto),
+                                (t!("settings.terminal.system"), "system", is_system),
                             ]
                                 .into_iter()
                                 .map(|(label, value, selected)| {
@@ -75,7 +74,7 @@ pub(super) fn TerminalShell() -> impl IntoView {
                         </div>
                         <div class="flex items-center gap-2">
                             <input
-                                placeholder="or a program: nu, fish, C:\\tools\\zsh.exe"
+                                placeholder=t!("settings.terminal.custom-placeholder")
                                 class="w-72 rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
                                 prop:value=move || custom.get()
                                 on:input=move |event| custom.set(event_target_value(&event))
@@ -93,7 +92,7 @@ pub(super) fn TerminalShell() -> impl IntoView {
                                 }
                             />
                             {is_custom
-                                .then(|| view! { <Pill label="in use" tone=Tone::Rust /> })}
+                                .then(|| view! { <Pill label=t!("settings.terminal.in-use") tone=Tone::Rust /> })}
                         </div>
                         <div class="flex items-center gap-2 text-callout text-label-2">
                             <span class="text-label-3">"Next shell:"</span>

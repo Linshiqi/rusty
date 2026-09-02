@@ -9,6 +9,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::{AppState, Divider, DockTab, remember_size},
@@ -128,18 +130,22 @@ pub fn all(state: AppState) -> Vec<Command> {
 
     out.push(action(
         Action::OpenProject,
-        "Open project…",
+        &t!("menu.file.open-project"),
         chord(Action::OpenProject),
     ));
     out.push(action(
         Action::RefreshProject,
-        "Re-check project",
+        &t!("menu.project.recheck"),
         chord(Action::RefreshProject),
     ));
-    out.push(action(Action::RefreshToolchain, "Re-scan toolchain", None));
+    out.push(action(
+        Action::RefreshToolchain,
+        &t!("menu.project.rescan-toolchain"),
+        None,
+    ));
     out.push(action(
         Action::ReloadCatalog,
-        "Reload chips and boards",
+        &t!("menu.project.reload-catalogue"),
         None,
     ));
 
@@ -152,46 +158,62 @@ pub fn all(state: AppState) -> Vec<Command> {
 
     out.push(view(
         Action::ToggleDock,
-        "Toggle the panel below",
+        &t!("palette.toggle-dock"),
         chord(Action::ToggleDock),
     ));
     out.push(view(
         Action::ShowDock(DockTab::Problems),
-        "Show problems",
+        &t!("palette.show-problems"),
         None,
     ));
-    out.push(view(Action::ShowDock(DockTab::Output), "Show output", None));
+    out.push(view(
+        Action::ShowDock(DockTab::Output),
+        &t!("palette.show-output"),
+        None,
+    ));
     out.push(view(
         Action::ShowDock(DockTab::Terminal),
-        "Show terminal",
+        &t!("palette.show-terminal"),
         None,
     ));
-    out.push(view(Action::ShowDock(DockTab::Waves), "Show waves", None));
+    out.push(view(
+        Action::ShowDock(DockTab::Waves),
+        &t!("palette.show-waves"),
+        None,
+    ));
     out.push(view(
         Action::ShowDock(DockTab::Devices),
-        "Show devices",
+        &t!("palette.show-devices"),
         None,
     ));
-    out.push(view(Action::ResetLayout, "Reset panel sizes", None));
-    out.push(view(Action::NavBack, "Back", chord(Action::NavBack)));
+    out.push(view(
+        Action::ResetLayout,
+        &t!("menu.view.reset-layout"),
+        None,
+    ));
+    out.push(view(
+        Action::NavBack,
+        &t!("menu.view.back"),
+        chord(Action::NavBack),
+    ));
     out.push(view(
         Action::NavForward,
-        "Forward",
+        &t!("menu.view.forward"),
         chord(Action::NavForward),
     ));
-    out.push(view(Action::ToggleVim, "Vim keys in the editor", None));
+    out.push(view(Action::ToggleVim, &t!("menu.view.vim"), None));
 
     for theme in Theme::ALL {
         out.push(Command {
             action: Action::SetTheme(theme),
-            title: format!("Theme: {}", theme.label()),
+            title: t!("palette.theme", name = theme.label()),
             group: "Settings",
             shortcut: None,
         });
     }
     out.push(Command {
         action: Action::OpenSettings,
-        title: "Settings".to_string(),
+        title: t!("palette.settings"),
         group: "Settings",
         shortcut: chord(Action::OpenSettings),
     });
@@ -255,14 +277,14 @@ pub enum Item {
     /// A flyout, VSCode's Open Recent shape — the list stays out of the way
     /// until asked for.
     Submenu {
-        label: &'static str,
+        label: String,
         items: Vec<Item>,
     },
     Separator,
 }
 
 pub struct Menu {
-    pub title: &'static str,
+    pub title: String,
     pub items: Vec<Item>,
 }
 
@@ -305,18 +327,30 @@ pub fn menus(state: AppState) -> Vec<Menu> {
     let mut view_items = vec![
         entry(
             Action::OpenPalette,
-            "Command palette…",
+            &t!("menu.view.palette"),
             chord(Action::OpenPalette),
         ),
         Item::Separator,
         Item::Submenu {
-            label: "Appearance",
+            label: t!("menu.view.appearance"),
             items: vec![
-                entry(Action::SetTheme(Theme::System), "Theme: System", None),
-                entry(Action::SetTheme(Theme::Light), "Theme: Light", None),
-                entry(Action::SetTheme(Theme::Dark), "Theme: Dark", None),
+                entry(
+                    Action::SetTheme(Theme::System),
+                    &t!("menu.view.theme-system"),
+                    None,
+                ),
+                entry(
+                    Action::SetTheme(Theme::Light),
+                    &t!("menu.view.theme-light"),
+                    None,
+                ),
+                entry(
+                    Action::SetTheme(Theme::Dark),
+                    &t!("menu.view.theme-dark"),
+                    None,
+                ),
                 Item::Separator,
-                entry(Action::ResetLayout, "Reset panel sizes", None),
+                entry(Action::ResetLayout, &t!("menu.view.reset-layout"), None),
             ],
         },
         Item::Separator,
@@ -328,17 +362,17 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         entry_when(
             Requires::NavBack,
             Action::NavBack,
-            "Back",
+            &t!("menu.view.back"),
             chord(Action::NavBack),
         ),
         entry_when(
             Requires::NavForward,
             Action::NavForward,
-            "Forward",
+            &t!("menu.view.forward"),
             chord(Action::NavForward),
         ),
         Item::Separator,
-        entry(Action::ToggleVim, "Vim keys in the editor", None),
+        entry(Action::ToggleVim, &t!("menu.view.vim"), None),
         Item::Separator,
     ];
     for panel in panels::all().into_iter().filter(|p| !p.hidden) {
@@ -355,23 +389,51 @@ pub fn menus(state: AppState) -> Vec<Menu> {
     }
     view_items.extend([
         Item::Separator,
-        entry(Action::ToggleDock, "Panel below", chord(Action::ToggleDock)),
-        entry(Action::ShowDock(DockTab::Problems), "Problems", None),
-        entry(Action::ShowDock(DockTab::Output), "Output", None),
-        entry(Action::ShowDock(DockTab::Terminal), "Terminal", None),
-        entry(Action::ShowDock(DockTab::Waves), "Waves", None),
-        entry(Action::ShowDock(DockTab::Devices), "Devices", None),
+        entry(
+            Action::ToggleDock,
+            &t!("menu.view.panel-below"),
+            chord(Action::ToggleDock),
+        ),
+        entry(
+            Action::ShowDock(DockTab::Problems),
+            &t!("dock.tab.problems"),
+            None,
+        ),
+        entry(
+            Action::ShowDock(DockTab::Output),
+            &t!("dock.tab.output"),
+            None,
+        ),
+        entry(
+            Action::ShowDock(DockTab::Terminal),
+            &t!("dock.tab.terminal"),
+            None,
+        ),
+        entry(
+            Action::ShowDock(DockTab::Waves),
+            &t!("dock.tab.waves"),
+            None,
+        ),
+        entry(
+            Action::ShowDock(DockTab::Devices),
+            &t!("dock.tab.devices"),
+            None,
+        ),
     ]);
 
     vec![
         Menu {
-            title: "File",
+            title: t!("menu.bar.file"),
             items: {
                 let mut items = vec![
-                    entry(Action::ShowPanel("wizard"), "New project…", None),
+                    entry(
+                        Action::ShowPanel("wizard"),
+                        &t!("menu.file.new-project"),
+                        None,
+                    ),
                     entry(
                         Action::OpenProject,
-                        "Open project…",
+                        &t!("menu.file.open-project"),
                         chord(Action::OpenProject),
                     ),
                 ];
@@ -386,7 +448,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                         })
                         .collect();
                     items.push(Item::Submenu {
-                        label: "Open Recent",
+                        label: t!("menu.file.open-recent"),
                         items: recent_items,
                     });
                 }
@@ -394,98 +456,146 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                     Item::Separator,
                     entry(
                         Action::OpenSettings,
-                        "Settings…",
+                        &t!("menu.file.settings"),
                         chord(Action::OpenSettings),
                     ),
                     Item::Separator,
-                    entry(Action::CloseWindow, "Exit", None),
+                    entry(Action::CloseWindow, &t!("menu.file.exit"), None),
                 ]);
                 items
             },
         },
         Menu {
-            title: "Edit",
+            title: t!("menu.bar.edit"),
             items: vec![
-                project_entry(Action::Undo, "Undo", Some("Ctrl+Z".to_string())),
-                project_entry(Action::Redo, "Redo", Some("Ctrl+Y".to_string())),
+                project_entry(
+                    Action::Undo,
+                    &t!("menu.edit.undo"),
+                    Some("Ctrl+Z".to_string()),
+                ),
+                project_entry(
+                    Action::Redo,
+                    &t!("menu.edit.redo"),
+                    Some("Ctrl+Y".to_string()),
+                ),
                 Item::Separator,
-                project_entry(Action::Cut, "Cut", Some("Ctrl+X".to_string())),
-                project_entry(Action::Copy, "Copy", Some("Ctrl+C".to_string())),
-                project_entry(Action::Paste, "Paste", Some("Ctrl+V".to_string())),
+                project_entry(
+                    Action::Cut,
+                    &t!("menu.edit.cut"),
+                    Some("Ctrl+X".to_string()),
+                ),
+                project_entry(
+                    Action::Copy,
+                    &t!("menu.edit.copy"),
+                    Some("Ctrl+C".to_string()),
+                ),
+                project_entry(
+                    Action::Paste,
+                    &t!("menu.edit.paste"),
+                    Some("Ctrl+V".to_string()),
+                ),
                 Item::Separator,
                 project_entry(
                     Action::ShowPanel("search"),
-                    "Search in project",
+                    &t!("menu.edit.search"),
                     chord(Action::ShowPanel("search")),
                 ),
             ],
         },
         Menu {
-            title: "Project",
+            title: t!("menu.bar.project"),
             items: vec![
                 project_entry(
                     Action::RefreshProject,
-                    "Re-check project",
+                    &t!("menu.project.recheck"),
                     chord(Action::RefreshProject),
                 ),
-                entry(Action::RefreshToolchain, "Re-scan toolchain", None),
-                entry(Action::ReloadCatalog, "Reload chips and boards", None),
+                entry(
+                    Action::RefreshToolchain,
+                    &t!("menu.project.rescan-toolchain"),
+                    None,
+                ),
+                entry(
+                    Action::ReloadCatalog,
+                    &t!("menu.project.reload-catalogue"),
+                    None,
+                ),
                 Item::Separator,
                 // The two directions people actually need, named as
                 // directions rather than as tool names: nobody thinks
                 // "I need cc", they think "I have this C driver".
                 Item::Submenu {
-                    label: "Add C interop",
+                    label: t!("menu.project.c-interop"),
                     items: vec![
                         project_entry(
                             Action::ToggleComment,
-                            "Comment or uncomment",
+                            &t!("menu.project.comment"),
                             chord(Action::ToggleComment),
                         ),
-                        project_entry(Action::Rename, "Rename symbol…", chord(Action::Rename)),
+                        project_entry(
+                            Action::Rename,
+                            &t!("menu.project.rename"),
+                            chord(Action::Rename),
+                        ),
                         Item::Separator,
-                        project_entry(Action::ScaffoldC("rust-calls-c"), "Rust calls C…", None),
-                        project_entry(Action::ScaffoldC("c-calls-rust"), "C calls Rust…", None),
+                        project_entry(
+                            Action::ScaffoldC("rust-calls-c"),
+                            &t!("menu.project.rust-calls-c"),
+                            None,
+                        ),
+                        project_entry(
+                            Action::ScaffoldC("c-calls-rust"),
+                            &t!("menu.project.c-calls-rust"),
+                            None,
+                        ),
                     ],
                 },
             ],
         },
         Menu {
-            title: "View",
+            title: t!("menu.bar.view"),
             items: view_items,
         },
         Menu {
-            title: "Device",
+            title: t!("menu.bar.device"),
             items: vec![
-                entry(Action::ScanDevices, "Re-scan ports and probes", None),
+                entry(Action::ScanDevices, &t!("menu.device.rescan"), None),
                 Item::Separator,
                 project_entry(
                     Action::ShowDock(DockTab::Devices),
-                    "Flash and monitor…",
+                    &t!("menu.device.flash"),
                     None,
                 ),
                 Item::Separator,
-                project_entry(Action::ShowPanel("memory"), "Memory report", None),
+                project_entry(Action::ShowPanel("memory"), &t!("menu.device.memory"), None),
             ],
         },
         Menu {
-            title: "Help",
+            title: t!("menu.bar.help"),
             items: vec![
                 // First in Help because it is the first question a fresh
                 // install raises, and because the automatic check only
                 // appears when something is missing — somebody who wants to
                 // look anyway needs a way in.
-                entry(Action::CheckEnvironment, "Check my environment…", None),
+                entry(
+                    Action::CheckEnvironment,
+                    &t!("menu.help.check-environment"),
+                    None,
+                ),
                 Item::Separator,
-                entry(Action::OpenSettings, "Keyboard shortcuts", None),
-                entry(Action::ShowPanel("assistant"), "Ask the assistant", None),
+                entry(Action::OpenSettings, &t!("menu.help.shortcuts"), None),
+                entry(
+                    Action::ShowPanel("assistant"),
+                    &t!("menu.help.assistant"),
+                    None,
+                ),
                 Item::Separator,
                 // Somewhere to send a bug. Without this the only route back
                 // from a user is the one they invent, and most people invent
                 // none — a workbench nobody can report a fault in gets
                 // reported as "it did not work" or not at all.
-                entry(Action::OpenUrl(ISSUES), "Report a problem…", None),
-                entry(Action::OpenUrl(RELEASES), "Downloads and releases", None),
+                entry(Action::OpenUrl(ISSUES), &t!("menu.help.report"), None),
+                entry(Action::OpenUrl(RELEASES), &t!("menu.help.releases"), None),
             ],
         },
     ]

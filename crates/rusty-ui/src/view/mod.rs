@@ -28,6 +28,8 @@ pub mod waves;
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -48,7 +50,7 @@ pub struct SettingsOpen(pub RwSignal<bool>);
 /// A panel as the shell sees it.
 pub struct Panel {
     pub id: &'static str,
-    pub title: &'static str,
+    pub title: String,
     /// Sidebar group. Empty means "belongs to no category" and is drawn as a
     /// rule rather than a heading — for panels like the wizard and the
     /// assistant, which are not about the open project or the attached device
@@ -77,6 +79,9 @@ pub fn App() -> impl IntoView {
     // Reattach to whatever the backend still holds; a frontend reload during
     // development should not lose the open project.
     controller::restore(state);
+    // And correct the language if the stored setting differs from the
+    // system's. Usually it does not, and this does nothing.
+    crate::i18n::restore_locale();
 
     // The browser's own chrome never belongs in the app: no native context
     // menu anywhere (surfaces that want one draw their own), and none of the
@@ -128,11 +133,11 @@ pub fn App() -> impl IntoView {
                 <div class="flex h-8 flex-none items-center justify-end border-b border-line px-2">
                     <button
                         type="button"
-                        title="Close this window and reopen the file in the main one"
+                        title=t!("chrome.back-to-main-hint")
                         on:click=move |_| controller::reattach(state, home.clone())
                         class="flex h-[26px] items-center gap-1.5 rounded-[6px] px-2.5 text-footnote text-label-2 transition-colors hover:bg-sunken hover:text-label"
                     >
-                        "↩ Back to the main window"
+                        {t!("chrome.back-to-main")}
                     </button>
                 </div>
                 <div class="flex min-h-0 flex-1 flex-col">
@@ -225,12 +230,12 @@ pub fn App() -> impl IntoView {
                     <aside class="flex w-[400px] flex-none flex-col border-l border-line bg-sidebar">
                         <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
                             <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                                "Assistant"
+                                {t!("chrome.assistant")}
                             </span>
                             <span class="flex-1" />
                             <button
                                 type="button"
-                                title="Close"
+                                title=t!("chrome.close")
                                 on:click=move |_| state.ai.open.set(false)
                                 class="rounded-[5px] px-1.5 text-footnote text-label-3 hover:text-label"
                             >
@@ -263,10 +268,8 @@ fn Stage() -> impl IntoView {
             Some(panel) if panel.needs_project && !state.has_project() => {
                 view! {
                     <components::Empty
-                        title="No project open"
-                        detail="Choose a folder containing a Cargo.toml. rusty reads the \
-                                project's four configuration files and cross-checks them, so \
-                                it can open — and diagnose — a project that does not build."
+                        title=t!("chrome.no-project-title")
+                        detail=t!("chrome.no-project-detail")
                     >
                         <OpenProjectButton kind=ButtonKind::Primary />
                         // The way back to yesterday's work, one click deep.
@@ -277,7 +280,7 @@ fn Stage() -> impl IntoView {
                                     view! {
                                         <div class="mt-4 flex w-full max-w-[52ch] flex-col gap-0.5 text-left">
                                             <div class="mb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                                                "Recent"
+                                                {t!("chrome.recent")}
                                             </div>
                                             {recents
                                                 .into_iter()
@@ -322,7 +325,7 @@ fn OpenProjectButton(#[prop(default = ButtonKind::Normal)] kind: ButtonKind) -> 
     let state = AppState::expect();
     let open = Callback::new(move |_| controller::choose_project(state));
 
-    view! { <Button label="Open project…" kind=kind on_click=open /> }
+    view! { <Button label=t!("menu.file.open-project") kind=kind on_click=open /> }
 }
 
 #[component]
@@ -343,7 +346,7 @@ fn Sidebar() -> impl IntoView {
     view! {
         <nav
             class="flex w-[46px] flex-none flex-col overflow-y-auto border-r border-line bg-sidebar pt-1.5 pb-2"
-            aria-label="Panels"
+            aria-label=t!("misc.panels")
         >
             {sections
                 .into_iter()
@@ -359,7 +362,7 @@ fn Sidebar() -> impl IntoView {
                                 .into_iter()
                                 .map(|panel| {
                                     let id = panel.id;
-                                    let title = panel.title;
+                                    let title = panel.title.clone();
                                     let icon = panel.icon;
                                     let needs_project = panel.needs_project;
                                     let selected = Signal::derive(move || {
@@ -376,9 +379,9 @@ fn Sidebar() -> impl IntoView {
                                             disabled=move || disabled.get()
                                             title=move || {
                                                 if disabled.get() {
-                                                    format!("{title} — open a project first")
+                                                    t!("panel.needs-project", panel = title)
                                                 } else {
-                                                    title.to_string()
+                                                    title.clone()
                                                 }
                                             }
                                             on:click=move |_| {
@@ -427,7 +430,7 @@ fn Sidebar() -> impl IntoView {
                     view! {
                         <button
                             type="button"
-                            title="Settings (Ctrl+,)"
+                            title=t!("toolbar.settings")
                             on:click=move |_| settings.update(|open| *open = !*open)
                             class=move || {
                                 let base =
@@ -507,7 +510,7 @@ fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
     let proposal = RwSignal::new(None::<rusty_embed::Migration>);
     let picking = RwSignal::new(false);
     let current = chip.clone();
-    let row = |label: &'static str, value: String, note: &'static str| {
+    let row = |label: String, value: String, note: String| {
         view! {
             <div class="flex flex-col gap-0.5 px-3 py-1.5">
                 <div class="flex items-baseline gap-2">
@@ -523,11 +526,11 @@ fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
         <div class="relative h-full">
             <button
                 type="button"
-                title="What this project builds for — click for the target and toolchain"
+                title=t!("status.built-for-hint")
                 on:click=move |_| open.update(|it| *it = !*it)
                 class="flex h-full items-center gap-1.5 border-r border-line px-3 transition-colors hover:bg-sunken hover:text-label"
             >
-                <span class="text-label-3">"chip"</span>
+                <span class="text-label-3">{t!("status.chip")}</span>
                 {chip}
                 <span class="text-label-4">"▴"</span>
             </button>
@@ -550,14 +553,14 @@ fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
                             // sitting in an otherwise empty box.
                             <div class="absolute bottom-full left-0 z-50 mb-px max-h-[70vh] w-max max-w-[34rem] min-w-[14rem] overflow-y-auto rounded-t-[8px] border border-line bg-raised py-1.5 shadow-lg">
                                 {row(
-                                    "target",
+                                    t!("status.target"),
                                     target.clone(),
-                                    "target triple, from .cargo/config.toml",
+                                    t!("status.target-note"),
                                 )}
                                 {row(
-                                    "toolchain",
+                                    t!("status.toolchain"),
                                     toolchain.clone(),
-                                    "channel, from rust-toolchain.toml",
+                                    t!("status.toolchain-note"),
                                 )}
                                 <div class="my-1 h-px bg-line" />
                                 <SwitchChip current=current picking=picking proposal=proposal />
@@ -650,14 +653,14 @@ fn SwitchChip(
                                             }
                                             class="rounded-[6px] bg-rust px-2.5 py-1 text-caption text-window transition-opacity hover:opacity-90"
                                         >
-                                            "Switch"
+                                            {t!("migrate.switch")}
                                         </button>
                                         <button
                                             type="button"
                                             on:click=move |_| proposal.set(None)
                                             class="rounded-[6px] px-2.5 py-1 text-caption text-label-2 transition-colors hover:bg-sunken hover:text-label"
                                         >
-                                            "Cancel"
+                                            {t!("migrate.cancel")}
                                         </button>
                                     </div>
                                 }
@@ -673,7 +676,7 @@ fn SwitchChip(
                         on:click=move |_| picking.set(true)
                         class="flex w-full items-center px-3 py-1.5 text-left text-footnote text-label-2 transition-colors hover:bg-sunken hover:text-label"
                     >
-                        "Switch this project to another chip…"
+                        {t!("migrate.pick")}
                     </button>
                 }
                     .into_any();
@@ -701,10 +704,7 @@ fn SwitchChip(
                             let detail = if same_hal {
                                 format!("{} · {}", chip.arch.label(), chip.bare_metal_target)
                             } else {
-                                format!(
-                                    "{} · different HAL — a new project, not a switch",
-                                    chip.arch.label(),
-                                )
+                                t!("migrate.different-hal", arch = chip.arch.label())
                             };
                             let tone = if same_hal { "text-label-4" } else { "text-amber" };
                             view! {
@@ -714,9 +714,7 @@ fn SwitchChip(
                                     title=if same_hal {
                                         String::new()
                                     } else {
-                                        "Every call your firmware makes to the HAL differs. \
-                                         The wizard creates a project for this part."
-                                            .to_string()
+                                        t!("migrate.different-hal-hint")
                                     }
                                     on:click=move |_| {
                                         controller::plan_migration(state, id.clone(), proposal)
@@ -753,7 +751,7 @@ fn StatusBar() -> impl IntoView {
                 view! {
                     <span class="flex h-full items-center gap-1.5 border-r border-line px-3">
                         <Dot tone=if busy { Tone::Amber } else { Tone::Patina } />
-                        {if busy { "working" } else { "ready" }}
+                        {if busy { t!("status.working") } else { t!("status.ready") }}
                     </span>
                 }
             }}
@@ -768,21 +766,21 @@ fn StatusBar() -> impl IntoView {
                     .then(|| {
                         let (text, tone) = match lsp {
                             crate::state::LspStatus::Starting => {
-                                ("rust-analyzer starting".to_string(), Tone::Neutral)
+                                (t!("status.lsp-starting"), Tone::Neutral)
                             }
                             crate::state::LspStatus::Ready if errors > 0 => {
-                                (format!("{errors} errors"), Tone::Crimson)
+                                (t!("status.lsp-errors", count = errors), Tone::Crimson)
                             }
                             crate::state::LspStatus::Ready => {
                                 ("rust-analyzer".to_string(), Tone::Patina)
                             }
-                            _ => ("rust-analyzer missing".to_string(), Tone::Crimson),
+                            _ => (t!("status.lsp-missing"), Tone::Crimson),
                         };
                         view! {
                             <Status
                                 text=text
                                 tone=tone
-                                title="The language server behind the editor"
+                                title=t!("status.lsp-hint")
                                 on_click=Callback::new(move |_| {
                                     state.show_dock(crate::state::DockTab::Problems)
                                 })
@@ -816,7 +814,7 @@ fn StatusBar() -> impl IntoView {
                             <Status
                                 text=text
                                 tone=tone
-                                title="Modal editing. Escape returns to normal mode."
+                                title=t!("status.vim-hint")
                             />
                         }
                     })
@@ -828,16 +826,16 @@ fn StatusBar() -> impl IntoView {
                 (total > 0)
                     .then(|| {
                         let text = if blocking > 0 {
-                            format!("{blocking} blocking")
+                            t!("status.blocking", count = blocking)
                         } else {
-                            format!("{total} notes")
+                            t!("status.notes", count = total)
                         };
                         let tone = if blocking > 0 { Tone::Crimson } else { Tone::Amber };
                         view! {
                             <Status
                                 text=text
                                 tone=tone
-                                title="Show them in the panel below"
+                                title=t!("status.problems-hint")
                                 on_click=Callback::new(move |_| {
                                     state.show_dock(crate::state::DockTab::Problems)
                                 })
@@ -851,15 +849,18 @@ fn StatusBar() -> impl IntoView {
                     .project.detected
                     .get()
                     .map(|project| {
-                        let chip = project.chip.clone().unwrap_or_else(|| "no chip".into());
+                        let chip = project
+                            .chip
+                            .clone()
+                            .unwrap_or_else(|| t!("status.no-chip"));
                         let target = project
                             .configured_target
                             .clone()
-                            .unwrap_or_else(|| "no target".into());
+                            .unwrap_or_else(|| t!("status.no-target"));
                         let toolchain = project
                             .configured_toolchain
                             .clone()
-                            .unwrap_or_else(|| "unpinned".into());
+                            .unwrap_or_else(|| t!("status.unpinned"));
                         // One chip, not three. The three values answer one
                         // question — what is this project built for — and the
                         // chip is the part of the answer anyone reads at a
@@ -885,7 +886,7 @@ fn StatusBar() -> impl IntoView {
                     .map(|report| {
                         view! {
                             <span class="flex h-full items-center border-l border-line px-3">
-                                {format!("{} deps", report.vitals.resolved_deps)}
+                                {t!("status.deps", count = report.vitals.resolved_deps)}
                             </span>
                         }
                     })
@@ -898,9 +899,9 @@ fn StatusBar() -> impl IntoView {
                 view! {
                     <span
                         class="flex h-full items-center border-l border-line px-3"
-                        title="Boards known, after your own and the project's files are layered in"
+                        title=t!("status.boards-hint")
                     >
-                        {format!("{boards} boards")}
+                        {t!("status.boards", count = boards)}
                     </span>
                 }
             }}

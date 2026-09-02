@@ -13,6 +13,8 @@ use leptos::prelude::*;
 
 use rusty_embed::{FlashAction, Transport};
 
+use rusty_i18n::t;
+
 use crate::{
     controller, format,
     state::AppState,
@@ -50,8 +52,8 @@ pub fn Session() -> impl IntoView {
         if state.project.firmware.with(Vec::is_empty) {
             return view! {
                 <Empty
-                    title="Nothing built yet"
-                    detail="There has to be a binary before there is anything to put on a board."
+                    title=t!("session.nothing-built-title")
+                    detail=t!("session.nothing-built-detail")
                 >
                     <div class="mt-1">
                         <CommandLine command="cargo build --release" />
@@ -66,8 +68,8 @@ pub fn Session() -> impl IntoView {
                 <Devices />
                 <div class="flex items-center gap-1.5 px-4 pt-3">
                     {[
-                        (FlashAction::FlashAndMonitor, "Flash and monitor"),
-                        (FlashAction::Monitor, "Attach only"),
+                        (FlashAction::FlashAndMonitor, t!("session.flash-and-monitor")),
+                        (FlashAction::Monitor, t!("session.attach-only")),
                     ]
                         .into_iter()
                         .map(|(action, label)| {
@@ -108,10 +110,10 @@ pub fn Devices() -> impl IntoView {
     view! {
         <div class="flex items-center gap-3 px-4 pt-3">
             <span class="flex-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                "Device"
+                {t!("session.device")}
             </span>
             <Button
-                label="Re-scan"
+                label=t!("session.rescan")
                 kind=ButtonKind::Quiet
                 on_click=Callback::new(move |_| controller::scan_devices(state))
             />
@@ -124,9 +126,7 @@ pub fn Devices() -> impl IntoView {
             if ports.is_empty() && probes.is_empty() {
                 return view! {
                     <p class="px-4 py-3 text-callout leading-relaxed text-label-2">
-                        "Nothing attached. On Windows a board with no driver enumerates as an \
-                         unknown device rather than a COM port, so if the board is plugged in and \
-                         not here, that is the thing to check first."
+                        {t!("session.nothing-attached")}
                     </p>
                 }
                     .into_any();
@@ -239,23 +239,23 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
     let state = AppState::expect();
 
     view! {
-        <SectionLabel label="Command" />
+        <SectionLabel label=t!("session.command") />
         {move || {
             let running = state.app.session_running.get();
             // The button names what this mode does, and the Output channel
             // follows it — `FlashAndMonitor` is not a verb anyone says.
             let (verb, channel) = match mode.get() {
-                FlashAction::Monitor => ("Attach", "monitor"),
-                _ => ("Flash and monitor", "flash"),
+                FlashAction::Monitor => (t!("session.attach"), "monitor"),
+                _ => (t!("session.flash-and-monitor"), "flash"),
             };
 
             let Some(plan) = state.device.plan.get() else {
                 // Say which half is missing. "Cannot flash" with no reason is
                 // the failure mode this whole workbench exists to avoid.
                 let reason = if state.device.transport.with(Option::is_none) {
-                    "Choose a device above."
+                    t!("session.choose-device")
                 } else {
-                    "No build selected — the Memory panel lists what this project has built."
+                    t!("session.no-build")
                 };
                 return view! {
                     <p class="px-4 pb-4 text-callout text-label-2">{reason}</p>
@@ -324,7 +324,7 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
                             })
                         />
                         <Button
-                            label="Stop"
+                            label=t!("session.stop")
                             disabled=Signal::derive(move || !state.app.session_running.get())
                             on_click=Callback::new(move |_| controller::stop_session(state))
                         />

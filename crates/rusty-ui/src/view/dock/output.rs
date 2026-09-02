@@ -9,6 +9,8 @@ use leptos::prelude::*;
 use rusty_embed::LogLevel;
 
 use super::*;
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -126,10 +128,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                 if lines.is_empty() && total > 0 {
                     return view! {
                         <p class="px-4 py-3 text-callout text-label-3">
-                            {format!(
-                                "All {total} lines are hidden by the current channel and \
-                                 filter.",
-                            )}
+                            {t!("dock.output.all-hidden", total = total)}
                         </p>
                     }
                         .into_any();
@@ -137,8 +136,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                 if lines.is_empty() {
                     return view! {
                         <p class="px-4 py-3 text-callout text-label-2">
-                            "Output from flashing, monitoring and anything you run below lands \
-                             here, and stays while you work in other panels."
+                            {t!("dock.output.empty")}
                         </p>
                     }
                         .into_any();
@@ -149,7 +147,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                             .then(|| {
                                 view! {
                                     <div class="text-caption text-label-4">
-                                        {format!("… {hidden} lines hidden by the filter")}
+                                        {t!("dock.output.hidden", count = hidden)}
                                     </div>
                                 }
                             })}
@@ -203,7 +201,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                                                     view! {
                                                         <button
                                                             type="button"
-                                                            title="Open in the editor"
+                                                            title=t!("dock.output.open-in-editor")
                                                             class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-rust"
                                                             on:click=move |_| {
                                                                 controller::open_at(
@@ -238,9 +236,9 @@ pub(super) fn OutputTab() -> impl IntoView {
                 class="min-w-0 flex-1 bg-transparent font-mono text-footnote outline-none placeholder:text-label-3"
                 placeholder=move || {
                     if state.has_project() {
-                        "cargo build --release".to_string()
+                        t!("dock.chrome.command-placeholder")
                     } else {
-                        "open a project first — commands run in its root".to_string()
+                        t!("dock.chrome.command-needs-project")
                     }
                 }
                 disabled=move || !state.has_project()
@@ -263,7 +261,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                                 class="shrink-0 rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:text-label"
                                 on:click=move |_| controller::stop_session(state)
                             >
-                                "Stop"
+                                {t!("dock.chrome.stop")}
                             </button>
                         }
                     })
@@ -274,9 +272,9 @@ pub(super) fn OutputTab() -> impl IntoView {
             let (x, y, line) = menu.get()?;
             let close = Callback::new(move |_| menu.set(None));
             let follow_label = if state.dock.follow.get_untracked() {
-                "Stop following"
+                t!("context.output-stop-following")
             } else {
-                "Follow new output"
+                t!("context.output-follow")
             };
             Some(
                 view! {
@@ -285,7 +283,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                             .map(|text| {
                                 view! {
                                     <MenuItem
-                                        label="Copy line"
+                                        label=t!("context.output-copy-line")
                                         on_select=Callback::new(move |_| {
                                             copy_to_clipboard(&text);
                                             menu.set(None);
@@ -294,7 +292,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                                 }
                             })}
                         <MenuItem
-                            label="Copy all"
+                            label=t!("context.output-copy-all")
                             on_select=Callback::new(move |_| {
                                 let all = state
                                     .dock.lines
@@ -318,7 +316,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                             })
                         />
                         <MenuItem
-                            label="Clear"
+                            label=t!("context.output-clear")
                             on_select=Callback::new(move |_| {
                                 state.clear_log();
                                 menu.set(None);

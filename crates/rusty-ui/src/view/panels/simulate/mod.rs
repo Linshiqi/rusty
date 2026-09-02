@@ -24,6 +24,8 @@ use geometry::*;
 use library::Library;
 use rusty_embed::SimBoard;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -45,8 +47,8 @@ pub fn Simulate() -> impl IntoView {
         if !state.has_project() {
             return view! {
                 <Empty
-                    title="No project open"
-                    detail="Open a firmware project to run it in the simulator."
+                    title=t!("simulate.no-project-title")
+                    detail=t!("simulate.no-project-detail")
                 />
             }
             .into_any();
@@ -85,7 +87,7 @@ pub fn Simulate() -> impl IntoView {
                         view! {
                             <div class="flex flex-col gap-2.5 border-b border-line bg-amber-fill px-4 py-3">
                                 <p class="text-callout font-medium">
-                                    "The simulator needs tools that are not installed."
+                                    {t!("simulate.tools-missing")}
                                 </p>
                                 {missing
                                     .iter()
@@ -118,7 +120,7 @@ pub fn Simulate() -> impl IntoView {
                                                         }
                                                         class="rounded-[6px] bg-rust px-2.5 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
                                                     >
-                                                        "Install"
+                                                        {t!("simulate.install")}
                                                     </button>
                                                 </div>
                                                 {move || {
@@ -129,7 +131,7 @@ pub fn Simulate() -> impl IntoView {
                                                             view! {
                                                                 <div class="flex flex-col gap-1">
                                                                     <span class="text-footnote text-label-2">
-                                                                        "Automatic install failed — by hand:"
+                                                                        {t!("simulate.install-failed")}
                                                                     </span>
                                                                     <code class="rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote select-text">
                                                                         {manual}
@@ -368,7 +370,7 @@ fn BoardEditor(
                         view! {
                             <button
                                 type="button"
-                                title="Stop the simulation"
+                                title=t!("simulate.stop")
                                 on:click=move |_| controller::stop_session_now(state)
                                 class="grid size-8 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
                             >
@@ -381,7 +383,7 @@ fn BoardEditor(
                         view! {
                             <button
                                 type="button"
-                                title="Build and simulate"
+                                title=t!("simulate.run")
                                 disabled=disabled
                                 on:click=move |_| controller::run_simulation(state, false)
                                 class="grid size-8 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
@@ -392,10 +394,9 @@ fn BoardEditor(
                                 type="button"
                                 disabled=disabled || !debuggable
                                 title=if debuggable {
-                                    "Boot frozen with the gdbstub listening; gdb attaches in \
-                                     the terminal"
+                                    t!("simulate.debug")
                                 } else {
-                                    "Install the matching gdb first — see the tools card"
+                                    t!("simulate.debug-blocked")
                                 }
                                 on:click=move |_| controller::run_simulation(state, true)
                                 class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
@@ -413,7 +414,7 @@ fn BoardEditor(
                 <crate::view::transport::DebugTransport />
                 <button
                     type="button"
-                    title="Save the board layout"
+                    title=t!("simulate.save")
                     disabled=move || !dirty.get()
                     on:click=move |_| save.run(())
                     class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
@@ -423,7 +424,7 @@ fn BoardEditor(
                 <span class="my-1 h-px w-5 bg-line" />
                 <button
                     type="button"
-                    title="Undo (Ctrl+Z)"
+                    title=t!("simulate.undo")
                     disabled=move || history.with(Vec::is_empty)
                     on:click=move |_| undo()
                     class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
@@ -432,7 +433,7 @@ fn BoardEditor(
                 </button>
                 <button
                     type="button"
-                    title="Redo (Ctrl+Y)"
+                    title=t!("simulate.redo")
                     disabled=move || future.with(Vec::is_empty)
                     on:click=move |_| redo()
                     class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
@@ -442,7 +443,7 @@ fn BoardEditor(
                 <span class="my-1 h-px w-5 bg-line" />
                 <button
                     type="button"
-                    title="Zoom out"
+                    title=t!("simulate.zoom-out")
                     on:click=move |_| {
                         view.update(|(_, _, k)| *k = (*k / 1.2).max(0.35))
                     }
@@ -455,7 +456,7 @@ fn BoardEditor(
                 </span>
                 <button
                     type="button"
-                    title="Zoom in"
+                    title=t!("simulate.zoom-in")
                     on:click=move |_| {
                         view.update(|(_, _, k)| *k = (*k * 1.2).min(2.5))
                     }
@@ -465,7 +466,7 @@ fn BoardEditor(
                 </button>
                 <button
                     type="button"
-                    title="Fit everything on screen (F)"
+                    title=t!("simulate.fit")
                     on:click=move |_| fit_view()
                     class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
                 >
@@ -473,7 +474,7 @@ fn BoardEditor(
                 </button>
                 <button
                     type="button"
-                    title="Snap grid — click to cycle 1/4/8/16px"
+                    title=t!("simulate.grid")
                     on:click=move |_| {
                         grid.update(|g| {
                             *g = match *g as i32 {
@@ -505,21 +506,12 @@ fn BoardEditor(
                     // `println!` — or the reverse.
                     let (label, detail) = match state.sim.pin_source.get() {
                         rusty_embed::PinSource::Emulator => (
-                            "running — pins from the emulator",
-                            "Pin levels are read from the chip's GPIO registers, so they are \
-                             true whether or not the firmware prints anything about itself. \
-                             A button press drives the pin the firmware actually reads, and \
-                             also sends `B<pin>=1` over the console for firmware written \
-                             against rusty's text protocol.",
+                            t!("simulate.pins-emulator"),
+                            t!("simulate.pins-emulator-detail"),
                         ),
                         rusty_embed::PinSource::Firmware => (
-                            "running — pins as the firmware reports them",
-                            "Pin levels are what the firmware reports over the serial line, \
-                             not what the chip drove — this emulator's GPIO peripheral keeps \
-                             no state, so firmware that does not print `[rusty:gpio] 0=1` \
-                             tells this board nothing. Buttons travel the same way: pressing \
-                             one sends `B<pin>=1` into the firmware's UART rather than \
-                             driving the pin.",
+                            t!("simulate.pins-firmware"),
+                            t!("simulate.pins-firmware-detail"),
                         ),
                     };
                     running
@@ -539,7 +531,7 @@ fn BoardEditor(
                 }}
                 <span class="flex-1" />
                 <span class="text-caption text-label-4">
-                    "drag a stub to a pin to wire · middle-drag pans · R turns · F fits"
+                    {t!("misc.canvas-hint")}
                 </span>
                     }
         .into_any()
@@ -1476,9 +1468,9 @@ fn BoardEditor(
                                                             view! {
                                                                 <span
                                                                     title=if unwired {
-                                                                        "Drag to a chip pin to wire this"
+                                                                        t!("simulate.stub-unwired")
                                                                     } else {
-                                                                        "Drag to rewire"
+                                                                        t!("simulate.stub-wired")
                                                                     }
                                                                     on:pointerdown=move |event: ev::PointerEvent| {
                                                                         event.prevent_default();
@@ -1813,7 +1805,7 @@ fn BoardEditor(
                             MenuTarget::Wire(part_index, slot) => {
                                 view! {
                                     <MenuItem
-                                        label="Straighten"
+                                        label=t!("simulate.straighten")
                                         on_select=Callback::new(move |_| {
                                             straighten(part_index, slot);
                                             menu.set(None);
@@ -1821,7 +1813,7 @@ fn BoardEditor(
                                     />
                                     <MenuSeparator />
                                     <MenuItem
-                                        label="Disconnect"
+                                        label=t!("simulate.disconnect")
                                         shortcut="Del"
                                         danger=true
                                         on_select=Callback::new(move |_| {
@@ -1839,7 +1831,7 @@ fn BoardEditor(
                                     });
                                 view! {
                                     <MenuItem
-                                        label="Rotate 90°"
+                                        label=t!("simulate.rotate")
                                         shortcut="Space"
                                         on_select=Callback::new(move |_| {
                                             rotate_part(index);
@@ -1851,7 +1843,7 @@ fn BoardEditor(
                                     // the near edge *in the same order*, and
                                     // turning it 180° reverses them.
                                     <MenuItem
-                                        label="Mirror"
+                                        label=t!("simulate.mirror")
                                         shortcut="X"
                                         on_select=Callback::new(move |_| {
                                             flip_part(index);
@@ -1859,14 +1851,14 @@ fn BoardEditor(
                                         })
                                     />
                                     <MenuItem
-                                        label="Duplicate"
+                                        label=t!("simulate.duplicate")
                                         on_select=Callback::new(move |_| {
                                             duplicate_part(index);
                                             menu.set(None);
                                         })
                                     />
                                     <MenuItem
-                                        label="Disconnect wires"
+                                        label=t!("simulate.disconnect-wires")
                                         disabled=wires == 0
                                         on_select=Callback::new(move |_| {
                                             for slot in 0..wires {
@@ -1877,7 +1869,7 @@ fn BoardEditor(
                                     />
                                     <MenuSeparator />
                                     <MenuItem
-                                        label="Remove"
+                                        label=t!("simulate.remove")
                                         shortcut="Del"
                                         danger=true
                                         on_select=Callback::new(move |_| {
@@ -1891,7 +1883,7 @@ fn BoardEditor(
                             MenuTarget::Sheet => {
                                 view! {
                                     <MenuItem
-                                        label="Undo"
+                                        label=t!("menu.edit.undo")
                                         shortcut="Ctrl+Z"
                                         disabled=history.with_untracked(Vec::is_empty)
                                         on_select=Callback::new(move |_| {
@@ -1900,7 +1892,7 @@ fn BoardEditor(
                                         })
                                     />
                                     <MenuItem
-                                        label="Redo"
+                                        label=t!("menu.edit.redo")
                                         shortcut="Ctrl+Y"
                                         disabled=future.with_untracked(Vec::is_empty)
                                         on_select=Callback::new(move |_| {
@@ -1919,7 +1911,7 @@ fn BoardEditor(
                                         .map(|command| {
                                             view! {
                                                 <MenuItem
-                                                    label="Open gdb in the terminal"
+                                                    label=t!("simulate.open-gdb")
                                                     on_select=Callback::new(move |_| {
                                                         controller::attach_debugger_terminal(
                                                             state,
@@ -1932,7 +1924,7 @@ fn BoardEditor(
                                             }
                                         })}
                                     <MenuItem
-                                        label="Fit to contents"
+                                        label=t!("simulate.fit-contents")
                                         shortcut="F"
                                         on_select=Callback::new(move |_| {
                                             fit_view();
@@ -1940,7 +1932,7 @@ fn BoardEditor(
                                         })
                                     />
                                     <MenuItem
-                                        label="Reset view"
+                                        label=t!("simulate.reset-view")
                                         shortcut="1:1"
                                         on_select=Callback::new(move |_| {
                                             view.set((0.0, 0.0, 1.0));
@@ -1968,7 +1960,7 @@ fn BoardEditor(
                             return view! {
                                 <div class="flex flex-col gap-2 p-3">
                                     <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                                        "Wire"
+                                        {t!("simulate.wire")}
                                     </span>
                                     <p class="text-footnote text-label-2">
                                         {format!("{} → GPIO{pin}", part.label)}
@@ -1983,14 +1975,14 @@ fn BoardEditor(
                                         on:click=move |_| straighten(part_index, slot)
                                         class="rounded-[6px] px-2 py-1 text-footnote text-label-2 ring-1 ring-line hover:bg-sunken hover:text-label"
                                     >
-                                        "Straighten"
+                                        {t!("simulate.straighten")}
                                     </button>
                                     <button
                                         type="button"
                                         on:click=move |_| delete_selection()
                                         class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
                                     >
-                                        "Disconnect (Del)"
+                                        {t!("simulate.disconnect-del")}
                                     </button>
                                 </div>
                             }
@@ -1999,9 +1991,7 @@ fn BoardEditor(
                         let Some(index) = selected.get() else {
                             return view! {
                                 <p class="p-3 text-footnote text-label-4">
-                                    "Select a part or a wire. Drag a part's gold stub to a \
-                                     chip pin to wire it — wiring is what sets the pin. \
-                                     Wheel zooms, background drags, Del removes."
+                                    {t!("simulate.nothing-selected")}
                                 </p>
                             }
                                 .into_any();
@@ -2123,7 +2113,7 @@ fn BoardEditor(
                                     }
                                     class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
                                 >
-                                    "Remove (Del)"
+                                    {t!("simulate.remove-del")}
                                 </button>
                             </div>
                         }

@@ -13,6 +13,8 @@ use leptos::{ev, html, prelude::*};
 
 use rusty_term::{Colour, Screen, Style};
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -366,7 +368,7 @@ pub fn TerminalView() -> impl IntoView {
                     view! {
                         <ContextMenu x=x y=y on_close=close>
                             <MenuItem
-                                label="Copy selection"
+                                label=t!("context.terminal-copy")
                                 disabled=!has_selection
                                 on_select=Callback::new(move |_| {
                                     if let Some(text) = &grabbed {
@@ -377,7 +379,7 @@ pub fn TerminalView() -> impl IntoView {
                                 })
                             />
                             <MenuItem
-                                label="Paste"
+                                label=t!("context.terminal-paste")
                                 on_select=Callback::new(move |_| {
                                     paste_clipboard();
                                     menu.set(None);
@@ -385,7 +387,7 @@ pub fn TerminalView() -> impl IntoView {
                             />
                             <MenuSeparator />
                             <MenuItem
-                                label="Restart shell"
+                                label=t!("context.terminal-restart")
                                 danger=true
                                 on_select=Callback::new(move |_| {
                                     controller::close_terminal(state);
@@ -456,7 +458,7 @@ fn Grid(screen: Screen) -> impl IntoView {
             .map(|code| {
                 view! {
                     <p class="mt-1 text-callout text-label-3">
-                        {format!("The shell exited with status {code}.")}
+                        {t!("terminal.exited", code = code)}
                     </p>
                 }
             })}

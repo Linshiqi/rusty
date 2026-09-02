@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -14,12 +16,10 @@ use super::*;
 pub(super) fn Appearance() -> impl IntoView {
     let state = AppState::expect();
     let theme = RwSignal::new(theme::stored());
-
     view! {
         <Field
-            label="Interface scale"
-            help="Browser-style zoom over the whole window, 70% to 160%. Applies when you \
-                  release the slider; the editor's own Ctrl+wheel text zoom is separate."
+            label=t!("settings.appearance.scale")
+            help=t!("settings.appearance.scale-help")
         >
             <div class="flex items-center gap-3">
                 // The preview during the drag is the label, never the zoom:
@@ -73,8 +73,8 @@ pub(super) fn Appearance() -> impl IntoView {
             </div>
         </Field>
         <Field
-            label="Theme"
-            help="System follows your desktop, including when you change it while rusty is open."
+            label=t!("settings.appearance.theme")
+            help=t!("settings.appearance.theme-help")
         >
             <div class="inline-flex rounded-[7px] bg-sunken p-0.5">
                 {Theme::ALL

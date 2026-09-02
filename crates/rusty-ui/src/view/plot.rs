@@ -16,6 +16,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::{AppState, TraceClock},
@@ -96,19 +98,14 @@ fn Signals() -> impl IntoView {
             return view! {
                 <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
                     <p class="max-w-[70ch] text-callout leading-relaxed text-label-2">
-                        "Nothing is being plotted. Firmware prints a line per loop and this \
-                         draws it:"
+                        {t!("plot.empty")}
                     </p>
                     <pre class="mt-2 rounded-[6px] bg-sunken px-3 py-2 font-mono text-caption text-label-3 select-text">
 "println!(\"[rusty:tel@{}] gyro_x={},pid_p={}\", now_us, gyro_x, p);
 println!(\"[rusty:param] pid_roll_p={} 0..50\", gain);   // announce a tunable"
                     </pre>
                     <p class="mt-2 max-w-[70ch] text-caption leading-relaxed text-label-3">
-                        "The stamp is optional and is the firmware's own clock in \
-                         microseconds. Without it the panel times by arrival and says so — \
-                         a plot that mixed the two silently would lie about when, which is \
-                         the only thing a control loop is read for. \
-                         examples/pid-tune is a working end of both lines."
+                        {t!("plot.empty-note")}
                     </p>
                 </div>
             }
@@ -320,11 +317,11 @@ fn Link() -> impl IntoView {
                     <span class="min-w-0 truncate font-mono text-caption text-label-2">{port}</span>
                     <button
                         type="button"
-                        title="Close the port"
+                        title=t!("plot.disconnect-hint")
                         on:click=move |_| controller::close_link(state)
                         class="shrink-0 rounded-[5px] px-2 py-0.5 text-caption text-crimson transition-colors hover:bg-sunken"
                     >
-                        "Disconnect"
+                        {t!("plot.disconnect")}
                     </button>
                 </div>
             }
@@ -376,7 +373,7 @@ fn Link() -> impl IntoView {
                     <button
                         type="button"
                         disabled=busy
-                        title="Open this port for reading and writing"
+                        title=t!("plot.connect-hint")
                         on:click=move |_| {
                             let port = connect();
                             if !port.is_empty() {
@@ -385,17 +382,15 @@ fn Link() -> impl IntoView {
                         }
                         class="shrink-0 rounded-[5px] px-2 py-0.5 text-caption text-rust transition-colors hover:bg-sunken disabled:opacity-40"
                     >
-                        "Connect"
+                        {t!("plot.connect")}
                     </button>
                 </div>
                 <p class="pt-1 text-caption leading-relaxed text-label-4">
                     {move || {
                         if busy {
-                            "Something else is running. Its telemetry is plotted, but only a \
-                             port rusty opened itself can be written to."
+                            t!("plot.busy")
                         } else {
-                            "rusty opens the port itself, which is what makes a tunable \
-                             writable. defmt decoding is espflash's — this mode is plain text."
+                            t!("plot.own-link")
                         }
                     }}
                 </p>
@@ -427,15 +422,14 @@ fn Sensors() -> impl IntoView {
             return view! {
                 <div class="shrink-0 border-t border-line">
                     <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                        "Sensors"
+                        {t!("plot.sensors")}
                     </div>
                     <p class="px-3 pb-2 text-caption leading-relaxed text-label-3">
-                        "None announced. Firmware prints "
+                        {t!("plot.sensors-empty-lead")}
                         <span class="font-mono">"[rusty:sensor] gyro=3 rad/s -35..35"</span>
-                        " and a card appears here; reading "
+                        {t!("plot.sensors-empty-mid")}
                         <span class="font-mono">"Igyro=1.25,-0.5,0.02"</span>
-                        " back off its serial input is what lets a loop run with no IMU \
-                         attached. Announce on a timer, not only at boot."
+                        {t!("plot.sensors-empty-tail")}
                     </p>
                 </div>
             }
@@ -449,7 +443,7 @@ fn Sensors() -> impl IntoView {
         view! {
             <div class="shrink-0 border-t border-line">
                 <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                    "Sensors"
+                    {t!("plot.sensors")}
                 </div>
                 {sensors
                     .into_iter()
@@ -543,7 +537,7 @@ fn Tunables() -> impl IntoView {
         view! {
             <div class="shrink-0">
                 <div class="px-3 py-1.5 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                    "Tunables"
+                    {t!("plot.tunables")}
                 </div>
                 <Link />
                 {params
@@ -551,13 +545,9 @@ fn Tunables() -> impl IntoView {
                     .then(|| {
                         view! {
                             <p class="px-3 text-caption leading-relaxed text-label-3">
-                                "None announced. Firmware prints "
+                                {t!("plot.tunables-empty-lead")}
                                 <span class="font-mono">"[rusty:param] name=value min..max"</span>
-                                " and it appears here — no config file, so the panel cannot \
-                                 drift from the binary that is running. Print it on a timer \
-                                 rather than only at boot: this panel usually connects to a \
-                                 board that has been flying for a while, and would otherwise \
-                                 never hear the announcement."
+                                {t!("plot.tunables-empty-tail")}
                             </p>
                         }
                     })}

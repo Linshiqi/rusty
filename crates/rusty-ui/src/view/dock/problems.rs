@@ -8,6 +8,8 @@ use leptos::prelude::*;
 
 use rusty_lsp::DiagSeverity;
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::{
     controller,
@@ -50,9 +52,9 @@ pub(super) fn ProblemsTab() -> impl IntoView {
             return view! {
                 <p class="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-callout text-label-2">
                     {if state.has_project() {
-                        "Nothing wrong that rusty can see."
+                        t!("problems.none")
                     } else {
-                        "Open a project to see what would stop it building."
+                        t!("problems.no-project")
                     }}
                 </p>
             }
@@ -92,14 +94,14 @@ pub(super) fn ProblemsTab() -> impl IntoView {
                     view! {
                         <ContextMenu x=at.x y=at.y on_close=close>
                             <MenuItem
-                                label="Open in the editor"
+                                label=t!("context.problems-open")
                                 on_select=Callback::new(move |_| {
                                     controller::open_at(state, path.clone(), line, col);
                                     menu.set(None);
                                 })
                             />
                             <MenuItem
-                                label="Copy message"
+                                label=t!("context.problems-copy")
                                 on_select=Callback::new(move |_| {
                                     copy_to_clipboard(&message);
                                     menu.set(None);

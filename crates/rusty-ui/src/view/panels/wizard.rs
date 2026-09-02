@@ -14,6 +14,8 @@ use leptos::prelude::*;
 
 use rusty_embed::{Chip, Runtime, WizardChoice};
 
+use rusty_i18n::t;
+
 use crate::{
     controller,
     state::AppState,
@@ -31,12 +33,12 @@ enum Step {
 impl Step {
     const ALL: [Step; 4] = [Step::Chip, Step::Runtime, Step::Options, Step::Review];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Step::Chip => "Chip",
-            Step::Runtime => "Runtime",
-            Step::Options => "Options",
-            Step::Review => "Review",
+            Step::Chip => t!("wizard.step-chip"),
+            Step::Runtime => t!("wizard.step-runtime"),
+            Step::Options => t!("wizard.step-options"),
+            Step::Review => t!("wizard.step-review"),
         }
     }
 
@@ -171,7 +173,7 @@ fn Footer(step: RwSignal<Step>) -> impl IntoView {
                     .map(|previous| {
                         view! {
                             <Button
-                                label="Back"
+                                label=t!("wizard.back")
                                 on_click=Callback::new(move |_| step.set(previous))
                             />
                         }
@@ -184,7 +186,7 @@ fn Footer(step: RwSignal<Step>) -> impl IntoView {
                     .map(|next| {
                         view! {
                             <Button
-                                label="Next"
+                                label=t!("wizard.next")
                                 kind=ButtonKind::Primary
                                 on_click=Callback::new(move |_| step.set(next))
                             />
@@ -290,7 +292,7 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
     let list = view! {
         <input
             class="mb-2 h-[28px] w-full rounded-[6px] bg-sunken px-2.5 text-callout outline-none ring-1 ring-line focus:ring-rust placeholder:text-label-3"
-            placeholder="Filter by name, architecture or radio…"
+            placeholder=t!("wizard.filter")
             on:input=move |event| query.set(event_target_value(&event))
         />
             {move || {
@@ -371,12 +373,9 @@ fn ChipDetail(chip: Chip) -> impl IntoView {
         // belongs here, on the part that has it, not as a badge on ten rows.
         <p class="mb-3 text-callout leading-relaxed text-label-2">
             {if forked {
-                "Upstream Rust cannot emit code for this core. Building it needs Espressif's \
-                 forked LLVM, which espup installs as a separate toolchain — a download measured \
-                 in gigabytes before the first build."
+                t!("wizard.forked")
             } else {
-                "Stock Rust targets this core. One `rustup target add` and it builds — no forked \
-                 compiler, no extra toolchain to keep current."
+                t!("wizard.stock")
             }}
         </p>
 
@@ -454,7 +453,7 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
                                     .then(|| {
                                         view! {
                                             <span class="text-footnote text-label-3">
-                                                "not available for this chip"
+                                                {t!("misc.not-for-chip")}
                                             </span>
                                         }
                                     })
@@ -470,16 +469,8 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
         <DetailHeading title=selected.label().to_string() />
         <p class="text-callout leading-relaxed text-label-2">
             {match selected {
-                Runtime::BareMetal => {
-                    "No operating system and no C toolchain. Builds take seconds, the binary \
-                     is small enough to reason about, and everything the chip does you call \
-                     directly. No threads, no sockets, no filesystem."
-                }
-                Runtime::EspIdf => {
-                    "Links Espressif's C framework, which brings `std`: threads, sockets, a \
-                     filesystem. The cost is the whole ESP-IDF build — minutes rather than \
-                     seconds — and a much larger image."
-                }
+                Runtime::BareMetal => t!("wizard.bare-metal"),
+                Runtime::EspIdf => t!("wizard.esp-idf"),
             }}
         </p>
     }
@@ -588,9 +579,9 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
                                 .then(|| {
                                     view! {
                                         <p class="mt-2 text-footnote leading-relaxed text-label-3">
-                                            "Turns on "
+                                            {t!("wizard.turns-on")}
                                             <span class="font-mono">{requires.join(", ")}</span>
-                                            " as well — it does not work without them."
+                                            {t!("wizard.turns-on-tail")}
                                         </p>
                                     }
                                 })}
@@ -600,7 +591,7 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
                     None => {
                         view! {
                             <p class="text-callout leading-relaxed text-label-3">
-                                "Point at an option to see what it commits the project to."
+                                {t!("wizard.point-at")}
                             </p>
                         }
                             .into_any()
@@ -626,7 +617,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
         <div class="mx-auto max-w-[70ch] px-4 py-4">
             <label class="mb-4 block">
                 <span class="mb-1.5 block text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                    "Project name"
+                    {t!("wizard.project-name")}
                 </span>
                 <input
                     class="h-[30px] w-[280px] rounded-[6px] bg-sunken px-2.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
@@ -686,8 +677,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                 let Some(plan) = state.wizard.plan.get() else {
                     return view! {
                         <p class="text-callout text-label-2">
-                            "This combination has no generator command — the terminal below says \
-                             why."
+                            {t!("wizard.no-generator")}
                         </p>
                     }
                         .into_any();
@@ -719,14 +709,14 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                     return view! {
                         <div class="rounded-[8px] bg-amber-fill px-3 py-2.5">
                             <div class="text-body font-medium">
-                                {format!("`{}` is not installed", plan.program)}
+                                {t!("wizard.not-installed", program = plan.program)}
                             </div>
                             <p class="mt-0.5 text-callout leading-relaxed text-label-2">
-                                "It is what generates the project. Installing it is a one-off."
+                                {t!("wizard.install-why")}
                             </p>
                             <div class="mt-2 flex items-center gap-2">
                                 <Button
-                                    label="Install it"
+                                    label=t!("wizard.install")
                                     kind=ButtonKind::Primary
                                     disabled=Signal::derive(move || busy)
                                     on_click=Callback::new(move |_| {
@@ -734,7 +724,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                                     })
                                 />
                                 <span class="text-footnote text-label-3">
-                                    "runs in the terminal below"
+                                    {t!("wizard.install-runs")}
                                 </span>
                             </div>
                             <div class="mt-2">
@@ -748,7 +738,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                 view! {
                     <div class="flex items-center gap-2">
                         <Button
-                            label="Choose a folder and create"
+                            label=t!("wizard.create")
                             kind=ButtonKind::Primary
                             disabled=Signal::derive(move || busy || !named)
                             on_click=Callback::new(move |_| {
@@ -758,7 +748,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                             })
                         />
                         <span class="text-footnote text-label-3">
-                            "rusty runs it and opens the result."
+                            {t!("misc.wizard-runs")}
                         </span>
                     </div>
 

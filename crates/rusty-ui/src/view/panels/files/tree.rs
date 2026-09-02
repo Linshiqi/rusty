@@ -4,6 +4,8 @@ use leptos::{ev, html, prelude::*};
 
 use rusty_edit::Entry;
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::{
     controller,
@@ -26,8 +28,8 @@ pub fn FilesPanel() -> impl IntoView {
         if !state.has_project() {
             return view! {
                 <Empty
-                    title="No project open"
-                    detail="Open a folder to browse and edit what is in it."
+                    title=t!("files.no-project-title")
+                    detail=t!("files.no-project-detail")
                 />
             }
             .into_any();
@@ -79,11 +81,11 @@ fn Tree() -> impl IntoView {
         >
             <div class="flex items-center gap-2 px-3 py-2">
                 <span class="flex-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                    "Files"
+                    {t!("tree.files")}
                 </span>
                 <button
                     type="button"
-                    title="Re-read the project"
+                    title=t!("tree.refresh")
                     class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
                     on:click=move |_| controller::refresh_tree(state)
                 >
@@ -183,14 +185,14 @@ fn Tree() -> impl IntoView {
                         view! {
                             <ContextMenu x=x y=y on_close=close>
                                 <MenuItem
-                                    label="New file…"
+                                    label=t!("context.tree-new-file")
                                     on_select=Callback::new(move |_| {
                                         naming.set(Some((String::new(), false)));
                                         tree_menu.set(None);
                                     })
                                 />
                                 <MenuItem
-                                    label="New folder…"
+                                    label=t!("context.tree-new-folder")
                                     on_select=Callback::new(move |_| {
                                         naming.set(Some((String::new(), true)));
                                         tree_menu.set(None);
@@ -198,7 +200,7 @@ fn Tree() -> impl IntoView {
                                 />
                                 <MenuSeparator />
                                 <MenuItem
-                                    label="Refresh"
+                                    label=t!("context.tree-refresh")
                                     on_select=Callback::new(move |_| {
                                         controller::refresh_tree(state);
                                         tree_menu.set(None);
@@ -216,7 +218,7 @@ fn Tree() -> impl IntoView {
                     view! {
                         <ContextMenu x=x y=y on_close=close>
                             <MenuItem
-                                label=if is_dir { "Expand or collapse" } else { "Open" }
+                                label=if is_dir { t!("context.tree-toggle") } else { t!("context.tree-open") }
                                 on_select=Callback::new(move |_| {
                                     if is_dir {
                                         state
@@ -236,7 +238,7 @@ fn Tree() -> impl IntoView {
                                 })
                             />
                             <MenuItem
-                                label="Search in this scope"
+                                label=t!("context.tree-search-scope")
                                 on_select=Callback::new(move |_| {
                                     search_within(state, &search_path, is_dir);
                                     tree_menu.set(None);
@@ -247,7 +249,7 @@ fn Tree() -> impl IntoView {
                                     let float = path.clone();
                                     view! {
                                         <MenuItem
-                                            label="Open in new window"
+                                            label=t!("context.tree-open-window")
                                             on_select=Callback::new(move |_| {
                                                 controller::detach_file(
                                                     state,
@@ -260,14 +262,14 @@ fn Tree() -> impl IntoView {
                                 })}
                             <MenuSeparator />
                             <MenuItem
-                                label="New file…"
+                                label=t!("context.tree-new-file")
                                 on_select=Callback::new(move |_| {
                                     naming.set(Some((file_into.clone(), false)));
                                     tree_menu.set(None);
                                 })
                             />
                             <MenuItem
-                                label="New folder…"
+                                label=t!("context.tree-new-folder")
                                 on_select=Callback::new(move |_| {
                                     naming.set(Some((folder_into.clone(), true)));
                                     tree_menu.set(None);
@@ -275,7 +277,7 @@ fn Tree() -> impl IntoView {
                             />
                             <MenuSeparator />
                             <MenuItem
-                                label="Copy path"
+                                label=t!("context.tree-copy-path")
                                 on_select=Callback::new(move |_| {
                                     copy_to_clipboard(&copy_path);
                                     tree_menu.set(None);

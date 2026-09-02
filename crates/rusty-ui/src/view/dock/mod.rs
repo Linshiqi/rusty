@@ -10,6 +10,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::{
     state::{AppState, Divider, DockTab},
     view::components::Tone,
@@ -119,7 +121,7 @@ fn DockTabs() -> impl IntoView {
                 // VSCode's pair: which channel, then a text filter. The
                 // channel list is fixed — it is the set of things rusty runs.
                 <select
-                    title="Show one output channel"
+                    title=t!("dock.chrome.channel")
                     class="h-6 rounded-[5px] bg-sunken px-1 text-footnote text-label-2 outline-none"
                     on:change=move |event| {
                         let value = event_target_value(&event);
@@ -150,8 +152,8 @@ fn DockTabs() -> impl IntoView {
                 // scroll up detaches, the bottom reattaches), and Clear
                 // lives in the right-click menu with the other verbs.
                 <input
-                    placeholder="filter (!word excludes)"
-                    title="Space-separated terms all must match; !term excludes"
+                    placeholder=t!("dock.chrome.filter")
+                    title=t!("dock.chrome.filter-hint")
                     class="h-6 w-40 rounded-[5px] bg-sunken px-1.5 text-footnote outline-none placeholder:text-label-4"
                     prop:value=move || state.dock.filter.get()
                     on:input=move |event| state.dock.filter.set(event_target_value(&event))
@@ -161,7 +163,11 @@ fn DockTabs() -> impl IntoView {
             <button
                 type="button"
                 title=move || {
-                    if state.layout.dock_open.get() { "Collapse panel" } else { "Expand panel" }
+                    if state.layout.dock_open.get() {
+                        t!("dock.chrome.collapse")
+                    } else {
+                        t!("dock.chrome.expand")
+                    }
                 }
                 class="grid size-6 place-items-center rounded-[5px] text-label-2 hover:bg-sunken hover:text-label"
                 on:click=move |_| state.layout.dock_open.update(|open| *open = !*open)

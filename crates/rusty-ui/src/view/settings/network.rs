@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use crate::state::AppState;
 
 use super::*;
@@ -32,10 +34,8 @@ pub(super) fn NetworkSettings() -> impl IntoView {
 
     view! {
         <Field
-            label="Proxy"
-            help="Used by the QEMU installer and the Crates panel. Detect follows the \
-                  environment variables, then the system proxy — the one the browser \
-                  uses. cargo and rustup keep their own proxy settings."
+            label=t!("settings.network.proxy")
+            help=t!("settings.network.proxy-help")
         >
             <div class="flex flex-col gap-2">
                 <div class="flex items-center gap-2">
@@ -57,16 +57,16 @@ pub(super) fn NetworkSettings() -> impl IntoView {
                                 class=pick(is_auto)
                                 on:click=move |_| choose(None)
                             >
-                                "Detect"
+                                {t!("misc.proxy-detect")}
                             </button>
                             <button
                                 type="button"
                                 class=pick(is_none)
                                 on:click=move |_| choose(Some("none"))
                             >
-                                "Direct"
+                                {t!("misc.proxy-direct")}
                             </button>
-                            <span class=pick(manual)>"Manual:"</span>
+                            <span class=pick(manual)>{t!("misc.proxy-manual")}</span>
                         }
                     }}
                     <input

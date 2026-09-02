@@ -18,6 +18,8 @@ use leptos::prelude::*;
 
 use rusty_embed::{PinInfo, PinReport};
 
+use rusty_i18n::t;
+
 use crate::{controller, state::AppState};
 
 /// Collapsed state lives in localStorage: only this window cares, and losing
@@ -58,7 +60,7 @@ pub fn PinMap() -> impl IntoView {
                 <div class="pointer-events-auto absolute right-3 bottom-3 z-20 flex max-h-[60%] w-[15rem] flex-col rounded-[8px] border border-line bg-raised/95 shadow-lg backdrop-blur">
                     <button
                         type="button"
-                        title="Hide the pin map"
+                        title=t!("pinmap.hide")
                         on:click=move |_| {
                             open.set(false);
                             remember(false);
@@ -76,7 +78,7 @@ pub fn PinMap() -> impl IntoView {
             view! {
                 <button
                     type="button"
-                    title="Show the chip's pins"
+                    title=t!("pinmap.show")
                     on:click=move |_| {
                         open.set(true);
                         remember(true);

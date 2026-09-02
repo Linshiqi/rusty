@@ -138,10 +138,19 @@
     problems: [],
   };
 
-  window.__mock = { toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
+  window.__mock = { locale: null, toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
 
   const handlers = {
     recent_projects: () => [ROOT],
+    // Stored across a reload, because that is the whole mechanism: choosing a
+    // language saves it and reloads into it. Held in memory this reads as a
+    // setting the app ignores, which is what it looked like the first time.
+    display_locale: () => localStorage.getItem("mock.locale"),
+    set_display_locale: (a) => {
+      if (a.tag) localStorage.setItem("mock.locale", a.tag);
+      else localStorage.removeItem("mock.locale");
+      return null;
+    },
     storage_location: () => ({ path: "C:\\mock\\rusty-data", isDefault: true, envOverride: false }),
     open_project: () => ({
       project: {

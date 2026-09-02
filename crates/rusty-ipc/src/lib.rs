@@ -44,6 +44,9 @@ pub mod workbench {
     /// every window.
     pub const VIM: &str = "vim_enabled";
     pub const SET_VIM: &str = "set_vim";
+    /// Display language. `None` means follow the system.
+    pub const LOCALE: &str = "display_locale";
+    pub const SET_LOCALE: &str = "set_display_locale";
     pub const UPDATE: &str = "check_update";
     pub const OPEN_URL: &str = "open_url";
 }
