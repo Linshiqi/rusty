@@ -214,6 +214,59 @@ fn reload() {
 
 #[cfg(test)]
 mod tests {
+    use rusty_embed::{Problem, Severity};
+    use rusty_i18n::Locale;
+
+    /// A translated diagnostic gets its *values* back.
+    ///
+    /// The whole point of splitting `kind` from `args` is that a translated
+    /// sentence still says which chip and which triple. A test that only
+    /// checked the sentence was Chinese would pass on a translation with
+    /// `{chip}` still in it, which is worse than English.
+    ///
+    /// The second half is the fallback: an unknown kind keeps the backend's
+    /// English rather than showing a key. That is the case a third-party
+    /// diagnostic — or a language that has not caught up — lands in.
+    ///
+    /// This is the one test that moves the process-wide locale. Nothing else
+    /// in this crate asserts on a rendered label, so the flip is invisible —
+    /// but a test that did would fail intermittently, and this comment is
+    /// where to look when it does.
+    #[test]
+    fn a_translated_diagnostic_keeps_its_arguments_and_falls_back() {
+        rusty_i18n::set_locale(Locale::SimplifiedChinese);
+
+        let known = Problem::new(
+            Severity::Blocking,
+            "target-not-installed",
+            "Target `riscv32imc-unknown-none-elf` not installed",
+            "cargo will refuse to build for a target rustup has not added.",
+        )
+        .arg("target", "riscv32imc-unknown-none-elf");
+        let (title, detail) = super::problem_text(&known);
+        assert!(
+            title.contains("riscv32imc-unknown-none-elf"),
+            "the triple must survive translation, got: {title}"
+        );
+        assert!(
+            !title.contains('{'),
+            "an argument was left unfilled: {title}"
+        );
+        assert_ne!(detail, known.detail, "the detail was not translated");
+
+        let unknown = Problem::new(
+            Severity::Warning,
+            "something-a-plugin-invented",
+            "Title from elsewhere",
+            "Detail from elsewhere",
+        );
+        let (title, detail) = super::problem_text(&unknown);
+        assert_eq!(title, "Title from elsewhere");
+        assert_eq!(detail, "Detail from elsewhere");
+
+        rusty_i18n::set_locale(Locale::English);
+    }
+
     /// Every diagnostic the backend can emit has a catalogue entry.
     ///
     /// Falling back to the backend's English is the *correct* behaviour for a
