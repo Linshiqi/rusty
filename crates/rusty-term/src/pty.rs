@@ -253,28 +253,29 @@ fn pump(
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    // Answer before parsing. ConPTY opens by asking where the
-                    // cursor is and will not start the shell until something
-                    // replies, so a terminal that does not answer is a terminal
-                    // that never prints anything at all.
+                    // ConPTY opens by asking where the cursor is and will not
+                    // start the shell until something replies, so a terminal
+                    // that does not answer is a terminal that never prints
+                    // anything at all. The emulator is fed up to each query
+                    // *before* that query is answered: a program that prints
+                    // and then asks in one write must hear about the cursor
+                    // after its own output, not before it. Answering off the
+                    // cursor as of the previous read was right only for the
+                    // lone query ConPTY sends at start-up.
                     carry.extend_from_slice(&buffer[..n]);
-                    let cursor = {
-                        let emulator = emulator.lock().expect("terminal emulator");
-                        emulator.parser.screen().cursor_position()
+                    let (replies, consumed) = {
+                        let mut emulator = emulator.lock().expect("terminal emulator");
+                        answer_queries(&carry, |preceding| {
+                            emulator.parser.process(preceding);
+                            emulator.parser.screen().cursor_position()
+                        })
                     };
-                    let (replies, consumed) = answer_queries(&carry, cursor);
                     carry.drain(..consumed);
                     if !replies.is_empty() {
                         let mut writer = writer.lock().expect("terminal writer");
                         let _ = writer.write_all(&replies);
                         let _ = writer.flush();
                     }
-
-                    emulator
-                        .lock()
-                        .expect("terminal emulator")
-                        .parser
-                        .process(&buffer[..n]);
                     if tx.send(()).is_err() {
                         // Nobody is rendering any more: the tab is gone.
                         return;
@@ -294,6 +295,13 @@ fn pump(
 ///
 /// Polled rather than blocking, so the mutex is never held across a wait — the
 /// same lock is what `kill` needs to end the session.
+///
+/// The renderer is woken exactly once, when the child is gone. An earlier
+/// version sent a wake on every poll as a way of noticing the consumer had
+/// left — and every one of those wakes was rendered and pushed over IPC as a
+/// frame, four unchanged screens a second from an idle terminal. Whether the
+/// session is still alive is read off the `Arc` instead: when this thread
+/// holds the last reference, the `Terminal` that shared it has been dropped.
 fn watch(
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     exited: Arc<Mutex<Option<i32>>>,
@@ -314,7 +322,7 @@ fn watch(
                 let _ = tx.send(());
                 return;
             }
-            if tx.send(()).is_err() {
+            if Arc::strong_count(&exited) == 1 {
                 return;
             }
             thread::sleep(Duration::from_millis(250));
@@ -332,10 +340,18 @@ fn watch(
 ///
 /// Returns the bytes to send back and how much of `bytes` was consumed. The
 /// remainder is a query split across two reads and must be kept.
-fn answer_queries(bytes: &[u8], cursor: (u16, u16)) -> (Vec<u8>, usize) {
+///
+/// `feed` is handed every consumed byte, in order, in slices that stop just
+/// before each query — and answers with the cursor position at that moment.
+/// That is how a query learns about the text printed ahead of it in the same
+/// write. Everything consumed is fed exactly once; the unconsumed tail is
+/// fed when its sequence completes.
+fn answer_queries(bytes: &[u8], mut feed: impl FnMut(&[u8]) -> (u16, u16)) -> (Vec<u8>, usize) {
     let mut out = Vec::new();
     let mut at = 0;
     let mut consumed = 0;
+    // How much has already gone to `feed`.
+    let mut fed = 0;
 
     while at < bytes.len() {
         if bytes[at] != 0x1b {
@@ -363,25 +379,34 @@ fn answer_queries(bytes: &[u8], cursor: (u16, u16)) -> (Vec<u8>, usize) {
         }
 
         let params = &bytes[at + 2..end];
-        match bytes[end] {
-            // Cursor position. Terminals report it 1-based.
+        let reply: Option<Vec<u8>> = match bytes[end] {
+            // Cursor position. Terminals report it 1-based, and it is the
+            // position *after* everything before the query has been drawn.
             b'n' if params == b"6" => {
-                out.extend_from_slice(
-                    format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).as_bytes(),
-                );
+                let cursor = feed(&bytes[fed..at]);
+                fed = at;
+                Some(format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).into_bytes())
             }
             // "Are you there?" — the answer is "yes, and fine".
-            b'n' if params == b"5" => out.extend_from_slice(b"\x1b[0n"),
+            b'n' if params == b"5" => Some(b"\x1b[0n".to_vec()),
             // Device attributes. Claiming to be a VT100 with an advanced video
             // option is what every emulator answers and what every program
             // expects; saying nothing leaves some of them waiting.
-            b'c' if params.is_empty() || params == b"0" => {
-                out.extend_from_slice(b"\x1b[?1;2c");
-            }
-            _ => {}
+            b'c' if params.is_empty() || params == b"0" => Some(b"\x1b[?1;2c".to_vec()),
+            _ => None,
+        };
+        if let Some(reply) = reply {
+            out.extend_from_slice(&reply);
         }
         at = end + 1;
         consumed = at;
+    }
+
+    // Everything complete that has not yet been drawn, the queries themselves
+    // included — the emulator ignores a request it cannot answer, and that is
+    // exactly what a query is to it.
+    if fed < consumed {
+        feed(&bytes[fed..consumed]);
     }
 
     (out, consumed)
@@ -538,38 +563,66 @@ mod tests {
     /// The query ConPTY blocks on, and the shape of the answer it wants.
     #[test]
     fn the_cursor_report_is_answered_one_based() {
-        let (replies, consumed) = answer_queries(b"\x1b[6n", (0, 0));
+        let (replies, consumed) = answer_queries(b"\x1b[6n", |_| (0, 0));
         assert_eq!(replies, b"\x1b[1;1R");
         assert_eq!(consumed, 4);
 
-        let (replies, _) = answer_queries(b"\x1b[6n", (11, 4));
+        let (replies, _) = answer_queries(b"\x1b[6n", |_| (11, 4));
         assert_eq!(replies, b"\x1b[12;5R");
+    }
+
+    /// A program that prints and asks in one write hears about the cursor
+    /// *after* its output. Answered off the previous read's cursor, `abc`
+    /// followed by a query reported column 1, and the program then drew its
+    /// prompt over its own text.
+    #[test]
+    fn a_query_sees_the_text_written_ahead_of_it() {
+        let mut parser = vt100::Parser::new(4, 40, 0);
+        let (replies, consumed) = answer_queries(b"abc\x1b[6n", |bytes| {
+            parser.process(bytes);
+            parser.screen().cursor_position()
+        });
+        assert_eq!(
+            replies, b"\x1b[1;4R",
+            "three glyphs drawn, cursor on the fourth column"
+        );
+        assert_eq!(consumed, 7);
+        assert_eq!(
+            parser.screen().contents().trim_end(),
+            "abc",
+            "everything consumed reached the emulator exactly once",
+        );
     }
 
     #[test]
     fn ordinary_output_is_left_alone() {
         // Colour changes and text must pass through untouched, and be consumed
         // so the carry buffer does not grow without bound.
-        let (replies, consumed) = answer_queries(b"\x1b[31mhello\x1b[0m", (0, 0));
+        let mut fed = Vec::new();
+        let (replies, consumed) = answer_queries(b"\x1b[31mhello\x1b[0m", |bytes| {
+            fed.extend_from_slice(bytes);
+            (0, 0)
+        });
         assert!(replies.is_empty());
         assert_eq!(consumed, 14);
+        assert_eq!(fed, b"\x1b[31mhello\x1b[0m", "and all of it is drawn");
     }
 
     /// A query split across two reads must not be answered twice, nor lost.
     #[test]
     fn a_split_query_waits_for_the_rest() {
-        let (replies, consumed) = answer_queries(b"abc\x1b[6", (0, 0));
+        let (replies, consumed) = answer_queries(b"abc\x1b[6", |_| (0, 0));
         assert!(replies.is_empty(), "half a query is not a query");
         assert_eq!(consumed, 3, "the incomplete tail must be kept");
 
-        let (replies, consumed) = answer_queries(b"\x1b[6n", (0, 0));
+        let (replies, consumed) = answer_queries(b"\x1b[6n", |_| (0, 0));
         assert_eq!(replies, b"\x1b[1;1R");
         assert_eq!(consumed, 4);
     }
 
     #[test]
     fn device_attributes_get_an_identity() {
-        let (replies, _) = answer_queries(b"\x1b[c", (0, 0));
+        let (replies, _) = answer_queries(b"\x1b[c", |_| (0, 0));
         assert_eq!(replies, b"\x1b[?1;2c");
     }
 

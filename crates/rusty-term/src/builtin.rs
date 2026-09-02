@@ -6,8 +6,9 @@
 //! and the same language on every OS.
 //!
 //! The language is bash. Execution is `brush-core`, a POSIX/bash-compatible
-//! shell written in Rust, vendored at the workspace root with a Windows PATH
-//! fix (see the root Cargo.toml). Pipes, redirection, globs, variables,
+//! shell written in Rust — the released 0.5, which carries the Windows PATH
+//! fix this crate once vendored a patched copy for. Pipes, redirection,
+//! globs, variables,
 //! command substitution, conditionals and loops all behave; external
 //! commands — the cargo, espflash, git and gdb this workbench is about —
 //! spawn as real processes inheriting the pty.
@@ -101,8 +102,11 @@ mod console {
 }
 
 /// The Unix twin: raw termios while reading, signals back on while a child
-/// runs — the child resets its own disposition at exec, the shell ignores
-/// SIGINT for the whole session, which is exactly what bash does.
+/// runs. The shell ignores SIGINT while it is reading a line, as bash does;
+/// while a child runs the disposition is put back to the default, because a
+/// `SIG_IGN` is *inherited across exec* — POSIX says so, and brush never
+/// resets it — so a child spawned under the ignore would have ignored Ctrl+C
+/// too. The earlier comment here claimed the child reset it; it does not.
 #[cfg(unix)]
 // Same grounds as the Windows twin: termios is FFI or nothing.
 #[allow(unsafe_code)]
@@ -117,7 +121,6 @@ mod console {
             if libc::tcgetattr(0, &mut base) != 0 {
                 return None;
             }
-            libc::signal(libc::SIGINT, libc::SIG_IGN);
             let console = Console { base };
             console.interactive();
             Some(console)
@@ -130,6 +133,7 @@ mod console {
                 let mut raw = self.base;
                 raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG);
                 libc::tcsetattr(0, libc::TCSANOW, &raw);
+                libc::signal(libc::SIGINT, libc::SIG_IGN);
             }
         }
         pub fn executing(&self) {
@@ -138,6 +142,11 @@ mod console {
                 cooked.c_lflag &= !(libc::ICANON | libc::ECHO);
                 cooked.c_lflag |= libc::ISIG;
                 libc::tcsetattr(0, libc::TCSANOW, &cooked);
+                // Default, so the children spawned from here on inherit a
+                // Ctrl+C that interrupts them. The shell itself is back in
+                // `interactive` — and back to ignoring — before it reads
+                // the next line.
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
             }
         }
     }
@@ -285,16 +294,32 @@ fn read_line(
                     let _ = stdout.flush();
                 }
             }
-            // ESC: an arrow or another CSI. Consume `[X`; up/down walk
-            // history, everything else is dropped rather than echoed as
-            // garbage.
+            // ESC: an arrow or another CSI. Consume the whole sequence —
+            // parameter bytes (`0x30..=0x3F`, so `3` and `1;5`), then
+            // intermediates, then the one final byte — and act only on the
+            // arrows; everything else is dropped rather than echoed as
+            // garbage. Taking exactly one byte after `[` left Delete's `~`
+            // and Ctrl+Arrow's `;5C` sitting in the command line.
             0x1b => {
                 let Some(Ok(b'[')) = bytes.next() else {
                     continue;
                 };
-                let Some(Ok(code)) = bytes.next() else {
+                let mut params: Vec<u8> = Vec::new();
+                let code = loop {
+                    match bytes.next() {
+                        Some(Ok(byte @ 0x30..=0x3F)) => params.push(byte),
+                        Some(Ok(0x20..=0x2F)) => {}
+                        Some(Ok(byte)) => break Some(byte),
+                        _ => break None,
+                    }
+                };
+                let Some(code) = code else {
                     continue;
                 };
+                // A modified arrow (`1;5A`) is not a history walk.
+                if !params.is_empty() {
+                    continue;
+                }
                 let replacement = match code {
                     b'A' if at > 0 => {
                         at -= 1;
