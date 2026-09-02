@@ -31,10 +31,16 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 
 # Frontend alone, on http://localhost:1425 — much faster to iterate on than a
 # full `tauri dev` rebuild. Anything needing the backend reports that it cannot
-# run; the layout and styling are real. To exercise backend flows here anyway,
+# run; the layout, styling and every click that needs no backend are real.
+# (They were not, for a while: one boot-time IPC call ran unguarded, the shim
+# threw a synchronous TypeError instead of rejecting, and the page rendered
+# and then answered nothing. `ipc::backend_available` guards every call that
+# runs at mount.) To exercise backend flows here anyway,
 # crates/rusty-ui/mock.js stubs the IPC surface: add
 #   <link data-trunk rel="copy-file" href="mock.js" /><script src="/mock.js"></script>
-# to index.html while debugging and REMOVE IT BEFORE COMMITTING. It is inert in
+# to index.html while debugging and REMOVE IT BEFORE COMMITTING — a test in
+# rusty-ui reads index.html and fails while the line is there, because it
+# reached four commits before that test existed. It is inert in
 # the real app. Three contracts it enforces: responses must carry every
 # non-defaulted field (serde rejects, and the error names only the field);
 # streaming commands like lsp_start must return a never-resolving promise —
@@ -70,6 +76,7 @@ cargo run -p rusty-embed --example flight_probe -- examples/rate-loop
 # The workbench without the window
 cargo run -p rusty-cli -- check .
 cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
+cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 ```
 
 ## Layout
@@ -77,12 +84,12 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy) |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder) |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging: gdb's machine interface parsed, folded into a session state — breakpoints, stepping, stack, variables |
-| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
+| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
@@ -456,13 +463,27 @@ translation fails a test rather than reaching a screen.
   moved to `[dock.tab]`; `menu.file` became `menu.bar.file` for the same
   reason. TOML rejects the collision, and the test that parses every catalogue
   is where it surfaces.
-- **Three tests carry it.** One asserts every language has exactly English's
-  keys. One scans the frontend source for `t!("…")` and asserts each key exists
+- **Four tests carry it.** One asserts every language has exactly English's
+  keys. One scans the frontend source for `t!(` and asserts each key exists
   — the macro cannot check that at expansion time, and `lookup`'s debug
-  assertion only fires if somebody opens the screen the key is on. The third
-  scans `rusty-embed` for every `Problem::new` kind: falling back to English is
-  correct for a diagnostic nobody has translated, and silently correct is how a
-  gap survives a release.
+  assertion only fires if somebody opens the screen the key is on. (It scans
+  for `t!(` and then skips whitespace: rustfmt breaks a call with arguments
+  after the paren, and a scan that demanded `t!("` on one line missed exactly
+  those.) The third scans `rusty-embed` for every `Problem::new` kind: falling
+  back to English is correct for a diagnostic nobody has translated, and
+  silently correct is how a gap survives a release. The fourth is the one the
+  other three cannot be: it reads `view/` and `controller/` for string
+  literals that *read as prose* — three or more words, one of them a word
+  only sentences use — because a sentence that never became a key is
+  invisible to a key check, and some sixty of them sat in the Chinese window
+  that way (a palette footer, a waves header, a flight blocker). A literal it
+  flags goes into the catalogue; the short allowlist in the test is for text
+  that is meant to stay English, which today is the trunk-only dev banner.
+- **Group headings and templated titles are keys too.** The palette's
+  headings were `&'static str` literals beside translated rows, and "— needs
+  a project" was a `format!` suffix; `panel.needs-project` and
+  `palette.show-dock` take the name as an argument. A `&'static str` field on
+  a type that reaches the screen is the tell.
 - Not translated, deliberately: command lines, tool names, chip ids, target
   triples, and the dock's output. Users retype them, search them, and paste
   them into issues.
@@ -485,6 +506,28 @@ appears in a control only when it carries state (a zoom %, a grid size).
 Dot-entries never show in the file tree. Every dock surface answers a
 right-click with its own menu or not at all — the browser's default menu is
 always a bug.
+
+**Nothing transient reflows the workspace.** The error banner is an overlay
+in the working area's top-right corner, not a row above the panel: as a row
+it pushed everything under it down forty pixels on arrival and back up on
+dismissal, and a click already in flight landed on whatever had moved under
+the pointer. It stays until dismissed or replaced by the next failure — a
+success no longer clears it, because every controller call shares one
+success path and a background re-probe was dismissing banners before they
+were read. The dock keeps a copy regardless.
+
+**Lists of things the shell has are generated from the thing.** The View
+menu and the palette iterate `DockTab::ALL` and the panel registry; five of
+the nine dock tabs were once spelled out by hand and the other four were
+reachable from nowhere but a click on the strip. `Divider::ALL` and
+`Divider::default_size` play the same role for Reset layout.
+
+**The board sheet is dark in both themes, on purpose.** The canvas, the
+devkit and the parts are drawn in hard-coded colours (`#101216` and
+friends) rather than theme tokens, the way a schematic sheet is the same
+colour in every editor; the panel chrome around it follows the theme. It is
+the one surface exempt from "every theme block carries the whole palette",
+and this sentence is what makes that a decision rather than an omission.
 
 ## Where state lives
 
@@ -512,8 +555,10 @@ usty`) holds `location.toml`
 - Per-project, team-shared things live in the project's `.rusty/`, where they
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
-- Theme, divider positions, the editor's text zoom, the interface scale and
-  the pin map's collapsed state are localStorage, and that is all that is.
+- Theme, divider positions, the editor's text zoom, the interface scale, the
+  pin map's collapsed state and the locale *cache* are localStorage, and that
+  is all that is. They all go through `state::local_get` / `local_set` /
+  `local_take` — one door, so the list above is a grep and not a claim.
   **Audit that claim when you add one** — it had already drifted twice. The
   assistant profile failed the rule (a second window boots the same frontend,
   and the backend reads it at request time) and so did the per-project tab
@@ -1001,6 +1046,88 @@ usty`) holds `location.toml`
 - A future built from `&SomeStruct { .. }` inline borrows a temporary that dies
   at the end of the statement. Bind the struct, then move it into an `async`
   block.
+- **An attribute on the wrong element compiles.** Leptos spreads an unknown
+  attribute onto a component's root, so when the `files.rs` split left the
+  editor's `prop:readonly` — the guard that keeps an IME from typing into
+  Vim's normal mode — on the context menu's Paste row, it became a `readonly`
+  on a button and guarded nothing. Twelve lines of comment explained a guard
+  that was not there. When an attribute exists to enforce something, grep for
+  it on the element it belongs to.
+- **An effect that reads the state its own request produces is a loop.** The
+  Registers tab re-read the selected peripheral on every `debug.session`
+  change; the read's answer arrives *as* a session change. Key such an effect
+  on the facts that should trigger it — here the stop address and the
+  peripheral — and compare with the previous run, as `memory.rs` does for the
+  ELF path.
+- **Tracked reads outside a reactive owner warn on every boot.** Controllers
+  and event handlers have no owner to subscribe; `has_project()` from one
+  printed Leptos's "outside a reactive tracking context" four times per
+  launch. `has_project_now()` / `active_path_now()` are the untracked forms
+  for that side; the tracked ones are for views and effects.
+- **A test that tolerates an absent tool has to say so in code, not in a
+  comment.** `is_some_and` on an `Option` is `false` for `None`, so a test
+  written to *pass* on a machine with no gdb was the one that failed there —
+  on every CI runner, for weeks, while the comment above it explained the
+  opposite. Spell the tolerance out (`is_none_or`) and skip with an
+  `eprintln!` naming the missing tool, the way `tests/analyzer.rs` does for
+  rust-analyzer. Better still, inject the tool: the simulator's plan takes a
+  `Machine` and the test hands it a directory with a fake gdb in it.
+- **`\<` and `\>` are word boundaries to the regex crate, not escaped
+  brackets.** A hand-written literal escaper that backslashed every ASCII
+  punctuation mark turned `Vec<u8>` into a pattern that can match nothing,
+  and every literal search for a generic, `->` or `=>` silently found nothing
+  — while replace, which used `regex::escape`, found them. Use
+  `fixed_strings` on the matcher builder for literal mode, and never a second
+  escaper beside the one the crate provides.
+- **Anything that takes a byte prefix of two strings backs up to a char
+  boundary.** `fold::splice` computed the common prefix of the old and new
+  screen text byte by byte and then sliced there; two CJK characters that
+  share their first two bytes — 中 and 世, the ordinary case in one block —
+  put the slice inside a character and panicked the window. `positions`
+  already had the boundary walk; the arithmetic is the same and so is the
+  code now.
+- **A thread that owns the `Arc` it waits on lives for ever.** rust-analyzer's
+  pull loop held an `Arc<Shared>` whose `poke` field held the sender the
+  loop was blocked receiving on; dropping the client killed the server but
+  the loop, the `Shared` and every open document's text stayed. The loop
+  holds a `Weak` now and the client sends `shutdown`/`exit` before `kill`.
+- **rustup answers for the directory it is run from.** `rustup target list
+  --installed` in rusty's own cwd reported the default toolchain's targets
+  for a project pinned to `nightly-…`, so the Toolchain panel said "target
+  not installed" and its fix installed into the wrong toolchain. Every
+  rustup probe runs with `current_dir(project.root)`, through
+  `process::command`, which is also the one place `RUSTUP_TOOLCHAIN` is
+  stripped and `CREATE_NO_WINDOW` set. rusty-core cannot depend on it, so
+  `workspace.rs` carries its own three-line `quiet()` for `cargo metadata`
+  and `rustc -vV` — guppy's builder gave the GUI a console window per open.
+- **`Channel::send` failing means the WebView is gone, nothing less.** A JS
+  side that drops its handler tells Rust nothing, so every "stop when the
+  user leaves the panel" loop keyed on `send().is_err()` ran until the
+  window closed: one more file watcher per project switch, an `ai_ask` that
+  could not be cancelled. Long-lived commands own a slot in `AppState`
+  instead (`watch`, `asking`), and the loop ends because the slot was
+  replaced. `stream.rs` is the one reader loop, and says this above it.
+- **`workbench.toml` is written through `config::update`, and only that.**
+  Every writer is a read-modify-write of the whole file, and two of them —
+  the tab strip on every tab switch, the recents on every open — interleaved
+  and lost one. `update` holds a process-wide lock across the read and the
+  write; the temporary file carries the process id, because two windows
+  sharing one `workbench.toml.tmp` produced a file that was neither's. The
+  file has its own private structs (`config::file`), so the wire types can
+  be renamed for the frontend without dropping a key from everybody's file.
+- **A child's stderr is read or it is `null()`; it is never `piped()` and
+  forgotten.** gdb's was piped and unread, and a gdb with a Python warning
+  per startup filled the pipe and blocked on it with every MI answer still
+  to come. And gdb writes `exit-code` and every non-ASCII byte in *octal* —
+  `"012"` is ten, `\346\227\245` is 日 — so both are decoded as octal, into
+  bytes, not chars.
+- **The pty's exit poll wakes the renderer once, on exit.** It used to send
+  a wake every 250 ms as a way to notice the consumer had gone, and every
+  wake was rendered and pushed over IPC — four unchanged frames a second
+  from an idle terminal. Liveness is read off `Arc::strong_count` instead.
+  And a DSR query is answered *after* the bytes before it in the same write
+  have reached the emulator, or a program that prints and asks gets the
+  cursor from before its own output.
 
 ## Meeting C
 

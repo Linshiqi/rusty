@@ -5317,7 +5317,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-ai"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5336,7 +5336,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "rusty-ai",
  "rusty-core",
@@ -5351,12 +5351,14 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
 name = "rusty-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5368,7 +5370,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "camino",
  "guppy",
@@ -5381,7 +5383,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-dbg"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -5389,14 +5391,13 @@ dependencies = [
 
 [[package]]
 name = "rusty-edit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
  "notify",
- "regex",
  "serde",
  "syntect",
  "tempfile",
@@ -5405,7 +5406,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-embed"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "object",
  "quick-xml",
@@ -5421,18 +5422,18 @@ dependencies = [
 
 [[package]]
 name = "rusty-i18n"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]
 name = "rusty-ipc"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "rusty-lsp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5443,7 +5444,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-term"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "brush-builtins",
  "brush-core",
@@ -5459,7 +5460,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-ui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
