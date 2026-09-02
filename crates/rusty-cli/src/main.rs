@@ -63,7 +63,10 @@ enum Command {
     /// Where a built firmware's bytes went, by section and by crate.
     Size {
         /// The linked ELF, e.g. target/riscv32imc-unknown-none-elf/release/blinky
+        /// — or a project directory, whose newest firmware for its configured
+        /// target is analysed, the way the desktop app picks one.
         elf: PathBuf,
+        /// The project the chip is read from, when `elf` is a file.
         #[arg(long, default_value = ".")]
         path: PathBuf,
         #[arg(long)]
@@ -185,7 +188,31 @@ fn main() -> Result<()> {
         }
 
         Command::Size { elf, path, json } => {
-            let chip = project::detect(&path).ok().and_then(|p| p.chip);
+            // A directory names the project as well as the build to look in;
+            // a file is the build, and `--path` names the project.
+            let (elf, project_dir) = if elf.is_dir() {
+                (None, elf)
+            } else {
+                (Some(elf), path)
+            };
+            let detected = project::detect(&project_dir).ok();
+            let chip = detected.as_ref().and_then(|p| p.chip.clone());
+            let elf = match elf {
+                Some(elf) => elf,
+                None => {
+                    let configured = detected
+                        .as_ref()
+                        .and_then(|p| p.configured_target.as_deref());
+                    rusty_embed::firmware::newest(&project_dir, configured)
+                        .map(|firmware| PathBuf::from(firmware.path))
+                        .with_context(|| {
+                            format!(
+                                "no built firmware found under {}: build first, or name the ELF",
+                                project_dir.join("target").display()
+                            )
+                        })?
+                }
+            };
             let report = memory::analyze(&elf, chip.as_deref())
                 .with_context(|| format!("reading {}", elf.display()))?;
             if json {
