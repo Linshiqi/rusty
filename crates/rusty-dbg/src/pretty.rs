@@ -17,10 +17,6 @@
 //!   are not element separators.
 //! - `"..."` — a `&str` local can contain any delimiter at all.
 
-use alloc::borrow::ToOwned;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 /// One value, laid out to fit `width` columns.
 ///
 /// Returns the input unchanged when it already fits — the common case, and
@@ -169,7 +165,11 @@ fn render(items: &[Item], indent: usize, width: usize, out: &mut String) {
                     // Measured against where this group *starts*, not from
                     // column zero: a group nested four deep has far less
                     // room than the same text at the margin.
-                    let column = out.len() - out.rfind('\n').map_or(0, |at| at + 1);
+                    // In characters, like `width` and the line's own count:
+                    // a byte column made a value with CJK text in it break
+                    // three columns early per ideograph.
+                    let line_start = out.rfind('\n').map_or(0, |at| at + 1);
+                    let column = out[line_start..].chars().count();
                     if column + one_line.chars().count() <= width {
                         out.push_str(&one_line);
                         continue;
@@ -195,7 +195,6 @@ fn render(items: &[Item], indent: usize, width: usize, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::format;
 
     /// The common case, and the one where reformatting would be damage.
     #[test]

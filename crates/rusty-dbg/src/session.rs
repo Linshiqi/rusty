@@ -114,7 +114,11 @@ impl Debugger {
             .current_dir(&launch.root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            // Not piped: nothing read it, so a gdb with something to say on
+            // stderr — a Python warning per startup, a remote-protocol
+            // complaint per step — filled the pipe and then blocked on it,
+            // and the session hung with every MI answer still to come.
+            .stderr(Stdio::null());
         // The rustup shim exports this for rusty's own build, and gdb has
         // no business inheriting it — the same leak that made a spawned
         // cargo compile an esp project with stable.
@@ -222,12 +226,6 @@ impl Debugger {
         self.send(&format!("-data-read-memory-bytes 0x{address:x} {bytes}"))
     }
 
-    /// Evaluate an expression in the selected frame — the watch panel, and
-    /// what a hover over a name in the editor will ask.
-    pub fn evaluate(&self, expression: &str) -> Result<()> {
-        self.send(&format!("-data-evaluate-expression {expression}"))
-    }
-
     /// End the session and the target with it.
     pub fn stop(&self) {
         let _ = self.send("-gdb-exit");
@@ -277,12 +275,15 @@ fn pump(
             }
         }
     }
-    // gdb is gone; say so once so the panel stops offering to step.
+    // gdb is gone; say so once so the panel stops offering to step. A target
+    // that exited said so itself, code and all; a gdb that went away without
+    // that is *not* a clean exit, and inventing `Some(0)` here read a crashed
+    // debugger as a program that finished normally.
     let mut final_state = state.lock().expect("state").clone();
     final_state.running = false;
     final_state.attached = false;
-    if final_state.exited.is_none() {
-        final_state.exited = Some(0);
+    if final_state.exited.is_none() && final_state.error.is_none() {
+        final_state.error = Some("gdb ended the session without reporting an exit".to_string());
     }
     let _ = sender.send(final_state);
 }
@@ -307,8 +308,11 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
                 state.running = false;
                 state.attached = true;
                 state.reason = Some(reason_of(value.field("reason").unwrap_or_default()));
+                // gdb prints `exit-code` in *octal* — `exit-code="012"` is
+                // ten — as the MI manual says and as nothing about the field
+                // suggests. Read as decimal, exit 10 was reported as 12.
                 if let Some(code) = value.field("exit-code") {
-                    state.exited = code.parse().ok().or(Some(0));
+                    state.exited = i32::from_str_radix(code, 8).ok();
                 }
                 if value.field("reason") == Some("exited-normally") {
                     state.exited = Some(0);
@@ -369,6 +373,19 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
             }
         }
         Record::Notify { class, fields } => {
+            // `-break-delete` answers a bare `^done`; the deletion itself
+            // arrives as this notification. Without handling it the list kept
+            // every breakpoint ever placed, and the panel only survived
+            // because the frontend keeps its own copy.
+            if class == "breakpoint-deleted" {
+                let value = Value::Tuple(fields.clone());
+                if let Some(id) = value.field("id").and_then(|id| id.parse::<u32>().ok()) {
+                    let before = state.breakpoints.len();
+                    state.breakpoints.retain(|b| b.number != Some(id));
+                    return state.breakpoints.len() != before;
+                }
+                return false;
+            }
             if class == "breakpoint-modified" {
                 let value = Value::Tuple(fields.clone());
                 if let Some(bkpt) = value.get("bkpt") {
@@ -588,6 +605,50 @@ mod tests {
             "the same number updates in place rather than piling up",
         );
         assert_eq!(state.breakpoints[0].line, 69);
+    }
+
+    /// `-break-delete 1` is answered with a bare `^done` and the deletion
+    /// arrives as `=breakpoint-deleted,id="1"`. A list that only ever heard
+    /// `bkpt=` records kept every breakpoint for the life of the session.
+    #[test]
+    fn a_deleted_breakpoint_leaves_the_list() {
+        let mut state = DebugState::default();
+        let root = root();
+        for number in ["1", "2"] {
+            let placed = mi::parse(&format!(
+                r#"^done,bkpt={{number="{number}",type="breakpoint",enabled="y",file="src/bin/main.rs",line="68"}}"#,
+            ))
+            .unwrap();
+            apply(&mut state, &placed, &root);
+        }
+        assert_eq!(state.breakpoints.len(), 2);
+
+        let deleted = mi::parse(r#"=breakpoint-deleted,id="1""#).unwrap();
+        assert!(apply(&mut state, &deleted, &root), "a deletion is a change");
+        assert_eq!(state.breakpoints.len(), 1);
+        assert_eq!(state.breakpoints[0].number, Some(2), "the other one stays");
+
+        let again = mi::parse(r#"=breakpoint-deleted,id="1""#).unwrap();
+        assert!(
+            !apply(&mut state, &again, &root),
+            "deleting what is gone changes nothing"
+        );
+    }
+
+    /// gdb writes `exit-code` in octal. `"012"` is ten, not twelve, and an
+    /// exit code the panel shows wrong is worse than none.
+    #[test]
+    fn a_target_exit_code_is_read_as_octal() {
+        let mut state = DebugState::default();
+        let stop = mi::parse(r#"*stopped,reason="exited",exit-code="012""#).unwrap();
+        apply(&mut state, &stop, &root());
+        assert_eq!(state.exited, Some(10));
+        assert_eq!(state.reason, Some(StopReason::Exited));
+
+        let mut state = DebugState::default();
+        let stop = mi::parse(r#"*stopped,reason="exited-normally""#).unwrap();
+        apply(&mut state, &stop, &root());
+        assert_eq!(state.exited, Some(0));
     }
 
     /// Real gdb output from an optimised esp32 build: line 69 was asked

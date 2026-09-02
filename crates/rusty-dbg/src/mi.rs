@@ -11,10 +11,6 @@
 //! debugger that mis-parses a frame line puts the caret on the wrong
 //! function while looking like it worked.
 
-use alloc::borrow::ToOwned;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 /// One value in an MI record: a string, a `{…}` tuple, or a `[…]` list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Value {
@@ -202,7 +198,7 @@ fn parse_value(input: &str) -> Option<(Value, &str)> {
                 // that reads as "no memory came back" three layers away.
                 let is_field = !rest.starts_with(['{', '[', '"']);
                 if let Some((key, value, tail)) = is_field.then(|| parse_field(rest)).flatten() {
-                    items.push(Value::Tuple(alloc::vec![(key, value)]));
+                    items.push(Value::Tuple(vec![(key, value)]));
                     rest = tail.strip_prefix(',').unwrap_or(tail);
                 } else {
                     let (value, tail) = parse_value(rest)?;
@@ -217,26 +213,53 @@ fn parse_value(input: &str) -> Option<(Value, &str)> {
 }
 
 /// A quoted MI string, escapes undone. Returns the text and what follows.
+///
+/// Built as bytes rather than chars because gdb writes anything outside
+/// ASCII as octal escapes, one per *byte*: a path under `驱动/` arrives as
+/// `\351\251\261\345\212\250/`, and each `\ooo` is a third of a character.
+/// Decoded a char at a time those became digits, and the breakpoint on a
+/// file in that directory never matched the file the editor had open.
 fn parse_c_string(input: &str) -> Option<(String, &str)> {
-    let mut chars = input.char_indices();
-    if chars.next()?.1 != '"' {
+    let bytes = input.as_bytes();
+    if bytes.first() != Some(&b'"') {
         return None;
     }
-    let mut out = String::new();
-    while let Some((index, ch)) = chars.next() {
-        match ch {
-            '"' => return Some((out, &input[index + 1..])),
-            '\\' => {
-                let (_, escaped) = chars.next()?;
-                out.push(match escaped {
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    '0' => '\0',
-                    other => other,
-                });
+    let mut out: Vec<u8> = Vec::new();
+    let mut at = 1;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'"' => {
+                let text = String::from_utf8_lossy(&out).into_owned();
+                return Some((text, &input[at + 1..]));
             }
-            other => out.push(other),
+            b'\\' => {
+                let escaped = *bytes.get(at + 1)?;
+                at += 2;
+                match escaped {
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'0'..=b'7' => {
+                        // Up to three octal digits, the first already read.
+                        let mut value = u32::from(escaped - b'0');
+                        let mut digits = 1;
+                        while digits < 3
+                            && let Some(next) = bytes.get(at)
+                            && (b'0'..=b'7').contains(next)
+                        {
+                            value = value * 8 + u32::from(next - b'0');
+                            at += 1;
+                            digits += 1;
+                        }
+                        out.push(value as u8);
+                    }
+                    other => out.push(other),
+                }
+            }
+            other => {
+                out.push(other);
+                at += 1;
+            }
         }
     }
     None
@@ -245,7 +268,21 @@ fn parse_c_string(input: &str) -> Option<(String, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
+
+    /// gdb escapes every non-ASCII byte as `\ooo`. Three of them make one
+    /// CJK character, and a decoder that took each as a character on its
+    /// own produced digits where the path was.
+    #[test]
+    fn octal_escapes_decode_to_the_bytes_they_spell() {
+        let (text, rest) = parse_c_string(r#""\346\227\245\346\234\254" tail"#).unwrap();
+        assert_eq!(text, "日本");
+        assert_eq!(rest, " tail");
+
+        // A one- or two-digit escape ends at the first non-octal byte, and
+        // `\0` is the same NUL it always was.
+        let (text, _) = parse_c_string(r#""a\0b\12c""#).unwrap();
+        assert_eq!(text, "a\0b\nc");
+    }
 
     /// Real records, captured from gdb 14 against an esp32 image. The frame
     /// is the one that matters: file and line are what put the caret on a

@@ -3,8 +3,6 @@
 //! Plain data, no IO — the frontend `use`s these directly, so what the
 //! debugger reports and what the panel draws cannot drift.
 
-use alloc::string::String;
-use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 /// A breakpoint the user asked for, and what gdb made of it.

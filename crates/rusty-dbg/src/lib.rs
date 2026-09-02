@@ -5,10 +5,6 @@
 //! frontend uses the model types directly, so the wire contract cannot
 //! drift from what the debugger actually reports.
 
-#![cfg_attr(not(feature = "backend"), no_std)]
-
-extern crate alloc;
-
 pub mod mi;
 pub mod model;
 pub mod pretty;
@@ -18,4 +14,4 @@ pub use model::*;
 #[cfg(feature = "backend")]
 pub mod session;
 #[cfg(feature = "backend")]
-pub use session::{Debugger, Events, Launch, Target};
+pub use session::{Debugger, Error, Events, Launch, Target};
