@@ -654,7 +654,7 @@ open-gdb = "Open gdb in the terminal"
 fit-contents = "Fit to contents"
 reset-view = "Reset view"
 wire = "Wire"
-nothing-selected = "Select a part or a wire. Drag a part's gold stub to a chip pin to wire it — wiring is what sets the pin. Wheel zooms, background drags, Del removes."
+nothing-selected = "Select a part or a wire. Drag a part's gold stub to a chip pin to wire it — wiring is what sets the pin. Wheel zooms, background or middle-drag pans, R turns, X mirrors, F fits, Del removes."
 [parts]
 # The simulator's parts library. Each tooltip says what the part *does on the
 # wire*, because that is what decides whether it is the one you want.
@@ -688,7 +688,6 @@ default-features = "everything the package turns on when nothing is specified"
 rename-scope = "every use in the project, written to disk"
 tab-cap = "shown to 5,000 lines"
 own-parts = "your own parts: .rusty/parts/*.toml"
-canvas-hint = "drag a stub to a pin to wire · middle-drag pans · R turns · F fits"
 not-for-chip = "not available for this chip"
 wizard-runs = "rusty runs it and opens the result."
 close-front = "Close what is in front"

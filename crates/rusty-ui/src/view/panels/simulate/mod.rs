@@ -494,45 +494,6 @@ fn BoardEditor(
                         {move || format!("{}", grid.get() as i32)}
                     </span>
                 </button>
-                {move || {
-                    // Says where these levels come from, at the one moment
-                    // somebody is reading them — and it has to follow the
-                    // emulator actually running, because the answer changed.
-                    // With rusty's QEMU a pin has state and the board shows
-                    // it; with Espressif's the write handler is empty, so the
-                    // board can only repeat what the firmware printed about
-                    // itself. A user whose LED stays dark needs to know which,
-                    // or they check their wiring when the bug is a missing
-                    // `println!` — or the reverse.
-                    let (label, detail) = match state.sim.pin_source.get() {
-                        rusty_embed::PinSource::Emulator => (
-                            t!("simulate.pins-emulator"),
-                            t!("simulate.pins-emulator-detail"),
-                        ),
-                        rusty_embed::PinSource::Firmware => (
-                            t!("simulate.pins-firmware"),
-                            t!("simulate.pins-firmware-detail"),
-                        ),
-                    };
-                    running
-                        .get()
-                        .then(|| {
-                            view! {
-                                // The tooltip carries the whole of it; the line
-                                // carries enough to make somebody hover.
-                                <span
-                                    class="cursor-help text-footnote text-label-3 underline decoration-dotted underline-offset-2"
-                                    title=detail
-                                >
-                                    {label}
-                                </span>
-                            }
-                        })
-                }}
-                <span class="flex-1" />
-                <span class="text-caption text-label-4">
-                    {t!("misc.canvas-hint")}
-                </span>
                     }
         .into_any()
     });
@@ -1797,6 +1758,51 @@ fn BoardEditor(
                             </g>
                         </svg>
                     </div>
+
+                    // Where these pin levels come from, on the board rather
+                    // than in the rail beside it: it is a claim about what you
+                    // are looking at, and the rail is a column of 46px actions
+                    // that a sentence cannot live in.
+                    //
+                    // It has to follow the emulator actually running, because
+                    // the answer changed. With rusty's QEMU a pin has state and
+                    // the board shows it; with Espressif's the write handler is
+                    // empty, so the board can only repeat what the firmware
+                    // printed about itself. A user whose LED stays dark needs to
+                    // know which, or they check their wiring when the bug is a
+                    // missing `println!` — or the reverse.
+                    {move || {
+                        let (label, detail) = match state.sim.pin_source.get() {
+                            rusty_embed::PinSource::Emulator => (
+                                t!("simulate.pins-emulator"),
+                                t!("simulate.pins-emulator-detail"),
+                            ),
+                            rusty_embed::PinSource::Firmware => (
+                                t!("simulate.pins-firmware"),
+                                t!("simulate.pins-firmware-detail"),
+                            ),
+                        };
+                        running
+                            .get()
+                            .then(|| {
+                                view! {
+                                    // The tooltip carries the whole of it; the
+                                    // line carries enough to make somebody
+                                    // hover. `pointer-events-none` so a caption
+                                    // parked over the sheet cannot eat a drag —
+                                    // the label itself opts back in for its
+                                    // tooltip.
+                                    <div class="pointer-events-none absolute bottom-2 left-3 max-w-[calc(100%-1.5rem)]">
+                                        <span
+                                            class="pointer-events-auto cursor-help text-footnote text-label-3 underline decoration-dotted underline-offset-2"
+                                            title=detail
+                                        >
+                                            {label}
+                                        </span>
+                                    </div>
+                                }
+                            })
+                    }}
 
                     {move || {
                         let (x, y, target) = menu.get()?;
