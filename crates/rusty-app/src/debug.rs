@@ -75,8 +75,7 @@ pub async fn debug_start(
 
     let (debugger, events) = tokio::task::spawn_blocking(move || Debugger::start(&launch))
         .await
-        .map_err(|e| CommandError::new(format!("the debugger panicked while starting: {e}")))?
-        .map_err(|e| CommandError::new(e.to_string()))?;
+        .map_err(|e| CommandError::new(format!("the debugger panicked while starting: {e}")))??;
 
     let debugger = Arc::new(debugger);
     let ours = Arc::clone(&debugger);
@@ -89,8 +88,10 @@ pub async fn debug_start(
         while let Some(update) = events.next() {
             let ended = update.exited.is_some();
             if on_state.send(update).is_err() {
-                // The panel is gone; a debugger nobody can reach is a
-                // process holding the ELF hostage.
+                // The WebView itself is gone — the only failure a send
+                // reports. A debugger with no window is a process holding the
+                // ELF hostage. (A closed panel is not this: the slot in
+                // `AppState` is what ends a session the user walked away from.)
                 debugger.stop();
                 break;
             }
@@ -119,11 +120,10 @@ pub async fn debug_breakpoint(
         .debugger()
         .await
         .ok_or_else(|| CommandError::new("No debug session is running."))?;
-    match remove {
+    Ok(match remove {
         Some(number) => debugger.remove_breakpoint(number),
         None => debugger.add_breakpoint(&file, line),
-    }
-    .map_err(|e| CommandError::new(e.to_string()))
+    }?)
 }
 
 /// Resume, pause, or step. One command with a verb rather than five
@@ -146,7 +146,7 @@ pub async fn debug_control(action: String, state: State<'_, AppState>) -> Result
             )));
         }
     };
-    result.map_err(|e| CommandError::new(e.to_string()))
+    Ok(result?)
 }
 
 /// Select a stack frame and read its variables.
@@ -156,9 +156,7 @@ pub async fn debug_frame(level: u32, state: State<'_, AppState>) -> Result<(), C
         .debugger()
         .await
         .ok_or_else(|| CommandError::new("No debug session is running."))?;
-    debugger
-        .refresh(level)
-        .map_err(|e| CommandError::new(e.to_string()))
+    Ok(debugger.refresh(level)?)
 }
 
 /// End the session — and the run it was attached to.
@@ -194,9 +192,7 @@ pub async fn debug_read_memory(
         .debugger()
         .await
         .ok_or_else(|| CommandError::new("No debug session is running."))?;
-    debugger
-        .read_memory(address, bytes)
-        .map_err(|e| CommandError::new(e.to_string()))
+    Ok(debugger.read_memory(address, bytes)?)
 }
 
 /// The chip's peripherals, from whichever SVD this machine has.
@@ -243,5 +239,5 @@ pub async fn fetch_svd(
     .await
     .map_err(|e| CommandError::new(format!("the SVD download panicked: {e}")))?
     .map(|_| ())
-    .map_err(CommandError::new)
+    .map_err(CommandError::from)
 }

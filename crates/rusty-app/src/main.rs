@@ -11,6 +11,7 @@ mod flash;
 mod lsp;
 mod simulate;
 mod state;
+mod stream;
 mod terminal;
 mod window;
 
@@ -129,6 +130,7 @@ fn main() {
             commands::ai_list_models,
             commands::ai_check_provider,
             ai::ai_ask,
+            ai::ai_cancel,
             window::window_minimize,
             window::window_toggle_maximize,
             window::window_close,
@@ -146,6 +148,8 @@ fn main() {
                 use tauri::Manager;
                 let state = app.state::<state::AppState>();
                 tauri::async_runtime::block_on(async {
+                    state.cancel_ask().await;
+                    state.stop_watch().await;
                     state.set_lsp(None).await;
                     state.set_terminal(None).await;
                     state.set_debugger(None).await;
@@ -161,11 +165,14 @@ fn main() {
 /// found by whoever next opens that panel, not by CI.
 ///
 /// Naming each handler proves it exists and `stringify!` proves the constant
-/// agrees with how it is spelled. What this deliberately does not cover is
-/// whether the handler was added to `generate_handler!` above; that failure at
-/// least announces itself clearly the first time the command is called.
+/// agrees with how it is spelled. The second test below covers the other half:
+/// that every handler named here is also in `generate_handler!` above, and
+/// vice versa. That used to be left to the first call of the command, which is
+/// the same as being left to whoever opens that panel.
 #[cfg(test)]
 mod wire_names {
+    use std::collections::BTreeSet;
+
     use rusty_ipc as cmd;
 
     macro_rules! assert_named {
@@ -220,10 +227,6 @@ mod wire_names {
             cmd::workbench::OPEN_URL => commands::open_url,
             cmd::workbench::KEYBINDS => commands::keybinds,
             cmd::workbench::SET_KEYBIND => commands::set_keybind,
-            cmd::workbench::VIM => commands::vim_enabled,
-            cmd::workbench::SET_VIM => commands::set_vim,
-            cmd::workbench::LOCALE => commands::display_locale,
-            cmd::workbench::SET_LOCALE => commands::set_display_locale,
             cmd::files::TREE => files::file_tree,
             cmd::files::OPEN => files::open_file,
             cmd::files::SAVE => files::save_file,
@@ -290,6 +293,7 @@ mod wire_names {
             cmd::features::IMPACT => commands::feature_impact,
 
             cmd::ai::ASK => ai::ai_ask,
+            cmd::ai::CANCEL => ai::ai_cancel,
             cmd::ai::PRESETS => commands::ai_presets,
             cmd::ai::TOOLS => commands::ai_tools,
             cmd::ai::KEY_CONFIGURED => commands::ai_key_configured,
@@ -303,5 +307,72 @@ mod wire_names {
             cmd::window::CLOSE => window::window_close,
             cmd::window::SET_ZOOM => window::window_set_zoom,
         }
+    }
+
+    /// The `module::handler` entries of `generate_handler![ … ]`, off this
+    /// file's own source. Read rather than reflected on because the macro
+    /// exposes nothing, and a list that is only checked by calling each
+    /// command is a list nobody checks.
+    fn registered_handlers(source: &str) -> Vec<String> {
+        let open = "generate_handler![";
+        let start = source.find(open).expect("the handler list") + open.len();
+        let end = start + source[start..].find("])").expect("the end of the list");
+        source[start..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| line.trim_end_matches(',').to_string())
+            .collect()
+    }
+
+    /// The `=> module::handler` entries of `assert_named! { … }`, the same way.
+    fn named_handlers(source: &str) -> Vec<String> {
+        let open = "assert_named! {";
+        let start = source.find(open).expect("the wire names") + open.len();
+        let end = start
+            + source[start..]
+                .find("\n        }")
+                .expect("the end of the wire names");
+        source[start..end]
+            .lines()
+            .filter_map(|line| line.split_once("=>"))
+            .map(|(_, handler)| handler.trim().trim_end_matches(',').to_string())
+            .collect()
+    }
+
+    /// Two lists of the same handlers, and this is what ties them together.
+    /// A handler in one and not the other is either a command the frontend
+    /// can never call or a constant with no handler behind it — both found at
+    /// runtime by whoever opens that panel, unless found here.
+    #[test]
+    fn the_handler_list_and_the_wire_names_are_the_same_set() {
+        let source = include_str!("main.rs");
+        let registered = registered_handlers(source);
+        let named = named_handlers(source);
+
+        let registered_set: BTreeSet<&str> = registered.iter().map(String::as_str).collect();
+        let named_set: BTreeSet<&str> = named.iter().map(String::as_str).collect();
+        assert_eq!(
+            registered_set.len(),
+            registered.len(),
+            "a handler is registered twice: {registered:?}",
+        );
+        assert_eq!(
+            named_set.len(),
+            named.len(),
+            "a handler is named twice: {named:?}"
+        );
+
+        let unnamed: Vec<_> = registered_set.difference(&named_set).collect();
+        let unregistered: Vec<_> = named_set.difference(&registered_set).collect();
+        assert!(
+            unnamed.is_empty() && unregistered.is_empty(),
+            "registered but not in rusty-ipc: {unnamed:?}; in rusty-ipc but not registered: \
+             {unregistered:?}",
+        );
+        assert!(
+            registered.len() > 80,
+            "the scan found the list, not a fragment of it"
+        );
     }
 }

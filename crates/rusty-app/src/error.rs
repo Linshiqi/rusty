@@ -39,6 +39,13 @@ impl CommandError {
         )
     }
 
+    /// The assistant's question was stopped before the model finished — by
+    /// the panel's Stop, or by a newer question taking its place. Not a fault;
+    /// the frontend tells it from one by the shared constant.
+    pub fn cancelled() -> Self {
+        Self::new(rusty_ipc::ai::STOPPED)
+    }
+
     fn from_source(error: &dyn std::error::Error) -> Self {
         let mut causes = Vec::new();
         let mut current = error.source();
@@ -85,6 +92,15 @@ impl From<rusty_edit::Error> for CommandError {
 
 impl From<rusty_lsp::Error> for CommandError {
     fn from(error: rusty_lsp::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
+/// gdb failing to start carries the OS error underneath — "could not start
+/// xtensa-esp-elf-gdb" is the head and "file not found" is the cause. Flattened
+/// with `to_string()`, as it was, the cause was lost at every call site.
+impl From<rusty_dbg::Error> for CommandError {
+    fn from(error: rusty_dbg::Error) -> Self {
         Self::from_source(&error)
     }
 }

@@ -2,13 +2,22 @@
 //!
 //! Separate from `commands.rs` for the same reason `ai.rs` is: this is
 //! long-running and streams, and everything else is request/response.
+//!
+//! Every session here is registered in `AppState`'s session slot and released
+//! from it *by identity* when its reader ends. A reader that released whatever
+//! was in the slot killed the session that had replaced it — see
+//! `AppState::release_session`.
 
 use std::path::PathBuf;
 
 use rusty_embed::{CommandPlan, LogLine, WizardChoice, process, toolchain, wizard};
 use tauri::{State, ipc::Channel};
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    error::CommandError,
+    state::{AppState, blocking},
+    stream,
+};
 
 /// Run a planned command, streaming its output.
 ///
@@ -25,25 +34,18 @@ pub async fn run_flash(
 
     // Spawning is quick and non-blocking; only the reading blocks.
     let session = process::spawn(&plan, working_dir.as_deref())?;
-    state.start_session(session.stopper()).await;
+    let ours = state.start_session(session.stopper()).await;
 
     // The reader loop is synchronous by nature — it sits on a pipe — so it
     // belongs on a blocking thread rather than starving an async worker for
     // however long a flash takes.
-    let code = tokio::task::spawn_blocking(move || {
-        while let Some(line) = session.recv() {
-            // A closed channel means the user left the panel. Stop reading;
-            // the session is torn down by whoever replaced or stopped it.
-            if on_line.send(line).is_err() {
-                break;
-            }
-        }
+    let code = blocking("the flash session", move || {
+        stream::forward(|| session.recv(), &on_line);
         session.wait()
     })
-    .await
-    .map_err(|e| CommandError::new(format!("flash session panicked: {e}")))?;
+    .await?;
 
-    state.stop_session().await;
+    state.release_session(&ours).await;
     Ok(code)
 }
 
@@ -70,23 +72,20 @@ pub async fn serial_link(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let link = rusty_embed::serial::open(&port, baud)?;
-    state.start_session(link.stopper()).await;
+    let link = blocking("opening the serial port", move || {
+        rusty_embed::serial::open(&port, baud)
+    })
+    .await??;
+    let ours = state.start_session(link.stopper()).await;
     state.set_session_input(Some(link.input())).await;
 
-    // Same shape as a spawned tool: a blocking reader on its own thread, and
-    // a closed channel means the user left.
-    tokio::task::spawn_blocking(move || {
-        while let Some(line) = link.recv() {
-            if on_line.send(line).is_err() {
-                break;
-            }
-        }
+    // Same shape as a spawned tool: a blocking reader on its own thread.
+    blocking("the serial link", move || {
+        stream::forward(|| link.recv(), &on_line);
     })
-    .await
-    .map_err(|e| CommandError::new(format!("serial link panicked: {e}")))?;
+    .await?;
 
-    state.stop_session().await;
+    state.release_session(&ours).await;
     // No exit code: nothing exited. `None` is what the frontend already reads
     // as "it finished without a status", which is exactly true here.
     Ok(None)
@@ -137,20 +136,15 @@ pub async fn create_project(
                 None => CommandError::from(e),
             }
         })?;
-    state.start_session(session.stopper()).await;
+    let ours = state.start_session(session.stopper()).await;
 
-    let code = tokio::task::spawn_blocking(move || {
-        while let Some(line) = session.recv() {
-            if on_line.send(line).is_err() {
-                break;
-            }
-        }
+    let code = blocking("the generator", move || {
+        stream::forward(|| session.recv(), &on_line);
         session.wait()
     })
-    .await
-    .map_err(|e| CommandError::new(format!("the generator panicked: {e}")))?;
+    .await?;
 
-    state.stop_session().await;
+    state.release_session(&ours).await;
 
     match code {
         Some(0) | None if destination.exists() => Ok(destination.display().to_string()),
@@ -194,19 +188,14 @@ pub async fn run_command(
     };
 
     let session = process::spawn(&plan, working_dir.as_deref())?;
-    state.start_session(session.stopper()).await;
+    let ours = state.start_session(session.stopper()).await;
 
-    let code = tokio::task::spawn_blocking(move || {
-        while let Some(line) = session.recv() {
-            if on_line.send(line).is_err() {
-                break;
-            }
-        }
+    let code = blocking("the command", move || {
+        stream::forward(|| session.recv(), &on_line);
         session.wait()
     })
-    .await
-    .map_err(|e| CommandError::new(format!("the command panicked: {e}")))?;
+    .await?;
 
-    state.stop_session().await;
+    state.release_session(&ours).await;
     Ok(code)
 }

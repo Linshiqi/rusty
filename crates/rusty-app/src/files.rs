@@ -3,13 +3,17 @@
 use rusty_edit::{Document, Entry};
 use tauri::State;
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    error::CommandError,
+    state::{AppState, blocking},
+};
 
 /// The project tree, with build output and dot-entries already excluded.
+/// A walk of the whole project, so off the async thread.
 #[tauri::command]
 pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(rusty_edit::read_tree(&root)?)
+    Ok(blocking("reading the tree", move || rusty_edit::read_tree(&root)).await??)
 }
 
 /// A new empty file or directory. Refuses names that already exist.
@@ -20,7 +24,10 @@ pub async fn create_entry(
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(rusty_edit::create(&root, &path, dir)?)
+    Ok(blocking("creating the entry", move || {
+        rusty_edit::create(&root, &path, dir)
+    })
+    .await??)
 }
 
 /// A file in its own OS window — the same frontend, booted straight into
@@ -103,7 +110,9 @@ pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Docum
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     // The grammars are parsed from a bundled dump and take long enough that
     // doing it per file is noticeable, so the set is built once and kept.
-    Ok(state.files().open(&root, &path)?)
+    // Highlighting a large file is still work worth a blocking thread.
+    let files = state.files();
+    Ok(blocking("opening the file", move || files.open(&root, &path)).await??)
 }
 
 /// Open a dependency's source read-only — where goto-definition lands when
@@ -141,7 +150,10 @@ pub async fn save_file(
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(rusty_edit::save(&root, &path, &text)?)
+    Ok(blocking("saving the file", move || {
+        rusty_edit::save(&root, &path, &text)
+    })
+    .await??)
 }
 
 /// Run the buffer through rustfmt without touching disk.
@@ -235,6 +247,14 @@ pub async fn replace_in_project(
 /// budget, a network share — and the workbench still works without one; a red
 /// banner about it would be crying wolf, exactly as it would for a missing
 /// rust-analyzer.
+///
+/// The watcher lives in `AppState`'s slot, not in this loop. Replacing it —
+/// the next project, or the next call here — drops it, and dropping it is
+/// what closes `changes` and ends the loop. Before the slot existed the loop
+/// itself held the watcher and waited for a failed `send` to let go, and a
+/// send only fails once the WebView is gone: every project switch left one
+/// more `notify` handle and one more thread behind, still pushing the old
+/// tree's changes into a window that had moved on.
 #[tauri::command]
 pub async fn watch_project(
     on_change: tauri::ipc::Channel<rusty_edit::FileChanges>,
@@ -242,25 +262,23 @@ pub async fn watch_project(
 ) -> Result<(), CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
 
-    let started = tokio::task::spawn_blocking(move || rusty_edit::watch(&root))
-        .await
-        .map_err(|e| CommandError::new(format!("the file watcher task panicked: {e}")))?;
-
+    let started = blocking("the file watcher", move || rusty_edit::watch(&root)).await?;
     let Ok((watch, changes)) = started else {
         return Ok(());
     };
 
-    let _ = tokio::task::spawn_blocking(move || {
-        // The handle has to outlive the loop: dropping it stops the OS
-        // watcher, and a watcher dropped at the end of `watch()` would report
-        // nothing while looking perfectly healthy.
-        let _watch = watch;
+    let ticket = state.start_watch(watch).await;
+    blocking("the file watcher", move || {
         while let Ok(batch) = changes.recv() {
             if on_change.send(batch).is_err() {
+                // The WebView is gone — the one thing a failed send means.
                 break;
             }
         }
     })
-    .await;
+    .await?;
+    // Only if the slot still holds *this* watcher. The loop also ends because
+    // a successor replaced it, and the successor's entry is not ours to clear.
+    state.release_watch(ticket).await;
     Ok(())
 }

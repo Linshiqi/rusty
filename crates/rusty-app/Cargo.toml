@@ -20,10 +20,20 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.2"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+# `sync` for the slots in `AppState`, `time` for the assistant's overall
+# budget — both were reaching this crate through other dependencies' feature
+# unification, which is not a way to depend on something.
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# The assistant's question is cancellable: a token in `AppState`, raced against
+# the agent loop. Already in the tree through reqwest.
+tokio-util = "0.7.19"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# A directory to watch, for the watcher-slot test.
+tempfile = "3.27.0"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
