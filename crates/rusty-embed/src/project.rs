@@ -193,17 +193,19 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
         // answering only "unknown" leaves somebody re-reading a root that was
         // never going to have one.
         let elsewhere = firmware_candidates(Path::new(&project.root));
+        // Named once: the English below reads it, and so does the argument a
+        // translation of the same sentence has to substitute for itself.
+        let named = elsewhere
+            .iter()
+            .map(|name| format!("`{name}/`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
         let detail = if elsewhere.is_empty() {
             "No `esp-hal` chip feature and no recognisable target triple. \
              Without a chip, rusty cannot pick a toolchain, flash, or size \
              the binary."
                 .to_string()
         } else {
-            let named = elsewhere
-                .iter()
-                .map(|name| format!("`{name}/`"))
-                .collect::<Vec<_>>()
-                .join(" and ");
             if elsewhere.len() == 1 {
                 format!(
                     "This directory has no chip of its own — it is a workspace \
@@ -223,31 +225,44 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
         };
         // One candidate is a layout, not a fault: everything that needs the
         // chip finds it. Two is genuinely blocking, because nothing can.
-        let severity = match elsewhere.len() {
-            1 => Severity::Info,
-            _ => Severity::Blocking,
+        //
+        // Each arm names its own kind rather than computing one, so the check
+        // that every diagnostic has a translation can read them off the source.
+        let problem = match elsewhere.len() {
+            1 => Problem::new(
+                Severity::Info,
+                "chip-in-firmware",
+                "Chip is in the firmware crate",
+                detail,
+            ),
+            0 => Problem::new(
+                Severity::Blocking,
+                "chip-none",
+                "Target chip unknown",
+                detail,
+            ),
+            _ => Problem::new(
+                Severity::Blocking,
+                "chip-ambiguous",
+                "Target chip unknown",
+                detail,
+            ),
         };
-        problems.push(Problem {
-            severity,
-            title: match elsewhere.len() {
-                1 => "Chip is in the firmware crate".into(),
-                _ => "Target chip unknown".into(),
-            },
-            detail,
-            fix_command: None,
-        });
+        problems.push(problem.arg("crates", &named));
         return problems;
     };
 
     let Some(chip) = chip::by_id(chip_id) else {
-        problems.push(Problem {
-            severity: Severity::Warning,
-            title: format!("Unrecognised chip `{chip_id}`"),
-            detail: "rusty does not have this part in its catalogue, so chip-specific \
-                     checks are skipped. Flashing and building still work."
-                .into(),
-            fix_command: None,
-        });
+        problems.push(
+            Problem::new(
+                Severity::Warning,
+                "chip-unrecognised",
+                format!("Unrecognised chip `{chip_id}`"),
+                "rusty does not have this part in its catalogue, so chip-specific \
+                 checks are skipped. Flashing and building still work.",
+            )
+            .arg("chip", chip_id),
+        );
         return problems;
     };
 
@@ -256,97 +271,125 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
     if let (Some(configured), Some(runtime)) = (&project.configured_target, project.runtime) {
         match chip.target_for(runtime) {
             Some(expected) if expected != configured => {
-                problems.push(Problem {
-                    severity: Severity::Blocking,
-                    title: "Target triple does not match the chip".into(),
-                    detail: format!(
-                        "`.cargo/config.toml` builds for `{configured}`, but {} with \
-                         {} needs `{expected}`. The build will either fail to link or \
-                         produce a binary for the wrong core.",
-                        chip.name,
-                        runtime.label()
-                    ),
-                    fix_command: Some(format!(
+                problems.push(
+                    Problem::new(
+                        Severity::Blocking,
+                        "target-mismatch",
+                        "Target triple does not match the chip",
+                        format!(
+                            "`.cargo/config.toml` builds for `{configured}`, but {} with \
+                             {} needs `{expected}`. The build will either fail to link or \
+                             produce a binary for the wrong core.",
+                            chip.name,
+                            runtime.label()
+                        ),
+                    )
+                    .arg("configured", configured)
+                    .arg("chip", &chip.name)
+                    .arg("runtime", runtime.label())
+                    .arg("expected", expected)
+                    .fix(format!(
                         "# set target = \"{expected}\" in .cargo/config.toml"
                     )),
-                });
+                );
             }
             None => {
-                problems.push(Problem {
-                    severity: Severity::Blocking,
-                    title: format!("{} has no {} target", chip.name, runtime.label()),
-                    detail: format!(
-                        "There is no supported Rust target for {} on this part.",
-                        runtime.label()
-                    ),
-                    fix_command: None,
-                });
+                problems.push(
+                    Problem::new(
+                        Severity::Blocking,
+                        "no-target-for-runtime",
+                        format!("{} has no {} target", chip.name, runtime.label()),
+                        format!(
+                            "There is no supported Rust target for {} on this part.",
+                            runtime.label()
+                        ),
+                    )
+                    .arg("chip", &chip.name)
+                    .arg("runtime", runtime.label()),
+                );
             }
             _ => {}
         }
     } else if project.configured_target.is_none() {
-        problems.push(Problem {
-            severity: Severity::Blocking,
-            title: "No target configured".into(),
-            detail: format!(
-                "`.cargo/config.toml` sets no `[build] target`, so cargo will build \
-                 for this machine instead of {}. The result will compile and then \
-                 fail to do anything useful.",
-                chip.name
-            ),
-            fix_command: Some(format!(
+        problems.push(
+            Problem::new(
+                Severity::Blocking,
+                "no-target",
+                "No target configured",
+                format!(
+                    "`.cargo/config.toml` sets no `[build] target`, so cargo will build \
+                     for this machine instead of {}. The result will compile and then \
+                     fail to do anything useful.",
+                    chip.name
+                ),
+            )
+            .arg("chip", &chip.name)
+            .fix(format!(
                 "# add [build] target = \"{}\" to .cargo/config.toml",
                 chip.bare_metal_target
             )),
-        });
+        );
     }
 
     // The single most common first-build failure.
     if chip.needs_esp_toolchain() {
         match project.configured_toolchain.as_deref() {
             Some("esp") => {}
-            Some(other) => problems.push(Problem {
-                severity: Severity::Blocking,
-                title: format!("{} needs the `esp` toolchain", chip.name),
-                detail: format!(
-                    "This part is {} and upstream rustc cannot emit code for it. \
-                     `rust-toolchain.toml` pins `{other}`, which will fail with an \
-                     unknown-target error. The `esp` toolchain ships a forked LLVM and \
-                     is installed by espup.",
-                    chip.arch.label()
-                ),
-                fix_command: Some("espup install".into()),
-            }),
-            None => problems.push(Problem {
-                severity: Severity::Warning,
-                title: format!(
-                    "{} needs the `esp` toolchain, and none is pinned",
-                    chip.name
-                ),
-                detail: "Builds will use whatever toolchain happens to be default. Pin \
-                         it so the project builds the same way on every machine."
-                    .into(),
-                fix_command: Some(
-                    "# add [toolchain] channel = \"esp\" to rust-toolchain.toml".into(),
-                ),
-            }),
+            Some(other) => problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "needs-esp",
+                    format!("{} needs the `esp` toolchain", chip.name),
+                    format!(
+                        "This part is {} and upstream rustc cannot emit code for it. \
+                         `rust-toolchain.toml` pins `{other}`, which will fail with an \
+                         unknown-target error. The `esp` toolchain ships a forked LLVM and \
+                         is installed by espup.",
+                        chip.arch.label()
+                    ),
+                )
+                .arg("chip", &chip.name)
+                .arg("arch", chip.arch.label())
+                .arg("pinned", other)
+                .fix("espup install"),
+            ),
+            None => problems.push(
+                Problem::new(
+                    Severity::Warning,
+                    "needs-esp-unpinned",
+                    format!(
+                        "{} needs the `esp` toolchain, and none is pinned",
+                        chip.name
+                    ),
+                    "Builds will use whatever toolchain happens to be default. Pin \
+                     it so the project builds the same way on every machine.",
+                )
+                .arg("chip", &chip.name)
+                .fix("# add [toolchain] channel = \"esp\" to rust-toolchain.toml"),
+            ),
         }
     } else if project.configured_toolchain.as_deref() == Some("esp") {
-        problems.push(Problem {
-            severity: Severity::Warning,
-            title: format!("{} does not need the `esp` toolchain", chip.name),
-            detail: format!(
-                "This part is {}, which stock Rust supports. Pinning `esp` still works \
-                 but forces everyone building this project to install espup.",
-                chip.arch.label()
-            ),
-            fix_command: None,
-        });
+        problems.push(
+            Problem::new(
+                Severity::Warning,
+                "esp-not-needed",
+                format!("{} does not need the `esp` toolchain", chip.name),
+                format!(
+                    "This part is {}, which stock Rust supports. Pinning `esp` still works \
+                     but forces everyone building this project to install espup.",
+                    chip.arch.label()
+                ),
+            )
+            .arg("chip", &chip.name)
+            .arg("arch", chip.arch.label()),
+        );
     }
 
     if project.uses_defmt {
         problems.push(Problem {
             severity: Severity::Info,
+            kind: "defmt".into(),
+            args: Default::default(),
             title: "defmt logging detected".into(),
             detail: "The monitor will decode frames against this build's ELF. Reflash \
                      after changing log strings or the decoding drifts."

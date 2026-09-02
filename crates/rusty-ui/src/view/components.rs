@@ -184,6 +184,9 @@ pub fn Button(
 pub fn ProblemRow(problem: rusty_embed::Problem) -> impl IntoView {
     let tone = Tone::from_severity(problem.severity);
     let fix = problem.fix_command.clone();
+    // Translated here rather than at the two call sites, so the Problems panel
+    // and the project header cannot end up saying the same thing differently.
+    let (title, detail) = crate::i18n::problem_text(&problem);
 
     view! {
         <div class="flex gap-2.5 border-b border-line px-4 py-3 last:border-b-0">
@@ -191,9 +194,9 @@ pub fn ProblemRow(problem: rusty_embed::Problem) -> impl IntoView {
                 <Dot tone=tone />
             </div>
             <div class="min-w-0 flex-1 select-text">
-                <div class="text-body font-medium">{problem.title}</div>
+                <div class="text-body font-medium">{title}</div>
                 <p class="mt-0.5 max-w-[72ch] text-callout leading-relaxed text-label-2">
-                    {problem.detail}
+                    {detail}
                 </p>
                 {fix.map(|command| view! { <div class="mt-2"><CommandLine command=command /></div> })}
             </div>

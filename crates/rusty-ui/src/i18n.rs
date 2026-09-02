@@ -182,6 +182,30 @@ fn purpose_in(section: &str, name: &str, english: &str) -> String {
     rusty_i18n::translate(&format!("{section}.{name}")).unwrap_or_else(|| english.to_string())
 }
 
+/// A diagnostic's title and detail, in this window's language.
+///
+/// The backend sends both the English and the `kind` that names *which*
+/// diagnostic this is, with the interpolated values kept apart in `args`. So
+/// the sentence can be looked up and refilled; a `kind` with no entry — a
+/// diagnostic added since, or a language that has not caught up — keeps the
+/// English, which is a sentence rather than a key.
+pub fn problem_text(problem: &rusty_embed::Problem) -> (String, String) {
+    let one = |suffix: &str, english: &str| {
+        rusty_i18n::translate(&format!("problem.{}-{suffix}", problem.kind)).map_or_else(
+            || english.to_string(),
+            |text| {
+                let args: Vec<(&str, String)> = problem
+                    .args
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.clone()))
+                    .collect();
+                rusty_i18n::fill(&text, &args)
+            },
+        )
+    };
+    (one("title", &problem.title), one("detail", &problem.detail))
+}
+
 fn reload() {
     if let Some(window) = web_sys::window() {
         let _ = window.location().reload();
@@ -190,6 +214,66 @@ fn reload() {
 
 #[cfg(test)]
 mod tests {
+    /// Every diagnostic the backend can emit has a catalogue entry.
+    ///
+    /// Falling back to the backend's English is the *correct* behaviour for a
+    /// `kind` nobody has translated — but for rusty's own diagnostics it is a
+    /// gap somebody should be told about, and silently showing English is how
+    /// a gap survives a release. So the check reads `rusty-embed`'s source for
+    /// the `kind` each `Problem::new` names, and requires both halves.
+    #[test]
+    fn every_diagnostic_kind_is_in_the_catalogue() {
+        let embed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("rusty-embed")
+            .join("src");
+        let known = rusty_i18n::keys(rusty_i18n::Locale::English);
+
+        let mut kinds = Vec::new();
+        for entry in std::fs::read_dir(&embed).expect("read rusty-embed/src") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read source");
+            // `Problem::new(severity, "kind", …)` — the kind is the first
+            // literal in the argument list. Bounded at the first builder call,
+            // or `.arg("crates", …)` answers for the kind and the test starts
+            // demanding entries for argument names.
+            for (index, _) in text.match_indices("Problem::new(") {
+                let rest = &text[index..];
+                let end = rest.find(".arg(").unwrap_or(rest.len());
+                let end = end.min(rest.find(".fix(").unwrap_or(rest.len()));
+                let args = &rest[..end];
+                let Some(open) = args.find('"') else { continue };
+                let Some(close) = args[open + 1..].find('"') else {
+                    continue;
+                };
+                kinds.push(args[open + 1..open + 1 + close].to_string());
+            }
+        }
+
+        assert!(
+            !kinds.is_empty(),
+            "found no `Problem::new` call sites — the scan is broken, not the catalogue"
+        );
+        let missing: Vec<String> = kinds
+            .iter()
+            .flat_map(|kind| {
+                [
+                    format!("problem.{kind}-title"),
+                    format!("problem.{kind}-detail"),
+                ]
+            })
+            .filter(|key| !known.contains(key))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these diagnostics have no catalogue entry:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
     /// Every `t!("…")` in this crate names a key the catalogue defines.
     ///
     /// The macro cannot check this — it has no view of the TOML at expansion

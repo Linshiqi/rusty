@@ -444,15 +444,25 @@ translation fails a test rather than reaching a screen.
   a different sentence in each, so `setup.purpose.<name>` is tried before
   `tool.<name>`. One wording silently answering for the other is a
   mistranslation nobody would notice.
+- **A `Problem` carries a `kind` and its `args` beside the English.** Prose
+  with values baked into it cannot be looked up, so the stable name travels
+  next to the sentence and the values travel apart from it — the frontend
+  refills `problem.<kind>-title` / `-detail`, and the CLI prints the English it
+  always did. Each `Problem::new` names its kind as a *literal*, because the
+  test that checks coverage reads them off the source; a computed kind is
+  unscannable and silently unchecked.
 - **A scalar key and a table cannot share a name.** `[dock]` held the tab
   titles and the panels below then needed sections of their own, so the tabs
   moved to `[dock.tab]`; `menu.file` became `menu.bar.file` for the same
   reason. TOML rejects the collision, and the test that parses every catalogue
   is where it surfaces.
-- **Two tests carry it.** One asserts every language has exactly English's
-  keys. The other scans the frontend source for `t!("…")` and asserts each key
-  exists — the macro cannot check that at expansion time, and `lookup`'s debug
-  assertion only fires if somebody opens the screen the key is on.
+- **Three tests carry it.** One asserts every language has exactly English's
+  keys. One scans the frontend source for `t!("…")` and asserts each key exists
+  — the macro cannot check that at expansion time, and `lookup`'s debug
+  assertion only fires if somebody opens the screen the key is on. The third
+  scans `rusty-embed` for every `Problem::new` kind: falling back to English is
+  correct for a diagnostic nobody has translated, and silently correct is how a
+  gap survives a release.
 - Not translated, deliberately: command lines, tool names, chip ids, target
   triples, and the dock's output. Users retype them, search them, and paste
   them into issues.

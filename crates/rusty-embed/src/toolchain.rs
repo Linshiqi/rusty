@@ -290,29 +290,37 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
 
     if needs_esp_toolchain && !status.has_esp_toolchain {
         let chip_name = chip.as_ref().map(|c| c.name.clone()).unwrap_or_default();
-        problems.push(Problem {
-            severity: Severity::Blocking,
-            title: "Xtensa toolchain missing".into(),
-            detail: format!(
-                "{chip_name} is Xtensa, which upstream rustc cannot target. Without the \
-                 `esp` toolchain the build fails with an unknown-target error that does \
-                 not mention espup. Installing it takes a while — it downloads a forked \
-                 LLVM."
-            ),
-            fix_command: Some("espup install".into()),
-        });
+        problems.push(
+            Problem::new(
+                Severity::Blocking,
+                "xtensa-missing",
+                "Xtensa toolchain missing",
+                format!(
+                    "{chip_name} is Xtensa, which upstream rustc cannot target. Without the \
+                     `esp` toolchain the build fails with an unknown-target error that does \
+                     not mention espup. Installing it takes a while — it downloads a forked \
+                     LLVM."
+                ),
+            )
+            .arg("chip", &chip_name)
+            .fix("espup install"),
+        );
     }
 
     if let Some(target) = &required_target
         && !required_target_installed
         && !target.starts_with("xtensa-")
     {
-        problems.push(Problem {
-            severity: Severity::Blocking,
-            title: format!("Target `{target}` not installed"),
-            detail: "cargo will refuse to build for a target rustup has not added.".into(),
-            fix_command: Some(format!("rustup target add {target}")),
-        });
+        problems.push(
+            Problem::new(
+                Severity::Blocking,
+                "target-not-installed",
+                format!("Target `{target}` not installed"),
+                "cargo will refuse to build for a target rustup has not added.",
+            )
+            .arg("target", target)
+            .fix(format!("rustup target add {target}")),
+        );
     }
 
     // Only complain about a flashing tool if the project could actually be
@@ -324,15 +332,17 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             .iter()
             .any(|t| matches!(t.name.as_str(), "espflash" | "probe-rs") && t.is_installed());
         if !has_flasher {
-            problems.push(Problem {
-                severity: Severity::Blocking,
-                title: "No way to flash the board".into(),
-                detail: "Neither espflash nor probe-rs is installed. espflash is the \
-                         simpler choice — it needs only the USB cable. probe-rs adds \
-                         breakpoint debugging and defmt over RTT, but wants a probe."
-                    .into(),
-                fix_command: Some("cargo install espflash".into()),
-            });
+            problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "no-flasher",
+                    "No way to flash the board",
+                    "Neither espflash nor probe-rs is installed. espflash is the \
+                     simpler choice — it needs only the USB cable. probe-rs adds \
+                     breakpoint debugging and defmt over RTT, but wants a probe.",
+                )
+                .fix("cargo install espflash"),
+            );
         }
     }
 
@@ -342,14 +352,16 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             .iter()
             .any(|t| t.name == "ldproxy" && t.is_installed());
         if !has_ldproxy {
-            problems.push(Problem {
-                severity: Severity::Blocking,
-                title: "ldproxy missing".into(),
-                detail: "ESP-IDF (std) builds link through ldproxy. Without it the build \
-                         fails at the link step with a linker-not-found error."
-                    .into(),
-                fix_command: Some("cargo install ldproxy".into()),
-            });
+            problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "ldproxy-missing",
+                    "ldproxy missing",
+                    "ESP-IDF (std) builds link through ldproxy. Without it the build \
+                     fails at the link step with a linker-not-found error.",
+                )
+                .fix("cargo install ldproxy"),
+            );
         }
     }
 

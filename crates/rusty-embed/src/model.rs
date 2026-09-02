@@ -3,6 +3,8 @@
 //! Like `rusty_core::model`, this is compiled unconditionally and must stay
 //! free of IO so the Leptos frontend can `use` these types directly.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -484,10 +486,26 @@ pub struct EmbeddedProject {
 
 /// Something wrong with the project or the machine, stated in terms of what to
 /// do about it.
+///
+/// **`kind` and `args` are what make this translatable.** The English is still
+/// here and is still the answer for anything that does not translate — the CLI
+/// prints it, and so does a window whose language has no entry for this
+/// diagnostic. But prose with values baked into it cannot be looked up, so the
+/// stable name travels beside it and the values travel apart from it. Same
+/// shape as a tool's purpose, for the same reason: the frontend keys on the
+/// name, never on the sentence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Problem {
     pub severity: Severity,
+    /// A stable slug naming *which* diagnostic this is. Empty means "no
+    /// name" — untranslatable, and the English below stands.
+    #[serde(default)]
+    pub kind: String,
+    /// What `{placeholders}` in the translation stand for. The English in
+    /// `title`/`detail` already has them substituted; a translation has not.
+    #[serde(default)]
+    pub args: BTreeMap<String, String>,
     /// One line, what is wrong.
     pub title: String,
     /// Why it matters, in the user's terms.
@@ -496,6 +514,39 @@ pub struct Problem {
     /// rather than run automatically — installing toolchains is the user's
     /// call, not ours.
     pub fix_command: Option<String>,
+}
+
+impl Problem {
+    /// A named diagnostic with no arguments.
+    pub fn new(
+        severity: Severity,
+        kind: &str,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Problem {
+            severity,
+            kind: kind.to_string(),
+            args: BTreeMap::new(),
+            title: title.into(),
+            detail: detail.into(),
+            fix_command: None,
+        }
+    }
+
+    /// One `{name}` the translation may need.
+    #[must_use]
+    pub fn arg(mut self, name: &str, value: impl Into<String>) -> Self {
+        self.args.insert(name.to_string(), value.into());
+        self
+    }
+
+    /// The command that fixes it.
+    #[must_use]
+    pub fn fix(mut self, command: impl Into<String>) -> Self {
+        self.fix_command = Some(command.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
