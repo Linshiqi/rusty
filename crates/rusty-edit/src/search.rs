@@ -4,23 +4,33 @@
 //! `ignore` walks the tree in parallel with the same gitignore rules the
 //! file tree shows, and `grep-searcher`/`grep-regex` do the matching — SIMD
 //! literal search, real Unicode case folding, `-w` word boundaries, binary
-//! detection. The walker and the tree share ignore rules, so search never
-//! surfaces a file the tree would hide.
+//! detection. The walker and the tree share ignore rules and the same
+//! [`hidden_entry`] predicate, so search never surfaces a file the tree would
+//! hide — `.cargo/config.toml` and `.rusty/sim.toml` included, which it once
+//! did while this paragraph said otherwise.
 //!
 //! Literal by default; regex sits behind an explicit toggle, and a pattern
 //! that does not parse is named rather than silently matching nothing.
+//!
+//! **One engine for search and replace.** Replace used to compile a second
+//! regex with a hand-written escape and a `\b…\b` word wrapper; the two
+//! disagreed on `<`, `>` and every whole-word query with a non-word edge, so
+//! the replace rewrote matches the panel never listed. Now both hold the same
+//! [`RegexMatcher`], and replace runs it on the same per-line slices the
+//! searcher does.
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use grep_matcher::Matcher;
+use grep_matcher::{Captures, LineTerminator, Matcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::sinks::Lossy;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
 use ignore::overrides::OverrideBuilder;
 use ignore::{WalkBuilder, WalkState};
 
+use crate::hidden::hidden_entry;
 use crate::model::{ReplaceOutcome, SearchHit, SearchResults, Skipped};
 
 /// Stop after this many hits. The panel says so when it happens.
@@ -81,9 +91,12 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
         .parents(false)
         .require_git(false)
         .overrides(overrides)
-        // `.git` holds thousands of files nobody is text-searching; without
-        // this it drowned every query the moment a project had history.
-        .filter_entry(|entry| entry.file_name().to_string_lossy() != ".git")
+        // The tree's own rule: dot entries never show, so a hit in one would
+        // point at a file the panel cannot open. `.git` alone drowned every
+        // query the moment a project had history.
+        .filter_entry(|entry| {
+            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
+        })
         .build_parallel()
         .run(|| {
             // Per-thread searcher (stateful); the matcher clones cheaply.
@@ -91,6 +104,11 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
             let mut searcher = SearcherBuilder::new()
                 .binary_detection(BinaryDetection::quit(0))
                 .line_number(true)
+                // The matcher's own terminator, or the searcher refuses the
+                // pair. CRLF, so a `\r` is stripped with the `\n` before a
+                // line reaches the pattern — `^gain$` found nothing in a
+                // CRLF file while it was left on.
+                .line_terminator(LineTerminator::crlf())
                 .build();
             let hits = &hits;
             let count = &count;
@@ -178,15 +196,14 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
     }
 }
 
-/// The compiled pattern: literal unless asked otherwise, word-bounded and
-/// case-folded by the engine rather than by hand.
 /// Replace every match in the project, and say what was left alone.
 ///
-/// **The same query, the same scope, the same walk as [`search`].** What is
-/// rewritten is exactly what the panel listed; a second set of rules built a
-/// slightly different way is how a replace touches a file nobody saw. The one
-/// deliberate difference is that this has no hit cap — replacing the first 500
-/// of 900 matches would be worse than refusing.
+/// **The same query, the same matcher, the same scope, the same walk as
+/// [`search`].** What is rewritten is exactly what the panel listed; a second
+/// engine built a slightly different way is how a replace touches a match
+/// nobody saw — and it did, for `Vec<u8>` and for every whole-word query with
+/// a non-word edge. The one deliberate difference is that this has no hit cap
+/// — replacing the first 500 of 900 matches would be worse than refusing.
 ///
 /// **A file with unsaved changes in the editor is never written.** Replacing
 /// on disk under a draft is the "editor eats work" failure in its purest form:
@@ -203,8 +220,8 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
         return ReplaceOutcome::default();
     }
 
-    let engine = match build_replacer(query) {
-        Ok(engine) => engine,
+    let matcher = match build_matcher(query) {
+        Ok(matcher) => matcher,
         Err(error) => {
             return ReplaceOutcome {
                 error: Some(error),
@@ -231,10 +248,12 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
         .parents(false)
         .require_git(false)
         .overrides(overrides)
-        .filter_entry(|entry| entry.file_name().to_string_lossy() != ".git")
+        .filter_entry(|entry| {
+            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
+        })
         .build_parallel()
         .run(|| {
-            let engine = engine.clone();
+            let matcher = matcher.clone();
             let outcome = &outcome;
             let root = root.to_path_buf();
             let replacement = replacement.to_string();
@@ -270,7 +289,7 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
                     return WalkState::Continue;
                 };
 
-                let count = engine.find_iter(&text).count();
+                let (replaced, count) = replace_lines(&matcher, &text, &replacement, expand);
                 if count == 0 {
                     return WalkState::Continue;
                 }
@@ -282,16 +301,11 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
                     return WalkState::Continue;
                 }
 
-                let replaced = if expand {
-                    engine.replace_all(&text, replacement.as_str())
-                } else {
-                    engine.replace_all(&text, regex::NoExpand(replacement.as_str()))
-                };
-                match std::fs::write(entry.path(), replaced.as_bytes()) {
+                match std::fs::write(entry.path(), &replaced) {
                     Ok(()) => {
                         let mut outcome = outcome.lock().unwrap();
                         outcome.changed.push(relative);
-                        outcome.replaced += count as u32;
+                        outcome.replaced += count;
                     }
                     Err(_) => outcome.lock().unwrap().skipped.push(Skipped {
                         path: relative,
@@ -309,38 +323,50 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
     outcome
 }
 
-/// The substituting half of [`build_matcher`].
+/// One file's text with every match replaced, and how many there were.
 ///
-/// A second engine rather than the grep matcher, because only this one
-/// substitutes: `$1` in the replacement has to mean the first capture, which
-/// is what anybody who turned the regex toggle on is expecting. The flags are
-/// the same three, so what it finds is what the panel found.
-fn build_replacer(query: &Query) -> Result<regex::Regex, String> {
-    let pattern = if query.regex {
-        query.text.clone()
-    } else {
-        regex::escape(&query.text)
-    };
-    let pattern = if query.whole_word {
-        format!(r"\b(?:{pattern})\b")
-    } else {
-        pattern
-    };
-    regex::RegexBuilder::new(&pattern)
-        .case_insensitive(!query.case_sensitive)
-        // Line-anchored like the search is: `^` and `$` are a line's edges,
-        // not the file's, or a pattern that worked in the panel finds nothing
-        // here.
-        .multi_line(true)
-        .build()
-        .map_err(|error| {
-            let reason = error.to_string();
-            let reason = reason
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("the pattern does not parse");
-            format!("the pattern does not parse: {reason}")
-        })
+/// Line by line, on the line *without* its terminator — which is precisely
+/// the slice `grep-searcher` hands the matcher, so `^`, `$` and word edges
+/// mean here what they meant in the panel, and a match can never span a
+/// line. The terminator goes back untouched, so a CRLF file stays CRLF and a
+/// missing final newline stays missing.
+///
+/// Only a *regex* query expands `$1`; a literal replacement is text somebody
+/// typed, `$HOME` and all.
+fn replace_lines(
+    matcher: &RegexMatcher,
+    text: &str,
+    replacement: &str,
+    expand: bool,
+) -> (Vec<u8>, u32) {
+    let mut out = Vec::with_capacity(text.len());
+    let mut count = 0u32;
+    let mut captures = matcher
+        .new_captures()
+        .expect("grep-regex's matcher cannot fail to allocate captures");
+    for raw in text.split_inclusive('\n') {
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let terminator = &raw[line.len()..];
+        matcher
+            .replace_with_captures(line.as_bytes(), &mut captures, &mut out, |found, dst| {
+                count += 1;
+                if expand {
+                    found.interpolate(
+                        |name| matcher.capture_index(name),
+                        line.as_bytes(),
+                        replacement.as_bytes(),
+                        dst,
+                    );
+                } else {
+                    dst.extend_from_slice(replacement.as_bytes());
+                }
+                true
+            })
+            .expect("grep-regex's matcher cannot fail while matching");
+        out.extend_from_slice(terminator.as_bytes());
+    }
+    (out, count)
 }
 
 /// Which files are in scope, as override globs.
@@ -367,16 +393,28 @@ fn build_overrides(root: &Path, query: &Query) -> Result<ignore::overrides::Over
         .map_err(|_| "the include/exclude patterns do not combine".to_string())
 }
 
+/// The compiled pattern: literal unless asked otherwise, word-bounded and
+/// case-folded by the engine rather than by hand.
+///
+/// The engine's own literal mode, not an escape written here. A hand-rolled
+/// escape backslashed every ASCII punctuation character — and to the regex
+/// syntax in use, `\<` and `\>` are *word-boundary assertions*, so a literal
+/// search for `Vec<u8>`, `->` or `=>` matched nothing at all while the
+/// replace, escaping correctly, rewrote what the panel never showed.
 fn build_matcher(query: &Query) -> Result<RegexMatcher, String> {
-    let pattern = if query.regex {
-        query.text.clone()
-    } else {
-        escape_literal(&query.text)
-    };
     RegexMatcherBuilder::new()
+        .fixed_strings(!query.regex)
         .case_insensitive(!query.case_sensitive)
         .word(query.whole_word)
-        .build(&pattern)
+        // `^` and `$` are a line's edges, on either line ending. ripgrep
+        // sets both of these unconditionally for the same reason: the
+        // searcher hands the pattern one line at a time, and a CRLF line
+        // keeps its `\r` unless the pattern knows `\r\n` is a terminator.
+        // Together they also promise that no match ever contains a line
+        // ending, which is what lets replace run line by line.
+        .multi_line(true)
+        .crlf(true)
+        .build(&query.text)
         .map_err(|error| {
             // The first line of the regex error names the problem; the rest
             // is a caret diagram that does not survive a status line.
@@ -387,19 +425,6 @@ fn build_matcher(query: &Query) -> Result<RegexMatcher, String> {
                 .unwrap_or("the pattern does not parse");
             format!("the pattern does not parse: {reason}")
         })
-}
-
-/// Escape a literal for the regex engine, without pulling the full regex
-/// crate into this crate's interface for one function.
-fn escape_literal(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if ch.is_ascii() && !ch.is_ascii_alphanumeric() && ch != '_' && ch != ' ' {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// `*.rs, src/**` → the patterns, trimmed, empties dropped.
@@ -873,6 +898,149 @@ let c = kp;",
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
             "gain
 "
+        );
+    }
+
+    /// The literal search that found nothing. A hand-written escape turned
+    /// `<` and `>` into `\<` and `\>`, which the regex syntax reads as word
+    /// boundaries — so `Vec<u8>`, `->` and `=>` matched no file at all.
+    #[test]
+    fn angle_brackets_and_arrows_are_literal_text() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.rs",
+            "fn bytes() -> Vec<u8> { vec![] }\nlet f = |x| => x;\n",
+        );
+
+        for needle in ["Vec<u8>", "->", "=>", "Option<T>"] {
+            let results = search(dir.path(), &query(needle));
+            let expected = if needle == "Option<T>" { 0 } else { 1 };
+            assert_eq!(
+                results.hits.len(),
+                expected,
+                "`{needle}` as a literal: {:?}",
+                results.hits
+            );
+            if expected == 1 {
+                let hit = &results.hits[0];
+                assert_eq!(
+                    &hit.text[hit.span_start as usize..hit.span_end as usize],
+                    needle,
+                    "the span is the literal, not a zero-width assertion",
+                );
+            }
+        }
+    }
+
+    /// A bare `>` used to become `\>`, a zero-width assertion that hit at the
+    /// end of every word: five phantom matches on a line with one `>`.
+    #[test]
+    fn a_bare_angle_bracket_is_one_hit_not_a_hit_per_word() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.rs", "if gain > limit { clamp(gain) }\n");
+
+        let results = search(dir.path(), &query(">"));
+        assert_eq!(results.hits.len(), 1, "{:?}", results.hits);
+        assert_eq!(results.hits[0].col, 8);
+        let hit = &results.hits[0];
+        assert_eq!(
+            &hit.text[hit.span_start as usize..hit.span_end as usize],
+            ">"
+        );
+    }
+
+    /// Whole-word in the engine means "no word character touches either
+    /// edge"; `\b(?:>>)\b` demanded a word character *on both sides of a
+    /// non-word token* and so never matched. Search found ` >> `, replace
+    /// left it alone, and the panel and the file disagreed.
+    #[test]
+    fn whole_word_agrees_between_search_and_replace_on_non_word_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.rs", "let x = a >> 2;\nlet y = a>>b;\n");
+
+        let spec = Query {
+            text: ">>".to_string(),
+            whole_word: true,
+            ..Query::default()
+        };
+        let found = search(dir.path(), &spec);
+        let outcome = replace(dir.path(), &spec, "shr", &[]);
+        assert_eq!(
+            outcome.replaced as usize,
+            found.hits.len(),
+            "what the panel listed is exactly what was rewritten: {:?} vs {outcome:?}",
+            found.hits,
+        );
+        assert_eq!(
+            found.hits.len(),
+            1,
+            "`a>>b` has a word character on both edges: {:?}",
+            found.hits
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "let x = a shr 2;\nlet y = a>>b;\n"
+        );
+    }
+
+    /// The same regex must count the same matches in both directions, with
+    /// `^` and `$` meaning a *line's* edges whatever the line ending. A
+    /// CRLF line used to reach the pattern with its `\r` still on, so
+    /// `^gain$` found nothing in a file that was full of it.
+    #[test]
+    fn search_and_replace_see_the_same_matches_whatever_the_line_ending() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "crlf.rs", "gain\r\nnot gain\r\ngain\r\n");
+        write(dir.path(), "lf.rs", "gain\nnot gain\ngain\n");
+
+        let spec = Query {
+            text: "^gain$".to_string(),
+            regex: true,
+            ..Query::default()
+        };
+        let found = search(dir.path(), &spec);
+        assert_eq!(found.files, 2, "both endings match: {:?}", found.hits);
+        assert_eq!(found.hits.len(), 4, "{:?}", found.hits);
+        let outcome = replace(dir.path(), &spec, "kp", &[]);
+        assert_eq!(outcome.replaced, 4);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("crlf.rs")).unwrap(),
+            "kp\r\nnot gain\r\nkp\r\n",
+            "line-anchored on both sides, and the CRLF survives",
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("lf.rs")).unwrap(),
+            "kp\nnot gain\nkp\n",
+        );
+    }
+
+    /// The tree hides dot entries, so a search that surfaced one would offer
+    /// a hit the panel cannot open — and a replace could rewrite a file
+    /// nobody saw. `.cargo/config.toml` is the one people actually have.
+    #[test]
+    fn a_dot_directory_the_tree_hides_is_neither_searched_nor_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/main.rs", "gain\n");
+        write(dir.path(), ".cargo/config.toml", "gain = 1\n");
+        write(dir.path(), ".rusty/sim.toml", "gain = 2\n");
+
+        let found = search(dir.path(), &query("gain"));
+        assert_eq!(
+            found
+                .hits
+                .iter()
+                .map(|h| h.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/main.rs"],
+        );
+
+        let outcome = replace(dir.path(), &query("gain"), "kp", &[]);
+        assert_eq!(outcome.changed, vec!["src/main.rs"]);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap(),
+            "gain = 1\n",
+            "a file the panel never listed must not change",
         );
     }
 }

@@ -81,9 +81,16 @@ pub struct Document {
     pub text: String,
     /// Which grammar was used, if one matched.
     pub language: Option<String>,
-    /// Set when the file is not text. There are no lines in that case — a
-    /// viewer that renders a firmware image as mojibake helps nobody.
+    /// Set when the file cannot be shown as text — because it is not text, or
+    /// because it is too large to send (`too_large` says which). There are no
+    /// lines in that case — a viewer that renders a firmware image as
+    /// mojibake helps nobody.
     pub binary: bool,
+    /// Set when the file was refused for its size rather than its contents.
+    /// A 3 MB generated register map *is* text; calling it binary sent the
+    /// reader looking for a corrupt file.
+    #[serde(default)]
+    pub too_large: bool,
     /// Set when the file was too large to highlight in full.
     pub truncated: bool,
     /// Not this project's file — a dependency's source, opened to read.

@@ -26,6 +26,9 @@ mod document;
 mod error;
 #[cfg(feature = "backend")]
 mod format;
+/// The one rule for what is not shown, searched or watched.
+#[cfg(feature = "backend")]
+mod hidden;
 #[cfg(feature = "backend")]
 mod highlight;
 #[cfg(feature = "backend")]

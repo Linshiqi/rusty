@@ -57,7 +57,7 @@ impl Files {
             source,
         })?;
         if metadata.len() > MAX_BYTES {
-            return Ok(binary(relative));
+            return Ok(refused(relative, Refusal::TooLarge));
         }
 
         let bytes = std::fs::read(&path).map_err(|source| Error::Read {
@@ -69,10 +69,10 @@ impl Files {
         // it is right often enough. Rendering a firmware image as mojibake
         // helps nobody.
         let Ok(text) = String::from_utf8(bytes) else {
-            return Ok(binary(relative));
+            return Ok(refused(relative, Refusal::Binary));
         };
         if text.contains('\0') {
-            return Ok(binary(relative));
+            return Ok(refused(relative, Refusal::Binary));
         }
 
         let (lines, language, truncated) = highlight::lines(&self.syntaxes, relative, &text);
@@ -82,6 +82,7 @@ impl Files {
             text,
             language,
             binary: false,
+            too_large: false,
             truncated,
             read_only: false,
         })
@@ -108,7 +109,7 @@ impl Files {
             source,
         })?;
         let Ok(text) = String::from_utf8(bytes) else {
-            let mut document = binary(absolute);
+            let mut document = refused(absolute, Refusal::Binary);
             document.read_only = true;
             return Ok(document);
         };
@@ -120,6 +121,7 @@ impl Files {
             text,
             language,
             binary: false,
+            too_large: false,
             truncated,
             read_only: true,
         })
@@ -212,13 +214,25 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(root.join(candidate))
 }
 
-fn binary(relative: &str) -> Document {
+/// Why a file is not shown as text.
+enum Refusal {
+    /// Not text at all — a NUL byte, or bytes that are not UTF-8.
+    Binary,
+    /// Text, perhaps, but over [`MAX_BYTES`]; nobody read it to find out.
+    TooLarge,
+}
+
+/// A document with nothing in it and the reason why. `binary` is set for
+/// both, because both mean "there are no lines to draw"; `too_large` says
+/// which, so a viewer can tell a 3 MB register map from a firmware image.
+fn refused(relative: &str, why: Refusal) -> Document {
     Document {
         path: relative.to_string(),
         lines: Vec::new(),
         text: String::new(),
         language: None,
         binary: true,
+        too_large: matches!(why, Refusal::TooLarge),
         truncated: false,
         read_only: false,
     }
@@ -285,6 +299,30 @@ mod tests {
         let document = Files::new().open(dir.path(), "firmware.elf").unwrap();
 
         assert!(document.binary);
+        assert!(
+            !document.too_large,
+            "an ELF is refused for what it is, not its size"
+        );
+        assert!(document.lines.is_empty());
+        assert!(document.text.is_empty());
+    }
+
+    /// A file over the size limit is text nobody read, not a binary. The
+    /// two used to share one flag, and a generated register map three
+    /// megabytes long was reported as a firmware image.
+    #[test]
+    fn a_file_too_large_to_open_says_so_rather_than_calling_itself_binary() {
+        let dir = scratch();
+        let big = "// generated\n".repeat((MAX_BYTES as usize / 13) + 1);
+        assert!(big.len() as u64 > MAX_BYTES);
+        std::fs::write(dir.path().join("regs.rs"), &big).unwrap();
+
+        let document = Files::new().open(dir.path(), "regs.rs").unwrap();
+        assert!(document.too_large, "{document:?}");
+        assert!(
+            document.binary,
+            "no lines to draw, so the viewer's refusal still applies"
+        );
         assert!(document.lines.is_empty());
         assert!(document.text.is_empty());
     }

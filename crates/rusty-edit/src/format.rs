@@ -8,6 +8,7 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 use crate::error::{Error, Result};
 use crate::model::Formatted;
@@ -76,7 +77,17 @@ pub fn format_rust(root: &Path, rel_path: &str, text: &str) -> Result<Formatted>
 
 /// The rustfmt to run: stable's own binary when rustup can name it, else
 /// whatever `rustfmt` resolves to on PATH.
+///
+/// Resolved once per process. This runs on every format-on-save, and
+/// `rustup which` is a process spawn — tens of milliseconds between Ctrl+S
+/// and the text moving, paid to learn the same path every time. Only a
+/// successful answer is kept: a machine that gains the component while the
+/// app is open gets it on the next save rather than on the next launch.
 fn rustfmt_binary() -> String {
+    static RESOLVED: OnceLock<String> = OnceLock::new();
+    if let Some(path) = RESOLVED.get() {
+        return path.clone();
+    }
     let mut command = Command::new("rustup");
     command.args(["which", "--toolchain", "stable", "rustfmt"]);
     no_window(&mut command);
@@ -85,6 +96,7 @@ fn rustfmt_binary() -> String {
     {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !path.is_empty() {
+            let _ = RESOLVED.set(path.clone());
             return path;
         }
     }
@@ -160,11 +172,30 @@ fn no_window(command: &mut Command) {
 mod tests {
     use super::*;
 
-    // Real rustfmt, because the failure modes worth catching — a missing
-    // component, an edition mismatch, stdin handling — are all in the binary,
-    // not in our plumbing.
+    /// Whether a rustfmt this module can run exists on this machine.
+    ///
+    /// The tests below drive the real binary, because the failure modes
+    /// worth catching — a missing component, an edition mismatch, stdin
+    /// handling — are all in the binary, not in our plumbing. A machine
+    /// without one skips them and says so; the public CI runner is such a
+    /// machine, and a test that fails there for want of a tool teaches
+    /// people to ignore the suite.
+    fn rustfmt_available() -> bool {
+        let mut command = Command::new(rustfmt_binary());
+        command.arg("--version");
+        no_window(&mut command);
+        let present = command.output().is_ok_and(|out| out.status.success());
+        if !present {
+            eprintln!("skipping: rustfmt is not installed on this machine");
+        }
+        present
+    }
+
     #[test]
     fn formats_and_reports_change() {
+        if !rustfmt_available() {
+            return;
+        }
         let dir = tempfile::Builder::new()
             .prefix("rusty-fmt")
             .tempdir()
@@ -186,6 +217,9 @@ mod tests {
 
     #[test]
     fn a_parse_error_names_the_problem() {
+        if !rustfmt_available() {
+            return;
+        }
         let dir = tempfile::Builder::new()
             .prefix("rusty-fmt")
             .tempdir()

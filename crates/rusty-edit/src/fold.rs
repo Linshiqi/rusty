@@ -300,40 +300,66 @@ pub fn splice(doc: &str, folds: &Folded, old_view: &str, new_view: &str) -> (Str
 }
 
 /// The document byte offset that view byte offset `view` names.
+///
+/// One pass over the document's lines, each carrying its *own* terminator's
+/// length. The view is what [`Folded::view_text`] built — `lines()` joined
+/// with `\n` — so a visible line costs `content + 1` view bytes whatever the
+/// document's line ending is, while the document advances by what is really
+/// there. Counting `len + 1` for the document too put every splice in a CRLF
+/// file one byte early per preceding line, and re-walking `lines()` for each
+/// line made the arithmetic quadratic in the file on every keystroke.
 fn doc_offset(doc: &str, folds: &Folded, view: usize) -> usize {
-    // Walk the visible lines, spending view bytes until they run out.
     let mut remaining = view;
     let mut offset = 0usize;
-    let total = doc.lines().count() as u32;
-    for line in 0..total {
-        let len = nth_line(doc, line).map_or(0, str::len);
-        if folds.hides(line) {
-            offset += len + 1;
+    for (line, raw) in doc.split_inclusive('\n').enumerate() {
+        let content = line_content(raw);
+        if folds.hides(line as u32) {
+            offset += raw.len();
             continue;
         }
-        if remaining <= len {
+        if remaining <= content.len() {
             return offset + remaining;
         }
-        // The newline that follows this line costs one view byte too.
-        remaining -= len + 1;
-        offset += len + 1;
+        // The `\n` the view puts after this line costs one view byte.
+        remaining -= content.len() + 1;
+        offset += raw.len();
     }
     doc.len()
 }
 
-fn nth_line(text: &str, line: u32) -> Option<&str> {
-    text.lines().nth(line as usize)
+/// A line as `str::lines` would yield it: the terminator — `\n`, or `\r\n` —
+/// stripped, and nothing else. Both walkers must agree on what a line is,
+/// or the two texts drift apart by one byte per CRLF.
+fn line_content(raw: &str) -> &str {
+    let content = raw.strip_suffix('\n').unwrap_or(raw);
+    if raw.ends_with('\n') {
+        content.strip_suffix('\r').unwrap_or(content)
+    } else {
+        content
+    }
 }
 
 fn line_of(text: &str, offset: usize) -> u32 {
     text[..offset.min(text.len())].matches('\n').count() as u32
 }
 
+/// Bytes shared at the start, never splitting a character.
+///
+/// Equal bytes up to `i` do not make `i` a boundary in either string — the
+/// differing byte decides. `中` and `世` share two of their three bytes, so
+/// replacing one with the other left the prefix mid-character and the slice
+/// that followed panicked, in the handler that runs on every keystroke under
+/// a fold. The same back-up `positions::content_change` does in the LSP
+/// client, for the same reason.
 fn common_prefix(a: &str, b: &str) -> usize {
-    let mut i = 0;
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    while i < a.len() && i < b.len() && a[i] == b[i] {
-        i += 1;
+    let mut i = a
+        .as_bytes()
+        .iter()
+        .zip(b.as_bytes())
+        .take_while(|(x, y)| x == y)
+        .count();
+    while !(a.is_char_boundary(i) && b.is_char_boundary(i)) {
+        i -= 1;
     }
     i
 }
@@ -570,6 +596,42 @@ fn other() {
         let (doc, _) = splice(text, &folds, &view, &edited);
         assert!(doc.contains("// 中文注释"), "{doc}");
         assert!(doc.contains("ok2();"));
+    }
+
+    /// `中` (E4 B8 AD) and `世` (E4 B8 96) share their first two bytes, so a
+    /// byte-wise common prefix stops *inside* the character. The suffix scan
+    /// guarded that boundary; the prefix scan did not, and the slice after
+    /// it panicked — in the input handler, under a fold, killing the app.
+    #[test]
+    fn replacing_one_cjk_character_with_a_similar_one_does_not_split_it() {
+        let text = "fn f() {\n    a();\n}\nlet s = \"中\";\n";
+        let mut folds = Folded::default();
+        folds.fold(Region { header: 0, last: 1 });
+        let view = folds.view_text(text);
+        assert_eq!(view, "fn f() {\n}\nlet s = \"中\";\n");
+        let edited = view.replace('中', "世");
+        let (doc, _) = splice(text, &folds, &view, &edited);
+        assert_eq!(doc, "fn f() {\n    a();\n}\nlet s = \"世\";\n");
+    }
+
+    /// The view is `lines()` joined with `\n`; the document may be CRLF. A
+    /// mapping that charged the document one byte per line ending landed the
+    /// splice one byte early for every CRLF line above it — three lines up,
+    /// the edit went into the middle of `\r\n`.
+    #[test]
+    fn an_edit_under_a_fold_lands_correctly_in_a_crlf_document() {
+        let text = "fn f() {\r\n    // 中文注释\r\n}\r\nfn g() {\r\n    ok();\r\n}\r\n";
+        let mut folds = Folded::default();
+        folds.fold(Region { header: 0, last: 2 });
+        let view = folds.view_text(text);
+        assert_eq!(view, "fn f() {\nfn g() {\n    ok();\n}\n");
+        let edited = view.replace("    ok();", "    ok2();");
+        let (doc, folds) = splice(text, &folds, &view, &edited);
+        assert_eq!(
+            doc, "fn f() {\r\n    // 中文注释\r\n}\r\nfn g() {\r\n    ok2();\r\n}\r\n",
+            "only the edited line changes, and every CRLF survives",
+        );
+        assert_eq!(folds.regions(), &[Region { header: 0, last: 2 }]);
     }
 
     /// An error inside a collapsed function has to mark the collapsed line —

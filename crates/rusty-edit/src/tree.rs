@@ -10,7 +10,7 @@ use std::path::Path;
 
 use ignore::WalkBuilder;
 
-use crate::{error::Result, model::Entry};
+use crate::{error::Result, hidden::hidden_entry, model::Entry};
 
 /// How deep to walk.
 ///
@@ -37,12 +37,10 @@ pub fn read(root: &Path) -> Result<Vec<Entry>> {
         // `target/` and its tens of thousands of files would land in the tree
         // the first time anyone built.
         .require_git(false)
-        // Dot-entries never show. There was a toggle once; it earned its keep
-        // for nobody, and the files it revealed — .cargo, .rusty — are edited
-        // through their own panels, not by hand.
+        // Dot-entries never show — the rule search and the watcher share, so
+        // no panel can name a file this tree cannot open.
         .filter_entry(move |entry| {
-            let name = entry.file_name().to_string_lossy();
-            entry.depth() == 0 || !name.starts_with('.')
+            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
         })
         .build();
 

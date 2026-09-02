@@ -162,18 +162,23 @@ fn toml_line(line: &str) -> Line {
 
     let mut rest = value;
     // A trailing comment is a comment wherever it appears — but only outside a
-    // string, or a `#` in a URL would swallow the rest of the line.
+    // string, or a `#` in a URL would swallow the rest of the line. The
+    // string is closed by the quote that opened it and nothing else: an
+    // apostrophe inside `"it's"` used to flip the state, and the comment
+    // after it was painted as string.
     let comment_at = {
-        let mut in_string = false;
+        let mut in_string: Option<char> = None;
         let mut found = None;
         for (index, ch) in rest.char_indices() {
-            match ch {
-                '"' | '\'' => in_string = !in_string,
-                '#' if !in_string => {
+            match (in_string, ch) {
+                (Some(open), close) if close == open => in_string = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'') => in_string = Some(ch),
+                (None, '#') => {
                     found = Some(index);
                     break;
                 }
-                _ => {}
+                (None, _) => {}
             }
         }
         found
@@ -411,6 +416,36 @@ name = \"serde\"
             spans
                 .iter()
                 .any(|(t, k)| t.contains("real one") && *k == Token::Comment),
+            "{spans:?}",
+        );
+    }
+
+    /// An apostrophe inside a double-quoted string is a letter, not a quote.
+    /// Toggling on it left the state "in string" at the `#`, and the comment
+    /// was painted as string — on every `description = "it's …"` line.
+    #[test]
+    fn a_quote_of_the_other_kind_does_not_close_a_toml_string() {
+        let spans = tokens("Cargo.toml", "desc = \"it's\"  # note\n");
+
+        assert!(
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("it's") && *k == Token::Str),
+            "the string is a string: {spans:?}",
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("# note") && *k == Token::Comment),
+            "the comment after it is a comment: {spans:?}",
+        );
+
+        // And the other way round: a double quote inside a literal string.
+        let spans = tokens("Cargo.toml", "path = 'say \"hi\"'  # note\n");
+        assert!(
+            spans
+                .iter()
+                .any(|(t, k)| t.contains("# note") && *k == Token::Comment),
             "{spans:?}",
         );
     }
