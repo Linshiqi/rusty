@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use futures_util::Stream;
 
 use crate::{
-    error::Result,
+    error::{Error, Result},
     model::{ChatEvent, Content, Message, ToolDef},
 };
 
@@ -35,6 +35,34 @@ pub struct ChatRequest {
 }
 
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<ChatEvent>> + Send>>;
+
+/// A non-2xx before the stream starts, as the error it means.
+///
+/// 401 and 403 are the key, and say so. Everything else carries the body,
+/// because a provider's 400 is the only place it explains what it disliked.
+/// Shared by both dialects and by the model listing, so the three cannot
+/// disagree about what a status means.
+pub(crate) async fn check_status(
+    response: reqwest::Response,
+    profile: &str,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let code = status.as_u16();
+    if code == 401 || code == 403 {
+        return Err(Error::Unauthorized {
+            profile: profile.to_string(),
+            status: code,
+        });
+    }
+    Err(Error::Http {
+        profile: profile.to_string(),
+        status: code,
+        body: response.text().await.unwrap_or_default(),
+    })
+}
 
 #[async_trait]
 pub trait Provider: Send + Sync {

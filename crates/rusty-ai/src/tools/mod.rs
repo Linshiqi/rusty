@@ -50,6 +50,10 @@ impl ToolRegistry {
     /// a connected MCP server can never shadow `project_status` — name
     /// collisions between a host tool and a third-party one are otherwise a
     /// silent, and quite exploitable, failure.
+    ///
+    /// No production caller yet: the MCP client will be the first. Until then
+    /// the integration tests are its caller, and they are what keep the
+    /// namespacing rule true rather than intended.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         self.tools.push(tool);
     }
@@ -75,6 +79,11 @@ impl ToolRegistry {
 
     /// True when nothing in the registry needs user approval, which is what
     /// lets the assistant run its whole loop without interrupting.
+    ///
+    /// The agent loop does not consult this yet — every built-in is read-only,
+    /// so there is nothing to ask. It exists so the test that pins "every tool
+    /// is read-only" fails the day somebody adds one that is not, before an
+    /// approval flow exists to gate it.
     pub fn is_read_only(&self) -> bool {
         self.tools
             .iter()

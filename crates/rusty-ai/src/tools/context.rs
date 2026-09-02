@@ -49,11 +49,6 @@ impl<'a> ToolContext<'a> {
         }
     }
 
-    pub fn with_catalog(mut self, catalog: &'a Catalog) -> Self {
-        self.catalog = Some(catalog);
-        self
-    }
-
     /// The catalogue in play, falling back to the built-ins.
     ///
     /// Borrowed when one was supplied, owned when it has to be built — so the

@@ -18,9 +18,14 @@ async-trait = { version = "0.1.92", optional = true }
 eventsource-stream = { version = "0.2.3", optional = true }
 futures-util = { version = "0.3.33", optional = true }
 keyring = { version = "4.1.6", optional = true }
-reqwest = { version = "0.13.4", features = ["json", "stream", "gzip"], optional = true }
+# `socks`: the workbench's proxy setting is whatever the user typed or the
+# system reports, and `socks5://` is a common answer on the machines that need
+# a proxy at all. Without the feature that URL is a build error naming the
+# proxy, not a working route.
+reqwest = { version = "0.13.4", features = ["json", "stream", "gzip", "socks"], optional = true }
 thiserror = { version = "2.0.20", optional = true }
-tokio = { version = "1.53.1", features = ["rt", "macros", "sync"], optional = true }
+# `time`: the timeouts and the one retry's pause in `http`.
+tokio = { version = "1.53.1", features = ["rt", "macros", "sync", "time"], optional = true }
 
 rusty-core = { path = "../rusty-core", default-features = false, optional = true }
 rusty-embed = { path = "../rusty-embed", default-features = false, optional = true }

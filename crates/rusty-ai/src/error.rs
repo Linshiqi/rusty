@@ -28,6 +28,22 @@ pub enum Error {
     #[error("`{profile}` sent a response this client could not parse: {detail}")]
     Protocol { profile: String, detail: String },
 
+    /// The provider answered 200 and then reported failure *inside* the
+    /// stream — `data: {"error": …}` from an OpenAI-compatible endpoint,
+    /// `event: error` from Anthropic. Not a parse failure: the message is the
+    /// provider's own, and it is the diagnosis the user needs to read.
+    #[error("`{profile}` reported an error: {message}")]
+    Upstream { profile: String, message: String },
+
+    /// The HTTP client itself could not be set up — in practice, the proxy
+    /// setting is not a URL this client can route through.
+    #[error("could not set up the HTTP client — {detail}")]
+    HttpClient {
+        detail: String,
+        #[source]
+        source: Box<reqwest::Error>,
+    },
+
     #[error("no tool named `{0}`")]
     UnknownTool(String),
 

@@ -228,6 +228,56 @@ fn builtin_source() -> ToolSource {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Checking a provider
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What checking a provider profile established, as facts rather than as a
+/// sentence.
+///
+/// The first version of the check returned prose, and the prose said
+/// "Reachable" on a path that had made no network request at all: the model
+/// list was `unwrap_or_default()`ed, so a 401, a DNS failure and a timeout all
+/// read as an empty list, and an empty list read as success. Facts cannot be
+/// defaulted into a verdict — a failed request is an error, and the frontend
+/// words what did happen, in the user's language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "verdict", rename_all = "camelCase")]
+pub enum ProviderCheck {
+    /// The endpoint answered a request that carried the stored key.
+    #[serde(rename_all = "camelCase")]
+    Reachable {
+        /// The model the profile names.
+        model: String,
+        /// How many models the endpoint listed. Zero is an answer too — it
+        /// listed none — and is why `model_listed` is optional.
+        models_listed: usize,
+        /// Whether `model` was among them; absent when the endpoint listed
+        /// nothing, because "not in an empty list" is not evidence of anything.
+        model_listed: Option<bool>,
+    },
+    /// The endpoint was reached but the check could not be carried out, for
+    /// the stated reason. Neither the key nor the model has been verified.
+    #[serde(rename_all = "camelCase")]
+    NotChecked {
+        model: String,
+        why: NotCheckedReason,
+    },
+}
+
+/// Why a provider check stopped short. One variant today; a tagged enum so the
+/// next reason is an addition the frontend matches on, not a sentence it has
+/// to parse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "camelCase")]
+pub enum NotCheckedReason {
+    /// `/models` answered with a status saying there is no such listing here
+    /// (404 or 405). Either the endpoint does not list its models — some
+    /// gateways do not — or the base URL is wrong; the check cannot tell which,
+    /// and says so rather than picking one.
+    NoModelListing { status: u16 },
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Providers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -355,6 +405,34 @@ mod tests {
             matches!(&back.content[1], Content::ToolUse { name, .. } if name == "project_status"),
             "tool calls must survive: the next turn replays them to the model",
         );
+    }
+
+    /// The verdict is matched on by the frontend, so its tags are a contract:
+    /// `verdict` on the outside, `reason` on the inside, camelCase throughout.
+    #[test]
+    fn a_provider_check_survives_the_wire_with_its_tags() {
+        let reachable = ProviderCheck::Reachable {
+            model: "gpt-4o".into(),
+            models_listed: 12,
+            model_listed: Some(true),
+        };
+        let json = serde_json::to_value(&reachable).expect("serialize");
+        assert_eq!(json["verdict"], "reachable");
+        assert_eq!(json["modelsListed"], 12);
+        assert_eq!(json["modelListed"], true);
+        let back: ProviderCheck = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back, reachable);
+
+        let unchecked = ProviderCheck::NotChecked {
+            model: "x".into(),
+            why: NotCheckedReason::NoModelListing { status: 404 },
+        };
+        let json = serde_json::to_value(&unchecked).expect("serialize");
+        assert_eq!(json["verdict"], "notChecked");
+        assert_eq!(json["why"]["reason"], "noModelListing");
+        assert_eq!(json["why"]["status"], 404);
+        let back: ProviderCheck = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back, unchecked);
     }
 
     #[test]

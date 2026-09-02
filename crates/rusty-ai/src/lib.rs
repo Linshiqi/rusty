@@ -15,14 +15,17 @@
 //! cause. See [`tools`].
 //!
 //! ```no_run
-//! use rusty_ai::{AgentEvent, Assistant, Message, ToolContext, config};
+//! use rusty_ai::{AgentEvent, Assistant, Http, Message, ToolContext, config, secrets};
 //! use rusty_core::Workspace;
 //!
 //! # async fn demo() -> Result<(), rusty_ai::Error> {
 //! let workspace = Workspace::load(".")?;
 //! let settings: rusty_ai::ProviderConfig = todo!("from settings");
 //!
-//! let assistant = Assistant::new(config::build(&settings)?);
+//! // The key and the proxy are the host's to resolve: the keychain read is
+//! // blocking IO, and the proxy is a workbench setting.
+//! let key = secrets::load(&settings.profile)?;
+//! let assistant = Assistant::new(config::build(&settings, key, &Http::default())?);
 //! let context = ToolContext::with_workspace(&workspace)
 //!     .with_firmware("target/riscv32imc-unknown-none-elf/release/blinky");
 //! let mut history = vec![Message::user("Why won't this fit in flash?")];
@@ -47,6 +50,8 @@ pub mod config;
 #[cfg(feature = "backend")]
 mod error;
 #[cfg(feature = "backend")]
+pub mod http;
+#[cfg(feature = "backend")]
 pub mod provider;
 #[cfg(feature = "backend")]
 pub mod secrets;
@@ -58,6 +63,8 @@ use futures_util::StreamExt;
 
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
+#[cfg(feature = "backend")]
+pub use http::Http;
 #[cfg(feature = "backend")]
 pub use provider::{ChatRequest, Provider};
 #[cfg(feature = "backend")]
@@ -128,23 +135,21 @@ impl Assistant {
         }
     }
 
+    /// Replace the built-in registry with one the caller assembled.
+    ///
+    /// The extension seam, and today an unused one: an MCP client will
+    /// `register` a server's tools on a [`ToolRegistry`] and hand it here. It
+    /// stays public for that consumer rather than being carved out and put
+    /// back, because the shape of the loop — one registry, chosen before the
+    /// first turn — is the part worth fixing now.
     pub fn with_tools(mut self, tools: ToolRegistry) -> Self {
         self.tools = tools;
-        self
-    }
-
-    pub fn with_system(mut self, system: impl Into<String>) -> Self {
-        self.system = system.into();
         self
     }
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self
-    }
-
-    pub fn provider(&self) -> &dyn Provider {
-        self.provider.as_ref()
     }
 
     /// Run one question to completion, executing tool calls along the way.
