@@ -25,11 +25,21 @@ pub(super) fn ProblemsTab() -> impl IntoView {
         // Compiler diagnostics, flattened out of the per-file map. They join
         // the config problems here because "why does my project not build" has
         // one answer set, not two panels' worth.
+        //
+        // Hints are left out, and the panel's own first line is why: this
+        // lists what would stop the project building. A hint is dimming
+        // information — an unused import, a `#[cfg]` branch that is off —
+        // and `#[cfg]` branches being off is the normal state of every
+        // crate that supports more than one chip. Listing them means the
+        // count beside "Problems" is never zero and therefore never means
+        // anything. They still show in the editor, where `diag-hint` dims
+        // the span they cover, which is what a hint is for.
         let mut diags: Vec<(String, rusty_lsp::FileDiagnostic)> =
             state.lsp.diagnostics.with(|by_file| {
                 by_file
                     .iter()
                     .flat_map(|(path, items)| items.iter().map(|d| (path.clone(), d.clone())))
+                    .filter(|(_, d)| d.severity != DiagSeverity::Hint)
                     .collect()
             });
         diags.sort_by(|a, b| {

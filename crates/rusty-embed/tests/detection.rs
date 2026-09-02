@@ -306,12 +306,15 @@ fn a_workspace_whose_firmware_is_excluded_says_where_the_chip_is() {
     let project = detect(dir.path());
 
     assert!(project.chip.is_none(), "the root itself has no chip");
-    assert_eq!(titles(&project), vec!["Target chip unknown"]);
-    let detail = &project.problems[0].detail;
+    let problem = &project.problems[0];
     assert!(
-        detail.contains("`firmware/`"),
-        "the message must name where to look: {detail}"
+        problem.detail.contains("`firmware/`"),
+        "the message must name where the chip is: {}",
+        problem.detail
     );
+    // Not blocking. Everything that needs the chip finds it down there, so a
+    // red badge here would be crying wolf about a working project.
+    assert_eq!(problem.severity, Severity::Info);
 }
 
 /// And it must not invent one. An excluded directory that is not a firmware
@@ -330,6 +333,90 @@ fn an_excluded_directory_that_is_not_firmware_is_not_offered() {
     ]);
     let project = detect(dir.path());
     assert!(!project.problems[0].detail.contains("fixtures"));
+}
+
+/// Where the build actually happens. Identity for every ordinary project —
+/// a root with its own chip is its own firmware directory — so nothing about
+/// a normal build changes.
+#[test]
+fn an_ordinary_project_builds_where_it_was_opened() {
+    let dir = project_dir(&[(
+        "Cargo.toml",
+        "[package]
+name = \"fw\"
+version = \"0.1.0\"
+edition = \"2021\"
+
+[dependencies]
+esp-hal = { version = \"1\", features = [\"esp32c3\"] }
+",
+    )]);
+    assert_eq!(project::firmware_root(dir.path()), dir.path());
+}
+
+/// And the excluded-firmware workspace builds down there, where the chip and
+/// the target triple are.
+#[test]
+fn a_workspace_builds_in_its_excluded_firmware() {
+    let dir = project_dir(&[
+        (
+            "Cargo.toml",
+            "[workspace]
+members = [\"core\"]
+exclude = [\"firmware\"]
+",
+        ),
+        (
+            "firmware/Cargo.toml",
+            "[package]
+name = \"fw\"
+version = \"0.1.0\"
+edition = \"2021\"
+
+[dependencies]
+esp-hal = { version = \"1\", features = [\"esp32c3\"] }
+",
+        ),
+    ]);
+    assert_eq!(
+        project::firmware_root(dir.path()),
+        dir.path().join("firmware")
+    );
+}
+
+/// Two of them is a question rusty cannot answer, and answering it anyway
+/// means flashing one board with the other's binary. It stays at the root,
+/// where the "chip unknown" problem names both.
+#[test]
+fn two_excluded_firmware_crates_are_refused_rather_than_picked_between() {
+    let esp = "[package]
+name = \"fw\"
+version = \"0.1.0\"
+edition = \"2021\"
+
+[dependencies]
+esp-hal = { version = \"1\", features = [\"esp32c3\"] }
+";
+    let dir = project_dir(&[
+        (
+            "Cargo.toml",
+            "[workspace]
+exclude = [\"left\", \"right\"]
+",
+        ),
+        ("left/Cargo.toml", esp),
+        ("right/Cargo.toml", esp),
+    ]);
+    assert_eq!(project::firmware_root(dir.path()), dir.path());
+    let project = detect(dir.path());
+    let problem = &project.problems[0];
+    assert!(
+        problem.detail.contains("`left/`") && problem.detail.contains("`right/`"),
+        "{}",
+        problem.detail
+    );
+    // This one *is* blocking: nothing can find a chip, so nothing can build.
+    assert_eq!(problem.severity, Severity::Blocking);
 }
 
 #[test]

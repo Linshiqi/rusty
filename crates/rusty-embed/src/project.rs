@@ -15,7 +15,7 @@
 //! `xtensa-esp32-none-elf` is a real and common mistake, and nothing in the
 //! toolchain will tell you which of the two you meant.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
     chip,
@@ -115,11 +115,39 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
     Ok(project)
 }
 
+/// The directory cargo, espflash and the emulator should run in.
+///
+/// Usually the project itself. The exception is the standard embedded
+/// workspace: host-testable crates as members, the bare-metal crate
+/// `exclude`d so `cargo test` at the root does not build `no_std` for the
+/// host. The chip is down there, and so is everything a build, a flash or a
+/// simulation needs.
+///
+/// **Only when there is exactly one candidate.** Two excluded firmware crates
+/// is a question rusty cannot answer — and answering it anyway means flashing
+/// one board with the other's binary, which is the failure this whole file is
+/// written to avoid. The root is returned instead and detection's "chip
+/// unknown" problem names both.
+///
+/// Identity for every ordinary project: a root that has its own chip is its
+/// own firmware directory, so nothing about a normal build changes.
+pub fn firmware_root(root: &Path) -> PathBuf {
+    if detect(root).is_ok_and(|p| p.chip.is_some()) {
+        return root.to_path_buf();
+    }
+    let mut candidates = firmware_candidates(root);
+    match candidates.len() {
+        1 => root.join(candidates.remove(0)),
+        _ => root.to_path_buf(),
+    }
+}
+
 /// Excluded directories that are firmware crates in their own right.
 ///
-/// Named, never adopted. rusty could open one of these instead and be right
-/// most of the time — and wrong in a way that flashes the wrong binary to a
-/// board. So this only says where to look.
+/// A crate is one when it names a chip by the same two tests applied to the
+/// root — an `esp-hal` chip feature, or a bare-metal triple in
+/// `.cargo/config.toml`. Anything else the workspace excluded (a fixture
+/// tree, a vendored copy) is not offered.
 fn firmware_candidates(root: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
         return Vec::new();
@@ -146,7 +174,7 @@ fn firmware_candidates(root: &Path) -> Vec<String> {
             let dir = root.join(name);
             dir.join("Cargo.toml").is_file() && detect(&dir).is_ok_and(|inner| inner.chip.is_some())
         })
-        .map(|name| format!("`{name}/`"))
+        .map(str::to_string)
         .collect()
 }
 
@@ -171,17 +199,40 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
              the binary."
                 .to_string()
         } else {
-            format!(
-                "No `esp-hal` chip feature and no recognisable target triple here — \
-                 this looks like a workspace whose firmware is excluded from it. \
-                 The chip is in {}. Open that directory as the project to flash, \
-                 size or simulate; this one is where its tests run.",
-                elsewhere.join(" or "),
-            )
+            let named = elsewhere
+                .iter()
+                .map(|name| format!("`{name}/`"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            if elsewhere.len() == 1 {
+                format!(
+                    "This directory has no chip of its own — it is a workspace \
+                     whose firmware is excluded from it. The chip is in {named}, \
+                     and that is where rusty builds, flashes and simulates. \
+                     Nothing is broken; only this line could not be filled in."
+                )
+            } else {
+                // Two candidates is a question with no right answer, and
+                // picking one means flashing a board with the other's binary.
+                format!(
+                    "No chip here, and more than one excluded crate has one: \
+                     {named}. rusty will not choose between them — open the one \
+                     you mean as the project."
+                )
+            }
+        };
+        // One candidate is a layout, not a fault: everything that needs the
+        // chip finds it. Two is genuinely blocking, because nothing can.
+        let severity = match elsewhere.len() {
+            1 => Severity::Info,
+            _ => Severity::Blocking,
         };
         problems.push(Problem {
-            severity: Severity::Blocking,
-            title: "Target chip unknown".into(),
+            severity,
+            title: match elsewhere.len() {
+                1 => "Chip is in the firmware crate".into(),
+                _ => "Target chip unknown".into(),
+            },
             detail,
             fix_command: None,
         });

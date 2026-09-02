@@ -128,10 +128,30 @@ impl AppState {
         self.inner.lock().await.root.clone()
     }
 
+    /// Where cargo, espflash and the emulator run.
+    ///
+    /// The opened directory for every ordinary project. The exception is the
+    /// standard embedded workspace — host-testable crates as members, the
+    /// bare-metal crate `exclude`d so `cargo test` at the root does not build
+    /// `no_std` for the host — where the chip, the target triple and the
+    /// toolchain are all one directory down.
+    ///
+    /// Distinct from [`Self::root`], which stays the directory the user
+    /// opened: the file tree, the editor and the language server all belong
+    /// to the whole repository. Only the *build* moves.
+    pub async fn firmware_root(&self) -> Option<PathBuf> {
+        let root = self.root().await?;
+        let dir = root.clone();
+        tokio::task::spawn_blocking(move || rusty_embed::project::firmware_root(&dir))
+            .await
+            .ok()
+            .or(Some(root))
+    }
+
     /// The open project's chip, when detection found one — what picks an
     /// SVD, and what a register view is about.
     pub async fn chip(&self) -> Option<String> {
-        let root = self.root().await?;
+        let root = self.firmware_root().await?;
         rusty_embed::project::detect(&root).ok()?.chip
     }
 

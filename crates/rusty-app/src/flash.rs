@@ -21,7 +21,7 @@ pub async fn run_flash(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let working_dir = state.root().await;
+    let working_dir = state.firmware_root().await;
 
     // Spawning is quick and non-blocking; only the reading blocks.
     let session = process::spawn(&plan, working_dir.as_deref())?;
@@ -181,7 +181,7 @@ pub async fn run_command(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let working_dir = state.root().await;
+    let working_dir = state.firmware_root().await;
     let plan = CommandPlan {
         display: std::iter::once(program.clone())
             .chain(args.iter().cloned())

@@ -144,7 +144,7 @@ pub async fn terminal_open(
     on_frame: Channel<Screen>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let cwd = state.root().await;
+    let cwd = state.firmware_root().await;
     let shell = resolved_shell();
     // Traced to the dev console: a terminal that never paints is diagnosed
     // from these four lines, not from guesses.

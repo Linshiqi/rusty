@@ -46,7 +46,13 @@ pub struct OpenResult {
 #[tauri::command]
 pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<OpenResult> {
     let root = PathBuf::from(&path);
-    let detected = project::detect(&root)?;
+    let firmware = {
+        let root = root.clone();
+        tokio::task::spawn_blocking(move || project::firmware_root(&root))
+            .await
+            .map_err(|e| CommandError::new(format!("detection panicked: {e}")))?
+    };
+    let detected = detected_at(&root, &firmware)?;
 
     let (workspace, report, workspace_error) = match Workspace::load(&root) {
         Ok(workspace) => match workspace.report() {
@@ -70,10 +76,45 @@ pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<Op
 }
 
 /// Re-read the project's files without reopening it.
+///
+/// Detection runs where the *firmware* is, which for an ordinary project is
+/// the directory that was opened and for a workspace with an excluded
+/// bare-metal crate is that crate. `root` is then put back to what the user
+/// opened, because that is what it means everywhere it is read: the title
+/// bar's project name, and the key the per-project tab strip is stored under.
+///
+/// `chip_source` carries the difference. It exists so a wrong answer can be
+/// traced to the file that produced it, and "the chip came from a
+/// subdirectory" is exactly that kind of fact.
 #[tauri::command]
 pub async fn project_status(state: State<'_, AppState>) -> Answer<EmbeddedProject> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(project::detect(&root)?)
+    let firmware = state.firmware_root().await.unwrap_or_else(|| root.clone());
+    detected_at(&root, &firmware)
+}
+
+/// Detection for a project whose firmware may live one directory down.
+///
+/// Shared by `open_project` and `project_status`: two derivations of the same
+/// answer is two chances for the status bar and the Problems panel to
+/// disagree about which chip this is.
+fn detected_at(root: &std::path::Path, firmware: &std::path::Path) -> Answer<EmbeddedProject> {
+    let mut project = project::detect(firmware)?;
+    if firmware != root {
+        if let Ok(name) = firmware.strip_prefix(root) {
+            let where_from = format!("in {}/", name.display());
+            project.chip_source = Some(match project.chip_source {
+                Some(source) => format!("{source}, {where_from}"),
+                None => where_from,
+            });
+        }
+        // Back to what the user opened. `root` means "the project directory"
+        // everywhere it is read — the title bar's name, and the key the
+        // per-project tab strip is stored under — and neither of those is the
+        // firmware crate.
+        project.root = root.display().to_string();
+    }
+    Ok(project)
 }
 
 /// Direct dependencies with their latest stable versions from crates.io.
@@ -281,7 +322,7 @@ pub async fn set_assistant_choice(
 pub async fn pin_report(
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_embed::PinReport>, CommandError> {
-    let Some(root) = state.root().await else {
+    let Some(root) = state.firmware_root().await else {
         return Ok(None);
     };
     let Some(chip) = state.chip().await else {
@@ -304,7 +345,10 @@ pub async fn plan_migration(
     chip: String,
     state: State<'_, AppState>,
 ) -> Result<rusty_embed::Migration, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     let catalog = state.catalog().await;
     let detected = rusty_embed::project::detect(&root)?;
     let current = detected.chip.ok_or_else(|| {
@@ -334,7 +378,10 @@ pub async fn apply_migration(
     plan: rusty_embed::Migration,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     rusty_embed::migrate::apply(&root, &plan).map_err(CommandError::new)
 }
 
@@ -353,7 +400,7 @@ pub async fn catalog_problems(
 /// Machine tooling, cross-checked against the open project when there is one.
 #[tauri::command]
 pub async fn toolchain_report(state: State<'_, AppState>) -> Answer<ToolchainReport> {
-    let detected = match state.root().await {
+    let detected = match state.firmware_root().await {
         Some(root) => project::detect(&root).ok(),
         None => None,
     };
@@ -369,7 +416,10 @@ pub async fn toolchain_report(state: State<'_, AppState>) -> Answer<ToolchainRep
 /// clothes.
 #[tauri::command]
 pub async fn firmware_list(state: State<'_, AppState>) -> Answer<Vec<Firmware>> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     let configured = project::detect(&root)
         .ok()
         .and_then(|p| p.configured_target);
@@ -385,7 +435,7 @@ pub async fn firmware_list(state: State<'_, AppState>) -> Answer<Vec<Firmware>> 
 #[tauri::command]
 pub async fn memory_report(elf_path: String, state: State<'_, AppState>) -> Answer<MemoryReport> {
     let path = PathBuf::from(&elf_path);
-    let chip_id = match state.root().await {
+    let chip_id = match state.firmware_root().await {
         Some(root) => project::detect(&root).ok().and_then(|p| p.chip),
         None => None,
     };
@@ -446,7 +496,10 @@ pub async fn plan_flash(
     baud: Option<u32>,
     state: State<'_, AppState>,
 ) -> Answer<CommandPlan> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     let chip_id = project::detect(&root)?.chip.ok_or_else(|| {
         CommandError::new(
             "The target chip is unknown, so rusty cannot choose a flashing command. \
@@ -497,7 +550,10 @@ pub async fn scaffold_c_interop(
 ) -> Answer<rusty_embed::ScaffoldReport> {
     use rusty_embed::scaffold::Direction;
 
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
 
     // Before anything is written. `scaffold` already refuses rather than lay
     // half a scaffold over somebody's code; this is the same rule applied to

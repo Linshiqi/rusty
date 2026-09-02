@@ -11,14 +11,20 @@ pub async fn save_sim_board(
     board: SimBoard,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     simulate::save_board(&root, &board).map_err(CommandError::new)
 }
 
 /// How this project would be simulated, or exactly why it cannot be.
 #[tauri::command]
 pub async fn plan_simulation(state: State<'_, AppState>) -> Result<SimPlan, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     let detected = project::detect(&root)?;
     Ok(simulate::plan(&detected, false))
 }
@@ -74,7 +80,10 @@ pub async fn save_sim_trace(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     let dir = root.join("target/rusty-sim");
     std::fs::create_dir_all(&dir)
         .map_err(|e| CommandError::new(format!("could not create {}: {e}", dir.display())))?;
@@ -283,7 +292,10 @@ pub async fn run_simulation(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     let detected = project::detect(&root)?;
     let plan = simulate::plan(&detected, debug);
 

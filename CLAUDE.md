@@ -559,11 +559,26 @@ usty`) holds `location.toml`
   fixtures and vendored copies. And `toml::Table`, not `toml::Value` — in toml
   1.x `Value`'s `FromStr` parses a single *value*, so a manifest fails at its
   first table header with an error that reads as a broken `Cargo.toml`.
-- **Detection reports where the chip is, not just that it is missing.** Open
-  such a workspace at its root and there is genuinely no chip there; the
-  problem now names the excluded directory that has one and says to open it.
-  Not adopted — rusty could open it instead and be right most of the time, and
-  wrong in a way that flashes the wrong binary to a board.
+- **The build follows the chip, the tree follows the user.**
+  `project::firmware_root` is the directory cargo, espflash and the emulator
+  run in: the opened project for anything ordinary, and the single excluded
+  firmware crate when the root has no chip of its own. Identity for every
+  normal project, so nothing about a normal build changed. `state.root()`
+  stays the opened directory — the file tree, the editor, the language server
+  and the per-project tab strip all belong to the whole repository, and
+  `project.root` is what the title bar names it by. Only the *build* moves,
+  and `chip_source` says the chip came from a subdirectory.
+  **Exactly one candidate, or none.** Two excluded firmware crates is a
+  question with no right answer, and answering it anyway means flashing one
+  board with the other's binary — so that case stays at the root and the
+  problem names both. One candidate is `Info`, not `Blocking`: everything
+  that needs the chip finds it, and a red badge on a working project is
+  crying wolf.
+- **Hint-severity diagnostics are not problems.** The Problems panel says it
+  lists what would stop the project building; a `#[cfg]` branch being off is
+  the normal state of every crate that supports more than one chip. They were
+  in the list while the count beside the tab already excluded them, so the
+  two disagreed. Hints stay in the editor, where `diag-hint` dims the span.
 - **rust-analyzer's `check.allTargets` default buries no_std projects.** It
   builds tests and benches, which need a test harness `no_std` does not have,
   so every real diagnostic drowns in "can't find crate for `test`". The client

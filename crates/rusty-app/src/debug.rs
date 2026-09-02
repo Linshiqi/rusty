@@ -31,7 +31,10 @@ pub async fn debug_start(
     on_state: Channel<DebugState>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
     // Refusing beats attaching to whatever happens to be built. gdb reading a
     // different compilation from the one executing is the worst kind of wrong:
     // it answers every question, fluently, about another binary.
@@ -205,7 +208,7 @@ pub async fn debug_read_memory(
 pub async fn register_map(
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_embed::RegisterMap>, CommandError> {
-    let root = state.root().await;
+    let root = state.firmware_root().await;
     let Some(chip) = state.chip().await else {
         return Ok(None);
     };

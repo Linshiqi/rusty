@@ -558,6 +558,15 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // line height pushes every number below it down — the
                         // gutter walks away from the code a row at a time.
                         let icon_px = (row_height(zoom.get()) * 0.68).round().max(7.0) as u32;
+                        // Each decoration gets a slot of its own on *every*
+                        // row, occupied or not. The row is `justify-end`, so a
+                        // line with no chevron lets its number slide right
+                        // into the chevron's place — and one number out of
+                        // step with its neighbours reads as the gutter having
+                        // lost track of the file.
+                        let slot = format!("width: {icon_px}px");
+                        let runs_column = !runnables.get().is_empty();
+                        let folds_column = !foldables.get().is_empty();
                         view! {
                             <div
                                 class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
@@ -692,7 +701,17 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 title="Click to set a breakpoint"
                                                 class="group flex cursor-pointer items-center justify-end gap-1.5"
                                             >
-                                                {run}
+                                                {runs_column
+                                                    .then(|| {
+                                                        view! {
+                                                            <span
+                                                                class="flex shrink-0 items-center justify-center"
+                                                                style=slot.clone()
+                                                            >
+                                                                {run}
+                                                            </span>
+                                                        }
+                                                    })}
                                                 <span class=move || {
                                                     if marked.get() {
                                                         "text-crimson"
@@ -714,7 +733,17 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 // side of the margin it reads
                                                 // as another breakpoint
                                                 // control.
-                                                {chevron}
+                                                {folds_column
+                                                    .then(|| {
+                                                        view! {
+                                                            <span
+                                                                class="flex shrink-0 items-center justify-center"
+                                                                style=slot.clone()
+                                                            >
+                                                                {chevron}
+                                                            </span>
+                                                        }
+                                                    })}
                                             </div>
                                         }
                                     })
