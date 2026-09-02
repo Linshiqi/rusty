@@ -1,11 +1,14 @@
 //! Embedded Rust domain logic for the rusty workbench.
 //!
-//! Split by the `backend` feature exactly as `rusty-core` is: [`model`] and
-//! [`chip`] are pure data and compile to wasm so the Leptos frontend can `use`
-//! them; everything that reads files or spawns processes is backend-only.
+//! Split by the `backend` feature exactly as `rusty-core` is: [`model`],
+//! [`protocol`], [`plant`] and [`setup`] are pure data and arithmetic and
+//! compile to wasm so the Leptos frontend can `use` them; everything that
+//! reads files or spawns processes is backend-only.
 //!
-//! The chip catalogue is deliberately on the wasm side — the frontend needs to
-//! render the part list in the project wizard before any backend call happens.
+//! The chip catalogue is *not* on the wasm side, deliberately: the lookups
+//! need the TOML parser, and only the backend can see the user's and the
+//! project's overlay files. The frontend gets the catalogue over IPC, which
+//! is the one answer that includes those overlays.
 
 pub mod model;
 // The plant is arithmetic and no IO, like `protocol` — the frontend runs
@@ -25,9 +28,14 @@ pub mod chip;
 
 pub use model::*;
 pub use plant::{Plant, PlantConfig};
+// The whole of the serial protocol's public surface, so a caller can reach
+// every line shape through one path. Half of it was here and the other half
+// only under `protocol::`, which is how the same file ended up importing the
+// two halves two ways.
 pub use protocol::{
-    GpioReport, PinSource, PwmReport, SensorDef, analog_line, parse_display_report,
-    parse_gpio_report, parse_pin_source, parse_pwm_report, parse_sensor_def, sensor_line, to_vcd,
+    GpioReport, Param, PinSource, PwmReport, SensorDef, Telemetry, analog_line,
+    parse_display_report, parse_gpio_report, parse_param, parse_pin_source, parse_pwm_report,
+    parse_sensor_def, parse_telemetry, sensor_line, set_param_line, to_vcd,
 };
 
 #[cfg(feature = "backend")]

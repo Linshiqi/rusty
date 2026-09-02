@@ -118,11 +118,12 @@ pub fn requirements(id: &str) -> Vec<String> {
     out
 }
 
-/// Where a generated project ended up.
+/// Where a generated project ends up: the crate's name under `parent`, which
+/// is what both generators do today.
 ///
-/// Returned rather than inferred by the caller: the generator decides the
-/// directory name, and a UI that recomputed it from the crate name would open
-/// the wrong folder the first time a generator sanitises a hyphen.
+/// One function rather than that assumption spelled at each caller, so the
+/// day a generator starts sanitising a hyphen or a capital the change is here
+/// and the UI opens the folder that was actually made.
 pub fn destination(parent: &std::path::Path, choice: &WizardChoice) -> std::path::PathBuf {
     parent.join(&choice.name)
 }

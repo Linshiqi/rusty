@@ -21,7 +21,7 @@ use object::{Object, ObjectSection, ObjectSymbol};
 use crate::{
     chip,
     error::{Error, Result},
-    model::{CrateSize, MemoryReport, MemoryTotals, SectionKindDto, SectionSize},
+    model::{CrateSize, MemoryReport, MemoryTotals, SectionKind, SectionSize},
 };
 
 /// Analyse a linked ELF.
@@ -113,16 +113,16 @@ fn is_allocated(section: &object::Section<'_, '_>) -> bool {
     elf_header(section).0 & SHF_ALLOC != 0
 }
 
-fn classify(section: &object::Section<'_, '_>) -> SectionKindDto {
+fn classify(section: &object::Section<'_, '_>) -> SectionKind {
     let (flags, section_type) = elf_header(section);
     if flags & SHF_EXECINSTR != 0 {
-        SectionKindDto::Code
+        SectionKind::Code
     } else if section_type == SHT_NOBITS {
-        SectionKindDto::ZeroedData
+        SectionKind::ZeroedData
     } else if flags & SHF_WRITE != 0 {
-        SectionKindDto::InitialisedData
+        SectionKind::InitialisedData
     } else {
-        SectionKindDto::ReadOnlyData
+        SectionKind::ReadOnlyData
     }
 }
 
@@ -165,10 +165,10 @@ fn attribute_to_crates(file: &object::File<'_>) -> (Vec<CrateSize>, u64) {
             total: 0,
         });
         match classify(&section) {
-            SectionKindDto::Code => entry.code += size,
-            SectionKindDto::ReadOnlyData => entry.read_only_data += size,
-            SectionKindDto::InitialisedData => entry.data += size,
-            SectionKindDto::ZeroedData => entry.bss += size,
+            SectionKind::Code => entry.code += size,
+            SectionKind::ReadOnlyData => entry.read_only_data += size,
+            SectionKind::InitialisedData => entry.data += size,
+            SectionKind::ZeroedData => entry.bss += size,
         }
         entry.total += size;
     }
@@ -236,12 +236,12 @@ mod tests {
         // store the initialiser *and* 1 KB of RAM to live in. Counting it once
         // in either direction understates the real cost, and this is the case
         // people are surprised by.
-        assert_eq!(SectionKindDto::InitialisedData.budget(), (true, true));
+        assert_eq!(SectionKind::InitialisedData.budget(), (true, true));
 
-        assert_eq!(SectionKindDto::Code.budget(), (true, false));
-        assert_eq!(SectionKindDto::ReadOnlyData.budget(), (true, false));
+        assert_eq!(SectionKind::Code.budget(), (true, false));
+        assert_eq!(SectionKind::ReadOnlyData.budget(), (true, false));
         // .bss is zeroed by startup code, so nothing is stored for it.
-        assert_eq!(SectionKindDto::ZeroedData.budget(), (false, true));
+        assert_eq!(SectionKind::ZeroedData.budget(), (false, true));
     }
 
     #[test]

@@ -134,6 +134,30 @@ fn a_malformed_file_is_reported_without_losing_the_rest() {
     );
 }
 
+/// The plural is the likeliest typo of all, and it used to parse as a file
+/// with nothing in it: no board, no problem, nothing to say why.
+#[test]
+fn a_misspelled_table_is_reported_rather_than_read_as_empty() {
+    let dir = project_with_boards(&[(
+        "plural.toml",
+        r#"
+[[boards]]
+id = "plural-board"
+name = "Plural Board"
+chip = "esp32c3"
+"#,
+    )]);
+    let catalog = Catalog::load(Some(dir.path()));
+
+    assert!(catalog.board("plural-board").is_none());
+    let problem = catalog
+        .problems()
+        .iter()
+        .find(|p| p.path.contains("plural.toml"))
+        .expect("a file that defines nothing recognisable must be reported");
+    assert!(problem.detail.contains("boards"), "{}", problem.detail);
+}
+
 /// A typo in a field name is the most likely mistake in a hand-written file,
 /// and the least helpful to ignore.
 #[test]

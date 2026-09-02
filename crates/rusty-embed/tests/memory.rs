@@ -12,7 +12,9 @@ use object::{
     Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
     write::{Object, Symbol, SymbolSection},
 };
-use rusty_embed::{memory, model::SectionKindDto};
+// rusty's own section classification, distinct from the ELF writer's
+// `object::SectionKind` imported above.
+use rusty_embed::{memory, model::SectionKind as Kind};
 
 const CODE_BYTES: usize = 4096;
 const RODATA_BYTES: usize = 1024;
@@ -109,10 +111,10 @@ fn sections_are_classified_from_their_header_flags() {
             .unwrap_or_else(|| panic!("{name} missing from {:?}", report.sections))
             .kind
     };
-    assert_eq!(kind_of(".text"), SectionKindDto::Code);
-    assert_eq!(kind_of(".rodata"), SectionKindDto::ReadOnlyData);
-    assert_eq!(kind_of(".data"), SectionKindDto::InitialisedData);
-    assert_eq!(kind_of(".bss"), SectionKindDto::ZeroedData);
+    assert_eq!(kind_of(".text"), Kind::Code);
+    assert_eq!(kind_of(".rodata"), Kind::ReadOnlyData);
+    assert_eq!(kind_of(".data"), Kind::InitialisedData);
+    assert_eq!(kind_of(".bss"), Kind::ZeroedData);
 
     assert!(
         !report.sections.iter().any(|s| s.name.starts_with(".debug")),

@@ -46,7 +46,22 @@ pub struct Catalog {
 impl Catalog {
     /// Only what ships in the binary. Pure and deterministic — this is what the
     /// tests and the free functions in [`crate::chip`] use.
+    ///
+    /// Parsed once per process and cloned out: `load` starts from this on
+    /// every call, and every project open, every device scan and every
+    /// wizard step calls `load`. Re-parsing two TOML files each time was
+    /// measurable and bought nothing, since the files are compiled in.
     pub fn builtin() -> Self {
+        Self::builtin_shared().clone()
+    }
+
+    /// The parsed built-ins, shared. What [`crate::chip`] reads through.
+    pub(crate) fn builtin_shared() -> &'static Catalog {
+        static PARSED: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
+        PARSED.get_or_init(Self::parse_builtin)
+    }
+
+    fn parse_builtin() -> Self {
         let mut catalog = Catalog {
             chips: Vec::new(),
             boards: Vec::new(),
@@ -240,7 +255,11 @@ fn user_catalog_dir() -> Option<PathBuf> {
 // the frontend renders. Tying them together would mean a UI change breaking
 // everyone's board files.
 
+// `deny_unknown_fields` on the file as well as on each entry: `[[boards]]`
+// or `[[chips]]` — the plural, the likeliest typo of all — used to parse as
+// a file with nothing in it, and the board simply never appeared.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChipFile {
     #[serde(default)]
     chip: Vec<ChipEntry>,
@@ -297,6 +316,7 @@ impl ChipEntry {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BoardFile {
     #[serde(default)]
     board: Vec<BoardEntry>,

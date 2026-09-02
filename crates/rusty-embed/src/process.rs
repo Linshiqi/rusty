@@ -10,8 +10,9 @@
 //! user's existing knowledge and existing bug reports still apply.
 
 use std::{
+    ffi::OsStr,
     io::{BufRead, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -23,8 +24,64 @@ use std::{
 use crate::{
     error::{Error, Result},
     model::{CommandPlan, LogLevel, LogLine, LogStream},
-    toolchain::no_console_window,
 };
+
+/// A command for one of the tools rusty drives, with the three policies every
+/// spawn in this crate needs already applied.
+///
+/// One place for them because they were three places with three different
+/// subsets: `spawn` had all three, the version probes had only the window flag,
+/// the registry query spelled the flag inline, and `cargo metadata` had none.
+/// Every `cargo` and `rustc` that ran without the flag flashed a console over
+/// the window; every `rustup` that ran with `RUSTUP_TOOLCHAIN` still set
+/// answered for rusty's own toolchain instead of the project's.
+///
+/// - **`RUSTUP_TOOLCHAIN` is removed.** Launched from `cargo tauri dev`, this
+///   process inherits the variable the rustup shim set for *rusty's own* build,
+///   and rustup lets it outrank the project's `rust-toolchain.toml`. A spawned
+///   `cargo build` then compiles an esp-pinned Xtensa project with stable,
+///   which dies with "can't find crate for core"; a spawned `rustup target
+///   list` answers for the wrong toolchain. The project's own pin must decide.
+/// - **No console window** on Windows. Without it every probe blinks a black
+///   rectangle over the UI, and the toolchain panel probes six tools on open.
+/// - **Rusty's tool directories on PATH**, appended. `cc` invokes the cross
+///   compiler *by name*, so a toolchain rusty unpacked into its own directory
+///   is one `cargo build` cannot find however correctly the panel reports it.
+///   Appended rather than prepended: a compiler the user put on PATH themselves
+///   is the one they meant. (Which binary *rusty* runs is the other question,
+///   and `tools::find` answers it the other way round — see there.)
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.env_remove("RUSTUP_TOOLCHAIN");
+
+    let bins = crate::tools::tool_bin_dirs();
+    if !bins.is_empty()
+        && let Some(existing) = std::env::var_os("PATH")
+    {
+        let mut paths: Vec<PathBuf> = std::env::split_paths(&existing).collect();
+        paths.extend(bins);
+        if let Ok(joined) = std::env::join_paths(paths) {
+            command.env("PATH", joined);
+        }
+    }
+
+    no_console_window(&mut command);
+    command
+}
+
+/// Keep a child process from flashing a console window.
+///
+/// Part of [`command`]; on its own only for the one caller that builds its
+/// `Command` some other way.
+#[cfg(windows)]
+pub(crate) fn no_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub(crate) fn no_console_window(_command: &mut Command) {}
 
 /// A running child process.
 ///
@@ -132,7 +189,7 @@ impl Stopper {
 
 /// Start the planned command.
 pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> {
-    let mut command = Command::new(&plan.program);
+    let mut command = command(&plan.program);
     command
         .args(&plan.args)
         .stdout(Stdio::piped())
@@ -140,36 +197,11 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
         // Piped, not null: the simulator injects button presses through the
         // child's stdin (QEMU's `-serial mon:stdio` reads it as UART RX).
         // Tools that never read stdin just ignore an empty pipe.
-        .stdin(Stdio::piped())
-        // Launched from `cargo tauri dev`, this process inherits the
-        // RUSTUP_TOOLCHAIN the rustup shim set for *rusty's own* build —
-        // and rustup lets that variable outrank the project's
-        // rust-toolchain.toml. A spawned `cargo build` then compiles an
-        // esp-pinned Xtensa project with stable, which dies with "can't
-        // find crate for core". The project's own pin must decide.
-        .env_remove("RUSTUP_TOOLCHAIN");
-
-    // Anything rusty downloaded, on the child's PATH. `cc` invokes the cross
-    // compiler *by name*, so a toolchain rusty unpacked into its own
-    // directory is one `cargo build` cannot find however correctly the panel
-    // reports it — the user installs it with one click and the build still
-    // fails. Appended, not prepended: a compiler the user put on PATH
-    // themselves is the one they meant.
-    let bins = crate::tools::tool_bin_dirs();
-    if !bins.is_empty()
-        && let Some(existing) = std::env::var_os("PATH")
-    {
-        let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&existing).collect();
-        paths.extend(bins);
-        if let Ok(joined) = std::env::join_paths(paths) {
-            command.env("PATH", joined);
-        }
-    }
+        .stdin(Stdio::piped());
 
     if let Some(dir) = working_dir {
         command.current_dir(dir);
     }
-    no_console_window(&mut command);
 
     let mut child = command.spawn().map_err(|source| Error::Spawn {
         tool: plan.program.clone(),

@@ -182,7 +182,11 @@ fn missing_tool<'a>(
         .find(|t| t.name == name && t.path.is_none())
 }
 
-fn destination_of(tool: &str) -> Destination {
+/// Where a tool's install lands, by name. The backend's recipe table is the
+/// authority on what each install runs; a test there checks this rule agrees
+/// with it, since the two live on opposite sides of the wasm split and cannot
+/// share code.
+pub(crate) fn destination_of(tool: &str) -> Destination {
     if tool.starts_with("qemu-system-") || tool.ends_with("-gdb") || tool.ends_with("-gcc") {
         Destination::DataDirectory
     } else if tool == "rust-analyzer" || tool == "espup" {

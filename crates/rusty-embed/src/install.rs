@@ -17,9 +17,13 @@
 //! (`dl.espressif.com`), which exists precisely for that and serves identical
 //! bytes. [`crate::net`] adds the proxy ladder underneath.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::{config, model::CommandPlan, net, tools::host_platform};
+use crate::{
+    error::{Error, Result},
+    model::{CommandPlan, REPO},
+    net, tools,
+};
 
 /// The esp-gdb release the installer pulls.
 pub(crate) const GDB_RELEASE: &str = "esp-gdb-v14.2_20240403";
@@ -38,15 +42,15 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// keeps the registers, so the board view can show what a pin *is* rather
 /// than what the firmware said it set.
 ///
-/// Tag, and the repository it hangs off, both pinned for the reason in this
-/// module's header.
+/// The tag is pinned for the reason in this module's header; the repository
+/// it hangs off is [`REPO`], named once for the whole crate.
 const RUSTY_QEMU_TAG: &str = "qemu-v1";
-const RUSTY_REPO: &str = "Linshiqi/rusty";
 
 /// An archive to fetch: where to put it, the URLs to try in order, and the
-/// extraction step.
-pub struct QemuDownload {
-    pub archive: std::path::PathBuf,
+/// extraction step. One shape for QEMU, the debuggers and the C toolchain —
+/// the name says so, where `QemuDownload` used to claim only the first.
+pub struct ToolDownload {
+    pub archive: PathBuf,
     pub urls: Vec<String>,
     pub extract: CommandPlan,
 }
@@ -54,27 +58,40 @@ pub struct QemuDownload {
 /// How to install a tool the plan reported missing, as inspectable steps —
 /// one click in the panel, the dock shows every line, and only a failure
 /// sends anyone to the manual instructions.
-pub fn install_steps(tool: &str) -> std::result::Result<Vec<CommandPlan>, String> {
+///
+/// The public entry: the recipe table in `toolchain` covers every cargo- and
+/// rustup-installed tool, and this adds the one refusal that table cannot
+/// know about — QEMU is an archive, not a recipe.
+pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>> {
     if tool.starts_with("qemu-system-") {
-        return Err(format!(
+        return Err(Error::refused(format!(
             "qemu installs through its own download path — this is a bug if it surfaces; \
              manual fallback: https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE} \
-             into the data directory's tools/qemu/"
-        ));
+             into the data directory's tools/"
+        )));
     }
-    // One recipe table for every cargo/rustup-installed tool, shared with
-    // the Toolchain panel, so the two cannot drift.
-    crate::toolchain::install_steps(tool)
+    crate::toolchain::recipe(tool)
 }
 
-/// The directory every archive unpacks into, created if it is not there yet.
-fn tools_dir() -> std::result::Result<std::path::PathBuf, String> {
-    let Some(tools) = config::data_dir().map(|d| d.join("tools")) else {
-        return Err("the data directory could not be resolved".to_string());
-    };
-    std::fs::create_dir_all(&tools)
-        .map_err(|e| format!("could not create {}: {e}", tools.display()))?;
-    Ok(tools)
+/// Where every archive unpacks — resolved, not created. A plan is made
+/// against this path and the directory is made only once there is a plan:
+/// asking about a tool rusty does not know must not leave a directory behind,
+/// and nor must a test.
+fn data_tools_dir() -> Result<PathBuf> {
+    tools::data_tools_dir().ok_or_else(|| Error::Config {
+        detail: "the data directory could not be resolved".to_string(),
+    })
+}
+
+/// Make the directory an archive is about to land in.
+fn prepare(plan: &ToolDownload) -> Result<()> {
+    if let Some(parent) = plan.archive.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    Ok(())
 }
 
 /// The unpack step for an archive already downloaded.
@@ -114,25 +131,35 @@ fn espressif_urls(project: &str, release: &str, asset: &str) -> Vec<String> {
 }
 
 /// The archive for a gdb family, mirror ladder included.
-pub fn gdb_download(tool: &str) -> std::result::Result<QemuDownload, String> {
+pub fn gdb_download(tool: &str) -> Result<ToolDownload> {
+    let plan = gdb_download_into(tool, &data_tools_dir()?)?;
+    prepare(&plan)?;
+    Ok(plan)
+}
+
+/// [`gdb_download`] against a tools directory the caller names — the pure
+/// half, which is what the tests exercise so they never touch the real data
+/// directory.
+fn gdb_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
     if tool != "xtensa-esp-elf-gdb" && tool != "riscv32-esp-elf-gdb" {
-        return Err(format!("{tool} is not a gdb this installer knows"));
+        return Err(Error::refused(format!(
+            "{tool} is not a gdb this installer knows"
+        )));
     }
     if !cfg!(windows) {
-        return Err(format!(
+        return Err(Error::refused(format!(
             "one-click install only knows the Windows build so far — download {tool} from \
              https://github.com/espressif/binutils-gdb/releases/tag/{GDB_RELEASE} and unpack \
              it into the data directory's tools/"
-        ));
+        )));
     }
-    let tools = tools_dir()?;
     let asset = format!("{tool}-{GDB_VERSION}-x86_64-w64-mingw32.zip");
     let archive = tools.join(format!("{tool}.zip"));
-    Ok(QemuDownload {
+    Ok(ToolDownload {
         urls: espressif_urls("binutils-gdb", GDB_RELEASE, &asset),
         extract: extract_step(
             &archive,
-            &tools,
+            tools,
             "unpacks the gdb bundle into the data directory's tools/",
             true,
         ),
@@ -150,26 +177,33 @@ pub fn gdb_download(tool: &str) -> std::result::Result<QemuDownload, String> {
 ///
 /// The asset name was checked rather than assumed: `riscv32-esp-elf-gcc` and
 /// `-{tag}-` spellings both 404, and only this one answers 200.
-pub fn gcc_download(tool: &str) -> std::result::Result<QemuDownload, String> {
+pub fn gcc_download(tool: &str) -> Result<ToolDownload> {
+    let plan = gcc_download_into(tool, &data_tools_dir()?)?;
+    prepare(&plan)?;
+    Ok(plan)
+}
+
+fn gcc_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
     if tool != "riscv32-esp-elf-gcc" {
-        return Err(format!("{tool} is not a C toolchain this installer knows"));
+        return Err(Error::refused(format!(
+            "{tool} is not a C toolchain this installer knows"
+        )));
     }
     if !cfg!(windows) {
-        return Err(format!(
+        return Err(Error::refused(format!(
             "one-click install only knows the Windows build so far — download \
              riscv32-esp-elf from \
              https://github.com/espressif/crosstool-NG/releases/tag/{GCC_RELEASE} and put \
              its bin/ on PATH"
-        ));
+        )));
     }
-    let tools = tools_dir()?;
     let asset = format!("riscv32-esp-elf-{GCC_VERSION}-x86_64-w64-mingw32.zip");
     let archive = tools.join("riscv32-esp-elf.zip");
-    Ok(QemuDownload {
+    Ok(ToolDownload {
         urls: espressif_urls("crosstool-NG", GCC_RELEASE, &asset),
         extract: extract_step(
             &archive,
-            &tools,
+            tools,
             "unpacks the RISC-V C toolchain into the data directory's tools/, which moves \
              with it when the directory is relocated",
             true,
@@ -202,20 +236,27 @@ fn rusty_qemu_asset(platform: &str) -> Option<String> {
     })
 }
 
-pub fn qemu_download(tool: &str) -> std::result::Result<QemuDownload, String> {
+pub fn qemu_download(tool: &str) -> Result<ToolDownload> {
+    let plan = qemu_download_into(tool, &data_tools_dir()?)?;
+    prepare(&plan)?;
+    Ok(plan)
+}
+
+fn qemu_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
     let Some(arch) = tool.strip_prefix("qemu-system-") else {
-        return Err(format!("{tool} is not a qemu emulator name"));
+        return Err(Error::refused(format!(
+            "{tool} is not a qemu emulator name"
+        )));
     };
-    let Some(platform) = host_platform() else {
-        return Err(format!(
+    let Some(platform) = tools::host_platform() else {
+        return Err(Error::refused(format!(
             "no {tool} build is published for {}-{} — build QEMU from \
              https://github.com/espressif/qemu/releases/tag/{QEMU_RELEASE} and unpack it \
              into the data directory's tools/qemu/",
             std::env::consts::OS,
             std::env::consts::ARCH,
-        ));
+        )));
     };
-    let tools = tools_dir()?;
 
     let asset = format!("qemu-{arch}-softmmu-{QEMU_VERSION}-{platform}.tar.xz");
     let archive = tools.join(format!("qemu-{arch}.tar.xz"));
@@ -228,17 +269,15 @@ pub fn qemu_download(tool: &str) -> std::result::Result<QemuDownload, String> {
     // arch is satisfied by the same file.
     let mut urls = Vec::new();
     if let Some(ours) = rusty_qemu_asset(platform) {
-        urls.push(format!(
-            "https://github.com/{RUSTY_REPO}/releases/download/{RUSTY_QEMU_TAG}/{ours}"
-        ));
+        urls.push(format!("{REPO}/releases/download/{RUSTY_QEMU_TAG}/{ours}"));
     }
     urls.extend(espressif_urls("qemu", QEMU_RELEASE, &asset));
 
-    Ok(QemuDownload {
+    Ok(ToolDownload {
         urls,
         extract: extract_step(
             &archive,
-            &tools,
+            tools,
             "unpacks into the data directory's tools/qemu — bsdtar handles .tar.xz and \
              ships with Windows",
             false,
@@ -251,32 +290,25 @@ pub fn qemu_download(tool: &str) -> std::result::Result<QemuDownload, String> {
 /// `progress`. In-process on rustls: the OS TLS stack (schannel) aborts on
 /// some CDNs with "server closed abruptly", and a spawned curl cannot be
 /// relied on to exist unbroken everywhere.
-pub fn download(
-    urls: &[String],
-    dest: &Path,
-    mut progress: impl FnMut(String),
-) -> std::result::Result<(), String> {
+pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) -> Result<()> {
     use std::io::{Read, Write};
+    use std::time::Duration;
 
     // Every mirror, over every route — see `net` for why one proxy URL is
     // not one route. Each attempt is named as it is tried.
     let routes = net::proxy_candidates(net::effective_proxy());
-
-    let agent_for = |route: &Option<String>| -> ureq::Agent {
-        let mut builder = ureq::Agent::config_builder()
-            .timeout_connect(Some(std::time::Duration::from_secs(15)))
-            // Headers must arrive promptly or this route is declared dead
-            // and the next one gets its turn — a blackholed route must not
-            // hang the panel at "downloading" forever.
-            .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
-            // And nothing runs unbounded: a stalled body eventually dies.
-            .timeout_global(Some(std::time::Duration::from_secs(15 * 60)));
-        if let Some(url) = route
-            && let Ok(proxy) = ureq::Proxy::new(url)
-        {
-            builder = builder.proxy(Some(proxy));
-        }
-        builder.build().into()
+    let deadlines = || net::Deadlines {
+        connect: Duration::from_secs(15),
+        // Headers must arrive promptly or this route is declared dead and
+        // the next one gets its turn — a blackholed route must not hang the
+        // panel at "downloading" forever.
+        headers: Some(Duration::from_secs(30)),
+        // And nothing runs unbounded: a stalled body eventually dies.
+        total: Duration::from_secs(15 * 60),
+    };
+    let write_failed = |error: std::io::Error| Error::Write {
+        path: dest.display().to_string(),
+        source: error,
     };
 
     let mut last_error = String::new();
@@ -292,7 +324,7 @@ pub fn download(
             Some(proxy) => progress(format!("downloading {url}\n  via {proxy}")),
             None => progress(format!("downloading {url}\n  direct")),
         }
-        let agent = agent_for(&route);
+        let agent = net::agent(route.as_deref(), deadlines());
         let response = match agent.get(&url).call() {
             Ok(response) => response,
             Err(error) => {
@@ -313,10 +345,7 @@ pub fn download(
         }
 
         let mut reader = response.into_body().into_reader();
-        let mut file = match std::fs::File::create(dest) {
-            Ok(file) => file,
-            Err(error) => return Err(format!("could not create {}: {error}", dest.display())),
-        };
+        let mut file = std::fs::File::create(dest).map_err(write_failed)?;
         let mut buffer = [0u8; 64 * 1024];
         let mut done: u64 = 0;
         let mut last_mark: u64 = 0;
@@ -325,9 +354,7 @@ pub fn download(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if let Err(error) = file.write_all(&buffer[..n]) {
-                        return Err(format!("could not write {}: {error}", dest.display()));
-                    }
+                    file.write_all(&buffer[..n]).map_err(write_failed)?;
                     done += n as u64;
                     if done - last_mark >= 4 * 1024 * 1024 {
                         last_mark = done;
@@ -355,7 +382,9 @@ pub fn download(
             return Ok(());
         }
     }
-    Err(format!("every route failed; last error: {last_error}"))
+    Err(Error::Download {
+        detail: format!("every route failed; last error: {last_error}"),
+    })
 }
 
 #[cfg(test)]
@@ -399,12 +428,22 @@ mod tests {
         );
     }
 
+    /// Planned against a directory the test names, so nothing here creates
+    /// or reads the real data directory — a test that did left `tools/`
+    /// behind on every developer machine it ran on.
     #[test]
     fn qemu_download_prefers_rustys_build_then_falls_back_to_espressif() {
-        let Some(platform) = host_platform() else {
+        let Some(platform) = tools::host_platform() else {
             return; // a platform neither project publishes; qemu_download says so
         };
-        let plan = qemu_download("qemu-system-xtensa").expect("a plan for this host");
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("tools");
+        let plan = qemu_download_into("qemu-system-xtensa", &tools).expect("a plan for this host");
+        assert!(
+            !tools.exists(),
+            "planning creates nothing; only a download about to land does",
+        );
+        assert_eq!(plan.archive, tools.join("qemu-xtensa.tar.xz"));
 
         // Espressif's two are always last and always in that order: GitHub is
         // unreachable from some networks entirely, and dl.espressif.com exists
@@ -431,7 +470,7 @@ mod tests {
         // host has no rusty build and must still get a working plan.
         match rusty_qemu_asset(platform) {
             Some(asset) => {
-                assert!(plan.urls[0].contains(RUSTY_REPO), "{}", plan.urls[0]);
+                assert!(plan.urls[0].starts_with(REPO), "{}", plan.urls[0]);
                 assert!(plan.urls[0].ends_with(&asset), "{}", plan.urls[0]);
             }
             None => assert!(
@@ -471,11 +510,23 @@ mod tests {
     }
 
     /// The installer must refuse a name it does not know rather than compose
-    /// a plausible URL for it.
+    /// a plausible URL for it — and refuse before touching the disk.
     #[test]
     fn an_unknown_tool_is_refused_by_name() {
-        assert!(gdb_download("gdb").is_err());
-        assert!(gcc_download("arm-none-eabi-gcc").is_err());
-        assert!(qemu_download("qemu").is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("tools");
+        assert!(matches!(
+            gdb_download_into("gdb", &tools),
+            Err(Error::Refused { .. })
+        ));
+        assert!(matches!(
+            gcc_download_into("arm-none-eabi-gcc", &tools),
+            Err(Error::Refused { .. })
+        ));
+        assert!(matches!(
+            qemu_download_into("qemu", &tools),
+            Err(Error::Refused { .. })
+        ));
+        assert!(!tools.exists(), "a refusal leaves nothing behind");
     }
 }

@@ -176,9 +176,7 @@ fn device_file(root: &Path, chip: &str) -> Option<(PathBuf, String)> {
     let lock = std::fs::read_to_string(root.join("Cargo.lock")).ok()?;
     let version = locked_version(&lock, "esp-metadata")?;
 
-    let home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs_home().map(|home| home.join(".cargo")))?;
+    let home = crate::tools::cargo_home()?;
     // The registry directory carries a hash of the index URL, so it is found
     // rather than constructed.
     let registries = std::fs::read_dir(home.join("registry/src")).ok()?;
@@ -207,12 +205,6 @@ fn locked_version(lock: &str, package: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
 }
 
 #[derive(Deserialize)]

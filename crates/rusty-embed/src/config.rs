@@ -180,9 +180,8 @@ pub struct WorkbenchState {
     /// relocated.
     #[serde(default)]
     pub locale: Option<String>,
-    /// Terminal shell: absent = auto (the bundled Nushell when installed,
-    /// else the system shell); "system" = always the OS shell; anything
-    /// else = a program to run.
+    /// Terminal shell: absent = auto (rusty's own built-in shell); "system" =
+    /// always the OS shell; anything else = a program to run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_shell: Option<String>,
     /// The assistant profile last chosen — never the key, which lives in the
@@ -213,9 +212,7 @@ const TABS_KEPT: usize = 40;
 
 /// Remember a project's open editors, replacing whatever that project had.
 pub fn record_tabs(root: &str, tabs: Vec<String>, active: Option<String>) {
-    let mut state = workbench();
-    push_tabs(&mut state.open_tabs, root, tabs, active);
-    let _ = save_workbench(&state);
+    let _ = update(|state| push_tabs(&mut state.open_tabs, root, tabs, active));
 }
 
 /// The list discipline, separate from storage so it is testable — the same
@@ -249,9 +246,133 @@ fn workbench_path() -> Option<PathBuf> {
     Some(data_dir()?.join("workbench.toml"))
 }
 
+/// The file's own records, kept apart from the wire types by the rule that
+/// keeps `catalog.rs` apart from `model`: `workbench.toml` is a contract with
+/// every installed copy of rusty, and `AssistantChoice` and `ProjectTabs` are
+/// contracts with this build's frontend. When the two were one struct, a
+/// field renamed for the frontend's sake would have silently dropped that key
+/// from everybody's file — read as absent, written back without it.
+///
 /// Unknown fields survive a round trip *by being ignored on read and absent on
 /// write* — an older rusty reading a newer file must not explode, which is why
 /// this does not `deny_unknown_fields` the way the catalogue does.
+mod file {
+    use serde::{Deserialize, Serialize};
+
+    use crate::model::{AssistantChoice, ProjectTabs};
+
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    pub(super) struct Workbench {
+        #[serde(default)]
+        pub recent_projects: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub proxy: Option<String>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        pub keybinds: std::collections::BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub vim: bool,
+        #[serde(default)]
+        pub locale: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub terminal_shell: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub assistant: Option<Assistant>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub open_tabs: Vec<Tabs>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Assistant {
+        pub profile: String,
+        pub kind: String,
+        pub base_url: String,
+        pub model: String,
+        #[serde(default)]
+        pub max_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub temperature: Option<f32>,
+        #[serde(default)]
+        pub supports_tools: Option<bool>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Tabs {
+        pub root: String,
+        pub tabs: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub active: Option<String>,
+    }
+
+    impl From<Workbench> for super::WorkbenchState {
+        fn from(file: Workbench) -> Self {
+            Self {
+                recent_projects: file.recent_projects,
+                proxy: file.proxy,
+                keybinds: file.keybinds,
+                vim: file.vim,
+                locale: file.locale,
+                terminal_shell: file.terminal_shell,
+                assistant: file.assistant.map(|a| AssistantChoice {
+                    profile: a.profile,
+                    kind: a.kind,
+                    base_url: a.base_url,
+                    model: a.model,
+                    max_tokens: a.max_tokens,
+                    temperature: a.temperature,
+                    supports_tools: a.supports_tools,
+                }),
+                open_tabs: file
+                    .open_tabs
+                    .into_iter()
+                    .map(|t| ProjectTabs {
+                        root: t.root,
+                        tabs: t.tabs,
+                        active: t.active,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    impl From<&super::WorkbenchState> for Workbench {
+        fn from(state: &super::WorkbenchState) -> Self {
+            Self {
+                recent_projects: state.recent_projects.clone(),
+                proxy: state.proxy.clone(),
+                keybinds: state.keybinds.clone(),
+                vim: state.vim,
+                locale: state.locale.clone(),
+                terminal_shell: state.terminal_shell.clone(),
+                assistant: state.assistant.as_ref().map(|a| Assistant {
+                    profile: a.profile.clone(),
+                    kind: a.kind.clone(),
+                    base_url: a.base_url.clone(),
+                    model: a.model.clone(),
+                    max_tokens: a.max_tokens,
+                    temperature: a.temperature,
+                    supports_tools: a.supports_tools,
+                }),
+                open_tabs: state
+                    .open_tabs
+                    .iter()
+                    .map(|t| Tabs {
+                        root: t.root.clone(),
+                        tabs: t.tabs.clone(),
+                        active: t.active.clone(),
+                    })
+                    .collect(),
+            }
+        }
+    }
+}
+
+/// One writer at a time within this process. Every writer is a
+/// read-modify-write of the whole file, and two of them interleaving —
+/// the tab strip is recorded on every tab switch, the recents on every open
+/// — lost whichever wrote first. Held by [`update`], across the read and the
+/// write both.
+static WRITERS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// What the workbench remembers, or a fresh state.
 ///
 /// **"Not there yet" and "there and unreadable" are different, and conflating
@@ -266,19 +387,24 @@ fn workbench_path() -> Option<PathBuf> {
 /// cannot clobber it, and the workbench starts clean instead of refusing to
 /// work until somebody edits TOML by hand.
 pub fn workbench() -> WorkbenchState {
-    let Some(path) = workbench_path() else {
-        return WorkbenchState::default();
-    };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
+    workbench_path()
+        .map(|path| workbench_at(&path))
+        .unwrap_or_default()
+}
+
+/// [`workbench`] against a named file — the whole of the logic, so a test can
+/// run it against a directory of its own rather than the machine's.
+fn workbench_at(path: &Path) -> WorkbenchState {
+    let Ok(raw) = std::fs::read_to_string(path) else {
         // No file, or unreadable this instant. Either way there is nothing to
         // lose by starting from default; a save will create it.
         return WorkbenchState::default();
     };
-    match toml::from_str(&raw) {
-        Ok(state) => state,
+    match toml::from_str::<file::Workbench>(&raw) {
+        Ok(state) => state.into(),
         Err(error) => {
             let kept = path.with_extension("toml.broken");
-            let _ = std::fs::rename(&path, &kept);
+            let _ = std::fs::rename(path, &kept);
             eprintln!(
                 "rusty: {} did not parse ({error}); kept it as {} and started fresh",
                 path.display(),
@@ -290,42 +416,59 @@ pub fn workbench() -> WorkbenchState {
 }
 
 pub fn save_workbench(state: &WorkbenchState) -> Result<()> {
-    let Some(path) = workbench_path() else {
-        return Ok(());
-    };
+    match workbench_path() {
+        Some(path) => save_workbench_at(&path, state),
+        None => Ok(()),
+    }
+}
+
+fn save_workbench_at(path: &Path, state: &WorkbenchState) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| Error::Write {
             path: parent.display().to_string(),
             source,
         })?;
     }
-    let body = toml::to_string_pretty(state).expect("a list of strings serialises");
-    let temp = path.with_extension("toml.tmp");
+    let body =
+        toml::to_string_pretty(&file::Workbench::from(state)).expect("plain fields serialise");
+    // A temporary name of this process's own, then a rename: a fixed
+    // `workbench.toml.tmp` shared by two windows saving at once was written
+    // by both, renamed by one, and the file that landed was neither's.
+    let temp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
     std::fs::write(&temp, body).map_err(|source| Error::Write {
         path: temp.display().to_string(),
         source,
     })?;
-    std::fs::rename(&temp, &path).map_err(|source| Error::Write {
+    std::fs::rename(&temp, path).map_err(|source| Error::Write {
         path: path.display().to_string(),
         source,
     })
 }
 
+/// Read, change, write — as one step, under the writers' lock. The one way
+/// to change the file from this crate, so no two writers can interleave.
+pub fn update(change: impl FnOnce(&mut WorkbenchState)) -> Result<()> {
+    let _held = WRITERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = workbench();
+    change(&mut state);
+    save_workbench(&state)
+}
+
 /// Record a project as the most recently opened.
 pub fn record_recent(path: &str) {
-    let mut state = workbench();
-    push_recent(&mut state.recent_projects, path);
     // Failure to persist a convenience is not worth failing the open over.
-    let _ = save_workbench(&state);
+    let _ = update(|state| push_recent(&mut state.recent_projects, path));
 }
 
 /// Drop a project that turned out not to exist any more.
 pub fn forget_recent(path: &str) {
-    let mut state = workbench();
-    state
-        .recent_projects
-        .retain(|known| !same_dir(Path::new(known), Path::new(path)));
-    let _ = save_workbench(&state);
+    let _ = update(|state| {
+        state
+            .recent_projects
+            .retain(|known| !same_dir(Path::new(known), Path::new(path)));
+    });
 }
 
 /// The list discipline, separate from storage so it is testable: newest
@@ -448,23 +591,23 @@ mod tests {
     /// over it. One transient bad file, and every recent project is gone with
     /// nothing said.
     ///
-    /// Drives the internals rather than the public fns, like the relocation
-    /// test above and for the same reason: tests must not read or write the
-    /// machine they run on.
+    /// Runs the real loader against a directory of its own — tests must not
+    /// read or write the machine they run on — and it *is* the real loader:
+    /// an earlier version of this test re-did the rename by hand and would
+    /// have stayed green with the production move deleted.
     #[test]
     fn a_file_that_does_not_parse_is_kept_rather_than_read_as_empty() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("workbench.toml");
         std::fs::write(&path, "recent_projects = [\"E:/work\"]\nthis is not toml\n").unwrap();
 
-        // What `workbench()` does with the file it just read, minus the
-        // machine-dependent path lookup.
-        let raw = std::fs::read_to_string(&path).unwrap();
-        let parsed: std::result::Result<WorkbenchState, _> = toml::from_str(&raw);
-        assert!(parsed.is_err(), "the fixture has to be genuinely malformed");
+        let state = workbench_at(&path);
+        assert!(
+            state.recent_projects.is_empty(),
+            "a fresh start, not a guess"
+        );
 
         let kept = path.with_extension("toml.broken");
-        std::fs::rename(&path, &kept).unwrap();
         assert!(
             std::fs::read_to_string(&kept).unwrap().contains("E:/work"),
             "the list survives where somebody can get it back",
@@ -472,6 +615,59 @@ mod tests {
         assert!(
             !path.exists(),
             "and a save now creates a file rather than clobbering one"
+        );
+        save_workbench_at(&path, &state).unwrap();
+        assert!(path.exists(), "the next save creates rather than clobbers");
+    }
+
+    /// The file records and the wire types are different structs now, and a
+    /// round trip through the file must lose nothing. Every field is set to
+    /// something that is not its default, per the fixture rule: a field the
+    /// writer forgot and the reader defaulted would otherwise agree perfectly.
+    #[test]
+    fn every_field_survives_the_round_trip_through_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        let state = WorkbenchState {
+            recent_projects: vec!["E:/work/blinky".into()],
+            proxy: Some("http://proxy:3128".into()),
+            keybinds: [("palette".to_string(), "Ctrl+P".to_string())]
+                .into_iter()
+                .collect(),
+            vim: true,
+            locale: Some("zh-CN".into()),
+            terminal_shell: Some("system".into()),
+            assistant: Some(AssistantChoice {
+                profile: "work".into(),
+                kind: "anthropic".into(),
+                base_url: "https://api.example".into(),
+                model: "claude".into(),
+                max_tokens: Some(2048),
+                temperature: Some(0.3),
+                supports_tools: Some(false),
+            }),
+            open_tabs: vec![ProjectTabs {
+                root: "E:/work/blinky".into(),
+                tabs: vec!["src/main.rs".into()],
+                active: Some("src/main.rs".into()),
+            }],
+        };
+        save_workbench_at(&path, &state).unwrap();
+        let back = workbench_at(&path);
+
+        assert_eq!(back.recent_projects, state.recent_projects);
+        assert_eq!(back.proxy, state.proxy);
+        assert_eq!(back.keybinds, state.keybinds);
+        assert_eq!(back.vim, state.vim);
+        assert_eq!(back.locale, state.locale);
+        assert_eq!(back.terminal_shell, state.terminal_shell);
+        assert_eq!(back.assistant, state.assistant);
+        assert_eq!(back.open_tabs, state.open_tabs);
+        assert!(
+            !path
+                .with_extension(format!("toml.{}.tmp", std::process::id()))
+                .exists(),
+            "the temporary is renamed away"
         );
     }
 

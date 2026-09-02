@@ -47,15 +47,14 @@ pub fn check() -> UpdateStatus {
 fn fetch_latest() -> Result<(String, String), String> {
     let mut last = "no route to github".to_string();
     for route in crate::net::proxy_routes() {
-        let mut builder = ureq::Agent::config_builder()
-            .timeout_connect(Some(std::time::Duration::from_secs(10)))
-            .timeout_global(Some(std::time::Duration::from_secs(30)));
-        if let Some(url) = &route
-            && let Ok(proxy) = ureq::Proxy::new(url)
-        {
-            builder = builder.proxy(Some(proxy));
-        }
-        let agent: ureq::Agent = builder.build().into();
+        let agent = crate::net::agent(
+            route.as_deref(),
+            crate::net::Deadlines {
+                connect: std::time::Duration::from_secs(10),
+                headers: None,
+                total: std::time::Duration::from_secs(30),
+            },
+        );
 
         // GitHub refuses anonymous calls without a user agent.
         match agent

@@ -6,69 +6,222 @@
 //! `error: toolchain 'stable' does not support target 'xtensa-esp32-none-elf'`.
 //! Nothing in that message mentions espup, and the fix is not discoverable from
 //! it. Detecting the mismatch before the build is most of the value here.
+//!
+//! **rustup is asked from the project's directory, for the project's
+//! toolchain.** `rustup target list --installed` answers for the *active*
+//! toolchain, and which one is active depends on where rustup is asked from —
+//! a `rust-toolchain.toml` pin — and on `RUSTUP_TOOLCHAIN`, which `cargo tauri
+//! dev` leaks into this process. Asked from rusty's own directory with no
+//! project in mind, it answered for whatever the machine's default was: a
+//! project pinned to a nightly with the target added only there was reported
+//! "Target not installed", and the offered `rustup target add` run from the
+//! same wrong place added the target to the default toolchain again, so the
+//! problem survived its own fix. [`RustupContext`] carries the directory and
+//! the pin, and the fix command names the toolchain so it is right wherever it
+//! is pasted.
 
-use std::process::Command;
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
-use crate::tools::find_tool as on_path;
 use crate::{
     chip,
+    error::{Error, Result},
     model::{
         CommandPlan, EmbeddedProject, Problem, Severity, ToolStatus, Toolchain, ToolchainReport,
         ToolchainStatus,
     },
+    process, tools,
 };
 
-/// External binaries the workbench drives: name, purpose, install command, and
-/// whether every project needs it.
-const TOOLS: &[(&str, &str, &str, bool)] = &[
-    (
-        "rustup",
-        "Manages Rust toolchains and targets",
-        "https://rustup.rs",
-        true,
-    ),
-    (
-        "espup",
-        "Installs the Xtensa toolchain; only needed for ESP32 / S2 / S3",
-        "cargo install espup",
-        false,
-    ),
-    (
-        "espflash",
-        "Flashes and monitors over USB serial — the usual path with no debug probe",
-        "cargo install espflash",
-        false,
-    ),
-    (
-        "probe-rs",
-        "Flashes and debugs through a JTAG/SWD probe, and decodes defmt over RTT",
-        "cargo install probe-rs-tools",
-        false,
-    ),
-    (
-        "esp-generate",
-        "Generates bare-metal project templates",
-        "cargo install esp-generate",
-        false,
-    ),
-    (
-        "rust-analyzer",
-        "Completion, diagnostics and navigation in the editor",
-        "rustup component add rust-analyzer",
-        false,
-    ),
-    (
-        "ldproxy",
-        "Linker shim required by ESP-IDF (std) builds",
-        "cargo install ldproxy",
-        false,
-    ),
+/// One external binary the workbench drives: what it is for, how it gets
+/// installed, and whether every project needs it.
+///
+/// **The one table.** Probing, the instruction shown beside a missing tool,
+/// and the one-click recipe all read from here, so a tool cannot be probed
+/// under one spelling and installed under another. The recipes used to be a
+/// second `match` with `--locked` spelled into it while the panel's text said
+/// `cargo install espflash` without — two accounts of one fact, and only a
+/// reader who compared them would know which one the button ran.
+struct Tool {
+    name: &'static str,
+    purpose: &'static str,
+    /// True when no project builds without it.
+    required: bool,
+    recipe: Recipe,
+}
+
+/// How a tool gets onto the machine.
+enum Recipe {
+    /// Nothing rusty can run: a page to visit, and the sentence that says
+    /// why. rustup is the installer everything else rides on, so it is the
+    /// one thing that cannot be one-clicked.
+    Manual {
+        url: &'static str,
+        because: &'static str,
+    },
+    /// `cargo install <package> --locked`, into `~/.cargo/bin` — where
+    /// flashing and the simulator look. Redirecting it with `--root` would
+    /// put espflash somewhere nothing finds it.
+    CargoInstall {
+        package: &'static str,
+        why: &'static str,
+    },
+    /// `rustup component add`, on the stable toolchain: rusty resolves the
+    /// binary there directly, so the esp toolchain's missing component stops
+    /// mattering.
+    RustupComponent {
+        component: &'static str,
+        why: &'static str,
+    },
+    /// Two steps by design: the first is quick, the second downloads the
+    /// Xtensa toolchain and is honestly slow — better one visible slow step
+    /// than a guide page nobody finds.
+    Espup,
+}
+
+const TOOLS: &[Tool] = &[
+    Tool {
+        name: "rustup",
+        purpose: "Manages Rust toolchains and targets",
+        required: true,
+        recipe: Recipe::Manual {
+            url: "https://rustup.rs",
+            because: "rustup is the installer everything else rides on — get it from \
+                      https://rustup.rs, then everything here becomes one click",
+        },
+    },
+    Tool {
+        name: "espup",
+        purpose: "Installs the Xtensa toolchain; only needed for ESP32 / S2 / S3",
+        required: false,
+        recipe: Recipe::Espup,
+    },
+    Tool {
+        name: "espflash",
+        purpose: "Flashes and monitors over USB serial — the usual path with no debug probe",
+        required: false,
+        recipe: Recipe::CargoInstall {
+            package: "espflash",
+            why: "builds espflash into ~/.cargo/bin, where flashing and the simulator look",
+        },
+    },
+    Tool {
+        name: "probe-rs",
+        purpose: "Flashes and debugs through a JTAG/SWD probe, and decodes defmt over RTT",
+        required: false,
+        recipe: Recipe::CargoInstall {
+            package: "probe-rs-tools",
+            why: "the probe-rs CLI: JTAG/SWD flashing, debugging, defmt over RTT",
+        },
+    },
+    Tool {
+        name: "esp-generate",
+        purpose: "Generates bare-metal project templates",
+        required: false,
+        recipe: Recipe::CargoInstall {
+            package: "esp-generate",
+            why: "the template generator behind File > New project",
+        },
+    },
+    Tool {
+        name: "rust-analyzer",
+        purpose: "Completion, diagnostics and navigation in the editor",
+        required: false,
+        recipe: Recipe::RustupComponent {
+            component: "rust-analyzer",
+            why: "the stable component; rusty resolves it directly, so the esp toolchain's \
+                  missing component stops mattering",
+        },
+    },
+    Tool {
+        name: "ldproxy",
+        purpose: "Linker shim required by ESP-IDF (std) builds",
+        required: false,
+        recipe: Recipe::CargoInstall {
+            package: "ldproxy",
+            why: "the linker shim ESP-IDF (std) builds route through",
+        },
+    },
 ];
 
-/// Whether a binary is on PATH — the same lookup the tool probe uses, so a
-/// caller cannot check for a tool under one rule and find it under another.
-pub fn on_path_pub(name: &str) -> Option<std::path::PathBuf> {
-    on_path(name)
+impl Recipe {
+    /// The steps that install the tool, ready for the shared session runner —
+    /// every line of every step streams into the dock, and only a failure
+    /// sends anyone to the manual command.
+    fn steps(&self) -> Result<Vec<CommandPlan>> {
+        let step = |program: &str, args: &[&str], rationale: &str| CommandPlan {
+            program: program.to_string(),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            display: std::iter::once(program)
+                .chain(args.iter().copied())
+                .collect::<Vec<_>>()
+                .join(" "),
+            rationale: rationale.to_string(),
+            warning: None,
+        };
+        match self {
+            Recipe::Manual { because, .. } => Err(Error::refused(*because)),
+            Recipe::CargoInstall { package, why } => {
+                Ok(vec![step("cargo", &["install", package, "--locked"], why)])
+            }
+            Recipe::RustupComponent { component, why } => Ok(vec![step(
+                "rustup",
+                &["component", "add", component, "--toolchain", "stable"],
+                why,
+            )]),
+            Recipe::Espup => Ok(vec![
+                step(
+                    "cargo",
+                    &["install", "espup", "--locked"],
+                    "the Xtensa toolchain manager itself",
+                ),
+                step(
+                    "espup",
+                    &["install"],
+                    "downloads the esp toolchain (Xtensa rustc + gcc) — a gigabyte-class \
+                     download, so this step takes minutes",
+                ),
+            ]),
+        }
+    }
+
+    /// The instruction shown beside a missing tool: exactly what the one-click
+    /// recipe would run, joined into one line, or the page to visit when there
+    /// is no recipe. Derived from [`Self::steps`] rather than spelled again, so
+    /// the text and the button cannot disagree.
+    fn command(&self) -> String {
+        match self {
+            Recipe::Manual { url, .. } => (*url).to_string(),
+            other => other
+                .steps()
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .map(|step| step.display.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" && ")
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    fn installable(&self) -> bool {
+        !matches!(self, Recipe::Manual { .. })
+    }
+}
+
+fn tool(name: &str) -> Option<&'static Tool> {
+    TOOLS.iter().find(|tool| tool.name == name)
+}
+
+/// Where a binary rusty drives is on this machine, by the one ladder in
+/// [`crate::tools`] — the data directory's `tools/`, then cargo's bin, then
+/// PATH. The same lookup the tool probe uses, so a caller cannot check for a
+/// tool under one rule and find it under another.
+pub fn on_path_pub(name: &str) -> Option<PathBuf> {
+    tools::find(name)
 }
 
 /// The C compiler a project for this architecture needs, and how to get it.
@@ -102,131 +255,55 @@ pub fn c_compiler(arch: crate::model::Arch) -> Option<(&'static str, &'static st
     }
 }
 
-/// How to install one of the tools rusty drives.
+/// How to install one of the tools rusty drives, as one line to type.
 ///
 /// The table already knew this and only the toolchain panel was reading it, so
 /// every other caller reported "not found" and stopped there — which is exactly
 /// the half-answer this workbench exists to avoid.
-pub fn install_command(tool: &str) -> Option<&'static str> {
-    TOOLS
-        .iter()
-        .find(|(name, ..)| *name == tool)
-        .map(|(_, _, install, _)| *install)
+pub fn install_command(tool_name: &str) -> Option<String> {
+    tool(tool_name).map(|tool| tool.recipe.command())
 }
 
-/// The steps that install one tool, ready for the shared session runner —
-/// every line of every step streams into the dock, and only a failure sends
-/// anyone to the manual command.
-///
-/// One table drives probing, manual instructions and one-click installs, so
-/// a tool cannot be probed under one spelling and installed under another.
-/// rustup itself is the one thing this cannot install: it is the installer.
-pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>, String> {
-    let cargo_install = |package: &str, why: &str| -> Vec<CommandPlan> {
-        vec![CommandPlan {
-            program: "cargo".to_string(),
-            args: vec![
-                "install".to_string(),
-                package.to_string(),
-                "--locked".to_string(),
-            ],
-            display: format!("cargo install {package} --locked"),
-            rationale: why.to_string(),
-            warning: None,
-        }]
-    };
-
-    match tool {
-        "espflash" => Ok(cargo_install(
-            "espflash",
-            "builds espflash into ~/.cargo/bin, where flashing and the simulator look",
-        )),
-        "probe-rs" => Ok(cargo_install(
-            "probe-rs-tools",
-            "the probe-rs CLI: JTAG/SWD flashing, debugging, defmt over RTT",
-        )),
-        "esp-generate" => Ok(cargo_install(
-            "esp-generate",
-            "the template generator behind File > New project",
-        )),
-        "ldproxy" => Ok(cargo_install(
-            "ldproxy",
-            "the linker shim ESP-IDF (std) builds route through",
-        )),
-        "rust-analyzer" => Ok(vec![CommandPlan {
-            program: "rustup".to_string(),
-            args: vec![
-                "component".to_string(),
-                "add".to_string(),
-                "rust-analyzer".to_string(),
-                "--toolchain".to_string(),
-                "stable".to_string(),
-            ],
-            display: "rustup component add rust-analyzer --toolchain stable".to_string(),
-            rationale: "the stable component; rusty resolves it directly, so the esp \
-                        toolchain's missing component stops mattering"
-                .to_string(),
-            warning: None,
-        }]),
-        // Two steps by design: the first is quick, the second downloads the
-        // Xtensa toolchain and is honestly slow — better one visible slow
-        // step than a guide page nobody finds.
-        "espup" => Ok(vec![
-            CommandPlan {
-                program: "cargo".to_string(),
-                args: vec![
-                    "install".to_string(),
-                    "espup".to_string(),
-                    "--locked".to_string(),
-                ],
-                display: "cargo install espup --locked".to_string(),
-                rationale: "the Xtensa toolchain manager itself".to_string(),
-                warning: None,
-            },
-            CommandPlan {
-                program: "espup".to_string(),
-                args: vec!["install".to_string()],
-                display: "espup install".to_string(),
-                rationale: "downloads the esp toolchain (Xtensa rustc + gcc) — a gigabyte-\
-                            class download, so this step takes minutes"
-                    .to_string(),
-                warning: None,
-            },
-        ]),
-        "rustup" => Err(
-            "rustup is the installer everything else rides on — get it from \
-             https://rustup.rs, then everything here becomes one click"
-                .to_string(),
-        ),
-        other => Err(format!("no install recipe for {other}")),
+/// The steps that install one tool, for `install::install_steps` — which is
+/// the public entry, because it also knows about the archives this table does
+/// not cover.
+pub(crate) fn recipe(tool_name: &str) -> Result<Vec<CommandPlan>> {
+    match tool(tool_name) {
+        Some(tool) => tool.recipe.steps(),
+        None => Err(Error::refused(format!("no install recipe for {tool_name}"))),
     }
 }
 
-/// Inspect the machine.
+/// Inspect the machine with no project in mind: the default toolchain answers
+/// for the targets. [`report`] is the form that knows about a project.
 pub fn status() -> ToolchainStatus {
+    status_in(&RustupContext::default())
+}
+
+fn status_in(rustup: &RustupContext<'_>) -> ToolchainStatus {
     let toolchains = list_toolchains();
     let has_esp_toolchain = toolchains.iter().any(|t| t.is_esp);
 
     ToolchainStatus {
         toolchains,
-        installed_targets: list_installed_targets(),
+        installed_targets: list_installed_targets(rustup),
         tools: TOOLS
             .iter()
-            .map(|(name, purpose, install, required)| {
+            .map(|tool| {
                 // Presence decides; the version is asked for only once the
                 // binary is known to exist, so a tool that has no `--version`
                 // is still installed and one that is absent costs no spawn.
-                let path = on_path(name);
+                // Asked of the copy that was found, not of whatever a bare
+                // name resolves to: those can be two different binaries.
+                let path = tools::find(tool.name);
                 ToolStatus {
-                    name: (*name).to_string(),
-                    purpose: (*purpose).to_string(),
-                    version: path.as_ref().and_then(|_| probe_version(name)),
+                    name: tool.name.to_string(),
+                    purpose: tool.purpose.to_string(),
+                    version: path.as_ref().and_then(|found| probe_version(found)),
                     path: path.map(|found| found.display().to_string()),
-                    install_command: (*install).to_string(),
-                    // One table drives probing and installing, so this cannot
-                    // claim a recipe that install_steps does not have.
-                    installable: install_steps(name).is_ok(),
-                    required: *required,
+                    install_command: tool.recipe.command(),
+                    installable: tool.recipe.installable(),
+                    required: tool.required,
                 }
             })
             .collect(),
@@ -236,7 +313,8 @@ pub fn status() -> ToolchainStatus {
 
 /// Machine state plus what this project needs from it.
 pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
-    let mut status = status();
+    let rustup = RustupContext::for_project(project);
+    let mut status = status_in(&rustup);
     let mut problems = Vec::new();
 
     let chip = project
@@ -250,7 +328,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     // question people ask before they have, and answering it only after they
     // try is the failure this panel exists to prevent.
     if let Some((binary, install)) = chip.as_ref().and_then(|c| c_compiler(c.arch)) {
-        let path = on_path(binary);
+        let path = tools::find(binary);
         status.tools.push(ToolStatus {
             name: binary.to_string(),
             purpose: format!(
@@ -258,7 +336,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
                  esp-idf-sys, and by nothing else",
                 chip.as_ref().map_or("this part", |c| c.name.as_str()),
             ),
-            version: path.as_ref().and_then(|_| probe_version(binary)),
+            version: path.as_ref().and_then(|found| probe_version(found)),
             path: path.map(|found| found.display().to_string()),
             install_command: install.to_string(),
             // The RISC-V one downloads like QEMU and the debuggers do, on
@@ -279,14 +357,11 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         _ => project.and_then(|p| p.configured_target.clone()),
     };
 
-    let required_target_installed = match &required_target {
-        // Xtensa targets are shipped inside the espup toolchain rather than
-        // added through rustup, so `rustup target list` never mentions them and
-        // its absence is not evidence of anything.
-        Some(target) if target.starts_with("xtensa-") => status.has_esp_toolchain,
-        Some(target) => status.installed_targets.iter().any(|t| t == target),
-        None => true,
-    };
+    let required_target_installed = target_installed(
+        required_target.as_deref(),
+        &status.installed_targets,
+        status.has_esp_toolchain,
+    );
 
     if needs_esp_toolchain && !status.has_esp_toolchain {
         let chip_name = chip.as_ref().map(|c| c.name.clone()).unwrap_or_default();
@@ -319,7 +394,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
                 "cargo will refuse to build for a target rustup has not added.",
             )
             .arg("target", target)
-            .fix(format!("rustup target add {target}")),
+            .fix(target_fix(target, rustup.toolchain)),
         );
     }
 
@@ -341,7 +416,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
                      simpler choice — it needs only the USB cable. probe-rs adds \
                      breakpoint debugging and defmt over RTT, but wants a probe.",
                 )
-                .fix("cargo install espflash"),
+                .fix(install_command("espflash").unwrap_or_default()),
             );
         }
     }
@@ -360,7 +435,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
                     "ESP-IDF (std) builds link through ldproxy. Without it the build \
                      fails at the link step with a linker-not-found error.",
                 )
-                .fix("cargo install ldproxy"),
+                .fix(install_command("ldproxy").unwrap_or_default()),
             );
         }
     }
@@ -374,18 +449,51 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     }
 }
 
-// ─── probing ─────────────────────────────────────────────────────────────────
+// ─── the pure parts ──────────────────────────────────────────────────────────
 
-fn list_toolchains() -> Vec<Toolchain> {
-    let Some(out) = run("rustup", &["toolchain", "list"]) else {
-        return Vec::new();
-    };
-    out.lines()
+/// Whether the target a project needs is there to build for.
+///
+/// Xtensa targets are shipped inside the espup toolchain rather than added
+/// through rustup, so `rustup target list` never mentions them and their
+/// absence from it is not evidence of anything; the `esp` toolchain's
+/// presence is the answer. No required target is nothing to check.
+fn target_installed(required: Option<&str>, installed: &[String], has_esp: bool) -> bool {
+    match required {
+        Some(target) if target.starts_with("xtensa-") => has_esp,
+        Some(target) => installed.iter().any(|t| t == target),
+        None => true,
+    }
+}
+
+/// The command that adds a target, naming the toolchain when the project pins
+/// one — so it is right wherever it is pasted. Bare, `rustup target add` acts
+/// on whatever toolchain is active where it is typed, and typed from the
+/// wrong directory it fixed the default toolchain while the pinned one stayed
+/// short of the target.
+fn target_fix(target: &str, toolchain: Option<&str>) -> String {
+    match toolchain {
+        Some(channel) => format!("rustup target add {target} --toolchain {channel}"),
+        None => format!("rustup target add {target}"),
+    }
+}
+
+/// `rustup toolchain list`, one line per toolchain.
+///
+/// The annotations changed shape between rustup releases — `(default)` once,
+/// `(active, default)` now — so the parenthesised list is read as a list
+/// rather than matched as one string. Matching `(default)` reported no
+/// default at all on a current rustup.
+fn parse_toolchain_list(text: &str) -> Vec<Toolchain> {
+    text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(|line| {
-            let is_default = line.contains("(default)");
-            let name = line.split_whitespace().next().unwrap_or(line).to_string();
+            let (name, annotations) = line.split_once('(').unwrap_or((line, ""));
+            let name = name.trim().to_string();
+            let is_default = annotations
+                .trim_end_matches(')')
+                .split(',')
+                .any(|word| word.trim() == "default");
             // espup names its toolchain `esp`; rustup shows it without a host
             // triple suffix because it is a custom install.
             let is_esp = name == "esp" || name.starts_with("esp-");
@@ -398,21 +506,56 @@ fn list_toolchains() -> Vec<Toolchain> {
         .collect()
 }
 
-fn list_installed_targets() -> Vec<String> {
-    run("rustup", &["target", "list", "--installed"])
-        .map(|out| {
-            out.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
+/// `rustup target list --installed`, one triple per line.
+fn parse_target_list(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+// ─── probing ─────────────────────────────────────────────────────────────────
+
+/// Where, and for which toolchain, rustup is asked about targets — see the
+/// module header for why either half being wrong survives its own fix.
+#[derive(Default)]
+struct RustupContext<'a> {
+    /// The project directory, so a `rust-toolchain.toml` pin decides.
+    cwd: Option<&'a Path>,
+    /// The pinned channel, passed explicitly as well: the two agree, and the
+    /// command in the logs then says which toolchain it asked about.
+    toolchain: Option<&'a str>,
+}
+
+impl<'a> RustupContext<'a> {
+    fn for_project(project: Option<&'a EmbeddedProject>) -> Self {
+        RustupContext {
+            cwd: project.map(|p| Path::new(p.root.as_str())),
+            toolchain: project.and_then(|p| p.configured_toolchain.as_deref()),
+        }
+    }
+}
+
+fn list_toolchains() -> Vec<Toolchain> {
+    run("rustup", &["toolchain", "list"], None)
+        .map(|out| parse_toolchain_list(&out))
         .unwrap_or_default()
 }
 
-/// First line of `<tool> --version`, or `None` when the binary is absent.
-fn probe_version(tool: &str) -> Option<String> {
-    let out = run(tool, &["--version"])?;
+fn list_installed_targets(rustup: &RustupContext<'_>) -> Vec<String> {
+    let mut args = vec!["target", "list", "--installed"];
+    if let Some(toolchain) = rustup.toolchain {
+        args.extend(["--toolchain", toolchain]);
+    }
+    run("rustup", &args, rustup.cwd)
+        .map(|out| parse_target_list(&out))
+        .unwrap_or_default()
+}
+
+/// First line of `<tool> --version`, or `None` when it would not run.
+fn probe_version(tool: &Path) -> Option<String> {
+    let out = run(tool, &["--version"], None)?;
     out.lines()
         .next()
         .map(str::trim)
@@ -420,10 +563,15 @@ fn probe_version(tool: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn run(program: &str, args: &[&str]) -> Option<String> {
-    let mut command = Command::new(program);
+/// Run a probe through [`process::command`], so it gets the same environment
+/// every other spawn here does — no leaked `RUSTUP_TOOLCHAIN`, no console
+/// window — and answer its output, or `None` when it failed.
+fn run(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Option<String> {
+    let mut command = process::command(program);
     command.args(args);
-    no_console_window(&mut command);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
 
     let output = command.output().ok()?;
     if !output.status.success() {
@@ -437,16 +585,164 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     Some(text)
 }
 
-/// Keep child processes from flashing a console window.
-///
-/// Without this every version probe blinks a black rectangle over the UI, and
-/// the toolchain panel probes six tools on open.
-#[cfg(windows)]
-pub(crate) fn no_console_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(not(windows))]
-pub(crate) fn no_console_window(_command: &mut Command) {}
+    /// A current rustup annotates its lines `(active, default)`; an older one
+    /// `(default)`. The default has to be found under both, or the panel
+    /// reports a machine with toolchains and no default.
+    #[test]
+    fn the_default_toolchain_is_found_under_both_annotation_shapes() {
+        let modern = parse_toolchain_list(
+            "stable-x86_64-pc-windows-msvc (active, default)\n\
+             nightly-2025-06-01-x86_64-pc-windows-msvc\n\
+             esp\n",
+        );
+        assert_eq!(modern.len(), 3);
+        assert!(modern[0].is_default, "{modern:?}");
+        assert_eq!(modern[0].name, "stable-x86_64-pc-windows-msvc");
+        assert!(!modern[1].is_default);
+        assert!(modern[2].is_esp && !modern[2].is_default);
+
+        let older = parse_toolchain_list("stable-x86_64-unknown-linux-gnu (default)\nesp\n");
+        assert!(older[0].is_default);
+        assert!(!older[0].is_esp);
+
+        // `(active)` alone is a directory override, not the default.
+        let overridden = parse_toolchain_list("nightly-x86_64-unknown-linux-gnu (active)\n");
+        assert!(!overridden[0].is_default);
+    }
+
+    #[test]
+    fn the_target_list_is_one_triple_per_line() {
+        assert_eq!(
+            parse_target_list("riscv32imc-unknown-none-elf\n\nx86_64-pc-windows-msvc \n"),
+            vec![
+                "riscv32imc-unknown-none-elf".to_string(),
+                "x86_64-pc-windows-msvc".to_string(),
+            ],
+        );
+        assert!(parse_target_list("").is_empty());
+    }
+
+    /// An Xtensa target is never in `rustup target list`; the esp toolchain's
+    /// presence is the evidence. Everything else is looked up literally, and
+    /// nothing required is nothing to check.
+    #[test]
+    fn a_target_is_installed_by_the_rule_its_toolchain_uses() {
+        let installed = vec!["riscv32imc-unknown-none-elf".to_string()];
+        assert!(target_installed(
+            Some("riscv32imc-unknown-none-elf"),
+            &installed,
+            false
+        ));
+        assert!(!target_installed(
+            Some("riscv32imac-unknown-none-elf"),
+            &installed,
+            false
+        ));
+        assert!(
+            target_installed(Some("xtensa-esp32-none-elf"), &[], true),
+            "shipped inside the esp toolchain, so its absence from the list means nothing",
+        );
+        assert!(!target_installed(Some("xtensa-esp32-none-elf"), &[], false));
+        assert!(target_installed(None, &[], false));
+    }
+
+    /// The fix has to survive being pasted anywhere. Without the toolchain it
+    /// acts on whatever is active where it is typed, which from the wrong
+    /// directory is the default toolchain — and the problem it was offered
+    /// for stays exactly as it was.
+    #[test]
+    fn the_target_fix_names_the_pinned_toolchain() {
+        assert_eq!(
+            target_fix("riscv32imc-unknown-none-elf", Some("nightly-2025-06-01")),
+            "rustup target add riscv32imc-unknown-none-elf --toolchain nightly-2025-06-01",
+        );
+        assert_eq!(
+            target_fix("riscv32imc-unknown-none-elf", None),
+            "rustup target add riscv32imc-unknown-none-elf",
+        );
+    }
+
+    /// The project's directory and its pin both reach rustup, or a pinned
+    /// project is answered for the machine's default.
+    #[test]
+    fn rustup_is_asked_from_the_project_for_the_projects_toolchain() {
+        let project = EmbeddedProject {
+            root: "E:/work/blinky".to_string(),
+            chip: Some("esp32c3".to_string()),
+            chip_source: None,
+            runtime: None,
+            configured_target: Some("riscv32imc-unknown-none-elf".to_string()),
+            configured_toolchain: Some("nightly-2025-06-01".to_string()),
+            frameworks: Vec::new(),
+            uses_defmt: false,
+            uses_embassy: false,
+            c_interop: Default::default(),
+            evidence: Vec::new(),
+            problems: Vec::new(),
+        };
+        let context = RustupContext::for_project(Some(&project));
+        assert_eq!(context.cwd, Some(Path::new("E:/work/blinky")));
+        assert_eq!(context.toolchain, Some("nightly-2025-06-01"));
+
+        let bare = RustupContext::for_project(None);
+        assert!(bare.cwd.is_none() && bare.toolchain.is_none());
+    }
+
+    /// The text beside a missing tool is the recipe, not a second spelling of
+    /// it: what the button runs is what the panel says.
+    #[test]
+    fn the_install_text_is_the_recipe_it_describes() {
+        assert_eq!(
+            install_command("espflash").as_deref(),
+            Some("cargo install espflash --locked")
+        );
+        assert_eq!(
+            install_command("espup").as_deref(),
+            Some("cargo install espup --locked && espup install"),
+            "a two-step recipe shows both steps",
+        );
+        assert_eq!(
+            install_command("rust-analyzer").as_deref(),
+            Some("rustup component add rust-analyzer --toolchain stable"),
+        );
+        assert_eq!(
+            install_command("rustup").as_deref(),
+            Some("https://rustup.rs"),
+            "the one tool with no recipe shows where to get it",
+        );
+        assert_eq!(
+            install_command("ldproxy").as_deref(),
+            Some("cargo install ldproxy --locked")
+        );
+        assert_eq!(install_command("mystery"), None);
+        for tool in TOOLS {
+            assert_eq!(
+                recipe(tool.name).is_ok(),
+                tool.recipe.installable(),
+                "{}: `installable` must mean a recipe exists",
+                tool.name,
+            );
+        }
+    }
+
+    /// The setup screen says where each step lands before running it, from
+    /// a rule of its own on the wasm side. That rule and this table have to
+    /// agree, or the screen claims a directory the recipe never writes to.
+    #[test]
+    fn every_recipe_lands_where_the_setup_screen_says_it_does() {
+        use crate::setup::{Destination, destination_of};
+        for tool in TOOLS {
+            let expected = match tool.recipe {
+                Recipe::CargoInstall { .. } => Destination::CargoBin,
+                Recipe::RustupComponent { .. } | Recipe::Espup => Destination::RustupHome,
+                // rustup is a link, and the setup screen handles it on its own.
+                Recipe::Manual { .. } => continue,
+            };
+            assert_eq!(destination_of(tool.name), expected, "{}", tool.name);
+        }
+    }
+}

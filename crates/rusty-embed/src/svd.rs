@@ -9,11 +9,17 @@
 //! registers with no size and fields with no description — and a register
 //! view that refuses the file it was given is worth less than one that
 //! shows the ninety per cent it understood. What it cannot place, it drops;
-//! what it drops, it counts, so the panel can say so.
+//! what it drops, it counts, so the panel can say so. That rule has no
+//! exceptions: an address that will not parse is not zero, it is a
+//! peripheral the map does not have, and a file that ends early is a map
+//! that is short and says where.
 
 use quick_xml::events::Event;
 
-use crate::model::{Peripheral, Register, RegisterField, RegisterMap};
+use crate::{
+    error::{Error, Result},
+    model::{Peripheral, Register, RegisterField, RegisterMap},
+};
 
 /// Parse an SVD document.
 ///
@@ -29,9 +35,17 @@ pub fn parse(xml: &str) -> RegisterMap {
     // tag names at different depths (`name` belongs to whatever contains
     // it), so position is the only way to know what a value describes.
     let mut path: Vec<String> = Vec::new();
+    // The element being built at each level, and whether it is still worth
+    // keeping. A number that would not parse poisons its element rather than
+    // becoming a default: a peripheral at base 0 or a one-bit field that was
+    // meant to be thirty-two is a panel that lies about the chip, and the
+    // element is counted as dropped when it closes.
     let mut peripheral: Option<Peripheral> = None;
+    let mut peripheral_ok = true;
     let mut register: Option<Register> = None;
+    let mut register_ok = true;
     let mut field: Option<RegisterField> = None;
+    let mut field_ok = true;
     let mut text = String::new();
 
     loop {
@@ -39,9 +53,18 @@ pub fn parse(xml: &str) -> RegisterMap {
             Ok(Event::Start(element)) => {
                 let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
                 match name.as_str() {
-                    "peripheral" => peripheral = Some(Peripheral::default()),
-                    "register" => register = Some(Register::default()),
-                    "field" => field = Some(RegisterField::default()),
+                    "peripheral" => {
+                        peripheral = Some(Peripheral::default());
+                        peripheral_ok = true;
+                    }
+                    "register" => {
+                        register = Some(Register::default());
+                        register_ok = true;
+                    }
+                    "field" => {
+                        field = Some(RegisterField::default());
+                        field_ok = true;
+                    }
                     _ => {}
                 }
                 path.push(name);
@@ -73,7 +96,10 @@ pub fn parse(xml: &str) -> RegisterMap {
                     }
                     ("peripheral", "baseAddress") => {
                         if let Some(p) = &mut peripheral {
-                            p.base = number(&text).unwrap_or(0);
+                            match number(&text) {
+                                Some(base) => p.base = base,
+                                None => peripheral_ok = false,
+                            }
                         }
                     }
                     ("register", "name") => {
@@ -88,12 +114,18 @@ pub fn parse(xml: &str) -> RegisterMap {
                     }
                     ("register", "addressOffset") => {
                         if let Some(r) = &mut register {
-                            r.offset = number(&text).unwrap_or(0) as u32;
+                            match number(&text) {
+                                Some(offset) => r.offset = offset as u32,
+                                None => register_ok = false,
+                            }
                         }
                     }
                     ("register", "size") => {
                         if let Some(r) = &mut register {
-                            r.bits = number(&text).unwrap_or(32) as u32;
+                            match number(&text) {
+                                Some(bits) => r.bits = bits as u32,
+                                None => register_ok = false,
+                            }
                         }
                     }
                     ("register", "access") => {
@@ -115,31 +147,43 @@ pub fn parse(xml: &str) -> RegisterMap {
                     }
                     ("field", "bitOffset") | ("field", "lsb") => {
                         if let Some(f) = &mut field {
-                            f.offset = number(&text).unwrap_or(0) as u32;
+                            match number(&text) {
+                                Some(offset) => f.offset = offset as u32,
+                                None => field_ok = false,
+                            }
                         }
                     }
                     ("field", "bitWidth") => {
                         if let Some(f) = &mut field {
-                            f.width = number(&text).unwrap_or(1) as u32;
+                            match number(&text) {
+                                Some(width) => f.width = width as u32,
+                                None => field_ok = false,
+                            }
                         }
                     }
                     ("field", "msb") => {
                         // The other spelling: `lsb`/`msb` instead of
                         // offset and width. Espressif's files use both.
                         if let Some(f) = &mut field {
-                            let msb = number(&text).unwrap_or(0) as u32;
-                            f.width = msb.saturating_sub(f.offset) + 1;
+                            match number(&text) {
+                                Some(msb) => f.width = (msb as u32).saturating_sub(f.offset) + 1,
+                                None => field_ok = false,
+                            }
                         }
                     }
                     ("fields", "field") => {
-                        if let (Some(r), Some(f)) = (&mut register, field.take())
-                            && !f.name.is_empty()
-                        {
-                            r.fields.push(f);
+                        if let (Some(r), Some(f)) = (&mut register, field.take()) {
+                            if field_ok && !f.name.is_empty() {
+                                r.fields.push(f);
+                            } else {
+                                map.dropped += 1;
+                            }
                         }
                     }
                     ("registers", "register") => match (&mut peripheral, register.take()) {
-                        (Some(p), Some(r)) if !r.name.is_empty() => p.registers.push(r),
+                        (Some(p), Some(r)) if register_ok && !r.name.is_empty() => {
+                            p.registers.push(r);
+                        }
                         (_, Some(_)) => map.dropped += 1,
                         _ => {}
                     },
@@ -147,7 +191,9 @@ pub fn parse(xml: &str) -> RegisterMap {
                         // A peripheral with no registers is `derivedFrom`
                         // another — inheritance this deliberately does not
                         // model. Counted, not guessed at.
-                        Some(p) if !p.name.is_empty() && !p.registers.is_empty() => {
+                        Some(p)
+                            if peripheral_ok && !p.name.is_empty() && !p.registers.is_empty() =>
+                        {
                             map.peripherals.push(p);
                         }
                         Some(_) => map.dropped += 1,
@@ -158,7 +204,31 @@ pub fn parse(xml: &str) -> RegisterMap {
                 path.pop();
                 text.clear();
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => {
+                // A document that ends inside a peripheral was cut off: the
+                // element in progress is the remainder, and it is counted and
+                // named rather than quietly not there.
+                if peripheral.take().is_some() {
+                    map.dropped += 1;
+                    map.note = Some(format!(
+                        "the file ends inside a peripheral at byte {}; whatever followed is \
+                         missing from this map",
+                        reader.buffer_position(),
+                    ));
+                }
+                break;
+            }
+            Err(error) => {
+                if peripheral.take().is_some() {
+                    map.dropped += 1;
+                }
+                map.note = Some(format!(
+                    "the file could not be read past byte {}: {error}. Whatever followed is \
+                     missing from this map.",
+                    reader.buffer_position(),
+                ));
+                break;
+            }
             _ => {}
         }
     }
@@ -206,16 +276,18 @@ pub fn source(chip: &str) -> Option<(String, std::path::PathBuf)> {
 
 /// Fetch a chip's SVD into the data directory, over the same proxy ladder
 /// every other download uses.
-pub fn fetch(chip: &str, progress: impl FnMut(String)) -> Result<std::path::PathBuf, String> {
+pub fn fetch(chip: &str, progress: impl FnMut(String)) -> Result<std::path::PathBuf> {
     let (url, dest) = source(chip).ok_or_else(|| {
-        format!(
+        Error::refused(format!(
             "rusty has no SVD source for {chip}. Put one at \
              <project>/.rusty/svd/{chip}.svd and it will be used.",
-        )
+        ))
     })?;
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
+            path: parent.display().to_string(),
+            source,
+        })?;
     }
     crate::install::download(&[url], &dest, progress)?;
     Ok(dest)
@@ -299,6 +371,7 @@ mod tests {
             map.dropped, 1,
             "and it is counted rather than silently gone"
         );
+        assert!(map.note.is_none(), "a whole file has nothing to add");
 
         let gpio = &map.peripherals[0];
         assert_eq!(gpio.name, "GPIO");
@@ -334,14 +407,84 @@ mod tests {
         );
     }
 
+    /// Half a file is half a map, not an error — and not a whole map either.
+    /// A register view that showed the peripherals it reached with nothing
+    /// saying more were expected would send somebody looking for a GPIO the
+    /// parse never saw.
     #[test]
-    fn a_truncated_file_yields_what_it_had() {
+    fn a_truncated_file_yields_what_it_had_and_says_it_is_short() {
         let cut = &SAMPLE[..SAMPLE.len() / 2];
         let map = parse(cut);
-        // Half a file is half a map, not an error: a register view that
-        // refuses what it was given is worth less than one showing the
-        // part it understood.
         assert!(map.peripherals.is_empty() || map.peripherals[0].name == "GPIO");
+        assert!(
+            map.dropped >= 1,
+            "the peripheral the cut fell inside is counted as dropped"
+        );
+        let note = map.note.expect("a short file says so");
+        assert!(note.contains("byte"), "and says where: {note}");
+    }
+
+    /// The module's rule with no exceptions. A base address that does not
+    /// parse used to become 0, an offset 0, a width 1 — each a confident
+    /// wrong number in a panel that exists to show the right one.
+    #[test]
+    fn a_number_that_will_not_parse_drops_its_element_and_counts_it() {
+        let broken = r#"
+<device><peripherals>
+  <peripheral>
+    <name>BAD_BASE</name>
+    <baseAddress>not-a-number</baseAddress>
+    <registers><register><name>R</name><addressOffset>0</addressOffset></register></registers>
+  </peripheral>
+  <peripheral>
+    <name>GOOD</name>
+    <baseAddress>0x1000</baseAddress>
+    <registers>
+      <register><name>BAD_OFFSET</name><addressOffset>0xZZ</addressOffset></register>
+      <register><name>BAD_SIZE</name><addressOffset>4</addressOffset><size>wide</size></register>
+      <register>
+        <name>OK</name>
+        <addressOffset>8</addressOffset>
+        <fields>
+          <field><name>BAD_WIDTH</name><bitOffset>0</bitOffset><bitWidth>lots</bitWidth></field>
+          <field><name>BAD_MSB</name><lsb>0</lsb><msb>?</msb></field>
+          <field><name>FINE</name><bitOffset>4</bitOffset><bitWidth>2</bitWidth></field>
+        </fields>
+      </register>
+    </registers>
+  </peripheral>
+</peripherals></device>
+"#;
+        let map = parse(broken);
+        let names: Vec<&str> = map.peripherals.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["GOOD"],
+            "a peripheral with no address is not at 0"
+        );
+
+        let good = &map.peripherals[0];
+        let registers: Vec<&str> = good.registers.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            registers,
+            vec!["OK"],
+            "a register with no offset or no width is not at 0 or 32 bits"
+        );
+        let fields: Vec<&str> = good.registers[0]
+            .fields
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(
+            fields,
+            vec!["FINE"],
+            "a field with no width is not one bit wide"
+        );
+
+        // One peripheral, two registers, two fields: five things the map does
+        // not have, and it says five.
+        assert_eq!(map.dropped, 5);
+        assert!(map.note.is_none(), "nothing wrong with the file's shape");
     }
 
     #[test]

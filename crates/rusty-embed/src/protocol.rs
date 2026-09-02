@@ -23,6 +23,23 @@ pub struct GpioReport {
     pub pins: Vec<(u8, bool)>,
 }
 
+/// The optional `@stamp` that closes a report's header, and what follows the
+/// `]`: `@1234] 26=1` is `(Some(1234), " 26=1")`, `] 26=1` is `(None, " 26=1")`.
+///
+/// One reader for the three stamped reports — gpio, pwm, telemetry — so the
+/// three cannot come to disagree about what a stamp looks like. `None` when
+/// the header does not close or the stamp is not a number: a line that is
+/// nearly a report is not one.
+fn split_stamp(rest: &str) -> Option<(Option<u64>, &str)> {
+    match rest.strip_prefix('@') {
+        Some(stamped) => {
+            let (stamp, tail) = stamped.split_once(']')?;
+            Some((Some(stamp.trim().parse::<u64>().ok()?), tail))
+        }
+        None => Some((None, rest.strip_prefix(']')?)),
+    }
+}
+
 /// Parse one serial line of the firmware's pin reports.
 ///
 /// Two spellings: `[rusty:gpio] 26=1,27=0` and `[rusty:gpio@12345] 26=1` —
@@ -32,13 +49,7 @@ pub struct GpioReport {
 /// peripheral models here do not expose register readback to do better.
 pub fn parse_gpio_report(line: &str) -> Option<GpioReport> {
     let rest = line.trim().strip_prefix("[rusty:gpio")?;
-    let (at_us, rest) = match rest.strip_prefix('@') {
-        Some(stamped) => {
-            let (stamp, tail) = stamped.split_once(']')?;
-            (Some(stamp.trim().parse::<u64>().ok()?), tail)
-        }
-        None => (None, rest.strip_prefix(']')?),
-    };
+    let (at_us, rest) = split_stamp(rest)?;
     let mut pins = Vec::new();
     for pair in rest.trim().split(',') {
         let (pin, level) = pair.trim().split_once('=')?;
@@ -86,13 +97,7 @@ pub struct PwmReport {
 /// the board view stands on everywhere else, and the panel says so.
 pub fn parse_pwm_report(line: &str) -> Option<PwmReport> {
     let rest = line.trim().strip_prefix("[rusty:pwm")?;
-    let (at_us, rest) = match rest.strip_prefix('@') {
-        Some(stamped) => {
-            let (stamp, tail) = stamped.split_once(']')?;
-            (Some(stamp.trim().parse::<u64>().ok()?), tail)
-        }
-        None => (None, rest.strip_prefix(']')?),
-    };
+    let (at_us, rest) = split_stamp(rest)?;
     let mut pins = Vec::new();
     for pair in rest.trim().split(',') {
         let (pin, duty) = pair.trim().split_once('=')?;
@@ -125,30 +130,13 @@ pub fn to_vcd(events: &[(u64, u8, bool)]) -> String {
     let id_of = |index: usize| -> char { (b'!' + index as u8) as char };
 
     let mut out = String::new();
-    out.push_str(
-        "$version rusty simulator $end
-",
-    );
-    out.push_str(
-        "$timescale 1 us $end
-",
-    );
-    out.push_str(
-        "$scope module board $end
-",
-    );
+    out.push_str("$version rusty simulator $end\n");
+    out.push_str("$timescale 1 us $end\n");
+    out.push_str("$scope module board $end\n");
     for (index, pin) in pins.iter().enumerate() {
-        out.push_str(&format!(
-            "$var wire 1 {} GPIO{pin} $end
-",
-            id_of(index)
-        ));
+        out.push_str(&format!("$var wire 1 {} GPIO{pin} $end\n", id_of(index)));
     }
-    out.push_str(
-        "$upscope $end
-$enddefinitions $end
-",
-    );
+    out.push_str("$upscope $end\n$enddefinitions $end\n");
 
     let mut last_stamp: Option<u64> = None;
     for (at, pin, level) in events {
@@ -242,13 +230,7 @@ pub struct Telemetry {
 /// `NaN`-printing sensor must not take the other eleven with it.
 pub fn parse_telemetry(line: &str) -> Option<Telemetry> {
     let rest = line.trim().strip_prefix("[rusty:tel")?;
-    let (at_us, rest) = match rest.strip_prefix('@') {
-        Some(stamped) => {
-            let (stamp, tail) = stamped.split_once(']')?;
-            (Some(stamp.trim().parse::<u64>().ok()?), tail)
-        }
-        None => (None, rest.strip_prefix(']')?),
-    };
+    let (at_us, rest) = split_stamp(rest)?;
 
     let channels: Vec<(String, f32)> = rest
         .split(',')

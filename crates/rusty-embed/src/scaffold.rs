@@ -18,7 +18,10 @@
 
 use std::path::Path;
 
-use crate::model::CommandPlan;
+use crate::{
+    error::{Error, Result},
+    model::CommandPlan,
+};
 
 /// Which way the calls go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,20 +45,12 @@ pub struct Scaffold {
     pub next: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{path} already exists — rusty will not overwrite code you wrote")]
-    Exists { path: String },
-    #[error("could not write {path}: {source}")]
-    Write {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-}
-
 /// Write the scaffolding for one direction.
-pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold, Error> {
+///
+/// Fails with [`Error::Exists`] before anything is written, or [`Error::Write`]
+/// for a file that would not land — the crate's one error type, since this
+/// module's own was two variants that said the same things.
+pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold> {
     let files: &[(&str, &str)] = match direction {
         Direction::RustCallsC => &[
             ("build.rs", BUILD_RS),
@@ -274,6 +269,7 @@ mod tests {
 
         let error = c_interop(dir.path(), Direction::RustCallsC).unwrap_err();
         assert!(matches!(error, Error::Exists { .. }), "{error}");
+        assert!(error.to_string().contains("build.rs"), "{error}");
         assert!(
             !dir.path().join("csrc").exists(),
             "the refusal came before the first write, not after three",

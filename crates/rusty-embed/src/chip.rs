@@ -6,15 +6,13 @@
 //! user's or a project's overrides takes a [`Catalog`](crate::catalog::Catalog)
 //! explicitly instead.
 
-use std::sync::OnceLock;
-
 use crate::{catalog::Catalog, model::Chip};
 
+/// The parsed built-ins — the one copy `Catalog` keeps for the whole process.
+/// This module used to hold a second cache of its own, so the same two TOML
+/// files were parsed twice and kept twice.
 fn builtin() -> &'static Catalog {
-    // Parsed once. The table is small, but this is called from inside loops
-    // that render the wizard.
-    static CATALOG: OnceLock<Catalog> = OnceLock::new();
-    CATALOG.get_or_init(Catalog::builtin)
+    Catalog::builtin_shared()
 }
 
 /// Every part that ships with rusty.

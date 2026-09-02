@@ -14,11 +14,10 @@
 //! number is the difference between picking the right port and flashing their
 //! Arduino by mistake.
 
-use std::process::Command;
-
 use crate::{
     catalog::Catalog,
     model::{Probe, SerialPort, UsbIdentity},
+    process, tools,
 };
 
 /// USB vendor/product pairs seen on Espressif development boards.
@@ -132,9 +131,14 @@ pub fn list_serial_ports(catalog: &Catalog) -> Vec<SerialPort> {
 /// library would pull a USB stack into a desktop app that mostly does not need
 /// one.
 pub fn list_probes() -> Vec<Probe> {
-    let mut command = Command::new("probe-rs");
+    // Found by the same ladder the toolchain panel reports it with, so a
+    // probe-rs in `~/.cargo/bin` that is not on this window's PATH is listed
+    // as installed *and* asked. Absent means no probes, and costs no spawn.
+    let Some(probe_rs) = tools::find("probe-rs") else {
+        return Vec::new();
+    };
+    let mut command = process::command(probe_rs);
     command.arg("list");
-    super::toolchain::no_console_window(&mut command);
 
     let Ok(output) = command.output() else {
         return Vec::new();

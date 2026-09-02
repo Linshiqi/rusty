@@ -149,10 +149,7 @@ pub fn firmware_root(root: &Path) -> PathBuf {
 /// `.cargo/config.toml`. Anything else the workspace excluded (a fixture
 /// tree, a vendored copy) is not offered.
 fn firmware_candidates(root: &Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
-        return Vec::new();
-    };
-    let Ok(manifest) = text.parse::<toml::Table>() else {
+    let Ok(manifest) = read_toml(&root.join("Cargo.toml")) else {
         return Vec::new();
     };
     let Some(excluded) = manifest
@@ -386,16 +383,16 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
     }
 
     if project.uses_defmt {
-        problems.push(Problem {
-            severity: Severity::Info,
-            kind: "defmt".into(),
-            args: Default::default(),
-            title: "defmt logging detected".into(),
-            detail: "The monitor will decode frames against this build's ELF. Reflash \
-                     after changing log strings or the decoding drifts."
-                .into(),
-            fix_command: None,
-        });
+        // Through the constructor, like every other kind: the frontend's
+        // coverage test reads `Problem::new(` off this file, and a literal
+        // struct was the one diagnostic it could not see.
+        problems.push(Problem::new(
+            Severity::Info,
+            "defmt",
+            "defmt logging detected",
+            "The monitor will decode frames against this build's ELF. Reflash after \
+             changing log strings or the decoding drifts.",
+        ));
     }
 
     problems
@@ -408,7 +405,7 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
 /// `toml::Value`'s `FromStr` parses a single value, not a document, so it
 /// rejects every real manifest at the first `[section]` header. `Table` is the
 /// document type.
-fn read_toml(path: &Path) -> Result<toml::Table> {
+pub(crate) fn read_toml(path: &Path) -> Result<toml::Table> {
     let text = std::fs::read_to_string(path).map_err(|source| Error::Read {
         path: path.display().to_string(),
         source,
@@ -442,10 +439,6 @@ fn collect_dependency_names(manifest: &toml::Table) -> Vec<String> {
     names
 }
 
-/// The chip named by an `esp-hal`-family feature.
-///
-/// These crates take the part as a feature (`features = ["esp32c3"]`), which
-/// makes the manifest the most authoritative source available offline.
 /// Vendors to consult, in the order their HAL crates are checked.
 ///
 /// Each contributes its own list of crates that carry the part number as a
@@ -456,6 +449,10 @@ fn collect_dependency_names(manifest: &toml::Table) -> Vec<String> {
 /// before `esp-hal`.
 const VENDORS: &[Vendor] = &[Vendor::Espressif, Vendor::St];
 
+/// The chip named by an `esp-hal`-family feature.
+///
+/// These crates take the part as a feature (`features = ["esp32c3"]`), which
+/// makes the manifest the most authoritative source available offline.
 fn chip_from_manifest(manifest: &toml::Table) -> (Option<String>, Option<String>) {
     let known: Vec<String> = chip::catalogue().into_iter().map(|c| c.id).collect();
 

@@ -54,18 +54,13 @@ pub fn system_proxy() -> Option<String> {
 
 fn windows_system_proxy() -> Option<String> {
     let query = |value: &str| -> Option<String> {
-        let mut command = std::process::Command::new("reg");
+        let mut command = crate::process::command("reg");
         command.args([
             "query",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
             "/v",
             value,
         ]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000);
-        }
         let out = command.output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
         text.lines()
@@ -109,8 +104,42 @@ fn parse_proxy_server(value: &str) -> Option<String> {
 /// Every route worth trying, in order — the configured proxy, its SOCKS
 /// twin, then direct. Shared with the update check, which has the same
 /// problem this module's header describes.
-pub fn proxy_routes() -> Vec<Option<String>> {
+pub(crate) fn proxy_routes() -> Vec<Option<String>> {
     proxy_candidates(effective_proxy())
+}
+
+/// How long one fetch may take at each stage.
+pub(crate) struct Deadlines {
+    /// To a connected socket. A blackholed route must fail fast enough that
+    /// the next one gets its turn.
+    pub connect: std::time::Duration,
+    /// Until the response headers arrive, when the caller wants a separate
+    /// bound on that — a download must not sit at "downloading" for ever
+    /// waiting for a server that accepted the connection and said nothing.
+    pub headers: Option<std::time::Duration>,
+    /// For the whole exchange. Nothing runs unbounded.
+    pub total: std::time::Duration,
+}
+
+/// One HTTP agent over one route of the ladder.
+///
+/// The fetchers in this crate — tool installs and the update check — each
+/// built their own agent, and two builders drift: one learned about the proxy
+/// and the other did not. `rusty-core`'s registry query keeps a copy, because
+/// it cannot depend on this crate.
+pub(crate) fn agent(route: Option<&str>, deadlines: Deadlines) -> ureq::Agent {
+    let mut builder = ureq::Agent::config_builder()
+        .timeout_connect(Some(deadlines.connect))
+        .timeout_global(Some(deadlines.total));
+    if let Some(headers) = deadlines.headers {
+        builder = builder.timeout_recv_response(Some(headers));
+    }
+    if let Some(url) = route
+        && let Ok(proxy) = ureq::Proxy::new(url)
+    {
+        builder = builder.proxy(Some(proxy));
+    }
+    builder.build().into()
 }
 
 /// The transport ladder for one configured proxy: as given, then the SOCKS5

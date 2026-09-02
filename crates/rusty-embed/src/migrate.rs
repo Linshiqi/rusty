@@ -146,8 +146,8 @@ pub fn plan(root: &Path, from: &Chip, to: &Chip) -> Migration {
     // reason, which is a slow surprise rather than an error.
     let toolchain_path = root.join("rust-toolchain.toml");
     if let Ok(text) = std::fs::read_to_string(&toolchain_path) {
-        match channel_of(&text) {
-            Some(channel) => {
+        match channel_line(&text) {
+            Some((channel, line)) => {
                 let wanted = if to.toolchain == ToolchainRequirement::EspXtensa {
                     "esp"
                 } else if channel == "esp" {
@@ -158,11 +158,15 @@ pub fn plan(root: &Path, from: &Chip, to: &Chip) -> Migration {
                     &channel
                 };
                 if wanted != channel {
+                    // The line as the file spells it, not a canonical
+                    // `channel = "esp"`: a file written `channel="esp"` or
+                    // with single quotes used to fail `apply` as "changed
+                    // since this was planned" when nothing had changed.
                     migration.files.push(FileChange {
                         path: "rust-toolchain.toml".to_string(),
                         edits: vec![Edit {
-                            before: format!("channel = \"{channel}\""),
-                            after: format!("channel = \"{wanted}\""),
+                            before: line.to_string(),
+                            after: line.replacen(&channel, wanted, 1),
                         }],
                     });
                 }
@@ -327,7 +331,11 @@ pub fn apply(root: &Path, migration: &Migration) -> Result<Vec<String>, String> 
                 text.push_str(&edit.after);
                 continue;
             }
-            if !text.contains(&edit.before) {
+            // The same test the replacement uses. A `contains` guard passed
+            // a file that only had `esp32c3` left in it, and the word-bounded
+            // replacement below then wrote it back unchanged and reported a
+            // switch that had switched nothing.
+            if !edit_applies(&text, &edit.before) {
                 return Err(format!(
                     "{} no longer contains `{}` — it changed since this was planned. \
                      Nothing has been written; look at the file and try again.",
@@ -355,6 +363,17 @@ pub fn apply(root: &Path, migration: &Migration) -> Result<Vec<String>, String> 
 /// `xtensa-esp32c3-none-elf`, which is not a target that exists.
 fn word_appears(text: &str, word: &str) -> bool {
     boundaries(text, word).next().is_some()
+}
+
+/// Whether an edit's `before` is still in the file, judged exactly as
+/// [`replace_word`] will judge it: a multi-line block by containment, a
+/// single line by word boundaries.
+fn edit_applies(text: &str, before: &str) -> bool {
+    if before.contains('\n') {
+        text.contains(before)
+    } else {
+        word_appears(text, before)
+    }
 }
 
 fn replace_word(text: &str, from: &str, to: &str) -> String {
@@ -476,7 +495,11 @@ fn pin_sites(root: &Path) -> Vec<String> {
 /// is exactly why it would survive: nothing complains, and the file quietly
 /// accumulates the debris of every switch.
 fn build_std_line(config: &str) -> Option<String> {
-    let lines: Vec<&str> = config.lines().collect();
+    // The file's own bytes, line endings included. Rebuilt from `lines()`
+    // and joined with `\n`, the block came back without its `\r`s, and every
+    // CRLF checkout — the default under Git for Windows — then failed to
+    // apply with "it changed since this was planned".
+    let lines: Vec<&str> = config.split_inclusive('\n').collect();
     let at = lines
         .iter()
         .position(|line| line.trim_start().starts_with("build-std"))?;
@@ -497,13 +520,17 @@ fn build_std_line(config: &str) -> Option<String> {
     });
 
     let from = if alone { header.expect("checked") } else { at };
-    Some(format!("{}\n", lines[from..=at].join("\n")))
+    Some(lines[from..=at].concat())
 }
 
-fn channel_of(toolchain: &str) -> Option<String> {
+/// The `channel = …` line of a `rust-toolchain.toml`: the channel it names,
+/// and the line exactly as written — quotes, spacing and all — so an edit
+/// can name what the file actually contains.
+fn channel_line(toolchain: &str) -> Option<(String, &str)> {
     toolchain.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
-        (key.trim() == "channel").then(|| value.trim().trim_matches('"').to_string())
+        (key.trim() == "channel")
+            .then(|| (value.trim().trim_matches(['"', '\'']).to_string(), line))
     })
 }
 
@@ -546,6 +573,93 @@ mod tests {
 
     fn esp32c3() -> Chip {
         chip("esp32c3", "riscv32imc-unknown-none-elf", false)
+    }
+
+    /// The default checkout under Git for Windows: every line ends in CRLF.
+    /// The plan's `before` text has to be the file's own bytes, or `apply`
+    /// refuses a file nothing has touched as "changed since this was planned".
+    #[test]
+    fn a_crlf_config_is_planned_and_applied_unchanged_in_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".cargo")).unwrap();
+        std::fs::write(
+            dir.path().join(".cargo/config.toml"),
+            "[build]\r\ntarget = \"xtensa-esp32-none-elf\"\r\n\r\n[unstable]\r\nbuild-std = [\"core\"]\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\r\nname = \"blinky\"\r\n\r\n[dependencies]\r\nesp-hal = { version = \"1\", features = [\"esp32\"] }\r\n",
+        )
+        .unwrap();
+
+        let migration = plan(dir.path(), &esp32(), &esp32c3());
+        assert!(migration.blocker.is_none(), "{migration:?}");
+        let written = apply(dir.path(), &migration).expect("an unchanged CRLF file still applies");
+        assert!(written.iter().any(|p| p == ".cargo/config.toml"));
+
+        let config = std::fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap();
+        assert!(
+            !config.contains("build-std"),
+            "the block is gone: {config:?}"
+        );
+        assert!(
+            config.contains("riscv32imc-unknown-none-elf\"\r\n"),
+            "and the line endings stayed: {config:?}"
+        );
+    }
+
+    /// `channel="esp"` without spaces, or with single quotes, is the same
+    /// setting. The edit names the line as written rather than a canonical
+    /// spelling the file may not use.
+    #[test]
+    fn a_channel_line_is_matched_as_the_file_spells_it() {
+        let dir = tempfile::tempdir().unwrap();
+        project(dir.path());
+        std::fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel='esp'\n",
+        )
+        .unwrap();
+
+        let migration = plan(dir.path(), &esp32(), &esp32c3());
+        let toolchain = migration
+            .files
+            .iter()
+            .find(|f| f.path == "rust-toolchain.toml")
+            .expect("the channel changes when leaving Xtensa");
+        assert_eq!(toolchain.edits[0].before, "channel='esp'");
+        assert_eq!(toolchain.edits[0].after, "channel='stable'");
+        apply(dir.path(), &migration).expect("the plan matches the file it was made from");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("rust-toolchain.toml")).unwrap(),
+            "[toolchain]\nchannel='stable'\n",
+        );
+    }
+
+    /// The stale-plan guard judges an edit exactly as the replacement does. A
+    /// `contains` guard let a file whose only `esp32` was inside `esp32c3` pass,
+    /// and the word-bounded replacement then rewrote nothing and reported a
+    /// switch.
+    #[test]
+    fn a_plan_whose_word_is_gone_is_refused_rather_than_written_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        project(dir.path());
+        let migration = plan(dir.path(), &esp32(), &esp32c3());
+        // Somebody switched by hand in between: the word is gone, the file
+        // still *contains* it inside the new id.
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"blinky\"\n\n[dependencies]\nesp-hal = { version = \"1\", features = [\"esp32c3\"] }\n",
+        )
+        .unwrap();
+        let outcome = apply(dir.path(), &migration);
+        assert!(
+            outcome
+                .as_ref()
+                .is_err_and(|e| e.contains("changed since this was planned")),
+            "{outcome:?}"
+        );
     }
 
     fn project(dir: &Path) {
