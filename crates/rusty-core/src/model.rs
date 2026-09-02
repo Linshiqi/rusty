@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 // Top level
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Everything the Overview page needs, in one payload.
+/// One direct dependency, its resolved version, and what crates.io knows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CrateRow {
@@ -29,7 +29,7 @@ pub struct CrateRow {
     pub note: Option<String>,
 }
 
-/// One direct dependency, its resolved version, and what crates.io knows.
+/// Everything the Overview page needs, in one payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceReport {

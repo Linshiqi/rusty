@@ -15,6 +15,11 @@ pub enum Error {
         source: Box<guppy::Error>,
     },
 
+    /// `cargo metadata` could not be started, or exited unsuccessfully. The
+    /// detail is cargo's own stderr, which names the manifest line at fault.
+    #[error("could not run `cargo metadata` for `{path}`: {detail}")]
+    CargoRun { path: String, detail: String },
+
     /// A package name was supplied that is not a workspace member.
     #[error("`{name}` is not a member of this workspace")]
     NotAMember { name: String },

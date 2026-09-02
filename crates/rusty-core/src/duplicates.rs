@@ -98,3 +98,27 @@ fn compat_range(v: &Version) -> String {
         format!("0.0.{}", v.patch)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::compat_range;
+    use semver::Version;
+
+    /// The "why do I have two base64s" answer rests on this bucketing, and
+    /// the fixture workspace has no duplicate to exercise it, so the rule is
+    /// pinned directly: cargo's caret semantics, where `0.x` minors and
+    /// `0.0.x` patches are each their own world.
+    #[test]
+    fn versions_bucket_the_way_cargo_unifies_them() {
+        let bucket = |v: &str| compat_range(&Version::parse(v).unwrap());
+        assert_eq!(bucket("1.2.3"), bucket("1.9.0"), "1.x versions unify");
+        assert_ne!(bucket("1.9.0"), bucket("2.0.0"), "a major is a new world");
+        assert_eq!(bucket("0.21.7"), bucket("0.21.0"));
+        assert_ne!(
+            bucket("0.21.7"),
+            bucket("0.22.1"),
+            "0.x minors do not unify"
+        );
+        assert_ne!(bucket("0.0.3"), bucket("0.0.4"), "nor do 0.0.x patches");
+    }
+}

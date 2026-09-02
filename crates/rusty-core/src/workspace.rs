@@ -36,8 +36,25 @@ impl Workspace {
 
         let mut cmd = MetadataCommand::new();
         cmd.manifest_path(&manifest);
-        let graph = cmd
-            .build_graph()
+        // Run cargo ourselves rather than through guppy's builder: the flag
+        // that keeps a Windows child from opening a console window lives on
+        // `std::process::Command`, and a GUI parent that let guppy spawn
+        // `cargo metadata` flashed one up on every project open.
+        let mut command = cmd.cargo_command();
+        quiet(&mut command);
+        let output = command.output().map_err(|e| Error::CargoRun {
+            path: manifest.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        if !output.status.success() {
+            return Err(Error::CargoRun {
+                path: manifest.display().to_string(),
+                detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+        let json = String::from_utf8_lossy(&output.stdout);
+        let graph = guppy::CargoMetadata::parse_json(&json)
+            .and_then(|metadata| metadata.build_graph())
             .map_err(|e| Error::metadata(manifest.display(), e))?;
 
         Ok(Self {
@@ -52,10 +69,6 @@ impl Workspace {
 
     pub fn root(&self) -> &Utf8Path {
         self.graph.workspace().root()
-    }
-
-    pub fn host_triple(&self) -> &str {
-        &self.host_triple
     }
 
     /// Everything the Overview page renders, in one pass.
@@ -115,6 +128,23 @@ impl Workspace {
     }
 }
 
+/// No console window for a child on Windows. A GUI process has no console,
+/// so a child that inherits nothing is given one — a black window flashed up
+/// for the duration of every `cargo metadata` and `rustc -vV`. rusty-embed
+/// carries the same three lines; this crate cannot depend on it.
+fn quiet(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+    }
+}
+
 /// Ask rustc for the host triple.
 ///
 /// `std::env::consts` cannot produce a real triple (it has no vendor or ABI),
@@ -122,8 +152,10 @@ impl Workspace {
 /// authority. Falls back to a clearly-marked placeholder rather than a wrong
 /// triple if rustc is not on PATH.
 fn host_triple() -> String {
-    Command::new("rustc")
-        .arg("-vV")
+    let mut command = Command::new("rustc");
+    command.arg("-vV");
+    quiet(&mut command);
+    command
         .output()
         .ok()
         .filter(|out| out.status.success())
