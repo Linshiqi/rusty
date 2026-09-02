@@ -27,8 +27,18 @@ use serde::Deserialize;
 use crate::model::{PinClaim, PinInfo, PinReport};
 
 /// The part's pins and the project's claims on them.
-pub fn report(root: &Path, chip: &str) -> PinReport {
-    let claims = claims(root);
+///
+/// **Two roots, because they answer different questions.** `root` is the
+/// directory the user opened, and every claim's path is reported relative to
+/// it — a claim is a place in the editor, and the editor belongs to the whole
+/// repository. `firmware` is where the chip is, which is where esp-hal put its
+/// device description; on the standard embedded workspace those are not the
+/// same directory, and reporting `src/main.rs` relative to the firmware crate
+/// gave the editor a path that does not exist from the root.
+///
+/// Identical for every ordinary project, where the root has its own chip.
+pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
+    let claims = claims(root, firmware);
     // With no capabilities, every claim is `unknown` — not because the pin
     // does not exist, but because nothing here can say that it does. The
     // note carries the difference.
@@ -40,7 +50,7 @@ pub fn report(root: &Path, chip: &str) -> PinReport {
         unknown: claims.clone(),
     };
 
-    let Some((path, text)) = device_file(root, chip) else {
+    let Some((path, text)) = device_file(firmware, chip) else {
         return blind(format!(
             "rusty could not find esp-hal's description of {chip}, so it can only show \
              what the source names — not which pins exist, which are input-only, or \
@@ -104,7 +114,15 @@ pub fn report(root: &Path, chip: &str) -> PinReport {
 ///
 /// Anchored on the dot so a comment or a string mentioning "GPIO26" is not a
 /// claim, and so `GPIO26` inside a longer identifier is not either.
-pub fn claims(root: &Path) -> Vec<PinClaim> {
+///
+/// **Scanned from `firmware`, reported relative to `root`.** Pins are named in
+/// the firmware crate, which on the standard embedded workspace is a directory
+/// the root excludes — so scanning the root finds nothing. But a claim is a
+/// place the editor opens, and the editor is rooted at the opened directory,
+/// so `firmware/src/main.rs` is the path that resolves. Getting either half
+/// wrong is silent: the wrong scan root reports no claims at all, and the
+/// wrong relative root reports paths that fail to open.
+pub fn claims(root: &Path, firmware: &Path) -> Vec<PinClaim> {
     fn walk(dir: &Path, root: &Path, found: &mut Vec<PinClaim>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -144,7 +162,7 @@ pub fn claims(root: &Path) -> Vec<PinClaim> {
     }
 
     let mut found = Vec::new();
-    walk(&root.join("src"), root, &mut found);
+    walk(&firmware.join("src"), root, &mut found);
     found
 }
 
@@ -315,7 +333,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = claims(dir.path());
+        let found = claims(dir.path(), dir.path());
         let pins: Vec<u32> = found.iter().map(|claim| claim.gpio).collect();
         assert_eq!(
             pins,
@@ -327,6 +345,41 @@ mod tests {
             "zero-based, like every line that crosses the wire"
         );
         assert!(found[0].text.starts_with("let led ="));
+    }
+
+    /// A workspace whose firmware is one directory down still reports paths
+    /// the editor can open.
+    ///
+    /// Both halves have to be right and each fails silently on its own: scan
+    /// the root and there are no claims to show, report relative to the
+    /// firmware crate and every claim opens `src/main.rs` from a root that has
+    /// no `src/`. That second one is what shipped — clicking a pin raised
+    /// "could not read src/main.rs (os error 3)".
+    #[test]
+    fn an_excluded_firmware_crate_reports_paths_from_the_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let firmware = dir.path().join("firmware");
+        std::fs::create_dir_all(firmware.join("src")).unwrap();
+        std::fs::write(
+            firmware.join("src/main.rs"),
+            "let led = Output::new(peripherals.GPIO26, Level::High);\n",
+        )
+        .unwrap();
+
+        let found = claims(dir.path(), &firmware);
+        assert_eq!(
+            found.len(),
+            1,
+            "the firmware's claim was not found: {found:?}"
+        );
+        assert_eq!(
+            found[0].file, "firmware/src/main.rs",
+            "the path has to resolve from the opened directory, not from the chip's",
+        );
+        assert!(
+            dir.path().join(&found[0].file).is_file(),
+            "the reported path must exist relative to the root the editor uses",
+        );
     }
 
     /// Without the device description the report is still useful, and says
@@ -341,7 +394,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = report(dir.path(), "esp32");
+        let report = report(dir.path(), dir.path(), "esp32");
         assert!(report.pins.is_empty());
         assert!(
             report.note.is_some_and(|n| n.contains("could not find")),

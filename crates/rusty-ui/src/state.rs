@@ -589,6 +589,14 @@ pub struct Editor {
     /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
     /// the editor derives from it.
     pub zoom: RwSignal<f64>,
+    /// Markdown files the user asked to see as source.
+    ///
+    /// The default for `.md` is the rendered view, because a workbench opens a
+    /// README to read it far more often than to edit it — so this holds the
+    /// exceptions rather than the rule. Session state, per path, like folds
+    /// and for the same reason: which way you were reading a file yesterday
+    /// is not worth restoring onto one somebody has since rewritten.
+    pub source_view: RwSignal<Vec<String>>,
     /// Which regions of the active document are collapsed.
     ///
     /// Session state, per tab, deliberately not persisted: a fold is where
@@ -676,6 +684,15 @@ pub struct Search {
     /// Which search is current; a stale reply is dropped, and the debounce
     /// timer checks it before firing.
     pub generation: RwSignal<u64>,
+    /// The replacement text, and whether its box is showing. Folded away by
+    /// default, as VSCode folds it: a replace field always on screen is an
+    /// invitation to a project-wide rewrite nobody asked for.
+    pub replacement: RwSignal<String>,
+    pub replacing: RwSignal<bool>,
+    /// What the last replace did. Held rather than shown and forgotten —
+    /// it names the files it would not touch, and that is the half somebody
+    /// has to act on.
+    pub outcome: RwSignal<Option<rusty_edit::ReplaceOutcome>>,
 }
 
 /// The language server: whether it is up, which session is live, and what
@@ -973,6 +990,7 @@ impl AppState {
                 rename: RwSignal::new(None),
                 reveal: RwSignal::new(None),
                 expanded: RwSignal::new(Vec::new()),
+                source_view: RwSignal::new(Vec::new()),
                 folds: RwSignal::new(rusty_edit::Folded::default()),
                 stale: RwSignal::new(Vec::new()),
                 watch_session: RwSignal::new(0),
@@ -1006,6 +1024,9 @@ impl AppState {
                 exclude: RwSignal::new(String::new()),
                 results: RwSignal::new(None),
                 generation: RwSignal::new(0),
+                replacement: RwSignal::new(String::new()),
+                replacing: RwSignal::new(false),
+                outcome: RwSignal::new(None),
             },
             lsp: Lsp {
                 status: RwSignal::new(LspStatus::Off),
@@ -1112,6 +1133,45 @@ impl AppState {
 
     pub fn has_project(&self) -> bool {
         self.project.detected.with(Option::is_some)
+    }
+
+    /// Whether this file has edits the disk has not seen.
+    ///
+    /// The active editor keeps its draft in `editor.draft`; every other open
+    /// one keeps its own inside `parked`. A read-only document can never be
+    /// dirty — its draft is the disk's text by construction, and treating it
+    /// as unsaved would put a dot on every dependency you glanced at.
+    pub fn is_dirty(&self, path: &str) -> bool {
+        let active = self.editor.document.with(|doc| {
+            doc.as_ref().is_some_and(|doc| {
+                doc.path == path
+                    && !doc.read_only
+                    && self.editor.draft.with(|draft| draft != &doc.text)
+            })
+        });
+        active
+            || self.editor.parked.with(|parked| {
+                parked
+                    .iter()
+                    .find(|editor| editor.document.path == path)
+                    .is_some_and(|editor| {
+                        !editor.document.read_only && editor.draft != editor.document.text
+                    })
+            })
+    }
+
+    /// Every open editor with unsaved changes, project-relative.
+    ///
+    /// What a project-wide replace must not write over: the draft is still on
+    /// screen and still looks authoritative, so replacing underneath it means
+    /// the next Ctrl+S quietly puts the old text back.
+    pub fn dirty_paths(&self) -> Vec<String> {
+        self.editor
+            .tabs
+            .get_untracked()
+            .into_iter()
+            .filter(|path| self.is_dirty(path))
+            .collect()
     }
 
     /// Every problem, from both sources, worst first.

@@ -184,6 +184,47 @@ pub async fn search_project(
         .map_err(|e| CommandError::new(format!("search panicked: {e}")))
 }
 
+/// Rewrite every match the search would have listed.
+///
+/// `drafts` is the frontend's list of open editors with unsaved changes. It
+/// is passed rather than inferred because only the window knows: the backend
+/// holds no editor state, and a replace that wrote under a draft would put the
+/// old text back on the next save.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceArgs {
+    query: String,
+    replacement: String,
+    case_sensitive: bool,
+    whole_word: bool,
+    regex: bool,
+    include: String,
+    exclude: String,
+    /// Open editors with unsaved changes. See the doc above.
+    drafts: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn replace_in_project(
+    args: ReplaceArgs,
+    state: State<'_, AppState>,
+) -> Result<rusty_edit::ReplaceOutcome, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let spec = rusty_edit::SearchQuery {
+        text: args.query,
+        case_sensitive: args.case_sensitive,
+        whole_word: args.whole_word,
+        regex: args.regex,
+        include: args.include,
+        exclude: args.exclude,
+    };
+    let replacement = args.replacement;
+    let drafts = args.drafts;
+    tokio::task::spawn_blocking(move || rusty_edit::replace(&root, &spec, &replacement, &drafts))
+        .await
+        .map_err(|e| CommandError::new(format!("replace panicked: {e}")))
+}
+
 /// Watch the project and stream a batch every time it settles.
 ///
 /// Long-lived, like `lsp_start`: it does not resolve while the watcher is up,

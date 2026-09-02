@@ -45,35 +45,13 @@ pub(super) fn TabStrip() -> impl IntoView {
                         // Dirty is per-tab: the active one compares live
                         // draft to document, a parked one compares its
                         // stashed pair.
+                        // One derivation, in `AppState`: the replace has to
+                        // ask the same question of the same files, and two
+                        // copies of "is this dirty" is how a replace writes
+                        // over a draft the dot said was there.
                         let dirty = {
                             let path = path.clone();
-                            Signal::derive(move || {
-                                let on_screen = state
-                                    .editor.document
-                                    .with(|d| d.as_ref().map(|d| d.path.clone()))
-                                    .as_deref()
-                                    == Some(path.as_str());
-                                if on_screen {
-                                    state.editor.document.with(|d| {
-                                        d.as_ref().is_some_and(|d| {
-                                            !d.read_only
-                                                && state
-                                                    .editor.draft
-                                                    .with(|draft| draft != &d.text)
-                                        })
-                                    })
-                                } else {
-                                    state.editor.parked.with(|parked| {
-                                        parked
-                                            .iter()
-                                            .find(|e| e.document.path == path)
-                                            .is_some_and(|e| {
-                                                !e.document.read_only
-                                                    && e.draft != e.document.text
-                                            })
-                                    })
-                                }
-                            })
+                            Signal::derive(move || state.is_dirty(&path))
                         };
                         // The disk moved under an unsaved draft. Distinct
                         // from dirty, and shown as well as it rather than
@@ -232,6 +210,7 @@ pub(super) fn TabStrip() -> impl IntoView {
 pub(super) fn Header(document: Document) -> impl IntoView {
     let state = AppState::expect();
     let saved = document.text.clone();
+    let path = document.path.clone();
     let dirty = Signal::derive(move || state.editor.draft.with(|draft| draft != &saved));
 
     view! {
@@ -247,6 +226,51 @@ pub(super) fn Header(document: Document) -> impl IntoView {
                     })
             }}
             <span class="flex-1" />
+            // Markdown only: every other file has one way to read it, and a
+            // toggle that does nothing on 95% of tabs is chrome.
+            {super::editor::is_markdown(&path)
+                .then(|| {
+                    let path = path.clone();
+                    let showing_source = {
+                        let path = path.clone();
+                        Signal::derive(move || {
+                            state.editor.source_view.with(|v| v.contains(&path))
+                        })
+                    };
+                    view! {
+                        <button
+                            type="button"
+                            title=move || {
+                                if showing_source.get() {
+                                    t!("markdown.show-preview")
+                                } else {
+                                    t!("markdown.show-source")
+                                }
+                            }
+                            on:click=move |_| {
+                                let path = path.clone();
+                                state
+                                    .editor
+                                    .source_view
+                                    .update(|open| match open.iter().position(|p| *p == path) {
+                                        Some(at) => {
+                                            open.remove(at);
+                                        }
+                                        None => open.push(path),
+                                    })
+                            }
+                            class="shrink-0 rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                        >
+                            {move || {
+                                if showing_source.get() {
+                                    t!("markdown.preview")
+                                } else {
+                                    t!("markdown.source")
+                                }
+                            }}
+                        </button>
+                    }
+                })}
             {document
                 .read_only
                 .then(|| {

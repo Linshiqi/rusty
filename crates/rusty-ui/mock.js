@@ -140,6 +140,47 @@
 
   window.__mock = { locale: null, toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
 
+  // Every construct the renderer claims to handle, so the preview can be
+  // looked at rather than reasoned about.
+  const MD = [
+    "# rusty",
+    "",
+    "An embedded Rust workbench. **ESP32 first**, STM32 next.",
+    "",
+    "## Crates",
+    "",
+    "| Crate | Does |",
+    "|---|---|",
+    "| `rusty-core` | Cargo workspace analysis |",
+    "| `rusty-embed` | Chips, boards, flashing |",
+    "",
+    "### Getting started",
+    "",
+    "1. Install the toolchain",
+    "2. Open a project",
+    "   - the chip is detected",
+    "   - the target is checked",
+    "3. Press Run",
+    "",
+    "> A tool you cannot read a file in is a dashboard about work you do",
+    "> somewhere else.",
+    "",
+    "```bash",
+    "cargo test --workspace",
+    "```",
+    "",
+    "See [the docs](https://example.test/docs) and ~~the old ones~~.",
+    "",
+    "![a badge](https://example.test/badge.svg)",
+    "",
+    "---",
+    "",
+    "#### Notes",
+    "",
+    "- [x] markdown renders",
+    "- [ ] everything else",
+  ].join("\n");
+
   const handlers = {
     recent_projects: () => [ROOT],
     // Stored across a reload, because that is the whole mechanism: choosing a
@@ -170,13 +211,16 @@
         { name: "main.rs", path: MAIN, isDir: false, children: [] },
       ]},
       { name: "Cargo.toml", path: "Cargo.toml", isDir: false, children: [] },
+      { name: "README.md", path: "README.md", isDir: false, children: [] },
       ];
     },
     // Stateful, as the disk is: what save wrote is what open reads back.
     // Without this, format-on-save looks broken in the mock — the re-read
     // "restores" pre-format text no real backend would still have.
     open_file: (a) => {
-      const fallback = a.path.endsWith("Cargo.toml") ? TOML : RS;
+      let fallback = RS;
+      if (a.path.endsWith("Cargo.toml")) fallback = TOML;
+      if (a.path.endsWith(".md")) fallback = MD;
       return docOf(a.path, window.__mock.saved[a.path] || fallback);
     },
     highlight_text: (a) => docOf(a.path || MAIN, a.text).lines,
@@ -244,6 +288,22 @@
         ? all.filter((h) => h.path.endsWith(".rs"))
         : all;
       return { hits, files: new Set(hits.map((h) => h.path)).size, truncated: false, error: null };
+    },
+    // Stateful like the disk is: a replace that reported a count without
+    // changing what the next search finds would look right in the mock and
+    // wrong in the app.
+    replace_in_project: (outer) => {
+      // One struct, matching the command's single `args` parameter — a flat
+      // payload here would deserialise to nothing and the reply would be an
+      // error about a missing field rather than about the shape.
+      const a = outer.args;
+      if (!a || a.drafts === undefined) {
+        return { changed: [], replaced: 0, skipped: [], error: "mock: args.drafts missing" };
+      }
+      const skipped = a.drafts.map((path) => ({ path, reason: "unsaved" }));
+      const changed = ["src/main.rs", "Cargo.toml"].filter((p) => !a.drafts.includes(p));
+      window.__mock.replaced = a;
+      return { changed, replaced: changed.length * 2, skipped, error: null };
     },
     plan_simulation: () => ({
       supported: true, reason: null, missing: [],

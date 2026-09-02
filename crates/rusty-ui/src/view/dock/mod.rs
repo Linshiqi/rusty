@@ -23,14 +23,18 @@ pub fn Dock() -> impl IntoView {
     let state = AppState::expect();
 
     view! {
-        // The handle sits above the tab strip so the whole dock resizes, not
-        // just its contents.
+        // Closed means gone, as VSCode's panel is: the resize handle and the
+        // tab strip go with it. A collapsed dock that still holds a row of
+        // tabs is thirty pixels of chrome saying "there is something here" on
+        // every screen where the answer is no — and the way back is the same
+        // as VSCode's, Ctrl+` or the View menu, both of which name the panel
+        // they open.
         <Show when=move || state.layout.dock_open.get()>
+            // The handle sits above the tab strip so the whole dock resizes,
+            // not just its contents.
             <crate::view::split::Handle divider=Divider::Dock />
-        </Show>
-        <section class="flex flex-none flex-col bg-window">
-            <DockTabs />
-            <Show when=move || state.layout.dock_open.get()>
+            <section class="flex flex-none flex-col bg-window">
+                <DockTabs />
                 // A column rather than one scrolling box: the terminal keeps its
                 // prompt pinned below the scrollback, which only works if the
                 // tab owns its own scroll region.
@@ -56,8 +60,8 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Flight => view! { <FlightTab /> }.into_any(),
                     }}
                 </div>
-            </Show>
-        </section>
+            </section>
+        </Show>
     }
 }
 
@@ -160,27 +164,15 @@ fn DockTabs() -> impl IntoView {
                 />
             </Show>
 
+            // Only ever closes: the strip it lives in is not drawn when the
+            // dock is shut, so there is no state here where it would open one.
             <button
                 type="button"
-                title=move || {
-                    if state.layout.dock_open.get() {
-                        t!("dock.chrome.collapse")
-                    } else {
-                        t!("dock.chrome.expand")
-                    }
-                }
+                title=t!("dock.chrome.collapse")
                 class="grid size-6 place-items-center rounded-[5px] text-label-2 hover:bg-sunken hover:text-label"
-                on:click=move |_| state.layout.dock_open.update(|open| *open = !*open)
+                on:click=move |_| state.layout.dock_open.set(false)
             >
-                <span class=move || {
-                    if state.layout.dock_open.get() {
-                        "grid transition-transform"
-                    } else {
-                        "grid rotate-180 transition-transform"
-                    }
-                }>
-                    <IconView icon=Icon::Chevron size=13 />
-                </span>
+                <IconView icon=Icon::Chevron size=13 />
             </button>
         </div>
     }

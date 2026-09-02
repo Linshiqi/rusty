@@ -37,6 +37,36 @@ pub(crate) fn Editor() -> impl IntoView {
             .into_any();
         }
 
+        // Markdown reads as a page unless asked otherwise. A workbench opens
+        // a README to read it far more often than to edit it, and the source
+        // is one click away — where the reverse would leave somebody looking
+        // at sigils with no clue there was anything else.
+        if is_markdown(&document.path)
+            && !state
+                .editor
+                .source_view
+                .with(|v| v.contains(&document.path))
+        {
+            return view! {
+                <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <TabStrip />
+                    <Header document=document.clone() />
+                    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                        // The draft, not the saved text: switching to the page
+                        // after an edit must show the edit, or the toggle reads
+                        // as having lost it.
+                        <div class="mx-auto max-w-[80ch]">
+                            {move || {
+                                let text = state.editor.draft.get();
+                                view! { <crate::view::markdown::Markdown text=text /> }
+                            }}
+                        </div>
+                    </div>
+                </div>
+            }
+            .into_any();
+        }
+
         view! {
             <div class="flex min-h-0 min-w-0 flex-1 flex-col">
                 <TabStrip />
@@ -46,4 +76,14 @@ pub(crate) fn Editor() -> impl IntoView {
         }
         .into_any()
     }
+}
+
+/// Whether this path is Markdown.
+///
+/// The two extensions in the wild. `.mdown` and friends exist and nobody uses
+/// them; a file that is not recognised opens as source, which is wrong in a
+/// way the toggle fixes rather than wrong in a way that hides the text.
+pub(super) fn is_markdown(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
 }

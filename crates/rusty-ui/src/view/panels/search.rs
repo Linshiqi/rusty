@@ -12,7 +12,14 @@ use rusty_edit::SearchHit;
 use rusty_i18n::t;
 
 use super::files::Editor;
-use crate::{controller, state::AppState, view::components::Empty};
+use crate::{
+    controller,
+    state::AppState,
+    view::{
+        components::Empty,
+        icon::{Icon, IconView},
+    },
+};
 
 #[component]
 pub fn SearchPanel() -> impl IntoView {
@@ -66,7 +73,65 @@ pub fn SearchPanel() -> impl IntoView {
                             help=t!("search.regex")
                             on=state.search.regex
                         />
+                        <button
+                            type="button"
+                            title=t!("replace.toggle")
+                            on:click=move |_| {
+                                state.search.replacing.update(|open| *open = !*open)
+                            }
+                            class=move || {
+                                let base = "grid size-6 shrink-0 place-items-center rounded-[6px] transition-colors";
+                                if state.search.replacing.get() {
+                                    format!("{base} bg-selection text-rust")
+                                } else {
+                                    format!("{base} text-label-3 hover:text-label")
+                                }
+                            }
+                        >
+                            <span class=move || {
+                                if state.search.replacing.get() {
+                                    "grid rotate-90 transition-transform"
+                                } else {
+                                    "grid transition-transform"
+                                }
+                            }>
+                                <IconView icon=Icon::Chevron size=12 />
+                            </span>
+                        </button>
                     </div>
+                    <Show when=move || state.search.replacing.get()>
+                        <div class="flex items-center gap-1.5">
+                            <input
+                                type="text"
+                                placeholder=t!("replace.placeholder")
+                                autocomplete="off"
+                                spellcheck="false"
+                                prop:value=move || state.search.replacement.get()
+                                on:input=move |event: ev::Event| {
+                                    state.search.replacement.set(event_target_value(&event));
+                                }
+                                class="min-w-0 flex-1 rounded-[6px] bg-sunken px-2.5 py-1.5 font-mono text-footnote text-label placeholder:text-label-3"
+                            />
+                            // Disabled until there is something to act on, so
+                            // the button cannot be a rewrite of nothing.
+                            <button
+                                type="button"
+                                title=t!("replace.run-hint")
+                                disabled=move || {
+                                    state
+                                        .search
+                                        .results
+                                        .with(|r| {
+                                            r.as_ref().is_none_or(|r| r.hits.is_empty())
+                                        })
+                                }
+                                on:click=move |_| controller::replace_all(state)
+                                class="shrink-0 rounded-[6px] bg-rust px-2.5 py-1.5 text-footnote font-medium text-canvas hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                            >
+                                {t!("replace.run")}
+                            </button>
+                        </div>
+                    </Show>
                     <GlobBox
                         placeholder=t!("search.include")
                         value=state.search.include
@@ -76,6 +141,8 @@ pub fn SearchPanel() -> impl IntoView {
                         value=state.search.exclude
                     />
                 </div>
+
+                <ReplaceOutcomeNote />
 
                 <div class="min-h-0 flex-1 overflow-auto px-1 py-1">
                     {move || {
@@ -105,13 +172,17 @@ pub fn SearchPanel() -> impl IntoView {
                         }
 
                         let summary = if results.truncated {
-                            format!(
-                                "first {} results in {} files — narrow the query for the rest",
-                                results.hits.len(),
-                                results.files,
+                            t!(
+                                "results.truncated",
+                                count = results.hits.len(),
+                                files = results.files,
                             )
                         } else {
-                            format!("{} results in {} files", results.hits.len(), results.files)
+                            t!(
+                                "results.count",
+                                count = results.hits.len(),
+                                files = results.files,
+                            )
                         };
 
                         // Walk order is the tree's; group consecutive runs of
@@ -144,6 +215,79 @@ pub fn SearchPanel() -> impl IntoView {
             </div>
         }
         .into_any()
+    }
+}
+
+/// What the last replace did, and what it would not touch.
+///
+/// Stays until dismissed rather than fading: a replace cannot be undone from
+/// here, and the files it refused are the half somebody has to go and fix.
+#[component]
+fn ReplaceOutcomeNote() -> impl IntoView {
+    let state = AppState::expect();
+
+    move || {
+        let outcome = state.search.outcome.get()?;
+        let tone = if outcome.error.is_some() || !outcome.skipped.is_empty() {
+            "border-amber bg-amber-fill"
+        } else {
+            "border-line bg-sunken"
+        };
+        let summary = match &outcome.error {
+            Some(error) => error.clone(),
+            None if outcome.changed.is_empty() && outcome.skipped.is_empty() => {
+                t!("replace.none")
+            }
+            None => t!(
+                "replace.done",
+                count = outcome.replaced,
+                files = outcome.changed.len(),
+            ),
+        };
+        let skipped = outcome.skipped.clone();
+        Some(view! {
+            <div class=format!("mx-2 mt-2 rounded-[8px] border px-2.5 py-2 {tone}")>
+                <div class="flex items-start gap-2">
+                    <p class="min-w-0 flex-1 text-footnote leading-relaxed text-label select-text">
+                        {summary}
+                    </p>
+                    <button
+                        type="button"
+                        title=t!("replace.dismiss")
+                        on:click=move |_| state.search.outcome.set(None)
+                        class="shrink-0 rounded-[5px] px-1 text-footnote text-label-3 hover:text-label"
+                    >
+                        "×"
+                    </button>
+                </div>
+                {(!skipped.is_empty())
+                    .then(|| {
+                        view! {
+                            <p class="mt-1 text-caption text-label-2">
+                                {t!("replace.skipped", count = skipped.len())}
+                            </p>
+                            <ul class="mt-0.5 flex flex-col gap-0.5">
+                                {skipped
+                                    .into_iter()
+                                    .map(|skip| {
+                                        // Keyed on the reason name, never on a
+                                        // sentence the backend composed.
+                                        let why = rusty_i18n::translate(
+                                                &format!("replace.skip-{}", skip.reason),
+                                            )
+                                            .unwrap_or(skip.reason);
+                                        view! {
+                                            <li class="font-mono text-caption text-label-3 select-text">
+                                                {skip.path}" — "{why}
+                                            </li>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </ul>
+                        }
+                    })}
+            </div>
+        })
     }
 }
 
@@ -258,18 +402,8 @@ fn FileGroup(
 fn row(hit: SearchHit) -> impl IntoView {
     let state = AppState::expect();
 
-    let start = hit.span_start as usize;
-    let end = (hit.span_end as usize).min(hit.text.len());
     let (before, matched, after) =
-        if start <= end && hit.text.is_char_boundary(start) && hit.text.is_char_boundary(end) {
-            (
-                hit.text[..start].to_string(),
-                hit.text[start..end].to_string(),
-                hit.text[end..].to_string(),
-            )
-        } else {
-            (hit.text.clone(), String::new(), String::new())
-        };
+        preview(&hit.text, hit.span_start as usize, hit.span_end as usize);
 
     let path = hit.path.clone();
     view! {
@@ -287,5 +421,128 @@ fn row(hit: SearchHit) -> impl IntoView {
                 <span>{after}</span>
             </span>
         </button>
+    }
+}
+
+/// How much of the line before the match is worth keeping.
+///
+/// Enough to see what the match sits in — a `let`, a `fn`, the opening of a
+/// call — and no more. Wider and a deeply indented hit is off screen again.
+const LEAD: usize = 14;
+
+/// One hit's line, cut so the match is on screen.
+///
+/// **The panel exists to show where a word is, and it was showing everything
+/// but.** A result row rendered `text` verbatim and truncated on the right, so
+/// a match at column 90 of a long line — or at the end of four levels of
+/// indentation — was a row of leading spaces and unrelated code with the
+/// keyword somewhere past the edge.
+///
+/// Two cuts, in order. The indentation goes first, because it is never the
+/// answer to "where is this word". If the match is *still* too far in, the
+/// prefix is elided to its last [`LEAD`] characters behind a `…`, which is
+/// what VSCode does and reads as "there is more to the left" rather than as a
+/// truncation.
+///
+/// Byte offsets in, three strings out. Offsets that do not land on character
+/// boundaries — a windowed line cut mid-codepoint — give up and show the line
+/// with nothing lit, which is wrong but never panics.
+fn preview(text: &str, start: usize, end: usize) -> (String, String, String) {
+    let end = end.min(text.len());
+    if start > end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return (text.to_string(), String::new(), String::new());
+    }
+
+    // A match *inside* the indentation is a search for whitespace, and
+    // trimming it would delete the thing being looked for.
+    let indent = text.len() - text.trim_start().len();
+    let cut = if start >= indent { indent } else { 0 };
+
+    let mut before = &text[cut..start];
+    let mut ellipsis = false;
+    if before.chars().count() > LEAD {
+        let keep = before
+            .char_indices()
+            .nth_back(LEAD - 1)
+            .map_or(0, |(at, _)| at);
+        before = &before[keep..];
+        ellipsis = true;
+    }
+
+    let before = if ellipsis {
+        format!("…{before}")
+    } else {
+        before.to_string()
+    };
+    (
+        before,
+        text[start..end].to_string(),
+        text[end..].to_string(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LEAD, preview};
+
+    #[test]
+    fn indentation_never_pushes_the_match_off_the_row() {
+        let line = "                let gain = compute();";
+        let at = line.find("gain").unwrap();
+        let (before, matched, _) = preview(line, at, at + 4);
+        assert_eq!(matched, "gain");
+        assert_eq!(before, "let ", "the indentation is not the answer to where");
+    }
+
+    #[test]
+    fn a_far_match_keeps_its_immediate_context_behind_an_ellipsis() {
+        let line = "let result = some_module::helper(alpha, beta, gamma, needle);";
+        let at = line.find("needle").unwrap();
+        let (before, matched, after) = preview(line, at, at + 6);
+        assert_eq!(matched, "needle");
+        assert!(
+            before.starts_with('…'),
+            "expected an elision, got {before:?}"
+        );
+        assert!(
+            before.chars().count() <= LEAD + 1,
+            "the prefix is still too long: {before:?}"
+        );
+        assert!(
+            before.ends_with("gamma, "),
+            "the nearest context is what to keep"
+        );
+        assert_eq!(after, ");");
+    }
+
+    /// Searching for whitespace is the one case where the indentation *is* the
+    /// match, and trimming it would delete what was asked for.
+    #[test]
+    fn a_match_inside_the_indentation_survives() {
+        let line = "\t\tlet x = 1;";
+        let (before, matched, _) = preview(line, 0, 2);
+        assert_eq!(matched, "\t\t");
+        assert_eq!(before, "");
+    }
+
+    /// A windowed line can be cut mid-codepoint. Wrong is acceptable here;
+    /// panicking in a results list is not.
+    #[test]
+    fn an_offset_off_a_character_boundary_does_not_panic() {
+        let line = "中文 needle";
+        let (before, matched, after) = preview(line, 1, 2);
+        assert_eq!(before, line);
+        assert!(matched.is_empty() && after.is_empty());
+    }
+
+    #[test]
+    fn a_short_line_is_left_alone() {
+        let line = "let a = b;";
+        let at = line.find('b').unwrap();
+        let (before, matched, after) = preview(line, at, at + 1);
+        assert_eq!(
+            (before.as_str(), matched.as_str(), after.as_str()),
+            ("let a = ", "b", ";")
+        );
     }
 }

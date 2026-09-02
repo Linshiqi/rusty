@@ -42,7 +42,7 @@ pub use error::{Error, Result};
 #[cfg(feature = "backend")]
 pub use format::format_rust;
 #[cfg(feature = "backend")]
-pub use search::{Query as SearchQuery, search};
+pub use search::{Query as SearchQuery, replace, search};
 #[cfg(feature = "backend")]
 pub use tree::read as read_tree;
 #[cfg(feature = "backend")]

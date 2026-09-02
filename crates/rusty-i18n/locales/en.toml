@@ -362,7 +362,6 @@ channel = "Show one output channel"
 filter = "filter (!word excludes)"
 filter-hint = "Space-separated terms all must match; !term excludes"
 collapse = "Collapse panel"
-expand = "Expand panel"
 stop = "Stop"
 command-placeholder = "cargo build --release"
 command-needs-project = "open a project first — commands run in its root"
@@ -730,3 +729,30 @@ no-flasher-title = "No way to flash the board"
 no-flasher-detail = "Neither espflash nor probe-rs is installed. espflash is the simpler choice — it needs only the USB cable. probe-rs adds breakpoint debugging and defmt over RTT, but wants a probe."
 ldproxy-missing-title = "ldproxy missing"
 ldproxy-missing-detail = "ESP-IDF (std) builds link through ldproxy. Without it the build fails at the link step with a linker-not-found error."
+[replace]
+# Project-wide replace. It cannot be undone from inside the window, so every
+# string here is about saying what happened rather than that it did.
+toggle = "Replace"
+placeholder = "Replace with"
+run = "Replace all"
+run-hint = "Rewrite every match listed below"
+none = "Nothing to replace."
+done = "Replaced {count} in {files} files."
+skipped = "{count} left alone:"
+skip-unsaved = "unsaved changes here — save it, then replace again"
+skip-write-failed = "could not be written"
+dismiss = "Dismiss"
+
+[results]
+# The line above the hits. "first N" rather than "N" when the cap was reached,
+# because a silently partial answer reads as a complete one.
+count = "{count} results in {files} files"
+truncated = "first {count} results in {files} files — narrow the query for the rest"
+[markdown]
+# The rendered view of a `.md` file. Reading is the common case in a
+# workbench — a README, a `book/` — so it is the default, and the toggle says
+# which way it will go rather than which way it is.
+show-source = "Show the source"
+show-preview = "Show the rendered page"
+source = "Source"
+preview = "Preview"

@@ -343,14 +343,20 @@ pub async fn set_assistant_choice(
 pub async fn pin_report(
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_embed::PinReport>, CommandError> {
-    let Some(root) = state.firmware_root().await else {
+    // The opened directory for the claims — they are opened in the editor —
+    // and the firmware directory for the device description, which is where
+    // esp-hal put it. The same path on an ordinary project.
+    let Some(root) = state.root().await else {
+        return Ok(None);
+    };
+    let Some(firmware) = state.firmware_root().await else {
         return Ok(None);
     };
     let Some(chip) = state.chip().await else {
         return Ok(None);
     };
     Ok(Some(
-        tokio::task::spawn_blocking(move || rusty_embed::pins::report(&root, &chip))
+        tokio::task::spawn_blocking(move || rusty_embed::pins::report(&root, &firmware, &chip))
             .await
             .map_err(|e| CommandError::new(format!("reading the pin map panicked: {e}")))?,
     ))

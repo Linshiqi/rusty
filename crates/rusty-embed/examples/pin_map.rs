@@ -24,7 +24,10 @@ fn main() {
         std::process::exit(1);
     };
 
-    let report = pins::report(&root, chip);
+    // The same split the window makes: scan where the chip is, report paths
+    // the editor could open from the root.
+    let firmware = rusty_embed::project::firmware_root(&root);
+    let report = pins::report(&root, &firmware, chip);
     println!("{} — {} pins", report.chip, report.pins.len());
     if let Some(source) = &report.source {
         println!("capabilities: {source}");

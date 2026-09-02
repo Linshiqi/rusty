@@ -79,7 +79,11 @@ fn absorb(state: AppState, changes: FileChanges) {
 }
 
 /// Bring one open file back in line with the disk, or mark it if we cannot.
-fn follow(state: AppState, path: String) {
+///
+/// Public because a write rusty made itself must not wait on the watcher to
+/// notice it: the watcher is debounced, and a failure to start it is silence
+/// by design. A project-wide replace calls this for each file it changed.
+pub fn follow(state: AppState, path: String) {
     let active = state
         .editor
         .document

@@ -131,6 +131,10 @@ pub mod files {
     pub const OPEN_EXTERNAL: &str = "open_external";
     pub const FORMAT: &str = "format_text";
     pub const SEARCH: &str = "search_project";
+    /// Rewrite every match the search would list. Destructive and not
+    /// undoable from inside the window, which is why it reports what it
+    /// changed and what it refused rather than a bare count.
+    pub const REPLACE: &str = "replace_in_project";
     /// Long-lived: streams a batch every time the project settles after
     /// somebody else changed it. Never resolves while it is up, like
     /// `lsp_start`.

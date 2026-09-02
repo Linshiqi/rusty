@@ -139,6 +139,37 @@ pub struct SearchResults {
     pub error: Option<String>,
 }
 
+/// What a replace did, and what it would not touch.
+///
+/// Every field is here because the alternative is a silent one: a file holding
+/// an unsaved draft, one that could not be written. A replace across a
+/// project cannot be undone from inside the window, so one that reports only a
+/// number is one nobody can check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceOutcome {
+    /// Files rewritten, project-relative and `/`-separated.
+    pub changed: Vec<String>,
+    /// Occurrences replaced across all of them.
+    pub replaced: u32,
+    /// Files that matched and were left alone, with why.
+    pub skipped: Vec<Skipped>,
+    /// The pattern did not parse, or the globs did not combine. Nothing was
+    /// written when this is set.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A file a replace matched and did not write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Skipped {
+    pub path: String,
+    /// `unsaved` or `write-failed` — a stable name the frontend translates,
+    /// never a sentence. Same reasoning as a diagnostic's `kind`.
+    pub reason: String,
+}
+
 /// What changed on disk, while the window was looking elsewhere.
 ///
 /// One batch rather than one event per path: a save from another editor is

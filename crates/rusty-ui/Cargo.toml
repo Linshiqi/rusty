@@ -22,6 +22,12 @@ rusty-ipc = { path = "../rusty-ipc" }
 rusty-lsp = { path = "../rusty-lsp", default-features = false }
 rusty-dbg = { path = "../rusty-dbg", default-features = false }
 rusty-term = { path = "../rusty-term", default-features = false }
+# A real Markdown parser, for reading a README rather than for the six
+# constructs a hover tooltip uses. Pure Rust, no unsafe, compiles to wasm —
+# and the hand-rolled block splitter it replaces was already wrong about
+# heading levels, ordered lists, tables and nesting, all of which a project's
+# own documentation is full of.
+pulldown-cmark = { version = "0.13.4", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"
 serde_json = "1.0.151"

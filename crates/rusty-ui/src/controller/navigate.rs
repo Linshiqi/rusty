@@ -111,14 +111,21 @@ pub fn restore_tabs(state: AppState, root: &str) {
             (None, None) => return,
         };
 
-        // Open in strip order; the active one last, so it ends up on screen.
-        for path in tabs
-            .iter()
-            .filter(|p| Some(p.as_str()) != active.as_deref())
-        {
-            open_file(state, path.clone());
-        }
-        if let Some(active) = active {
+        // The strip comes back whole; only one file is read.
+        //
+        // Opening all of them was a round trip and a `didOpen` per tab, so a
+        // session with fifteen files reopened cost fifteen reads and fifteen
+        // notifications to rust-analyzer before the window was usable — and
+        // fourteen of those documents were never looked at. VSCode restores
+        // the strip and loads on click; `open_file` already fetches a path
+        // that is neither active nor parked, so a tab listed here and nowhere
+        // else *is* the lazy one, with no new state to hold it.
+        //
+        // The active one is opened rather than listed, because a strip with
+        // nothing on screen behind it is a window that looks like it failed.
+        state.editor.tabs.set(tabs.clone());
+        let active = active.filter(|path| tabs.iter().any(|t| t == path));
+        if let Some(active) = active.or_else(|| tabs.first().cloned()) {
             open_file(state, active);
         }
     });
@@ -177,6 +184,71 @@ fn run_search(state: AppState, generation: u64) {
             Err(_) => state.search.results.set(None),
         }
     });
+}
+
+/// Rewrite every match, and keep what it refused.
+///
+/// **Not undoable from inside the window**, which decides the shape: the
+/// panel has already listed exactly what will change, the open drafts are
+/// named and skipped rather than written over, and the outcome stays on
+/// screen afterwards because the skipped half is the part somebody has to act
+/// on. The tree and the open editors are re-read, since the disk just moved
+/// under both.
+pub fn replace_all(state: AppState) {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        query: String,
+        replacement: String,
+        case_sensitive: bool,
+        whole_word: bool,
+        regex: bool,
+        include: String,
+        exclude: String,
+        drafts: Vec<String>,
+    }
+
+    let query = state.search.query.get_untracked();
+    if query.trim().is_empty() {
+        return;
+    }
+    // Nested under `args` because the command takes one struct: nine loose
+    // parameters is past what clippy allows, and past what anybody can read.
+    #[derive(serde::Serialize)]
+    struct Outer {
+        args: Args,
+    }
+    let args = Outer {
+        args: Args {
+            query,
+            replacement: state.search.replacement.get_untracked(),
+            case_sensitive: state.search.case.get_untracked(),
+            whole_word: state.search.word.get_untracked(),
+            regex: state.search.regex.get_untracked(),
+            include: state.search.include.get_untracked(),
+            exclude: state.search.exclude.get_untracked(),
+            drafts: state.dirty_paths(),
+        },
+    };
+    track(
+        state,
+        async move { ipc::call::<_, rusty_edit::ReplaceOutcome>(cmd::files::REPLACE, &args).await },
+        move |outcome| {
+            // Each file rusty just rewrote, through the same path the watcher
+            // uses — an unsaved draft is marked rather than replaced, and a
+            // clean editor is re-read. Not left to the watcher itself: it is
+            // debounced, and a watcher that failed to start is silent.
+            for path in &outcome.changed {
+                super::follow(state, path.clone());
+            }
+            let changed = !outcome.changed.is_empty();
+            state.search.outcome.set(Some(outcome));
+            if changed {
+                // The results are about a project that no longer says that.
+                run_search(state, state.search.generation.get_untracked());
+            }
+        },
+    );
 }
 
 /// Rename the symbol at the caret, everywhere it is used.

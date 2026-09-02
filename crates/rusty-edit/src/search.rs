@@ -21,7 +21,7 @@ use grep_searcher::{BinaryDetection, SearcherBuilder};
 use ignore::overrides::OverrideBuilder;
 use ignore::{WalkBuilder, WalkState};
 
-use crate::model::{SearchHit, SearchResults};
+use crate::model::{ReplaceOutcome, SearchHit, SearchResults, Skipped};
 
 /// Stop after this many hits. The panel says so when it happens.
 const MAX_HITS: usize = 500;
@@ -61,30 +61,14 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
         }
     };
 
-    // Include/exclude are compiled into override globs — the same matcher
-    // gitignore uses, so `*.rs` and `src/**` mean what they mean there.
-    let mut overrides = OverrideBuilder::new(root);
-    for pattern in split_globs(&query.include) {
-        if overrides.add(&pattern).is_err() {
+    let overrides = match build_overrides(root, query) {
+        Ok(overrides) => overrides,
+        Err(error) => {
             return SearchResults {
-                error: Some(format!("cannot parse include pattern `{pattern}`")),
+                error: Some(error),
                 ..SearchResults::default()
             };
         }
-    }
-    for pattern in split_globs(&query.exclude) {
-        if overrides.add(&format!("!{pattern}")).is_err() {
-            return SearchResults {
-                error: Some(format!("cannot parse exclude pattern `{pattern}`")),
-                ..SearchResults::default()
-            };
-        }
-    }
-    let Ok(overrides) = overrides.build() else {
-        return SearchResults {
-            error: Some("the include/exclude patterns do not combine".to_string()),
-            ..SearchResults::default()
-        };
     };
 
     let hits: Mutex<Vec<SearchHit>> = Mutex::new(Vec::new());
@@ -196,6 +180,193 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
 
 /// The compiled pattern: literal unless asked otherwise, word-bounded and
 /// case-folded by the engine rather than by hand.
+/// Replace every match in the project, and say what was left alone.
+///
+/// **The same query, the same scope, the same walk as [`search`].** What is
+/// rewritten is exactly what the panel listed; a second set of rules built a
+/// slightly different way is how a replace touches a file nobody saw. The one
+/// deliberate difference is that this has no hit cap — replacing the first 500
+/// of 900 matches would be worse than refusing.
+///
+/// **A file with unsaved changes in the editor is never written.** Replacing
+/// on disk under a draft is the "editor eats work" failure in its purest form:
+/// the draft is still on screen, still looks authoritative, and the next save
+/// puts the un-replaced text back. The caller passes those paths in `drafts`
+/// and they come back in `skipped`, named.
+///
+/// Bytes in, bytes out, and a match never spans a line — so a CRLF file stays
+/// CRLF and a file with no trailing newline keeps not having one. Not
+/// incidental: a bulk edit turning line endings over is how this repository
+/// twice made a diff unreviewable.
+pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String]) -> ReplaceOutcome {
+    if query.text.is_empty() {
+        return ReplaceOutcome::default();
+    }
+
+    let engine = match build_replacer(query) {
+        Ok(engine) => engine,
+        Err(error) => {
+            return ReplaceOutcome {
+                error: Some(error),
+                ..ReplaceOutcome::default()
+            };
+        }
+    };
+    let overrides = match build_overrides(root, query) {
+        Ok(overrides) => overrides,
+        Err(error) => {
+            return ReplaceOutcome {
+                error: Some(error),
+                ..ReplaceOutcome::default()
+            };
+        }
+    };
+
+    let outcome: Mutex<ReplaceOutcome> = Mutex::new(ReplaceOutcome::default());
+
+    WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .parents(false)
+        .require_git(false)
+        .overrides(overrides)
+        .filter_entry(|entry| entry.file_name().to_string_lossy() != ".git")
+        .build_parallel()
+        .run(|| {
+            let engine = engine.clone();
+            let outcome = &outcome;
+            let root = root.to_path_buf();
+            let replacement = replacement.to_string();
+            // Only a *regex* search promises `$1`. In literal mode the
+            // replacement is text somebody typed, and expanding it turned
+            // `$1` — or `$100`, or `$HOME` — into nothing at all, deleting
+            // the match instead of replacing it.
+            let expand = query.regex;
+
+            Box::new(move |entry| {
+                let Ok(entry) = entry else {
+                    return WalkState::Continue;
+                };
+                if !entry.file_type().is_some_and(|t| t.is_file()) {
+                    return WalkState::Continue;
+                }
+                if entry.metadata().map(|m| m.len() > MAX_FILE).unwrap_or(true) {
+                    return WalkState::Continue;
+                }
+                let Ok(relative) = entry.path().strip_prefix(&root) else {
+                    return WalkState::Continue;
+                };
+                let relative = relative.to_string_lossy().replace('\\', "/");
+
+                // Read as bytes and decode. A file that is not UTF-8 is passed
+                // over in silence, exactly as the search's binary detection
+                // passes over it — reporting files the panel never listed
+                // would be noise about something nobody asked to change.
+                let Ok(bytes) = std::fs::read(entry.path()) else {
+                    return WalkState::Continue;
+                };
+                let Ok(text) = String::from_utf8(bytes) else {
+                    return WalkState::Continue;
+                };
+
+                let count = engine.find_iter(&text).count();
+                if count == 0 {
+                    return WalkState::Continue;
+                }
+                if drafts.contains(&relative) {
+                    outcome.lock().unwrap().skipped.push(Skipped {
+                        path: relative,
+                        reason: "unsaved".to_string(),
+                    });
+                    return WalkState::Continue;
+                }
+
+                let replaced = if expand {
+                    engine.replace_all(&text, replacement.as_str())
+                } else {
+                    engine.replace_all(&text, regex::NoExpand(replacement.as_str()))
+                };
+                match std::fs::write(entry.path(), replaced.as_bytes()) {
+                    Ok(()) => {
+                        let mut outcome = outcome.lock().unwrap();
+                        outcome.changed.push(relative);
+                        outcome.replaced += count as u32;
+                    }
+                    Err(_) => outcome.lock().unwrap().skipped.push(Skipped {
+                        path: relative,
+                        reason: "write-failed".to_string(),
+                    }),
+                }
+                WalkState::Continue
+            })
+        });
+
+    let mut outcome = outcome.into_inner().unwrap_or_default();
+    // The walk is parallel, so the order it finished in is not an order.
+    outcome.changed.sort();
+    outcome.skipped.sort_by(|a, b| a.path.cmp(&b.path));
+    outcome
+}
+
+/// The substituting half of [`build_matcher`].
+///
+/// A second engine rather than the grep matcher, because only this one
+/// substitutes: `$1` in the replacement has to mean the first capture, which
+/// is what anybody who turned the regex toggle on is expecting. The flags are
+/// the same three, so what it finds is what the panel found.
+fn build_replacer(query: &Query) -> Result<regex::Regex, String> {
+    let pattern = if query.regex {
+        query.text.clone()
+    } else {
+        regex::escape(&query.text)
+    };
+    let pattern = if query.whole_word {
+        format!(r"\b(?:{pattern})\b")
+    } else {
+        pattern
+    };
+    regex::RegexBuilder::new(&pattern)
+        .case_insensitive(!query.case_sensitive)
+        // Line-anchored like the search is: `^` and `$` are a line's edges,
+        // not the file's, or a pattern that worked in the panel finds nothing
+        // here.
+        .multi_line(true)
+        .build()
+        .map_err(|error| {
+            let reason = error.to_string();
+            let reason = reason
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("the pattern does not parse");
+            format!("the pattern does not parse: {reason}")
+        })
+}
+
+/// Which files are in scope, as override globs.
+///
+/// Shared with [`replace`] deliberately: search and replace disagreeing about
+/// what `*.rs` covers would mean rewriting a file the panel never listed, and
+/// two copies of this is exactly how that happens.
+fn build_overrides(root: &Path, query: &Query) -> Result<ignore::overrides::Override, String> {
+    // The same matcher gitignore uses, so `*.rs` and `src/**` mean what they
+    // mean there.
+    let mut overrides = OverrideBuilder::new(root);
+    for pattern in split_globs(&query.include) {
+        overrides
+            .add(&pattern)
+            .map_err(|_| format!("cannot parse include pattern `{pattern}`"))?;
+    }
+    for pattern in split_globs(&query.exclude) {
+        overrides
+            .add(&format!("!{pattern}"))
+            .map_err(|_| format!("cannot parse exclude pattern `{pattern}`"))?;
+    }
+    overrides
+        .build()
+        .map_err(|_| "the include/exclude patterns do not combine".to_string())
+}
+
 fn build_matcher(query: &Query) -> Result<RegexMatcher, String> {
     let pattern = if query.regex {
         query.text.clone()
@@ -500,5 +671,208 @@ mod tests {
         sorted.sort();
         assert_eq!(order, sorted, "stable output regardless of thread timing");
         assert_eq!(results.files, 3);
+    }
+    fn write(dir: &std::path::Path, name: &str, text: &str) {
+        let path = dir.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn query(text: &str) -> Query {
+        Query {
+            text: text.to_string(),
+            ..Query::default()
+        }
+    }
+
+    #[test]
+    fn replace_rewrites_every_match_and_counts_them() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.rs",
+            "let gain = gain + 1;
+",
+        );
+        write(
+            dir.path(),
+            "b.rs",
+            "// no matches here
+",
+        );
+
+        let outcome = replace(dir.path(), &query("gain"), "kp", &[]);
+        assert_eq!(outcome.changed, vec!["a.rs"], "b.rs had nothing to change");
+        assert_eq!(outcome.replaced, 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "let kp = kp + 1;
+"
+        );
+    }
+
+    /// The one that matters most: a file open with unsaved changes is named
+    /// and left alone. Writing under a draft leaves the old text on screen
+    /// looking authoritative, and the next save undoes the replace.
+    #[test]
+    fn a_file_with_an_unsaved_draft_is_skipped_and_named() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "src/main.rs",
+            "let gain = 1;
+",
+        );
+
+        let outcome = replace(
+            dir.path(),
+            &query("gain"),
+            "kp",
+            &["src/main.rs".to_string()],
+        );
+        assert!(
+            outcome.changed.is_empty(),
+            "nothing should have been written"
+        );
+        assert_eq!(outcome.replaced, 0);
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].path, "src/main.rs");
+        assert_eq!(outcome.skipped[0].reason, "unsaved");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("src/main.rs")).unwrap(),
+            "let gain = 1;
+",
+            "the file on disk is untouched"
+        );
+    }
+
+    /// A bulk edit that turns line endings over makes the diff unreviewable,
+    /// which is the failure this repository has already had twice.
+    #[test]
+    fn crlf_and_a_missing_final_newline_both_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.rs",
+            "let gain = 1;
+let b = 2;
+let c = gain;",
+        );
+
+        let outcome = replace(dir.path(), &query("gain"), "kp", &[]);
+        assert_eq!(outcome.replaced, 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "let kp = 1;
+let b = 2;
+let c = kp;",
+            "line endings and the absent trailing newline are not the replace's business"
+        );
+    }
+
+    /// Turning the regex toggle on is a promise that `$1` means something.
+    #[test]
+    fn regex_mode_substitutes_captures() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.rs",
+            "GPIO26 GPIO5
+",
+        );
+
+        let spec = Query {
+            text: r"GPIO(\d+)".to_string(),
+            regex: true,
+            ..Query::default()
+        };
+        let outcome = replace(dir.path(), &spec, "pin_$1", &[]);
+        assert_eq!(outcome.replaced, 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "pin_26 pin_5
+"
+        );
+    }
+
+    /// Literal mode must not read `$1` as a capture, or replacing with a shell
+    /// variable rewrites the file with nothing.
+    #[test]
+    fn literal_mode_takes_the_replacement_literally() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.rs",
+            "let x = VALUE;
+",
+        );
+
+        let outcome = replace(dir.path(), &query("VALUE"), "$1", &[]);
+        assert_eq!(outcome.replaced, 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "let x = $1;
+",
+            "a literal search takes a literal replacement"
+        );
+    }
+
+    /// The scope rules are the search's, so a replace cannot reach a file the
+    /// panel would not have listed.
+    #[test]
+    fn exclude_globs_keep_a_file_out_of_a_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "keep.rs",
+            "gain
+",
+        );
+        write(
+            dir.path(),
+            "skip.rs",
+            "gain
+",
+        );
+
+        let spec = Query {
+            text: "gain".to_string(),
+            exclude: "skip.rs".to_string(),
+            ..Query::default()
+        };
+        let outcome = replace(dir.path(), &spec, "kp", &[]);
+        assert_eq!(outcome.changed, vec!["keep.rs"]);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("skip.rs")).unwrap(),
+            "gain
+"
+        );
+    }
+
+    #[test]
+    fn a_pattern_that_does_not_parse_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.rs",
+            "gain
+",
+        );
+
+        let spec = Query {
+            text: "gain(".to_string(),
+            regex: true,
+            ..Query::default()
+        };
+        let outcome = replace(dir.path(), &spec, "kp", &[]);
+        assert!(outcome.error.is_some(), "a broken pattern has to say so");
+        assert!(outcome.changed.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            "gain
+"
+        );
     }
 }
