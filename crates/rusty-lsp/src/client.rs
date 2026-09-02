@@ -4,15 +4,11 @@
 //! terminal's: a reader thread feeds an event channel, requests are correlated
 //! by id, and the whole thing dies with the child process.
 //!
-//! Two pieces of embedded-specific knowledge live here, because getting either
-//! wrong looks like "rust-analyzer is broken" rather than like a setting:
+//! What lives here is the session itself — the process, the transport, the
+//! documents it has been shown, and the handshake. Finding the binary is
+//! [`discover`], turning replies into the model is [`convert`], keeping
+//! diagnostics fresh is [`pull`], and every URI goes through [`uri`].
 //!
-//! - The `rust-analyzer` on PATH is usually rustup's proxy, which dispatches by
-//!   the project's pinned toolchain — and an ESP project pins `esp`, which has
-//!   no rust-analyzer component, so the proxy fails *precisely for the projects
-//!   this workbench serves*. The stable toolchain's real binary is resolved
-//!   first instead; it analyses any toolchain's project fine, and reads the
-//!   pinned toolchain's own sysroot for the target's `core`.
 //! - `check.allTargets` defaults to on, which builds tests and benches. A
 //!   `no_std` firmware has no test harness, so that default drowns every real
 //!   diagnostic in "can't find crate for `test`". It is turned off.
@@ -23,28 +19,29 @@
 
 use std::{
     collections::HashMap,
-    io::{BufReader, Write},
+    io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdout, Command, Stdio},
+    process::Child,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::{Value, json};
 
 use crate::{
+    convert, discover,
     error::{Error, Result},
     model::{
-        ActionEdit, CodeActionFix, CompletionItem, DiagSeverity, EditRange, FileDiagnostic,
-        HoverInfo, Location, LspEvent, SemanticSpan, SignatureInfo,
+        CodeActionFix, CompletionItem, HoverInfo, Location, LspEvent, SemanticSpan, SignatureInfo,
     },
-    positions::{Encoding, character_to_scalar, content_change, scalar_to_character},
-    rpc,
+    positions::{Encoding, content_change, scalar_to_character},
+    pull, rpc,
+    uri::{path_to_uri, uri_to_absolute, uri_to_relative},
 };
 
 /// How long a request may take before the caller is told rather than kept
@@ -52,13 +49,32 @@ use crate::{
 /// retry — completion during startup — retry above this.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How long `shutdown` may take on the way out. rust-analyzer answers it in
+/// milliseconds; one that cannot is about to be killed anyway.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a server told to `exit` is given to do so before `kill`.
+const EXIT_GRACE: Duration = Duration::from_millis(500);
+
+/// How many lazily-resolved code actions get a `codeAction/resolve` round
+/// trip per request, and how long each may take. Twenty-four sequential
+/// round trips at the full request budget is how one slow server turned
+/// Ctrl+. into a six-minute wait.
+const MAX_RESOLVES: usize = 8;
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// A running rust-analyzer, and the documents it has been shown.
 pub struct LspClient {
     shared: Arc<Shared>,
-    child: Mutex<Child>,
+    /// `None` when the session runs over a transport that is not a child
+    /// process — the tests' in-memory pipes.
+    child: Mutex<Option<Child>>,
 }
 
 /// Diagnostics and lifecycle, for exactly one consumer.
+///
+/// Ends — `recv` returns `None` — once the client is dropped and the reader
+/// has seen the server go: nothing else holds the sender.
 pub struct Events {
     rx: Receiver<LspEvent>,
 }
@@ -68,6 +84,8 @@ impl Events {
         self.rx.recv().ok()
     }
 
+    /// `None` on a timeout *or* on the end of the stream; a caller that has
+    /// to tell them apart calls [`Events::recv`] on a thread of its own.
     pub fn recv_timeout(&self, within: Duration) -> Option<LspEvent> {
         self.rx.recv_timeout(within).ok()
     }
@@ -78,21 +96,31 @@ struct Doc {
     text: String,
 }
 
-struct Shared {
+/// Everything the session's threads share: the writer, the correlation
+/// table, the documents, and what the handshake learned.
+pub(crate) struct Shared {
     writer: Mutex<Box<dyn Write + Send>>,
     /// Wake the puller for a path. Requests cannot be made from the reader
     /// thread — it would wait on a reply only itself can read — so refreshes
-    /// hop threads through this.
+    /// hop threads through this. Set after the handshake, when the loop
+    /// starts; the puller holds only a `Weak` to this struct, so dropping
+    /// the last strong reference closes the channel and ends it.
     poke: Mutex<Option<Sender<String>>>,
-    pending: Mutex<HashMap<i64, Sender<Value>>>,
+    /// Requests awaiting a reply, by id. `None` down the channel means the
+    /// reader is gone and no reply will come.
+    pending: Mutex<HashMap<i64, Sender<Option<Value>>>>,
     docs: Mutex<HashMap<String, Doc>>,
     next_id: AtomicI64,
+    /// False once the reader thread has ended: every request from then on
+    /// fails at once instead of waiting its budget out for an answer that
+    /// cannot arrive.
+    alive: AtomicBool,
     /// Set once the handshake has read what the server picked. Diagnostics
     /// only arrive after `initialized`, so the default is never actually used.
     encoding: OnceLock<Encoding>,
     semantic_legend: OnceLock<Vec<String>>,
-    root: PathBuf,
-    events: Sender<LspEvent>,
+    pub(crate) root: PathBuf,
+    pub(crate) events: Sender<LspEvent>,
 }
 
 impl LspClient {
@@ -102,54 +130,58 @@ impl LspClient {
     /// it — detection does — so cfg resolution matches the chip rather than
     /// the host.
     pub fn spawn(root: &Path, target: Option<&str>) -> Result<(LspClient, Events)> {
-        let binary = find_rust_analyzer().ok_or(Error::NotFound)?;
-
-        let mut command = Command::new(&binary);
-        command
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // rust-analyzer narrates progress on stderr. Piped-but-undrained
-            // would fill the pipe and deadlock the server mid-index, so it is
-            // discarded — except when someone is diagnosing "no diagnostics",
-            // which is exactly when the server's own complaints are the answer.
-            .stderr(if std::env::var_os("RUSTY_LSP_LOG").is_some() {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            });
-        no_console_window(&mut command);
-
-        let mut child = command.spawn().map_err(Error::Spawn)?;
+        let binary = discover::find_rust_analyzer().ok_or(Error::NotFound)?;
+        let mut child = discover::command_for(&binary, root)
+            .spawn()
+            .map_err(Error::Spawn)?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
+        Self::connect(Box::new(stdout), Box::new(stdin), Some(child), root, target)
+    }
 
+    /// A session over an already-open transport.
+    ///
+    /// What [`LspClient::spawn`] builds once the process exists — and what
+    /// the tests build over a pair of pipes with a fake server on the other
+    /// end, so the handshake, the correlation and the shutdown are proved
+    /// against something that answers, without a rust-analyzer on the
+    /// machine.
+    pub(crate) fn connect(
+        reader: Box<dyn Read + Send>,
+        writer: Box<dyn Write + Send>,
+        child: Option<Child>,
+        root: &Path,
+        target: Option<&str>,
+    ) -> Result<(LspClient, Events)> {
         let (events_tx, events_rx) = mpsc::channel();
         let shared = Arc::new(Shared {
-            writer: Mutex::new(Box::new(stdin) as Box<dyn Write + Send>),
+            writer: Mutex::new(writer),
             poke: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
+            alive: AtomicBool::new(true),
             encoding: OnceLock::new(),
             semantic_legend: OnceLock::new(),
             root: root.to_path_buf(),
             events: events_tx,
         });
-        pump(stdout, Arc::clone(&shared));
+        pump(reader, Arc::clone(&shared));
 
         // The handshake, before anyone else gets the client. A failure here
         // must kill the child by hand — no `LspClient` exists yet to do it on
         // drop, and a leaked rust-analyzer holds the project's target dir open.
         if let Err(e) = handshake(&shared, root, target) {
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Some(mut child) = child {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             return Err(e);
         }
 
         let (poke_tx, poke_rx) = mpsc::channel();
         *shared.poke.lock().expect("lsp poke") = Some(poke_tx);
-        pull_loop(poke_rx, Arc::clone(&shared));
+        pull::pull_loop(poke_rx, Arc::downgrade(&shared));
 
         Ok((
             LspClient {
@@ -176,7 +208,6 @@ impl LspClient {
                 },
             );
         }
-        self.shared.poke_pull(path);
         let language = match path.rsplit('.').next() {
             Some("rs") => "rust",
             Some("toml") => "toml",
@@ -192,7 +223,12 @@ impl LspClient {
                     "text": text,
                 }
             }),
-        )
+        )?;
+        // After the notification is on the wire, never before: the puller's
+        // request races for the writer, and a pull that overtakes the open
+        // is answered for a document the server has not seen.
+        self.shared.poke_pull(path);
+        Ok(())
     }
 
     /// Tell the server the document now reads `new_text`.
@@ -217,7 +253,6 @@ impl LspClient {
             (doc.version, start, end, replacement)
         };
 
-        self.shared.poke_pull(path);
         self.shared.notify(
             "textDocument/didChange",
             json!({
@@ -230,7 +265,11 @@ impl LspClient {
                     "text": replacement,
                 }],
             }),
-        )
+        )?;
+        // Same ordering as `did_open`: a pull that overtakes the change on
+        // the wire is answered for the previous version.
+        self.shared.poke_pull(path);
+        Ok(())
     }
 
     /// The document was written to disk. This is what triggers a fresh
@@ -253,59 +292,12 @@ impl LspClient {
                 "position": position,
             }),
         )?;
-
-        // The reply is CompletionItem[] or a CompletionList; both hold items.
-        let items = result
-            .get("items")
-            .and_then(Value::as_array)
-            .or_else(|| result.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let encoding = self.shared.encoding();
-        let docs = self.shared.docs.lock().expect("lsp docs");
-        let text = docs.get(path).map(|d| d.text.as_str()).unwrap_or("");
-
-        // A hundred is more than any popup shows and keeps a `use`-everything
-        // completion reply from shipping megabytes over the bridge.
-        Ok(items
-            .iter()
-            .take(100)
-            .map(|item| {
-                let label = item["label"].as_str().unwrap_or_default().to_string();
-                let edit = item["textEdit"].as_object();
-                let insert = edit
-                    .and_then(|e| e.get("newText"))
-                    .or_else(|| item.get("insertText"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(&label)
-                    .to_string();
-                let range = edit.and_then(|e| e.get("range")).and_then(|range| {
-                    let scalar = |position: &Value| -> Option<(u32, u32)> {
-                        let line = position["line"].as_u64()? as u32;
-                        let character = position["character"].as_u64()? as u32;
-                        let line_text = text.split('\n').nth(line as usize)?;
-                        Some((line, character_to_scalar(line_text, character, encoding)))
-                    };
-                    let start = scalar(&range["start"])?;
-                    let end = scalar(&range["end"])?;
-                    Some(EditRange {
-                        start_line: start.0,
-                        start_col: start.1,
-                        end_line: end.0,
-                        end_col: end.1,
-                    })
-                });
-
-                CompletionItem {
-                    label,
-                    kind: item["kind"].as_u64().map(kind_name).map(str::to_string),
-                    detail: item["detail"].as_str().map(str::to_string),
-                    insert,
-                    edit: range,
-                }
-            })
-            .collect())
+        let text = self.shared.open_text(path).unwrap_or_default();
+        Ok(convert::completion_items(
+            &result,
+            &text,
+            self.shared.encoding(),
+        ))
     }
 
     /// What the thing under this position is, as prose, and how much text the
@@ -320,54 +312,16 @@ impl LspClient {
                 "position": position,
             }),
         )?;
-
-        // contents: MarkupContent | MarkedString | MarkedString[].
-        let contents = &result["contents"];
-        let text = contents["value"]
-            .as_str()
-            .map(str::to_string)
-            .or_else(|| contents.as_str().map(str::to_string))
-            .or_else(|| {
-                contents.as_array().map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(|p| p.as_str().or_else(|| p["value"].as_str()))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-            })
-            .filter(|t| !t.is_empty());
-
-        let range = result.get("range").and_then(|range| {
-            let encoding = self.shared.encoding();
-            let docs = self.shared.docs.lock().expect("lsp docs");
-            let text = docs.get(path)?.text.as_str();
-            let scalar = |position: &Value| -> Option<(u32, u32)> {
-                let line = position["line"].as_u64()? as u32;
-                let character = position["character"].as_u64()? as u32;
-                let line_text = text.split('\n').nth(line as usize)?;
-                Some((line, character_to_scalar(line_text, character, encoding)))
-            };
-            let start = scalar(&range["start"])?;
-            let end = scalar(&range["end"])?;
-            Some(EditRange {
-                start_line: start.0,
-                start_col: start.1,
-                end_line: end.0,
-                end_col: end.1,
-            })
-        });
-
-        Ok(text.map(|text| HoverInfo { text, range }))
+        let text = self.shared.open_text(path);
+        Ok(convert::hover_info(
+            &result,
+            text.as_deref(),
+            self.shared.encoding(),
+        ))
     }
 
     /// The signature of the call around this position, if the caret is inside
     /// one.
-    ///
-    /// The active parameter comes back as a byte range into the label. The
-    /// protocol sends it either as a substring or as offsets — and the offsets
-    /// are UTF-16 code units *regardless of the negotiated position encoding*,
-    /// which only governs document positions. Both forms are resolved here.
     pub fn signature_help(&self, path: &str, line: u32, col: u32) -> Result<Option<SignatureInfo>> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
@@ -377,66 +331,18 @@ impl LspClient {
                 "position": position,
             }),
         )?;
-
-        let signatures = result["signatures"].as_array().cloned().unwrap_or_default();
-        let active = result["activeSignature"].as_u64().unwrap_or(0) as usize;
-        let Some(signature) = signatures.get(active).or_else(|| signatures.first()) else {
-            return Ok(None);
-        };
-        let label = signature["label"].as_str().unwrap_or_default().to_string();
-        if label.is_empty() {
-            return Ok(None);
-        }
-
-        // Per-signature wins over top-level, as the 3.16 spec added.
-        let active_param = signature
-            .get("activeParameter")
-            .and_then(Value::as_u64)
-            .or_else(|| result.get("activeParameter").and_then(Value::as_u64));
-
-        let span = active_param
-            .and_then(|index| {
-                signature["parameters"]
-                    .as_array()?
-                    .get(index as usize)
-                    .cloned()
-            })
-            .and_then(|parameter| match &parameter["label"] {
-                // A substring of the label. `find` is what the spec intends;
-                // a parameter text that appears twice in one signature would
-                // have been sent as offsets.
-                Value::String(text) => {
-                    let start = label.find(text.as_str())?;
-                    Some((start, start + text.len()))
-                }
-                Value::Array(pair) => {
-                    let start = pair.first()?.as_u64()? as usize;
-                    let end = pair.get(1)?.as_u64()? as usize;
-                    Some((utf16_to_byte(&label, start), utf16_to_byte(&label, end)))
-                }
-                _ => None,
-            });
-
-        let doc = signature.get("documentation").and_then(|doc| {
-            doc.as_str()
-                .map(str::to_string)
-                .or_else(|| doc["value"].as_str().map(str::to_string))
-        });
-
-        Ok(Some(SignatureInfo {
-            label,
-            param_start: span.map(|(start, _)| start as u32),
-            param_end: span.map(|(_, end)| end as u32),
-            doc,
-        }))
+        Ok(convert::signature_info(&result))
     }
 
     /// The quick fixes and refactorings available at a position, with their
     /// edits resolved and converted — ready to splice.
     ///
-    /// Lazily-resolved actions get a `codeAction/resolve` round trip each.
-    /// Actions that edit other files, or only carry a server-side command,
-    /// are dropped: half of a multi-file fix is worse than none.
+    /// Lazily-resolved actions get a `codeAction/resolve` round trip each, up
+    /// to a budget. Actions that edit other files, or only carry a
+    /// server-side command, are dropped: half of a multi-file fix is worse
+    /// than none. A resolve that fails is swallowed only while there is
+    /// something else to offer — an empty menu with a reason in hand is an
+    /// error the caller should hear.
     pub fn code_actions(&self, path: &str, line: u32, col: u32) -> Result<Vec<CodeActionFix>> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
@@ -450,9 +356,13 @@ impl LspClient {
             }),
         )?;
 
-        let offers = result.as_array().cloned().unwrap_or_default();
+        let ours = self.uri(path);
+        let text = self.shared.open_text(path).unwrap_or_default();
+        let encoding = self.shared.encoding();
         let mut fixes = Vec::new();
-        for offer in offers.iter().take(24) {
+        let mut resolves = 0usize;
+        let mut failed: Option<Error> = None;
+        for offer in result.as_array().into_iter().flatten() {
             let Some(title) = offer["title"].as_str() else {
                 continue;
             };
@@ -462,18 +372,28 @@ impl LspClient {
             let action = if offer.get("edit").is_some() {
                 offer
             } else {
-                // The edit is lazy; ask for it. A resolve failure just drops
-                // this one offer.
-                match self.shared.request("codeAction/resolve", offer.clone()) {
+                if resolves >= MAX_RESOLVES {
+                    continue;
+                }
+                resolves += 1;
+                match self.shared.request_within(
+                    "codeAction/resolve",
+                    offer.clone(),
+                    RESOLVE_TIMEOUT,
+                ) {
                     Ok(full) => {
                         resolved = full;
                         &resolved
                     }
-                    Err(_) => continue,
+                    Err(error) => {
+                        failed.get_or_insert(error);
+                        continue;
+                    }
                 }
             };
 
-            if let Some(edits) = self.workspace_edit_for(path, &action["edit"])
+            if let Some(edits) = convert::single_file_edits(&action["edit"], &ours)
+                && let Some(edits) = convert::action_edits(&edits, &text, encoding)
                 && !edits.is_empty()
             {
                 fixes.push(CodeActionFix {
@@ -483,7 +403,10 @@ impl LspClient {
                 });
             }
         }
-        Ok(fixes)
+        match (fixes.is_empty(), failed) {
+            (true, Some(error)) => Err(error),
+            _ => Ok(fixes),
+        }
     }
 
     /// Rename the symbol at this position, everywhere, and write the files.
@@ -494,10 +417,13 @@ impl LspClient {
     /// a rename must not — a `pub fn` renamed in one file and not its callers
     /// is a broken build, and that is the *normal* case.
     ///
-    /// The caller is expected to have saved first: these edits land on disk,
-    /// and an unsaved buffer would be overwritten by its own stale bytes on
-    /// the next save. Returns the paths that changed, newest knowledge for
-    /// whoever has them open.
+    /// Every file is read and converted before any is written. A file the
+    /// server names that cannot be read, or that has changed since the
+    /// server read it, refuses the whole rename — not the half of it that
+    /// came after. The caller is expected to have saved first: these edits
+    /// land on disk, and an unsaved buffer would be overwritten by its own
+    /// stale bytes on the next save. Returns the paths that changed, newest
+    /// knowledge for whoever has them open.
     pub fn rename(&self, path: &str, line: u32, col: u32, new_name: &str) -> Result<Vec<String>> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
@@ -509,56 +435,21 @@ impl LspClient {
             }),
         )?;
 
-        // uri -> the server's own edits, ungrouped.
-        let mut by_file: Vec<(String, Vec<Value>)> = Vec::new();
-        let mut add = |uri: &str, edits: &Value| {
-            let Some(list) = edits.as_array() else {
-                return;
-            };
-            match by_file
-                .iter_mut()
-                .find(|(known, _)| same_file_uri(known, uri))
-            {
-                Some((_, existing)) => existing.extend(list.iter().cloned()),
-                None => by_file.push((uri.to_string(), list.clone())),
-            }
-        };
-
-        if let Some(changes) = result["changes"].as_object() {
-            for (uri, edits) in changes {
-                add(uri, edits);
-            }
-        }
-        if let Some(documents) = result["documentChanges"].as_array() {
-            for change in documents {
-                // A create/rename/delete *file* operation — rust-analyzer
-                // emits one when the symbol is a module. Applying only the
-                // text half would leave the project not building, so refuse
-                // the whole thing and say which part is missing.
-                let Some(uri) = change["textDocument"]["uri"].as_str() else {
-                    return Err(Error::Server {
-                        method: "textDocument/rename".into(),
-                        message: "this rename also moves a file, which rusty cannot apply \
-                                  yet — rename the module in the file tree instead"
-                            .into(),
-                    });
-                };
-                add(uri, &change["edits"]);
-            }
-        }
-
         let encoding = self.shared.encoding();
-        let mut changed = Vec::new();
-        for (uri, edits) in by_file {
-            let Some(file) = file_of_uri(&uri) else {
-                continue;
+        let mut planned: Vec<(PathBuf, String)> = Vec::new();
+        for (uri, edits) in convert::edits_by_file(&result)? {
+            let Some(file) = uri_to_absolute(&uri) else {
+                return Err(Error::Server {
+                    method: "textDocument/rename".into(),
+                    message: format!("rust-analyzer named a file this client cannot locate: {uri}"),
+                });
             };
-            let Ok(text) = std::fs::read_to_string(&file) else {
-                continue;
-            };
-            // A file the server describes differently from the disk is left
-            // alone, and the rename says so rather than half-applying.
-            let Some(out) = apply_text_edits(&text, &edits, encoding) else {
+            let file = PathBuf::from(file);
+            let text = std::fs::read_to_string(&file).map_err(|source| Error::Apply {
+                path: file.display().to_string(),
+                source,
+            })?;
+            let Some(out) = convert::apply_text_edits(&text, &edits, encoding) else {
                 return Err(Error::Server {
                     method: "textDocument/rename".into(),
                     message: format!(
@@ -567,88 +458,25 @@ impl LspClient {
                     ),
                 });
             };
-            if out == text {
-                continue;
+            if out != text {
+                planned.push((file, out));
             }
-            std::fs::write(&file, &out).map_err(Error::Io)?;
+        }
+
+        let mut changed = Vec::new();
+        for (file, out) in planned {
+            std::fs::write(&file, &out).map_err(|source| Error::Apply {
+                path: file.display().to_string(),
+                source,
+            })?;
             changed.push(file.display().to_string());
         }
         changed.sort();
         Ok(changed)
     }
 
-    /// A WorkspaceEdit's changes for `path` only    /// A WorkspaceEdit's changes for `path` only — `None` when the edit also
-    /// touches other files and applying just part of it would lie.
-    fn workspace_edit_for(&self, path: &str, edit: &Value) -> Option<Vec<ActionEdit>> {
-        let ours = self.uri(path);
-        let mut collected = Vec::new();
-
-        let mut take = |uri: &str, edits: &Value| -> bool {
-            if !same_file_uri(uri, &ours) {
-                return false;
-            }
-            if let Some(list) = edits.as_array() {
-                for text_edit in list {
-                    collected.push(text_edit.clone());
-                }
-            }
-            true
-        };
-
-        if let Some(changes) = edit["changes"].as_object() {
-            for (uri, edits) in changes {
-                if !take(uri, edits) {
-                    return None;
-                }
-            }
-        }
-        if let Some(documents) = edit["documentChanges"].as_array() {
-            for change in documents {
-                let Some(uri) = change["textDocument"]["uri"].as_str() else {
-                    // A create/rename/delete file operation — beyond this
-                    // client's apply path.
-                    return None;
-                };
-                if !take(uri, &change["edits"]) {
-                    return None;
-                }
-            }
-        }
-
-        let encoding = self.shared.encoding();
-        let docs = self.shared.docs.lock().expect("lsp docs");
-        let text = docs.get(path).map(|d| d.text.as_str()).unwrap_or("");
-        let scalar = |position: &Value| -> Option<(u32, u32)> {
-            let line = position["line"].as_u64()? as u32;
-            let character = position["character"].as_u64()? as u32;
-            let line_text = text.split('\n').nth(line as usize).unwrap_or("");
-            Some((line, character_to_scalar(line_text, character, encoding)))
-        };
-
-        let mut out = Vec::new();
-        for text_edit in collected {
-            let start = scalar(&text_edit["range"]["start"])?;
-            let end = scalar(&text_edit["range"]["end"])?;
-            out.push(ActionEdit {
-                range: EditRange {
-                    start_line: start.0,
-                    start_col: start.1,
-                    end_line: end.0,
-                    end_col: end.1,
-                },
-                new_text: text_edit["newText"].as_str().unwrap_or("").to_string(),
-            });
-        }
-        Some(out)
-    }
-
-    /// The whole document's semantic colouring, as the server sees it.
-    ///
-    /// The reply is quintuples of u32 — deltaLine, deltaStart, length, type
-    /// index, modifier bits — relative-encoded, in the negotiated position
-    /// encoding. Decoded here to absolute lines and Unicode-scalar columns,
-    /// with the type index resolved against the server's legend, so the
-    /// frontend sees names and scalars and nothing of the format.
+    /// The whole document's semantic colouring, as the server sees it — for
+    /// an open document; there is nothing to convert against otherwise.
     pub fn semantic_tokens(&self, path: &str) -> Result<Vec<SemanticSpan>> {
         let result = self.shared.request(
             "textDocument/semanticTokens/full",
@@ -664,46 +492,15 @@ impl LspClient {
                     .collect()
             })
             .unwrap_or_default();
-
-        let legend = self.shared.legend();
-        let encoding = self.shared.encoding();
-        let docs = self.shared.docs.lock().expect("lsp docs");
-        let Some(doc) = docs.get(path) else {
+        let Some(text) = self.shared.open_text(path) else {
             return Ok(Vec::new());
         };
-        let lines: Vec<&str> = doc.text.split('\n').collect();
-
-        let mut spans = Vec::with_capacity(data.len() / 5);
-        let mut line = 0u32;
-        let mut unit_col = 0u32;
-        for token in data.chunks_exact(5) {
-            let (delta_line, delta_start, unit_len, type_index) =
-                (token[0], token[1], token[2], token[3]);
-            if delta_line > 0 {
-                line += delta_line;
-                unit_col = delta_start;
-            } else {
-                unit_col += delta_start;
-            }
-            let Some(kind) = legend.get(type_index as usize) else {
-                continue;
-            };
-            let Some(line_text) = lines.get(line as usize) else {
-                continue;
-            };
-            let start = character_to_scalar(line_text, unit_col, encoding);
-            let end = character_to_scalar(line_text, unit_col + unit_len, encoding);
-            if end <= start {
-                continue;
-            }
-            spans.push(SemanticSpan {
-                line,
-                start_col: start,
-                length: end - start,
-                kind: kind.clone(),
-            });
-        }
-        Ok(spans)
+        Ok(convert::semantic_spans(
+            &data,
+            &text,
+            &self.shared.legend(),
+            self.shared.encoding(),
+        ))
     }
 
     /// Where the thing under this position is defined.
@@ -749,15 +546,9 @@ impl LspClient {
         };
         let col = std::fs::read_to_string(&absolute)
             .ok()
-            .and_then(|text| {
-                let line_text = text.split('\n').nth(line as usize)?;
-                Some(character_to_scalar(
-                    line_text,
-                    character,
-                    self.shared.encoding(),
-                ))
-            })
-            .unwrap_or(character);
+            .map_or(character, |text| {
+                convert::scalar_at(&text, line, character, self.shared.encoding())
+            });
         Ok(Some(Location {
             path: absolute.replace('\\', "/"),
             line,
@@ -785,33 +576,45 @@ impl LspClient {
     /// A protocol column as a scalar one, for a file that may not be open.
     fn scalarize(&self, path: &str, line: u32, character: u32) -> u32 {
         let encoding = self.shared.encoding();
-        let docs = self.shared.docs.lock().expect("lsp docs");
-        let from_docs = docs
-            .get(path)
-            .and_then(|doc| doc.text.split('\n').nth(line as usize))
-            .map(|line_text| character_to_scalar(line_text, character, encoding));
-        drop(docs);
-        from_docs
-            .or_else(|| {
-                let text = std::fs::read_to_string(self.shared.root.join(path)).ok()?;
-                let line_text = text.split('\n').nth(line as usize)?;
-                Some(character_to_scalar(line_text, character, encoding))
-            })
-            .unwrap_or(character)
+        self.shared.text_of(path).map_or(character, |text| {
+            convert::scalar_at(&text, line, character, encoding)
+        })
     }
 }
 
 impl Drop for LspClient {
+    /// Ask before killing. `shutdown` lets rust-analyzer finish what it is
+    /// writing and release the target directory; `exit` ends it; the process
+    /// is killed only if it lingers. A server that has already died answers
+    /// neither, and `alive` makes both return at once rather than after a
+    /// timeout — a project switch must not stall on the corpse of the last
+    /// server.
     fn drop(&mut self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+        let _ = self
+            .shared
+            .request_within("shutdown", Value::Null, SHUTDOWN_TIMEOUT);
+        let _ = self.shared.notify("exit", Value::Null);
+
+        let Ok(mut slot) = self.child.lock() else {
+            return;
+        };
+        let Some(mut child) = slot.take() else {
+            return;
+        };
+        let deadline = Instant::now() + EXIT_GRACE;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
         }
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
 impl Shared {
-    fn poke_pull(&self, path: &str) {
+    pub(crate) fn poke_pull(&self, path: &str) {
         if let Some(poke) = self.poke.lock().expect("lsp poke").as_ref() {
             let _ = poke.send(path.to_string());
         }
@@ -830,7 +633,7 @@ impl Shared {
         }
     }
 
-    fn encoding(&self) -> Encoding {
+    pub(crate) fn encoding(&self) -> Encoding {
         *self.encoding.get().unwrap_or(&Encoding::Utf16)
     }
 
@@ -840,12 +643,32 @@ impl Shared {
         self.semantic_legend.get().cloned().unwrap_or_default()
     }
 
+    pub(crate) fn is_open(&self, path: &str) -> bool {
+        self.docs.lock().expect("lsp docs").contains_key(path)
+    }
+
+    /// The document as this client last sent it, if it is open.
+    pub(crate) fn open_text(&self, path: &str) -> Option<String> {
+        self.docs
+            .lock()
+            .expect("lsp docs")
+            .get(path)
+            .map(|doc| doc.text.clone())
+    }
+
+    /// The document's text: what was last sent when it is open, what is on
+    /// disk when it is not.
+    pub(crate) fn text_of(&self, path: &str) -> Option<String> {
+        self.open_text(path)
+            .or_else(|| std::fs::read_to_string(self.root.join(path)).ok())
+    }
+
     fn write(&self, message: &Value) -> Result<()> {
         let mut writer = self.writer.lock().expect("lsp writer");
         rpc::write_message(&mut **writer, message).map_err(Error::Io)
     }
 
-    fn notify(&self, method: &str, params: Value) -> Result<()> {
+    pub(crate) fn notify(&self, method: &str, params: Value) -> Result<()> {
         self.write(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
     }
 
@@ -853,15 +676,37 @@ impl Shared {
         self.write(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
     }
 
-    fn request(&self, method: &str, params: Value) -> Result<Value> {
+    pub(crate) fn request(&self, method: &str, params: Value) -> Result<Value> {
+        self.request_within(method, params, REQUEST_TIMEOUT)
+    }
+
+    fn request_within(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        let gone = || Error::Exited {
+            method: method.to_string(),
+        };
+        if !self.alive.load(Ordering::Acquire) {
+            return Err(gone());
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel();
         self.pending.lock().expect("lsp pending").insert(id, tx);
+        // The reader may have ended between the check above and the insert,
+        // after failing every waiter it could see; one registered after that
+        // would never be told. Look again now that this one is registered.
+        if !self.alive.load(Ordering::Acquire) {
+            self.pending.lock().expect("lsp pending").remove(&id);
+            return Err(gone());
+        }
 
-        self.write(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
+        if let Err(error) =
+            self.write(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+        {
+            self.pending.lock().expect("lsp pending").remove(&id);
+            return Err(error);
+        }
 
-        match rx.recv_timeout(REQUEST_TIMEOUT) {
-            Ok(response) => {
+        match rx.recv_timeout(timeout) {
+            Ok(Some(response)) => {
                 if let Some(error) = response.get("error") {
                     Err(Error::Server {
                         method: method.to_string(),
@@ -874,6 +719,7 @@ impl Shared {
                     Ok(response.get("result").cloned().unwrap_or(Value::Null))
                 }
             }
+            Ok(None) => Err(gone()),
             Err(_) => {
                 self.pending.lock().expect("lsp pending").remove(&id);
                 Err(Error::Timeout {
@@ -882,49 +728,22 @@ impl Shared {
             }
         }
     }
-}
 
-/// Manifests rust-analyzer would otherwise never see.
-///
-/// The layout this exists for is the standard embedded one: a workspace whose
-/// host-testable crates are members, and a firmware crate `exclude`d because
-/// it needs a bare-metal target and its own toolchain — `cargo test` at the
-/// root would otherwise try to build `no_std` firmware for the host.
-///
-/// rust-analyzer loads *one* workspace from the root, so every file under the
-/// excluded directory comes back "not included in any crates, so
-/// rust-analyzer can't offer IDE services" — no completion, no diagnostics,
-/// no navigation, in exactly the half of the repository this workbench is
-/// for. `linkedProjects` is the server's own answer: name the extra manifests
-/// and it loads them alongside.
-///
-/// Read from `workspace.exclude` rather than guessed by walking: a directory
-/// the workspace deliberately named is a fact, and linking every `Cargo.toml`
-/// under the root would pull in vendored copies and fixtures.
-fn linked_projects(root: &Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
-        return Vec::new();
-    };
-    // `Table`, not `Value`: in toml 1.x `Value`'s `FromStr` parses a single
-    // TOML *value*, so a whole manifest fails at the first table header with
-    // an error that reads as a broken `Cargo.toml`.
-    let Ok(manifest) = text.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let Some(excluded) = manifest
-        .get("workspace")
-        .and_then(|w| w.get("exclude"))
-        .and_then(toml::Value::as_array)
-    else {
-        return Vec::new();
-    };
-    excluded
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .map(|name| root.join(name).join("Cargo.toml"))
-        .filter(|manifest| manifest.is_file())
-        .map(|manifest| manifest.to_string_lossy().into_owned())
-        .collect()
+    /// The reader has stopped: every request still waiting learns so now
+    /// rather than at its timeout, and every later one at once.
+    fn reader_gone(&self) {
+        self.alive.store(false, Ordering::Release);
+        let waiters: Vec<Sender<Option<Value>>> = self
+            .pending
+            .lock()
+            .expect("lsp pending")
+            .drain()
+            .map(|(_, waiter)| waiter)
+            .collect();
+        for waiter in waiters {
+            let _ = waiter.send(None);
+        }
+    }
 }
 
 /// The `initialize` round trip.
@@ -942,7 +761,7 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     // is not the same as an absent one — it tells rust-analyzer the set of
     // projects is exactly nothing, and the root workspace stops loading.
     let mut options = serde_json::Map::new();
-    let linked = linked_projects(root);
+    let linked = discover::linked_projects(root);
     if !linked.is_empty() {
         let mut all = vec![root.join("Cargo.toml").to_string_lossy().into_owned()];
         all.extend(linked);
@@ -1042,14 +861,20 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
 }
 
 /// Read the server forever, feeding responses and diagnostics.
-fn pump(stdout: ChildStdout, shared: Arc<Shared>) {
+///
+/// On the way out it fails every waiting request and says the server has
+/// exited. It also drops its own reference to [`Shared`], which — once the
+/// client is dropped too — closes the poke channel and the events channel:
+/// the puller ends, and the consumer's `recv` returns `None`.
+fn pump(reader: Box<dyn Read + Send>, shared: Arc<Shared>) {
     thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
+        let mut reader = BufReader::new(reader);
         // An Err is treated as EOF: a mangled frame means the stream has
         // drifted and every later byte would misparse anyway.
         while let Ok(Some(message)) = rpc::read_message(&mut reader) {
             dispatch(&shared, message);
         }
+        shared.reader_gone();
         let _ = shared.events.send(LspEvent::Exited {});
     });
 }
@@ -1086,623 +911,343 @@ fn dispatch(shared: &Shared, message: Value) {
             if let Some(id) = id.as_i64()
                 && let Some(waiter) = shared.pending.lock().expect("lsp pending").remove(&id)
             {
-                let _ = waiter.send(message);
+                let _ = waiter.send(Some(message));
             }
         }
         (None, Some(method)) if method == "textDocument/publishDiagnostics" => {
-            publish(shared, &message["params"]);
+            pull::publish(shared, &message["params"]);
         }
         // Progress, logs, show-message: narration, not state.
         _ => {}
     }
 }
 
-/// Pull diagnostics for pokes, forever, coalescing bursts.
+/// A fake rust-analyzer on the other end of two pipes.
 ///
-/// Retries while the server is busy: a pull during indexing answers with
-/// "content modified" or blocks, and both mean "later", not "never".
-fn pull_loop(poke: mpsc::Receiver<String>, shared: Arc<Shared>) {
-    thread::spawn(move || {
-        while let Ok(first) = poke.recv() {
-            // Typing produces a poke per pulse; only the newest matters.
-            let mut wanted = vec![first];
-            while let Ok(more) = poke.try_recv() {
-                if !wanted.contains(&more) {
-                    wanted.push(more);
-                }
-            }
-            for path in wanted {
-                for attempt in 0..10 {
-                    match pull(&shared, &path) {
-                        Ok(items) => {
-                            let _ = shared.events.send(LspEvent::Diagnostics {
-                                path: path.clone(),
-                                items,
-                            });
-                            break;
+/// The unit tests elsewhere prove the arithmetic and the integration test
+/// proves the real server; neither reaches the transport — correlation,
+/// what happens when the server dies with a request outstanding, what a
+/// drop does. These do, against a peer that speaks JSON-RPC over
+/// `std::io::pipe` and answers only what each test needs.
+#[cfg(test)]
+mod tests {
+    use std::io::PipeWriter;
+    use std::sync::mpsc::RecvTimeoutError;
+
+    use super::*;
+
+    /// Every message the fake server received, in order.
+    type Seen = Arc<Mutex<Vec<Value>>>;
+
+    fn method(message: &Value) -> &str {
+        message["method"].as_str().unwrap_or("")
+    }
+
+    /// Answer a request with `result`.
+    fn reply(writer: &mut dyn Write, request: &Value, result: Value) {
+        let _ = rpc::write_message(
+            writer,
+            &json!({ "jsonrpc": "2.0", "id": request["id"], "result": result }),
+        );
+    }
+
+    /// Answer a request with an error.
+    fn refuse(writer: &mut dyn Write, request: &Value, message: &str) {
+        let _ = rpc::write_message(
+            writer,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "error": { "code": -32603, "message": message },
+            }),
+        );
+    }
+
+    /// The answers every session needs and no test cares about.
+    fn default_handle(message: &Value, writer: &mut PipeWriter) -> bool {
+        if method(message) == "textDocument/diagnostic" {
+            reply(writer, message, json!({ "kind": "full", "items": [] }));
+        }
+        true
+    }
+
+    /// Start the peer. `handle` sees every message that is not part of the
+    /// lifecycle — `initialize`, `shutdown` and `exit` are answered here —
+    /// and returns `false` to hang up, which is what a crashed server looks
+    /// like from the client's side: end of stream, no answer.
+    fn fake_server(
+        mut handle: impl FnMut(&Value, &mut PipeWriter) -> bool + Send + 'static,
+    ) -> (Box<dyn Read + Send>, Box<dyn Write + Send>, Seen) {
+        let (client_reads, server_writes) = std::io::pipe().expect("a pipe");
+        let (server_reads, client_writes) = std::io::pipe().expect("a pipe");
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        thread::spawn(move || {
+            let mut reader = BufReader::new(server_reads);
+            let mut writer = server_writes;
+            while let Ok(Some(message)) = rpc::read_message(&mut reader) {
+                log.lock().unwrap().push(message.clone());
+                match method(&message) {
+                    "initialize" => reply(
+                        &mut writer,
+                        &message,
+                        json!({ "capabilities": { "positionEncoding": "utf-8" } }),
+                    ),
+                    "shutdown" => reply(&mut writer, &message, Value::Null),
+                    // Dropping the writer is the end of the stream on the
+                    // client's reader, exactly as a real exit is.
+                    "exit" => return,
+                    _ => {
+                        if !handle(&message, &mut writer) {
+                            return;
                         }
-                        Err(_) if attempt < 9 => {
-                            thread::sleep(Duration::from_millis(600));
-                        }
-                        Err(_) => {}
                     }
                 }
             }
-        }
-    });
-}
-
-/// One `textDocument/diagnostic` round trip.
-fn pull(shared: &Shared, path: &str) -> Result<Vec<FileDiagnostic>> {
-    let uri = path_to_uri(&shared.root.join(path));
-    let report = shared.request(
-        "textDocument/diagnostic",
-        json!({ "textDocument": { "uri": uri } }),
-    )?;
-    // A "full" report carries items; "unchanged" cannot happen because no
-    // previousResultId is ever sent.
-    let items = report
-        .get("items")
-        .cloned()
-        .unwrap_or(Value::Array(Vec::new()));
-    Ok(convert_items(shared, path, &items))
-}
-
-/// Convert one publishDiagnostics into the wire model and emit it.
-fn publish(shared: &Shared, params: &Value) {
-    let Some(uri) = params["uri"].as_str() else {
-        return;
-    };
-    // Diagnostics for files outside the project — a dependency's source — have
-    // nowhere to be shown; the file panel cannot open them.
-    let Some(path) = uri_to_relative(uri, &shared.root) else {
-        return;
-    };
-
-    // Pushed emptiness for a document the puller owns is exactly the wipe this
-    // client moved to the pull model to escape; the pull that follows the next
-    // refresh or edit is authoritative. Pushes still matter for files nothing
-    // has opened — whole-project results land there.
-    let items = convert_items(shared, &path, &params["diagnostics"]);
-    if items.is_empty() && shared.docs.lock().expect("lsp docs").contains_key(&path) {
-        shared.poke_pull(&path);
-        return;
+        });
+        (Box::new(client_reads), Box::new(client_writes), seen)
     }
 
-    let _ = shared.events.send(LspEvent::Diagnostics { path, items });
-}
+    fn methods(seen: &Seen) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .map(|m| method(m).to_string())
+            .collect()
+    }
 
-/// LSP diagnostics as the wire model, columns already scalar.
-fn convert_items(shared: &Shared, path: &str, diagnostics: &Value) -> Vec<FileDiagnostic> {
-    let encoding = shared.encoding();
-    let text = shared
-        .docs
-        .lock()
-        .expect("lsp docs")
-        .get(path)
-        .map(|doc| doc.text.clone())
-        .or_else(|| std::fs::read_to_string(shared.root.join(path)).ok());
-
-    let scalar = |line: u32, character: u32| -> u32 {
-        text.as_deref()
-            .and_then(|t| t.split('\n').nth(line as usize))
-            .map(|line_text| character_to_scalar(line_text, character, encoding))
-            .unwrap_or(character)
-    };
-
-    let mut items: Vec<FileDiagnostic> = diagnostics
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|d| {
-            let range = &d["range"];
-            let start_line = range["start"]["line"].as_u64()? as u32;
-            let end_line = range["end"]["line"].as_u64()? as u32;
-            Some(FileDiagnostic {
-                severity: match d["severity"].as_u64() {
-                    Some(2) => DiagSeverity::Warning,
-                    Some(3) => DiagSeverity::Info,
-                    Some(4) => DiagSeverity::Hint,
-                    // Absent means the producer did not say; rustc's errors
-                    // always do, so unmarked ones are treated as the worst.
-                    _ => DiagSeverity::Error,
-                },
-                message: d["message"].as_str().unwrap_or_default().to_string(),
-                source: d["source"].as_str().map(str::to_string),
-                code: match &d["code"] {
-                    Value::String(code) => Some(code.clone()),
-                    Value::Number(code) => Some(code.to_string()),
-                    _ => None,
-                },
-                start_line,
-                start_col: scalar(start_line, range["start"]["character"].as_u64()? as u32),
-                end_line,
-                end_col: scalar(end_line, range["end"]["character"].as_u64()? as u32),
-            })
-        })
-        .collect();
-    items.sort_by_key(|d| (d.start_line, d.start_col, d.severity));
-    items
-}
-
-/// Where rust-analyzer actually is.
-///
-/// The bare name on PATH is rustup's proxy, which dispatches by the pinned
-/// toolchain — and `rust-toolchain.toml` pinning `esp` (every Xtensa project)
-/// makes the proxy fail with "unknown binary in toolchain 'esp'". So: stable's
-/// real binary first, the active toolchain's second, PATH last.
-pub fn find_rust_analyzer() -> Option<PathBuf> {
-    for toolchain in [Some("stable"), None] {
-        let mut command = Command::new("rustup");
-        command.arg("which");
-        if let Some(toolchain) = toolchain {
-            command.args(["--toolchain", toolchain]);
-        }
-        command.arg("rust-analyzer");
-        no_console_window(&mut command);
-        if let Ok(out) = command.output()
-            && out.status.success()
-        {
-            let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-            if path.is_file() {
-                return Some(path);
+    /// Wait until the server has seen `wanted`, or give up.
+    fn saw(seen: &Seen, wanted: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if methods(seen).iter().any(|m| m == wanted) {
+                return true;
             }
+            thread::sleep(Duration::from_millis(10));
         }
+        false
     }
 
-    // No rustup: take PATH literally.
-    let path = std::env::var_os("PATH")?;
-    let name = if cfg!(windows) {
-        "rust-analyzer.exe"
-    } else {
-        "rust-analyzer"
-    };
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
-}
-
-/// `E:\x y\src` → `file:///E:/x%20y/src`.
-fn path_to_uri(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    let mut uri = String::from("file://");
-    if !text.starts_with('/') {
-        uri.push('/');
-    }
-    for ch in text.chars() {
-        match ch {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' | ':' => uri.push(ch),
-            _ => {
-                let mut buffer = [0u8; 4];
-                for byte in ch.encode_utf8(&mut buffer).bytes() {
-                    uri.push_str(&format!("%{byte:02X}"));
+    /// Two requests in flight, answered in the other order. The reply's id
+    /// decides who gets it — not arrival order, which the reader used to be
+    /// the only thing guaranteeing.
+    #[test]
+    fn replies_are_matched_to_their_requests_by_id_not_by_order() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server({
+            let mut parked: Option<Value> = None;
+            move |message, writer| match method(message) {
+                // Hold the hover until the completion has been answered.
+                "textDocument/hover" => {
+                    parked = Some(message.clone());
+                    true
                 }
+                "textDocument/completion" => {
+                    reply(writer, message, json!({ "items": [{ "label": "later" }] }));
+                    if let Some(hover) = parked.take() {
+                        reply(writer, &hover, json!({ "contents": "the hover" }));
+                    }
+                    true
+                }
+                _ => default_handle(message, writer),
+            }
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+
+        thread::scope(|scope| {
+            let hover = scope.spawn(|| client.hover("a.rs", 0, 3));
+            assert!(saw(&seen, "textDocument/hover"), "{:?}", methods(&seen));
+            let completion = client.completion("a.rs", 0, 3).expect("completion");
+            assert_eq!(completion[0].label, "later");
+            let hover = hover.join().unwrap().expect("hover").expect("some hover");
+            assert_eq!(hover.text, "the hover");
+        });
+    }
+
+    /// The server dies with a request outstanding. The caller must hear so
+    /// at once — it used to wait the full fifteen-second budget to be told
+    /// "timeout", which is the wrong answer as well as a slow one.
+    #[test]
+    fn a_server_that_dies_mid_request_fails_the_request_at_once() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, _seen) = fake_server(|message, writer| {
+            if method(message) == "textDocument/hover" {
+                return false;
+            }
+            default_handle(message, writer)
+        });
+        let (client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+
+        let started = Instant::now();
+        let outcome = client.hover("a.rs", 0, 3);
+        assert!(
+            matches!(outcome, Err(Error::Exited { ref method }) if method == "textDocument/hover"),
+            "{outcome:?}",
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}: the caller sat out the timeout",
+            started.elapsed(),
+        );
+        // And every request after it fails the same way, immediately.
+        assert!(matches!(
+            client.completion("a.rs", 0, 3),
+            Err(Error::Exited { .. })
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Some(LspEvent::Exited {}) => break,
+                Some(_) => continue,
+                None => panic!("the exit was never announced"),
             }
         }
     }
-    uri
-}
 
-/// A `file://` URI as an absolute native path.
-fn uri_to_absolute(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("file://")?;
-    let mut bytes = Vec::with_capacity(rest.len());
-    let mut input = rest.bytes();
-    while let Some(byte) = input.next() {
-        if byte == b'%' {
-            let high = input.next()?;
-            let low = input.next()?;
-            let hex = |b: u8| (b as char).to_digit(16);
-            bytes.push((hex(high)? * 16 + hex(low)?) as u8);
-        } else {
-            bytes.push(byte);
-        }
-    }
-    let mut decoded = String::from_utf8(bytes).ok()?;
-    if decoded.len() >= 3 && decoded.as_bytes()[0] == b'/' && decoded.as_bytes()[2] == b':' {
-        decoded.remove(0);
-    }
-    Some(decoded)
-}
-
-/// A `file://` URI as a path relative to `root`, or `None` if it is elsewhere.
-///
-/// Tolerant on purpose: rust-analyzer sends `file:///e%3A/...` — lowercased
-/// drive, percent-encoded colon — for the same file this side calls
-/// `file:///E:/...`.
-fn uri_to_relative(uri: &str, root: &Path) -> Option<String> {
-    let rest = uri.strip_prefix("file://")?;
-
-    let mut bytes = Vec::with_capacity(rest.len());
-    let mut input = rest.bytes();
-    while let Some(byte) = input.next() {
-        if byte == b'%' {
-            let high = input.next()?;
-            let low = input.next()?;
-            let hex = |b: u8| (b as char).to_digit(16);
-            bytes.push((hex(high)? * 16 + hex(low)?) as u8);
-        } else {
-            bytes.push(byte);
-        }
-    }
-    let mut decoded = String::from_utf8(bytes).ok()?;
-
-    // `/E:/x` → `E:/x` on Windows.
-    if decoded.len() >= 3 && decoded.as_bytes()[0] == b'/' && decoded.as_bytes()[2] == b':' {
-        decoded.remove(0);
-    }
-
-    let root = root.to_string_lossy().replace('\\', "/");
-    let (folded_full, folded_root) = if cfg!(windows) {
-        (decoded.to_lowercase(), root.to_lowercase())
-    } else {
-        (decoded.clone(), root.clone())
-    };
-    if !folded_full.starts_with(&folded_root) {
-        return None;
-    }
-    Some(decoded[root.len()..].trim_start_matches('/').to_string())
-}
-
-fn no_console_window(command: &mut Command) {
-    // Same reason as everywhere else a process is spawned on Windows: without
-    // this, every rust-analyzer start flashes a console window over the app.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-}
-
-/// Whether two file URIs name the same file, tolerating the one difference
-/// Windows manufactures: rust-analyzer answers with a lowercase drive letter
-/// (`file:///e:/…`) where this client builds an uppercase one. Everything
-/// after the drive is compared exactly — only the drive letter is
-/// case-insensitive on disk. Without this, every code action's edit looked
-/// like it belonged to a different file and was dropped as multi-file.
-fn same_file_uri(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
-    }
-    let (Some(a_rest), Some(b_rest)) = (a.strip_prefix("file:///"), b.strip_prefix("file:///"))
-    else {
-        return false;
-    };
-    let (Some(a_drive), Some(b_drive)) = (a_rest.as_bytes().first(), b_rest.as_bytes().first())
-    else {
-        return false;
-    };
-    a_drive.is_ascii_alphabetic()
-        && a_drive.eq_ignore_ascii_case(b_drive)
-        && a_rest.as_bytes().get(1) == Some(&b':')
-        && b_rest.as_bytes().get(1) == Some(&b':')
-        && a_rest[2..] == b_rest[2..]
-}
-
-/// A UTF-16 offset into `text`, as a byte offset.
-///
-/// For `ParameterInformation.label` offsets only: those are UTF-16 by spec no
-/// matter what position encoding was negotiated — the negotiation covers
-/// document positions, not offsets into strings the server sent.
-fn utf16_to_byte(text: &str, units: usize) -> usize {
-    let mut seen = 0;
-    for (byte, ch) in text.char_indices() {
-        if seen >= units {
-            return byte;
-        }
-        seen += ch.len_utf16();
-    }
-    text.len()
-}
-
-fn kind_name(kind: u64) -> &'static str {
-    // The LSP CompletionItemKind table, named so the frontend never holds a
-    // second copy of these numbers.
-    match kind {
-        1 => "text",
-        2 => "method",
-        3 => "function",
-        4 => "constructor",
-        5 => "field",
-        6 => "variable",
-        7 => "class",
-        8 => "interface",
-        9 => "module",
-        10 => "property",
-        11 => "unit",
-        12 => "value",
-        13 => "enum",
-        14 => "keyword",
-        15 => "snippet",
-        16 => "color",
-        17 => "file",
-        18 => "reference",
-        19 => "folder",
-        20 => "enum member",
-        21 => "constant",
-        22 => "struct",
-        23 => "event",
-        24 => "operator",
-        25 => "type parameter",
-        _ => "other",
-    }
-}
-
-/// A `file://` URI back to a path this process can open.
-fn file_of_uri(uri: &str) -> Option<std::path::PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    let rest = rest.strip_prefix('/').unwrap_or(rest);
-    let mut decoded = String::new();
-    let bytes = rest.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'%'
-            && at + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&rest[at + 1..at + 3], 16)
-        {
-            decoded.push(byte as char);
-            at += 3;
-            continue;
-        }
-        decoded.push(bytes[at] as char);
-        at += 1;
-    }
-    Some(std::path::PathBuf::from(decoded))
-}
-
-/// Apply a server's text edits to a whole document.
-///
-/// Back to front by position, so an edit never moves the ones still to be
-/// applied — the mistake that turns a rename into corruption at the second
-/// occurrence in a line.
-///
-/// `None` when an edit names a line the file does not have. That means the
-/// server and the disk disagree, and then *every* range is suspect: columns
-/// clamp silently, so a stale edit would not fail, it would append text into
-/// somebody's source. Refusing the whole file is the only honest answer.
-fn apply_text_edits(
-    text: &str,
-    edits: &[Value],
-    encoding: crate::positions::Encoding,
-) -> Option<String> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let offset = |line: u32, character: u32| -> usize {
-        let mut at = 0usize;
-        for row in lines.iter().take(line as usize) {
-            at += row.chars().count() + 1;
-        }
-        let row = lines.get(line as usize).copied().unwrap_or("");
-        at + crate::positions::character_to_scalar(row, character, encoding) as usize
-    };
-
-    let mut ranges: Vec<(usize, usize, String)> = Vec::new();
-    for edit in edits {
-        let last = edit["range"]["end"]["line"].as_u64().unwrap_or(0) as usize;
-        if last >= lines.len() {
-            return None;
-        }
-    }
-    let parsed = edits
-        .iter()
-        .filter_map(|edit| {
-            let start = offset(
-                edit["range"]["start"]["line"].as_u64()? as u32,
-                edit["range"]["start"]["character"].as_u64()? as u32,
-            );
-            let end = offset(
-                edit["range"]["end"]["line"].as_u64()? as u32,
-                edit["range"]["end"]["character"].as_u64()? as u32,
-            );
-            Some((
-                start.min(end),
-                start.max(end),
-                edit["newText"].as_str().unwrap_or("").to_string(),
-            ))
-        })
-        .collect::<Vec<_>>();
-    ranges.extend(parsed);
-    ranges.sort_by_key(|(start, ..)| *start);
-
-    let chars: Vec<char> = text.chars().collect();
-    let mut out: Vec<char> = chars.clone();
-    for (start, end, replacement) in ranges.into_iter().rev() {
-        if start > out.len() || end > out.len() {
-            continue;
-        }
-        out.splice(start..end, replacement.chars());
-    }
-    Some(out.into_iter().collect())
-}
-
-#[cfg(test)]
-mod rename_tests {
-    use super::{apply_text_edits, file_of_uri};
-    use crate::positions::Encoding;
-    use serde_json::json;
-
-    fn edit(line: u32, start: u32, end: u32, text: &str) -> serde_json::Value {
-        json!({
-            "range": {
-                "start": { "line": line, "character": start },
-                "end": { "line": line, "character": end },
-            },
-            "newText": text,
-        })
-    }
-
-    /// Two occurrences on one line. Applied front to back, the first edit
-    /// shifts the second's columns and the rename lands in the wrong place —
-    /// silently, as corrupted source rather than an error.
+    /// Dropping the client ends the session properly — `shutdown`, `exit` —
+    /// and, once the reader has seen the server go, closes the events stream.
+    /// It used to leave the puller thread holding the session for ever, so
+    /// the consumer blocked on `recv` never returned and leaked a thread per
+    /// project switch. Also pins the wire order an open takes: the
+    /// notification, then the pull it provokes — never the other way round.
     #[test]
-    fn edits_apply_back_to_front() {
-        let text = "let radio = radio_new();";
-        let out = apply_text_edits(
-            text,
-            &[edit(0, 4, 9, "tuner"), edit(0, 12, 17, "tuner")],
-            Encoding::Utf8,
-        );
-        assert_eq!(out.as_deref(), Some("let tuner = tuner_new();"));
-    }
+    fn dropping_the_client_shuts_the_server_down_and_closes_the_events() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server(default_handle);
+        let (client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
 
-    /// The server counts in the negotiated encoding, and rusty negotiates
-    /// utf-8 — so a CJK comment above the edit must not shift it. The trap
-    /// the LSP client keeps a 中文 comment in its other tests for.
-    #[test]
-    fn columns_are_read_in_the_negotiated_encoding() {
-        let text = "// 中文注释
-let radio = 1;";
-        let out = apply_text_edits(text, &[edit(1, 4, 9, "tuner")], Encoding::Utf8);
-        assert_eq!(
-            out.as_deref(),
-            Some(
-                "// 中文注释
-let tuner = 1;"
-            )
+        // The open provokes a pull, and the pull's answer arrives as an event.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Some(LspEvent::Diagnostics { path, .. }) if path == "a.rs" => break,
+                Some(_) => continue,
+                None => panic!("no diagnostics for the opened file: {:?}", methods(&seen)),
+            }
+        }
+        let order = methods(&seen);
+        let opened = order
+            .iter()
+            .position(|m| m == "textDocument/didOpen")
+            .unwrap();
+        let pulled = order
+            .iter()
+            .position(|m| m == "textDocument/diagnostic")
+            .unwrap();
+        assert!(opened < pulled, "the pull overtook the open: {order:?}");
+
+        drop(client);
+
+        // `recv` on its own thread: `None` is the end, and a hang is the bug.
+        let (ended_tx, ended_rx) = mpsc::channel();
+        thread::spawn(move || {
+            while events.recv().is_some() {}
+            let _ = ended_tx.send(());
+        });
+        match ended_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(()) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("the events stream never ended: {:?}", methods(&seen))
+            }
+            Err(RecvTimeoutError::Disconnected) => unreachable!(),
+        }
+        let order = methods(&seen);
+        let shutdown = order.iter().position(|m| m == "shutdown");
+        let exit = order.iter().position(|m| m == "exit");
+        assert!(
+            matches!((shutdown, exit), (Some(s), Some(e)) if s < e),
+            "shutdown then exit, before any kill: {order:?}",
         );
     }
 
+    /// A lazy action whose resolve fails, and nothing else to offer. That
+    /// used to come back as an empty list — `Err(_) => continue` — so the
+    /// menu was empty and the reason went nowhere.
     #[test]
-    fn a_uri_comes_back_as_a_path_with_its_escapes_undone() {
-        let path = file_of_uri("file:///E:/Code/my%20project/src/main.rs").expect("parsed");
-        assert!(path.to_string_lossy().contains("my project"), "{path:?}");
-        assert_eq!(file_of_uri("https://example.invalid/x.rs"), None);
-    }
+    fn a_failed_resolve_is_reported_when_nothing_else_could_be_offered() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, _seen) = fake_server(|message, writer| {
+            match method(message) {
+                "textDocument/codeAction" => reply(
+                    writer,
+                    message,
+                    json!([{ "title": "Import HashMap", "kind": "quickfix" }]),
+                ),
+                "codeAction/resolve" => refuse(writer, message, "resolve exploded"),
+                _ => return default_handle(message, writer),
+            }
+            true
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client
+            .did_open("a.rs", "let t = HashMap::new();\n")
+            .unwrap();
 
-    /// A range naming a line the file does not have means the server and
-    /// the disk disagree. Every other range in that file is then suspect
-    /// too — columns clamp silently, so a stale edit would not fail, it
-    /// would append text into somebody's source. Refuse the file whole.
-    #[test]
-    fn a_file_the_server_and_the_disk_disagree_about_is_refused() {
-        assert_eq!(
-            apply_text_edits("one line", &[edit(9, 0, 1, "x")], Encoding::Utf8),
-            None,
+        let outcome = client.code_actions("a.rs", 0, 9);
+        assert!(
+            matches!(
+                outcome,
+                Err(Error::Server { ref method, ref message })
+                    if method == "codeAction/resolve" && message.contains("exploded")
+            ),
+            "{outcome:?}",
         );
-        // And a range inside the file still applies.
-        assert_eq!(
-            apply_text_edits("one line", &[edit(0, 0, 3, "two")], Encoding::Utf8).as_deref(),
-            Some("two line"),
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn drive_letter_case_does_not_split_a_file_in_two() {
-        assert!(same_file_uri(
-            "file:///E:/proj/src/main.rs",
-            "file:///e:/proj/src/main.rs",
-        ));
-        assert!(!same_file_uri(
-            "file:///E:/proj/src/main.rs",
-            "file:///e:/proj/src/lib.rs",
-        ));
-        // The path half stays case-sensitive — only the drive folds.
-        assert!(!same_file_uri(
-            "file:///E:/Proj/a.rs",
-            "file:///e:/proj/a.rs"
-        ));
-        assert!(same_file_uri("file:///home/x/a.rs", "file:///home/x/a.rs"));
     }
 
+    /// A rename naming a file that cannot be read refuses the whole rename
+    /// and writes nothing. It used to skip the file and report the rest as
+    /// done — with a CJK directory, the *decoder* was what made the file
+    /// unreadable, so every rename under one silently half-applied.
     #[test]
-    fn windows_uris_round_trip_through_rust_analyzers_spelling() {
-        let root = Path::new(r"E:\CodeBase\proj");
-        assert_eq!(path_to_uri(root), "file:///E:/CodeBase/proj");
+    fn a_rename_naming_an_unreadable_file_writes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        let main = root.path().join("src/main.rs");
+        std::fs::write(&main, "fn radio() {}\n").unwrap();
+        let readable = path_to_uri(&main);
+        let missing = path_to_uri(&root.path().join("src/驱动/mod.rs"));
 
-        // The server's own spelling of a file under that root: lowercased
-        // drive, colon percent-encoded.
-        assert_eq!(
-            uri_to_relative("file:///e%3A/CodeBase/proj/src/main.rs", root).as_deref(),
-            Some("src/main.rs"),
+        let (reader, writer, _seen) = fake_server(move |message, writer| {
+            if method(message) == "textDocument/rename" {
+                let edit = json!({
+                    "range": {
+                        "start": { "line": 0, "character": 3 },
+                        "end": { "line": 0, "character": 8 },
+                    },
+                    "newText": "tuner",
+                });
+                // Cloned per call: the handler may answer more than once,
+                // and a key moved out of an `FnMut` cannot.
+                let (readable, missing) = (readable.clone(), missing.clone());
+                reply(
+                    writer,
+                    message,
+                    json!({ "changes": { readable: [edit], missing: [edit] } }),
+                );
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("src/main.rs", "fn radio() {}\n").unwrap();
+
+        let outcome = client.rename("src/main.rs", 0, 4, "tuner");
+        assert!(
+            matches!(outcome, Err(Error::Apply { ref path, .. }) if path.contains("驱动")),
+            "{outcome:?}",
         );
         assert_eq!(
-            uri_to_relative("file:///E:/CodeBase/proj/src/main.rs", root).as_deref(),
-            Some("src/main.rs"),
+            std::fs::read_to_string(&main).unwrap(),
+            "fn radio() {}\n",
+            "nothing may be written when part of the rename cannot be",
         );
-        // A dependency's source is not in the project.
-        assert_eq!(uri_to_relative("file:///E:/other/place/lib.rs", root), None,);
-    }
-
-    #[test]
-    fn spaces_survive_the_uri() {
-        let root = Path::new(r"E:\code base\p");
-        let uri = path_to_uri(root);
-        assert_eq!(uri, "file:///E:/code%20base/p");
-        assert_eq!(
-            uri_to_relative(&format!("{uri}/src/a.rs"), root).as_deref(),
-            Some("src/a.rs"),
-        );
-    }
-
-    /// The layout this exists for: a workspace whose firmware is excluded
-    /// because it cross-compiles. Without the link, every file under it comes
-    /// back "not included in any crates" and the editor is inert in exactly
-    /// the half of the repository this workbench is for.
-    #[test]
-    fn an_excluded_firmware_crate_is_linked() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[workspace]
-members = [\"core\"]
-exclude = [\"firmware\"]
-",
-        )
-        .expect("root manifest");
-        std::fs::create_dir(root.join("firmware")).expect("mkdir");
-        std::fs::write(
-            root.join("firmware/Cargo.toml"),
-            "[package]
-name = \"fw\"
-",
-        )
-        .expect("firmware manifest");
-
-        let linked = linked_projects(root);
-        assert_eq!(linked.len(), 1, "{linked:?}");
-        assert!(linked[0].ends_with("Cargo.toml"));
-        assert!(linked[0].contains("firmware"));
-    }
-
-    /// An excluded directory that is not a crate — a fixture tree, a vendored
-    /// copy — must not be handed to rust-analyzer as a project. It would fail
-    /// to load and the failure reads as the server being broken.
-    #[test]
-    fn an_excluded_directory_with_no_manifest_is_not_linked() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[workspace]
-exclude = [\"fixtures\"]
-",
-        )
-        .expect("root manifest");
-        std::fs::create_dir(root.join("fixtures")).expect("mkdir");
-        assert!(linked_projects(root).is_empty());
-    }
-
-    /// An ordinary project excludes nothing, and must be left entirely alone:
-    /// naming `linkedProjects` at all changes how rust-analyzer discovers the
-    /// workspace, so the option has to stay absent rather than empty.
-    #[test]
-    fn a_plain_workspace_links_nothing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[package]
-name = \"solo\"
-",
-        )
-        .expect("manifest");
-        assert!(linked_projects(root).is_empty());
-        assert!(linked_projects(Path::new("/nowhere-at-all")).is_empty());
     }
 }

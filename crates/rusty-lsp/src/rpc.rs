@@ -9,6 +9,15 @@ use std::io::{BufRead, Write};
 
 use serde_json::Value;
 
+/// The largest frame the reader will allocate for.
+///
+/// A whole-project semantic-tokens reply is a few megabytes; nothing
+/// rust-analyzer sends approaches this. A `Content-Length` beyond it means
+/// the stream has drifted — a header parsed out of the middle of a body —
+/// and the honest answer is an error, not a request for gigabytes the
+/// allocator would grant and the machine would feel.
+const MAX_FRAME: usize = 256 * 1024 * 1024;
+
 pub fn write_message(writer: &mut dyn Write, body: &Value) -> std::io::Result<()> {
     let text = serde_json::to_string(body)?;
     write!(writer, "Content-Length: {}\r\n\r\n", text.len())?;
@@ -40,6 +49,12 @@ pub fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>>
             "a message frame with no Content-Length",
         ));
     };
+    if length > MAX_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("a message frame claiming {length} bytes — the stream has drifted"),
+        ));
+    }
 
     let mut buffer = vec![0u8; length];
     reader.read_exact(&mut buffer)?;
@@ -69,5 +84,16 @@ mod tests {
             Some(json!({"msg": "中文", "n": 2})),
         );
         assert_eq!(read_message(&mut reader).unwrap(), None, "clean EOF");
+    }
+
+    /// A header read out of the middle of a body can claim any length at
+    /// all. Allocating it would be honouring garbage with gigabytes.
+    #[test]
+    fn an_absurd_content_length_is_an_error_not_an_allocation() {
+        let wire = b"Content-Length: 99999999999\r\n\r\n{}";
+        let mut reader = std::io::BufReader::new(wire.as_slice());
+        let error = read_message(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("drifted"), "{error}");
     }
 }

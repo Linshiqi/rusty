@@ -125,25 +125,6 @@ pub struct CodeActionFix {
     pub edits: Vec<ActionEdit>,
 }
 
-/// One file's share of a rename.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileEdits {
-    pub path: String,
-    pub edits: Vec<ActionEdit>,
-}
-
-/// What renaming a symbol would change, everywhere.
-///
-/// Unlike a code action this must *not* refuse when other files are
-/// involved: a `pub fn` renamed in one file and not its callers is a broken
-/// build, and that is the normal case rather than the exception.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenameEdits {
-    pub files: Vec<FileEdits>,
-}
-
 /// One run of semantic colour, as rust-analyzer sees the code.
 ///
 /// The kind is the server's own legend name (`function`, `struct`,

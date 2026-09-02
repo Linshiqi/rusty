@@ -246,13 +246,20 @@ mod tests {
 
     #[test]
     fn multibyte_edits_stay_on_char_boundaries() {
-        // 中 → 史 shares the first UTF-8 byte (0xE4), so a byte-wise prefix
-        // lands mid-character and must back up.
+        // 中 (E4 B8 AD) → 世 (E4 B8 96) shares its first *two* UTF-8 bytes,
+        // so a byte-wise prefix lands mid-character and must back up. The
+        // fixture used to be 中 → 史 (E5 8F B2), which shares no byte at all
+        // and so never exercised the back-up it claimed to.
         let old = "let a = \"中\";";
-        let new = "let a = \"史\";";
+        let new = "let a = \"世\";";
+        assert_eq!(
+            &old.as_bytes()[9..11],
+            &new.as_bytes()[9..11],
+            "the fixture shares bytes"
+        );
         let (start, end, text) = content_change(old, new, Encoding::Utf16);
         assert_eq!(start, (0, 9));
         assert_eq!(end, (0, 10));
-        assert_eq!(text, "史");
+        assert_eq!(text, "世");
     }
 }
