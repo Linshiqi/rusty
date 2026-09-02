@@ -203,6 +203,13 @@ pub mod window {
 /// The assistant and its configuration.
 pub mod ai {
     pub const ASK: &str = "ai_ask";
+    /// Stop the question in flight. [`ASK`] then resolves with an error whose
+    /// message is exactly [`STOPPED`], rather than with a transcript.
+    pub const CANCEL: &str = "ai_cancel";
+    /// The message [`ASK`] fails with after [`CANCEL`]. Shared so the frontend
+    /// recognises a stop by the constant, not by retyping the sentence — the
+    /// two drifted apart once and every stop then raised the error banner.
+    pub const STOPPED: &str = "The assistant was stopped before it finished.";
     pub const PRESETS: &str = "ai_presets";
     pub const TOOLS: &str = "ai_tools";
     pub const KEY_CONFIGURED: &str = "ai_key_configured";
