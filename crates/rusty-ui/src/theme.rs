@@ -48,18 +48,13 @@ impl Theme {
     }
 }
 
-fn storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.local_storage().ok().flatten()
-}
-
 fn document_element() -> Option<web_sys::Element> {
     web_sys::window()?.document()?.document_element()
 }
 
 /// Read the stored preference. `System` when nothing was ever chosen.
 pub fn stored() -> Theme {
-    storage()
-        .and_then(|s| s.get_item(STORAGE_KEY).ok().flatten())
+    crate::state::local_get(STORAGE_KEY)
         .and_then(|value| Theme::parse(&value))
         .unwrap_or(Theme::System)
 }
@@ -78,9 +73,7 @@ pub fn set(theme: Theme) {
             }
         }
     }
-    if let Some(storage) = storage() {
-        let _ = storage.set_item(STORAGE_KEY, theme.as_str());
-    }
+    crate::state::local_set(STORAGE_KEY, theme.as_str());
 }
 
 /// Apply whatever was stored, at startup.

@@ -28,10 +28,10 @@ pub(super) fn CatalogueSettings() -> impl IntoView {
         >
             <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 font-mono text-footnote select-text">
                 <dt class="text-label-3">{t!("settings.catalogue.built-in")}</dt>
-                <dd class="m-0 text-label-2">"compiled into rusty"</dd>
-                <dt class="text-label-3">"yours"</dt>
+                <dd class="m-0 text-label-2">{t!("settings.catalogue.built-in-where")}</dd>
+                <dt class="text-label-3">{t!("settings.catalogue.yours")}</dt>
                 <dd class="m-0">"%APPDATA%\\rusty\\boards\\*.toml"</dd>
-                <dt class="text-label-3">"project"</dt>
+                <dt class="text-label-3">{t!("settings.catalogue.project")}</dt>
                 <dd class="m-0">".rusty/boards/*.toml"</dd>
             </dl>
         </Field>

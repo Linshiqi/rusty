@@ -24,32 +24,22 @@ pub fn install(state: AppState) {
         // "Height is the distance to the bottom of the window" ignored the
         // status bar and the dock's own tab strip — 59 pixels between them —
         // so the divider ran that far from the pointer for the whole drag.
-        match divider {
-            Divider::Tree => {
-                let width = (from_size + (event.client_x() as f64 - from_pointer)).clamp(min, max);
-                state.layout.tree_width.set(width);
-            }
+        let travel = match divider {
+            Divider::Tree | Divider::DebugStack => event.client_x() as f64 - from_pointer,
             // Anchored to the bottom, so dragging up grows it.
-            Divider::Dock => {
-                let height = (from_size + (from_pointer - event.client_y() as f64)).clamp(min, max);
-                state.layout.dock_height.set(height);
-            }
-            Divider::DebugStack => {
-                let width = (from_size + (event.client_x() as f64 - from_pointer)).clamp(min, max);
-                state.layout.debug_width.set(width);
-            }
-        }
+            Divider::Dock => from_pointer - event.client_y() as f64,
+        };
+        state
+            .layout
+            .size_signal(divider)
+            .set((from_size + travel).clamp(min, max));
     });
 
     let up_handle = window_event_listener(ev::mouseup, move |_| {
         // Written on release rather than on every move: dragging fires dozens
         // of events a second, and localStorage is synchronous.
         if let Some(divider) = state.layout.dragging.get_untracked() {
-            let value = match divider {
-                Divider::Tree => state.layout.tree_width.get_untracked(),
-                Divider::Dock => state.layout.dock_height.get_untracked(),
-                Divider::DebugStack => state.layout.debug_width.get_untracked(),
-            };
+            let value = state.layout.size_signal(divider).get_untracked();
             remember_size(divider, value);
             state.layout.dragging.set(None);
         }
@@ -81,17 +71,12 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                 // Without this the drag selects text across the whole window,
                 // which looks like the app has broken.
                 event.prevent_default();
-                let (pointer, size) = match divider {
-                    Divider::Tree => {
-                        (event.client_x() as f64, state.layout.tree_width.get_untracked())
-                    }
-                    Divider::Dock => {
-                        (event.client_y() as f64, state.layout.dock_height.get_untracked())
-                    }
-                    Divider::DebugStack => {
-                        (event.client_x() as f64, state.layout.debug_width.get_untracked())
-                    }
+                let pointer = if vertical {
+                    event.client_x() as f64
+                } else {
+                    event.client_y() as f64
                 };
+                let size = state.layout.size_signal(divider).get_untracked();
                 state.layout.drag_from.set((pointer, size));
                 state.layout.dragging.set(Some(divider));
             }

@@ -29,9 +29,14 @@ use rusty_i18n::t;
 use crate::{
     controller,
     state::AppState,
-    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
+    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator, register_toolbar},
     view::icon::{Icon, IconView},
 };
+
+/// How far the sheet zooms, as a scale factor. Fit-to-view and the wheel
+/// both clamp to it; spelled once so the two cannot disagree about what
+/// "as far as it goes" means.
+const CANVAS_ZOOM_RANGE: (f64, f64) = (0.35, 2.5);
 
 #[component]
 pub fn Simulate() -> impl IntoView {
@@ -55,7 +60,7 @@ pub fn Simulate() -> impl IntoView {
         }
         let Some(plan) = state.sim.plan.get() else {
             return view! {
-                <p class="px-5 py-4 text-callout text-label-3">"Working out the plan…"</p>
+                <p class="px-5 py-4 text-callout text-label-3">{t!("simulate.planning")}</p>
             }
             .into_any();
         };
@@ -149,18 +154,19 @@ pub fn Simulate() -> impl IntoView {
                     })}
 
                 <BoardEditor
-                    board=plan.board.clone().unwrap_or_else(|| SimBoard {
-                        chip: "esp32".to_string(),
-                        kit_x: None,
-                        kit_y: None,
-                        leds: Vec::new(),
-                        buttons: Vec::new(),
-                        rgbs: Vec::new(),
-                        sevens: Vec::new(),
-                        displays: Vec::new(),
-                        pots: Vec::new(),
-            motors: Vec::new(),
-            analogs: Vec::new(),
+                    // No board file yet: an empty sheet for the *project's*
+                    // chip. This used to default to "esp32", which drew the
+                    // classic 30-pin header — GPIO34–39 included — over a C3
+                    // project, and a wire could be dropped on a pin the part
+                    // does not have. No chip draws rails only, which is the
+                    // honest picture of a project rusty could not identify.
+                    board=plan.board.clone().unwrap_or_else(|| {
+                        let chip = state
+                            .project
+                            .detected
+                            .with_untracked(|p| p.as_ref().and_then(|p| p.chip.clone()))
+                            .unwrap_or_default();
+                        geometry::empty_board(&chip, None)
                     })
                     blocked=blocked
                     debuggable=plan.debug.is_some()
@@ -319,7 +325,9 @@ fn BoardEditor(
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        let k = (rect.width() / w).min(rect.height() / h).clamp(0.35, 2.5);
+        let k = (rect.width() / w)
+            .min(rect.height() / h)
+            .clamp(CANVAS_ZOOM_RANGE.0, CANVAS_ZOOM_RANGE.1);
         view.set((-(min.0 - 40.0) * k, -(min.1 - 40.0) * k, k));
     };
 
@@ -497,13 +505,7 @@ fn BoardEditor(
                     }
         .into_any()
     });
-    Effect::new(move |_| {
-        state.layout.toolbar.set(Some(toolbar));
-    });
-    // Unconditional clear is safe because the stage drops the old panel
-    // before building the next: our cleanup always runs before a successor
-    // registers.
-    on_cleanup(move || state.layout.toolbar.set(None));
+    register_toolbar(state, toolbar);
 
     view! {
         <div class="flex min-h-0 flex-1 flex-col">
@@ -589,7 +591,7 @@ fn BoardEditor(
                         let cy = f64::from(event.client_y()) - rect.top();
                         view.update(|(tx, ty, k)| {
                             let factor = if event.delta_y() < 0.0 { 1.12 } else { 1.0 / 1.12 };
-                            let next = (*k * factor).clamp(0.35, 2.5);
+                            let next = (*k * factor).clamp(CANVAS_ZOOM_RANGE.0, CANVAS_ZOOM_RANGE.1);
                             let real = next / *k;
                             *tx = cx - (cx - *tx) * real;
                             *ty = cy - (cy - *ty) * real;
@@ -828,15 +830,7 @@ fn BoardEditor(
                             let kit = kit_pos.get_untracked();
                             parts.update(|list| {
                                 if let Some(p) = list.get_mut(part) {
-                                    let pin = p.pins[slot];
-                                    if let Some(row) = row_of_gpio(&rows.get_untracked(), pin) {
-                                        let mut full = vec![stub_point(p, slot)];
-                                        full.extend(p.waypoints[slot].iter().copied());
-                                        full.push(row_point(kit, rows.get_untracked().len(), row));
-                                        let tidy = simplify_route(full);
-                                        p.waypoints[slot] =
-                                            tidy[1..tidy.len() - 1].to_vec();
-                                    }
+                                    retidy(p, slot, kit, &rows.get_untracked());
                                 }
                             });
                         }
@@ -852,15 +846,7 @@ fn BoardEditor(
                                         if p.waypoints[slot].is_empty() {
                                             continue;
                                         }
-                                        let Some(row) = row_of_gpio(&rows.get_untracked(), p.pins[slot]) else {
-                                            continue;
-                                        };
-                                        let mut full = vec![stub_point(p, slot)];
-                                        full.extend(p.waypoints[slot].iter().copied());
-                                        full.push(row_point(kit, rows.get_untracked().len(), row));
-                                        let tidy = simplify_route(full);
-                                        p.waypoints[slot] =
-                                            tidy[1..tidy.len() - 1].to_vec();
+                                        retidy(p, slot, kit, &rows.get_untracked());
                                     }
                                 }
                             });
@@ -1167,7 +1153,7 @@ fn BoardEditor(
                                                 _ => "animation: none".to_string(),
                                             };
                                             let readout = move || match duty(pins[0]) {
-                                                None => "— no duty reported".to_string(),
+                                                None => t!("simulate.no-duty"),
                                                 Some(d) => {
                                                     format!("{:.0}% {}", d * 100.0, drive().label())
                                                 }
@@ -1972,9 +1958,7 @@ fn BoardEditor(
                                         {format!("{} → GPIO{pin}", part.label)}
                                     </p>
                                     <p class="text-footnote text-label-4">
-                                        {format!(
-                                            "{bends} bend(s) — drag any segment of the wire to move it; right-click for more",
-                                        )}
+                                        {t!("simulate.wire-bends", bends = bends.to_string())}
                                     </p>
                                     <button
                                         type="button"
@@ -2022,14 +2006,14 @@ fn BoardEditor(
                             <div class="flex flex-col gap-2 p-3">
                                 <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                                     {match part.kind {
-                                        PartKind::Led { .. } => "LED",
-                                        PartKind::Button => "Button",
-                                        PartKind::Rgb => "RGB LED",
-                                        PartKind::Seven => "7-segment",
-                                        PartKind::Display => "Display",
-                                        PartKind::Pot => "Potentiometer",
-                                        PartKind::Motor => "Motor",
-                                        PartKind::Analog => "Analog source",
+                                        PartKind::Led { .. } => t!("parts.led"),
+                                        PartKind::Button => t!("parts.button"),
+                                        PartKind::Rgb => t!("parts.rgb"),
+                                        PartKind::Seven => t!("parts.seven"),
+                                        PartKind::Display => t!("parts.display"),
+                                        PartKind::Pot => t!("parts.pot"),
+                                        PartKind::Motor => t!("parts.motor"),
+                                        PartKind::Analog => t!("parts.analog"),
                                     }}
                                 </span>
                                 {(part.kind.wires() > 0)
@@ -2060,8 +2044,7 @@ fn BoardEditor(
                                                     })
                                                     .collect_view()}
                                                 <p class="text-caption leading-snug text-label-4">
-                                                    "wire pins by dragging the gold stubs to \
-                                                     the chip"
+                                                    {t!("simulate.wire-hint")}
                                                 </p>
                                             </div>
                                         }
@@ -2071,17 +2054,17 @@ fn BoardEditor(
                                         view! {
                                             <div class="flex items-center gap-1.5">
                                                 {[
-                                                    ("green", "bg-[#3ddc84]"),
-                                                    ("blue", "bg-[#4aa8ff]"),
-                                                    ("red", "bg-[#ff5c5c]"),
-                                                    ("yellow", "bg-[#ffd75c]"),
+                                                    ("green", "bg-[#3ddc84]", t!("parts.color-green")),
+                                                    ("blue", "bg-[#4aa8ff]", t!("parts.color-blue")),
+                                                    ("red", "bg-[#ff5c5c]", t!("parts.color-red")),
+                                                    ("yellow", "bg-[#ffd75c]", t!("parts.color-yellow")),
                                                 ]
                                                     .into_iter()
-                                                    .map(|(name, swatch)| {
+                                                    .map(|(name, swatch, label)| {
                                                         view! {
                                                             <button
                                                                 type="button"
-                                                                title=name
+                                                                title=label
                                                                 on:click=move |_| {
                                                                     checkpoint();
                                                                     parts.update(|list| {
@@ -2107,16 +2090,11 @@ fn BoardEditor(
                                     })}
                                 <button
                                     type="button"
-                                    on:click=move |_| {
-                                        checkpoint();
-                                        parts.update(|list| {
-                                            if index < list.len() {
-                                                list.remove(index);
-                                            }
-                                        });
-                                        selected.set(None);
-                                        dirty.set(true);
-                                    }
+                                    // Through `remove_part`, like the menu and
+                                    // the Delete key. This button had its own
+                                    // copy of the removal, and it was the one
+                                    // that forgot to clear the selected wire.
+                                    on:click=move |_| remove_part(index)
                                     class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
                                 >
                                     {t!("simulate.remove-del")}

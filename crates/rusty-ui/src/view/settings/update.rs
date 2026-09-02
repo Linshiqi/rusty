@@ -44,7 +44,7 @@ pub(super) fn UpdateSettings() -> impl IntoView {
                         let url = status.url.clone().unwrap_or_default();
                         view! {
                             <div class="flex items-center gap-3">
-                                <Pill label=format!("{version} available") tone=Tone::Rust />
+                                <Pill label=t!("settings.update.available", version = version.clone()) tone=Tone::Rust />
                                 <Button
                                     label=t!("settings.update.open-release")
                                     kind=ButtonKind::Primary
@@ -66,7 +66,7 @@ pub(super) fn UpdateSettings() -> impl IntoView {
                             .into_any()
                     } else {
                         view! {
-                            <p class="text-callout text-label-2">"This is the newest release."</p>
+                            <p class="text-callout text-label-2">{t!("settings.update.newest")}</p>
                         }
                             .into_any()
                     };

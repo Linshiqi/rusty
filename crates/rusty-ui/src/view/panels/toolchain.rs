@@ -15,7 +15,7 @@ use crate::view::icon::{Icon, IconView};
 use crate::{
     controller,
     state::AppState,
-    view::components::{CommandLine, Dot, Pill, Readout, SectionLabel, Tone},
+    view::components::{CommandLine, Dot, Pill, Readout, SectionLabel, Tone, register_toolbar},
 };
 
 /// What rusty downloaded itself, how much of the disk it is, and the way to
@@ -48,7 +48,7 @@ fn Downloads() -> impl IntoView {
             <div class="mx-4 mb-2 rounded-[8px] border border-line px-3 py-2.5">
                 <div class="flex items-baseline justify-between gap-3">
                     <span class="text-callout text-label-2">
-                        "QEMU and the debuggers rusty downloads live here"{size}
+                        {t!("toolchain.downloads-here")}{size}
                     </span>
                     <button
                         type="button"
@@ -87,16 +87,13 @@ pub fn Toolchain() -> impl IntoView {
         }
         .into_any()
     });
-    Effect::new(move |_| {
-        state.layout.toolbar.set(Some(toolbar));
-    });
-    on_cleanup(move || state.layout.toolbar.set(None));
+    register_toolbar(state, toolbar);
 
     move || {
         let Some(report) = state.project.toolchain.get() else {
             return view! {
                 <div class="flex flex-1 items-center justify-center p-10">
-                    <span class="text-body text-label-2">"Reading the toolchain…"</span>
+                    <span class="text-body text-label-2">{t!("toolchain.reading")}</span>
                 </div>
             }
             .into_any();

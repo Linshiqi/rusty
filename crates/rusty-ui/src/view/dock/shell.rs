@@ -41,7 +41,7 @@ pub(super) fn ShellPicker() -> impl IntoView {
                         .next()
                         .unwrap_or(&preference)
                         .to_string();
-                    choices.push(rusty_embed::ShellChoice {
+                    choices.push(rusty_term::ShellChoice {
                         label: format!("{short} (current)"),
                         value: preference,
                     });

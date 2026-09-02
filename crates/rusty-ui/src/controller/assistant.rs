@@ -3,7 +3,10 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_ai::{AgentEvent, ChatEvent, Message, Preset, ProviderConfig, ToolDef};
+use rusty_ai::{
+    AgentEvent, ChatEvent, Content, Message, Preset, ProviderCheck, ProviderConfig, ToolDef,
+};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -128,17 +131,37 @@ pub fn list_models(state: AppState, config: ProviderConfig, into: RwSignal<Vec<S
 }
 
 /// Check a profile end to end without starting a conversation.
-pub fn check_provider(state: AppState, config: ProviderConfig, into: RwSignal<Option<String>>) {
+///
+/// The answer is facts — reached or not, the model listed or not — and the
+/// settings screen words them. A failed request is an error and lands on the
+/// banner like any other; it used to be read as an empty model list and the
+/// empty list as success.
+pub fn check_provider(
+    state: AppState,
+    config: ProviderConfig,
+    into: RwSignal<Option<ProviderCheck>>,
+) {
     #[derive(serde::Serialize)]
     struct Args {
         config: ProviderConfig,
     }
 
     let args = Args { config };
+    into.set(None);
     track(
         state,
-        async move { ipc::call::<_, String>(cmd::ai::CHECK_PROVIDER, &args).await },
+        async move { ipc::call::<_, ProviderCheck>(cmd::ai::CHECK_PROVIDER, &args).await },
         move |verdict| into.set(Some(verdict)),
+    );
+}
+
+/// Stop the question in flight. The backend cancels the agent loop and
+/// `ask` resolves; whatever text had streamed stays on screen.
+pub fn cancel_ask(state: AppState) {
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::ai::CANCEL, &()).await },
+        |()| {},
     );
 }
 
@@ -184,7 +207,29 @@ pub fn ask(state: AppState, question: String) {
     track(
         state,
         async move {
-            ipc::call_streaming::<_, Vec<Message>>(cmd::ai::ASK, &args, "onEvent", &channel).await
+            let outcome =
+                ipc::call_streaming::<_, Vec<Message>>(cmd::ai::ASK, &args, "onEvent", &channel)
+                    .await;
+            let Err(error) = outcome else {
+                return outcome;
+            };
+            // Any failure ends the streaming state, or the panel says
+            // "thinking" over a question the backend has already given up.
+            state.ai.streaming.set(false);
+            // Stopped on purpose is not a fault: whatever had streamed stays
+            // in the transcript, marked, and no banner is raised. The
+            // backend names a stop with exactly this message.
+            if error.message == cmd::ai::STOPPED {
+                let mut history = state.ai.conversation.get_untracked();
+                let partial = state.ai.pending.get_untracked();
+                if !partial.is_empty() {
+                    history.push(Message::assistant(vec![Content::Text {
+                        text: format!("{partial}\n\n*{}*", t!("assistant.stopped")),
+                    }]));
+                }
+                return Ok(history);
+            }
+            Err(error)
         },
         move |history| {
             // The backend's history is authoritative — it contains the tool

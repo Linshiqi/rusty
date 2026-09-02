@@ -2,6 +2,8 @@
 
 use leptos::prelude::*;
 
+use rusty_i18n::t;
+
 use rusty_embed::{
     CommandPlan, FlashAction, LogLevel, LogLine, LogStream, Probe, SerialPort, Transport,
 };
@@ -134,8 +136,8 @@ pub(super) fn note_exit(state: AppState, code: Option<i32>) {
     let source = state.dock.source;
     set_timeout(move || source.set("app"), std::time::Duration::ZERO);
     let text = match code {
-        Some(0) | None => "— finished".to_string(),
-        Some(code) => format!("— exited with status {code}"),
+        Some(0) | None => t!("misc.finished"),
+        Some(code) => t!("misc.exited-with", code = code.to_string()),
     };
     state.push_log(LogLine {
         stream: LogStream::Stdout,

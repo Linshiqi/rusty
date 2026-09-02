@@ -94,7 +94,7 @@ fn Tree() -> impl IntoView {
             </div>
             {move || {
                 let (parent, dir) = naming.get()?;
-                let hint = if dir { "folder name" } else { "file name" };
+                let hint = if dir { t!("tree.folder-name") } else { t!("tree.file-name") };
                 let shown_parent = if parent.is_empty() {
                     "./".to_string()
                 } else {
@@ -156,7 +156,7 @@ fn Tree() -> impl IntoView {
                     let tree = state.editor.tree.get();
                     if tree.is_empty() {
                         return view! {
-                            <p class="px-3 text-footnote text-label-3">"Nothing to show."</p>
+                            <p class="px-3 text-footnote text-label-3">{t!("tree.empty")}</p>
                         }
                             .into_any();
                     }

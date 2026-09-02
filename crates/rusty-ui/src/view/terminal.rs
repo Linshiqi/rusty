@@ -132,14 +132,20 @@ pub fn TerminalView() -> impl IntoView {
     // Re-measure whenever the dock is dragged. A shell told it has 80 columns
     // while being drawn in 120 wraps its own prompt in the wrong place, which
     // looks like a corrupted terminal rather than a stale size.
+    let focused_once = RwSignal::new(false);
     Effect::new(move |_| {
         let _ = state.layout.dock_height.get();
         if let Some(element) = host.get() {
             measure();
             // Focus on open, so the shell takes keystrokes without a click
             // first. Every terminal does this and its absence reads as "the
-            // terminal is broken".
-            let _ = element.focus();
+            // terminal is broken". Once, though: this effect also runs on
+            // every dock resize, and a terminal that grabbed the keyboard
+            // each time the divider moved took it away from the editor.
+            if !focused_once.get_untracked() {
+                focused_once.set(true);
+                let _ = element.focus();
+            }
         }
     });
 
@@ -351,7 +357,7 @@ pub fn TerminalView() -> impl IntoView {
                         Some(screen) => view! { <Grid screen=screen /> }.into_any(),
                         None => {
                             view! {
-                                <p class="text-callout text-label-2">"Starting a shell…"</p>
+                                <p class="text-callout text-label-2">{t!("terminal.starting")}</p>
                             }
                                 .into_any()
                         }
@@ -524,18 +530,22 @@ fn colour(colour: Colour, fallback: &str) -> String {
 /// keys nothing here binds — so the caller can leave those to the browser
 /// rather than swallowing them.
 fn encode(event: &ev::KeyboardEvent) -> Option<Vec<u8>> {
-    let key = event.key();
+    encode_key(&event.key(), event.ctrl_key(), event.alt_key())
+}
 
+/// The arithmetic behind [`encode`], on the three facts of a keypress that
+/// matter to a terminal — so it can be tested without a browser event.
+fn encode_key(key: &str, ctrl: bool, alt: bool) -> Option<Vec<u8>> {
     // Control codes first: `Ctrl C` is 0x03, and it must reach the shell rather
     // than being read as the letter C.
-    if event.ctrl_key() && !event.alt_key() {
+    if ctrl && !alt {
         let mut chars = key.chars();
         if let (Some(c), None) = (chars.next(), chars.next())
             && c.is_ascii_alphabetic()
         {
             return Some(vec![(c.to_ascii_uppercase() as u8) & 0x1f]);
         }
-        match key.as_str() {
+        match key {
             "[" => return Some(vec![0x1b]),
             "\\" => return Some(vec![0x1c]),
             "]" => return Some(vec![0x1d]),
@@ -543,7 +553,7 @@ fn encode(event: &ev::KeyboardEvent) -> Option<Vec<u8>> {
         }
     }
 
-    let bytes: &[u8] = match key.as_str() {
+    let bytes: &[u8] = match key {
         "Enter" => b"\r",
         // DEL, not BS. Every modern shell's line editor expects 0x7f, and
         // sending 0x08 makes backspace print `^H` instead of deleting.
@@ -574,8 +584,48 @@ fn encode(event: &ev::KeyboardEvent) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::colour;
+    use super::{colour, encode_key};
     use rusty_term::Colour;
+
+    /// Ctrl+letter is the control code, so Ctrl+C interrupts rather than
+    /// typing a `c`.
+    #[test]
+    fn ctrl_letters_become_control_codes() {
+        assert_eq!(encode_key("c", true, false), Some(vec![0x03]));
+        assert_eq!(encode_key("C", true, false), Some(vec![0x03]));
+        assert_eq!(encode_key("[", true, false), Some(vec![0x1b]));
+        // Ctrl+Alt is AltGr on many layouts and types a character.
+        assert_eq!(encode_key("@", true, true), Some(b"@".to_vec()));
+    }
+
+    /// Backspace is DEL, not BS: a shell's line editor given 0x08 prints
+    /// `^H` instead of deleting.
+    #[test]
+    fn backspace_is_del() {
+        assert_eq!(encode_key("Backspace", false, false), Some(vec![0x7f]));
+        assert_eq!(encode_key("Enter", false, false), Some(b"\r".to_vec()));
+    }
+
+    /// Named keys become their escape sequences; modifiers on their own
+    /// send nothing, so the browser keeps them.
+    #[test]
+    fn named_keys_encode_and_bare_modifiers_do_not() {
+        assert_eq!(
+            encode_key("ArrowUp", false, false),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            encode_key("Delete", false, false),
+            Some(b"\x1b[3~".to_vec())
+        );
+        assert_eq!(encode_key("Shift", false, false), None);
+        assert_eq!(encode_key("F5", false, false), None);
+        // A typed character, including one outside ASCII, is itself.
+        assert_eq!(
+            encode_key("中", false, false),
+            Some("中".as_bytes().to_vec())
+        );
+    }
 
     #[test]
     fn base_colours_stay_themeable() {

@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_embed::{CommandPlan, LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -16,7 +17,7 @@ use crate::{
 /// Ask crates.io about every direct dependency. Slow by design — one index
 /// request per crate — so only the panel's own ask triggers it.
 pub fn load_crate_report(state: AppState) {
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     state.project.crate_rows.set(None);
@@ -38,8 +39,7 @@ pub fn upgrade_crate(state: AppState, name: String, version: String) {
         program: "cargo".to_string(),
         args: vec!["add".to_string(), format!("{name}@{version}")],
         display: format!("cargo add {name}@{version}"),
-        rationale: "updates Cargo.toml to the requested version and re-resolves the lockfile"
-            .to_string(),
+        rationale: t!("crates.upgrade-rationale"),
         warning: None,
     };
     #[derive(serde::Serialize)]

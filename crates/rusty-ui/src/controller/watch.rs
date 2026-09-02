@@ -34,7 +34,7 @@ use crate::{
 pub fn start_watch(state: AppState) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     // A project switch leaves the old watcher's channel alive until its
@@ -84,10 +84,7 @@ fn absorb(state: AppState, changes: FileChanges) {
 /// notice it: the watcher is debounced, and a failure to start it is silence
 /// by design. A project-wide replace calls this for each file it changed.
 pub fn follow(state: AppState, path: String) {
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
 
     if active.as_deref() == Some(path.as_str()) {
         let dirty = state.editor.document.with_untracked(|d| {
@@ -157,10 +154,7 @@ fn reload_open(state: AppState, path: String) {
         let Ok(document) = ipc::call::<_, Document>(cmd::files::OPEN, &args).await else {
             return;
         };
-        let active = state
-            .editor
-            .document
-            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        let active = state.active_path_now();
 
         if active.as_deref() == Some(path.as_str()) {
             let dirty = state.editor.draft.with_untracked(|draft| {

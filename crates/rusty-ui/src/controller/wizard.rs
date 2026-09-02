@@ -3,6 +3,8 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use rusty_i18n::t;
+
 use rusty_embed::{
     CommandPlan, Explanation, LogLevel, LogLine, LogStream, WizardChoice, WizardOption,
 };
@@ -74,7 +76,7 @@ pub fn create_project(state: AppState, choice: WizardChoice) {
 
     spawn_local(async move {
         // Cancelling is not a failure and must not surface as one.
-        let directory = match ipc::pick_folder("Where should the project go?").await {
+        let directory = match ipc::pick_folder(&t!("misc.pick-destination")).await {
             Ok(Some(directory)) => directory,
             Ok(None) => return,
             Err(e) => {

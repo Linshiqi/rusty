@@ -32,10 +32,10 @@ pub(super) fn DevicesTab() -> impl IntoView {
                 <Dot tone=Tone::Neutral />
                 <span class="text-footnote text-label-3">
                     {move || {
-                        format!(
-                            "named against {} boards and {} chips",
-                            state.project.boards.with(Vec::len),
-                            state.project.chips.with(Vec::len),
+                        t!(
+                            "dock.devices.named-against",
+                            boards = state.project.boards.with(Vec::len).to_string(),
+                            chips = state.project.chips.with(Vec::len).to_string()
                         )
                     }}
                 </span>

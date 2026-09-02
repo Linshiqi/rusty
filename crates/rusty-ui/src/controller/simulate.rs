@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_embed::{LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -15,7 +16,7 @@ use crate::{
 
 /// Ask how this project would be simulated.
 pub fn load_sim_plan(state: AppState) {
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     track(
@@ -275,10 +276,11 @@ pub enum Feed {
 }
 
 impl Feed {
-    pub fn label(self) -> &'static str {
+    /// What the Flight tab calls this feed, in the window's language.
+    pub fn label(self) -> String {
         match self {
-            Feed::Rates => "rates",
-            Feed::Accelerometer => "gravity",
+            Feed::Rates => t!("dock.flight.feed-rates"),
+            Feed::Accelerometer => t!("dock.flight.feed-gravity"),
         }
     }
 }
@@ -347,13 +349,12 @@ pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSi
     });
 }
 
-/// Open the dock terminal and type the gdb attach line into it.
+/// Open the dock terminal and type the gdb attach line into it — the escape
+/// hatch for anything the debug panel does not model (raw registers, `x/16x`,
+/// a scripted `commands` block). The in-app session owns the ordinary path.
 ///
 /// The shell does the launching, so the user sees exactly what ran and owns
 /// the REPL afterwards — break, step, print are theirs, not wrapped.
-/// Open gdb's own REPL in the terminal — the escape hatch for anything the
-/// debug panel does not model (raw registers, `x/16x`, a scripted `commands`
-/// block). The in-app session owns the ordinary path.
 pub fn attach_debugger_terminal(state: AppState, command: String) {
     state.show_dock(crate::state::DockTab::Terminal);
     // `terminal` holds the shell's latest frame; None means no shell yet.

@@ -282,6 +282,21 @@ pub enum Divider {
 }
 
 impl Divider {
+    pub const ALL: [Divider; 3] = [Divider::Tree, Divider::Dock, Divider::DebugStack];
+
+    /// Where a divider sits before anyone has dragged it, in pixels.
+    ///
+    /// Spelled once: the boot default and View ▸ Reset layout both read it,
+    /// so a divider added here is reset there without a second copy of the
+    /// number to forget.
+    pub fn default_size(self) -> f64 {
+        match self {
+            Divider::Tree => 240.0,
+            Divider::Dock => 196.0,
+            Divider::DebugStack => 420.0,
+        }
+    }
+
     /// Bounds, in pixels. The lower one keeps a region usable rather than
     /// letting it be dragged to nothing — collapsing is what the toggle is for,
     /// and a two-pixel sidebar is not a smaller sidebar, it is a mistake.
@@ -327,54 +342,80 @@ fn detached_path() -> Option<String> {
     String::from_utf8(out).ok().filter(|p| !p.is_empty())
 }
 
+/// This window's own storage — the short list the storage rule allows here:
+/// theme, divider positions, the two zooms, the pin map's fold, the locale
+/// cache. `None` when the WebView has nothing, which every caller reads as
+/// "never chosen". One door, so the twelve copies of the
+/// `window → local_storage → ok → flatten` chain became one.
+pub fn local_get(key: &str) -> Option<String> {
+    web_sys::window()?
+        .local_storage()
+        .ok()
+        .flatten()?
+        .get_item(key)
+        .ok()
+        .flatten()
+}
+
+pub fn local_set(key: &str, value: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = storage.set_item(key, value);
+    }
+}
+
+/// Read a key and delete it — for a value that moved to `workbench.toml`
+/// and is carried across exactly once, so the key cannot linger to be
+/// misread by a later version.
+pub fn local_take(key: &str) -> Option<String> {
+    let storage = web_sys::window()?.local_storage().ok().flatten()?;
+    let raw = storage.get_item(key).ok().flatten()?;
+    let _ = storage.remove_item(key);
+    Some(raw)
+}
+
+/// The editor's font scale, as a factor of the 12.5px base. The wheel, the
+/// settings buttons and the stored value all clamp to it, so a hand-edited
+/// absurd value cannot produce a 300px caret. Three sites each spelled the
+/// pair of numbers before this.
+pub const EDITOR_ZOOM_RANGE: (f64, f64) = (0.6, 2.4);
+
+/// The interface scale — the slider's own range.
+pub const UI_ZOOM_RANGE: (f64, f64) = (0.7, 1.6);
+
 fn stored_size(divider: Divider, fallback: f64) -> f64 {
     let (min, max) = divider.bounds();
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item(divider.storage_key()).ok().flatten())
+    local_get(divider.storage_key())
         .and_then(|v| v.parse::<f64>().ok())
         .map(|v| v.clamp(min, max))
         .unwrap_or(fallback)
 }
 
-/// Editor font scale from last time. 1.0 is the 12.5px base; the wheel
-/// clamps to the same range, so a hand-edited absurd value cannot produce
-/// a 300px caret.
+/// Editor font scale from last time.
 fn stored_zoom() -> f64 {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item("rusty.editor.zoom").ok().flatten())
+    local_get("rusty.editor.zoom")
         .and_then(|v| v.parse::<f64>().ok())
-        .map(|z| z.clamp(0.6, 2.4))
+        .map(|z| z.clamp(EDITOR_ZOOM_RANGE.0, EDITOR_ZOOM_RANGE.1))
         .unwrap_or(1.0)
 }
 
-/// The interface scale from last time, clamped to the slider's own range.
+/// The interface scale from last time.
 fn stored_ui_zoom() -> f64 {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item("rusty.ui.zoom").ok().flatten())
+    local_get("rusty.ui.zoom")
         .and_then(|v| v.parse::<f64>().ok())
-        .map(|z| z.clamp(0.7, 1.6))
+        .map(|z| z.clamp(UI_ZOOM_RANGE.0, UI_ZOOM_RANGE.1))
         .unwrap_or(1.0)
 }
 
 pub fn remember_ui_zoom(zoom: f64) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item("rusty.ui.zoom", &format!("{zoom:.2}"));
-    }
+    local_set("rusty.ui.zoom", &format!("{zoom:.2}"));
 }
 
 pub fn remember_zoom(zoom: f64) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item("rusty.editor.zoom", &format!("{zoom:.2}"));
-    }
+    local_set("rusty.editor.zoom", &format!("{zoom:.2}"));
 }
 
 pub fn remember_size(divider: Divider, value: f64) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item(divider.storage_key(), &value.to_string());
-    }
+    local_set(divider.storage_key(), &value.to_string());
 }
 
 const PROVIDER_KEY: &str = "rusty.assistant.provider";
@@ -386,10 +427,7 @@ const PROVIDER_KEY: &str = "rusty.assistant.provider";
 /// secret — the key itself lives in the OS credential store and is fetched by
 /// the backend at the moment of the request, so it never enters this window.
 pub fn carried_provider() -> Option<ProviderConfig> {
-    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten())?;
-    let raw = storage.get_item(PROVIDER_KEY).ok().flatten()?;
-    let _ = storage.remove_item(PROVIDER_KEY);
-    serde_json::from_str(&raw).ok()
+    serde_json::from_str(&local_take(PROVIDER_KEY)?).ok()
 }
 
 /// How many lines of device output to keep.
@@ -728,7 +766,7 @@ pub struct Sim {
     pub link_port: RwSignal<Option<String>>,
     /// Pin levels for the board view, from whichever source [`sim_pin_source`]
     /// names.
-    pub gpio: RwSignal<std::collections::HashMap<u8, bool>>,
+    pub gpio: RwSignal<HashMap<u8, bool>>,
     /// Duty cycles for the board view, from `[rusty:pwm]` — the analogue
     /// half of [`Self::gpio`], and what a motor turns on.
     ///
@@ -736,7 +774,7 @@ pub struct Sim {
     /// and a motor on it says so rather than showing a commanded stop; a pin
     /// mapped to `0.0` was told to stop. The two look the same on a dial and
     /// mean opposite things when a motor will not start.
-    pub pwm: RwSignal<std::collections::HashMap<u8, f32>>,
+    pub pwm: RwSignal<HashMap<u8, f32>>,
     /// Sensors the firmware has declared it wants fed, newest wins by name.
     ///
     /// Declared rather than guessed, for the reason the tunables are: a panel
@@ -747,9 +785,9 @@ pub struct Sim {
     /// The last sample the panel *sent* for each sensor — what its sliders
     /// sit at. Not what the firmware did with it, which only the firmware can
     /// say and only by printing something.
-    pub sensor_values: RwSignal<std::collections::HashMap<String, Vec<f32>>>,
+    pub sensor_values: RwSignal<HashMap<String, Vec<f32>>>,
     /// Raw ADC counts the panel is holding on each pin.
-    pub analog: RwSignal<std::collections::HashMap<u8, u16>>,
+    pub analog: RwSignal<HashMap<u8, u16>>,
     /// The simulated aircraft, when the physical loop is closed.
     ///
     /// Injecting a rate proves the controller *responds*; it cannot show
@@ -813,22 +851,26 @@ pub struct Terminal {
     /// programs that redraw — every progress bar, every prompt redraw after a
     /// backspace — overwrite what is there rather than adding to it.
     pub screen: RwSignal<Option<TermScreen>>,
-    /// What shell the terminal will start, from the backend.
     /// Which terminal session is current. Bumped by every open; a session's
     /// frame and completion callbacks compare before writing, so a replaced
     /// session's late "the shell is gone" cannot blank the one that
     /// replaced it — which looked like the terminal flickering for ever.
     pub epoch: RwSignal<u64>,
-    pub info: RwSignal<Option<rusty_embed::ShellInfo>>,
+    /// What shell the terminal will start, from the backend.
+    pub info: RwSignal<Option<rusty_term::ShellInfo>>,
     /// What the shell picker offers: the built-in plus every shell the
     /// backend actually found on this machine.
-    pub choices: RwSignal<Vec<rusty_embed::ShellChoice>>,
+    pub choices: RwSignal<Vec<rusty_term::ShellChoice>>,
 }
 
 /// Where the dividers sit and what is on screen. Sizes are the one thing
 /// here that survives a reload, in localStorage.
 #[derive(Clone, Copy)]
 pub struct Layout {
+    /// Sidebar width and dock height, in pixels, remembered across sessions.
+    ///
+    /// A fixed-size panel is the first thing anyone tries to drag, and finding
+    /// that they cannot is the moment a tool starts feeling rigid.
     pub tree_width: RwSignal<f64>,
     pub dock_height: RwSignal<f64>,
     /// How much of the Debug tab the call stack gets.
@@ -855,17 +897,30 @@ pub struct Layout {
     pub zoom: RwSignal<f64>,
 }
 
+impl Layout {
+    /// The signal a divider drives. One mapping, so the drag handles, the
+    /// boot restore and Reset layout cannot disagree about which region a
+    /// divider resizes.
+    pub fn size_signal(&self, divider: Divider) -> RwSignal<f64> {
+        match divider {
+            Divider::Tree => self.tree_width,
+            Divider::Dock => self.dock_height,
+            Divider::DebugStack => self.debug_width,
+        }
+    }
+}
+
 /// The output dock: everything any tool has said, and how it is filtered.
 #[derive(Clone, Copy)]
 pub struct Dock {
-    /// Everything spawned tools have printed, oldest first.
+    /// Everything spawned tools have printed, oldest first, each line tagged
+    /// with the channel that was speaking — build, flash, simulate — so the
+    /// Output panel can show one conversation at a time, the way VSCode's
+    /// channel picker does.
     ///
     /// Lives here rather than in the Flash panel so it survives switching
     /// panels — watching a device is something you do *while* reading the
     /// memory report, not instead of it.
-    /// Device and tool output, each line tagged with the channel that was
-    /// speaking — build, flash, simulate — so the Output panel can show one
-    /// conversation at a time, the way VSCode's channel picker does.
     pub lines: RwSignal<Vec<(&'static str, LogLine)>>,
     /// Which channel new lines belong to. Sessions set it on start;
     /// `note_exit` drops it back to "app", where one-off notices live.
@@ -889,10 +944,6 @@ pub struct Workbench {
     /// workbench.toml, so the list survives restarts and belongs to the data
     /// directory rather than to this window.
     pub recents: RwSignal<Vec<String>>,
-    /// Sidebar width and dock height, in pixels, remembered across sessions.
-    ///
-    /// A fixed-size panel is the first thing anyone tries to drag, and finding
-    /// that they cannot is the moment a tool starts feeling rigid.
     /// `Some(path)` when this window was booted with `?detach=<path>` — a
     /// single file's editor, not the shell. Panels that show project-wide
     /// chrome (the tree, the tab strip) check it; so does everything that
@@ -1066,9 +1117,15 @@ impl AppState {
                 choices: RwSignal::new(Vec::new()),
             },
             layout: Layout {
-                tree_width: RwSignal::new(stored_size(Divider::Tree, 240.0)),
-                dock_height: RwSignal::new(stored_size(Divider::Dock, 196.0)),
-                debug_width: RwSignal::new(stored_size(Divider::DebugStack, 420.0)),
+                tree_width: RwSignal::new(stored_size(Divider::Tree, Divider::Tree.default_size())),
+                dock_height: RwSignal::new(stored_size(
+                    Divider::Dock,
+                    Divider::Dock.default_size(),
+                )),
+                debug_width: RwSignal::new(stored_size(
+                    Divider::DebugStack,
+                    Divider::DebugStack.default_size(),
+                )),
                 dragging: RwSignal::new(None),
                 drag_from: RwSignal::new((0.0, 0.0)),
                 dock_open: RwSignal::new(true),
@@ -1131,8 +1188,34 @@ impl AppState {
         self.app.in_flight.get() > 0
     }
 
+    /// Whether a project is open, tracked — for views and effects, which want
+    /// to re-run when one is opened or closed.
     pub fn has_project(&self) -> bool {
         self.project.detected.with(Option::is_some)
+    }
+
+    /// The same question from a controller or an event handler, where there
+    /// is no reactive owner to subscribe. Asking the tracked form there is
+    /// harmless at run time, but Leptos warns about it on every boot — four
+    /// times, from four controllers — and a warning that is always there is
+    /// one that hides the day it means something.
+    pub fn has_project_now(&self) -> bool {
+        self.project.detected.with_untracked(Option::is_some)
+    }
+
+    /// The path of the document on screen, tracked — for views.
+    pub fn active_path(&self) -> Option<String> {
+        self.editor
+            .document
+            .with(|d| d.as_ref().map(|d| d.path.clone()))
+    }
+
+    /// The same, untracked — for controllers and handlers. The expression
+    /// behind both was written out twenty-three times before this.
+    pub fn active_path_now(&self) -> Option<String> {
+        self.editor
+            .document
+            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
     }
 
     /// Whether this file has edits the disk has not seen.

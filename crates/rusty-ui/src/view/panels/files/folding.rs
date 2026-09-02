@@ -47,6 +47,36 @@ pub(super) fn row_for(state: AppState, line: u32) -> u32 {
     state.editor.folds.with(|f| f.row_for(line))
 }
 
+/// The two layers' inner padding, in pixels — `py-2 pl-2` on both. Every
+/// overlay anchors from here; a fifth copy of the literal `8.0` was how the
+/// cards and the caret could come to disagree about where a line starts.
+pub(super) const PAD_PX: f64 = 8.0;
+
+/// The top edge of the screen row a document line is drawn on, in pixels
+/// from the top of the text column, at this zoom.
+pub(super) fn row_top(state: AppState, line: u32, zoom: f64) -> f64 {
+    PAD_PX + f64::from(row_for(state, line)) * super::row_height(zoom)
+}
+
+/// The left edge of a scalar column on a line, in pixels, at this zoom.
+pub(super) fn col_left(text: &str, line: u32, col: u32, zoom: f64) -> f64 {
+    PAD_PX + super::column_px(text, line, col) * zoom
+}
+
+/// Where a card anchored to `line` sits: hanging from the row above it when
+/// `above`, or starting just under the row otherwise. Returns the `style`
+/// fragment, because the flip is a `translateY` and not a different `top`.
+/// Four popups each had their own copy of these two formulas.
+pub(super) fn card_place(state: AppState, line: u32, zoom: f64, above: bool) -> String {
+    if above {
+        let y = row_top(state, line, zoom) - 4.0;
+        format!("top: {y}px; transform: translateY(-100%)")
+    } else {
+        let y = row_top(state, line, zoom) + super::row_height(zoom) + 2.0;
+        format!("top: {y}px")
+    }
+}
+
 /// The document line a screen row shows. The inverse of [`row_for`], for
 /// anything that starts from a pixel — a click, a hover.
 pub(super) fn line_of_row(state: AppState, row: u32) -> u32 {

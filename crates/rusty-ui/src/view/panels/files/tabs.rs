@@ -27,9 +27,7 @@ pub(super) fn TabStrip() -> impl IntoView {
     view! {
         <div class="flex flex-none items-stretch overflow-x-auto border-b border-line bg-sidebar">
             {move || {
-                let active = state
-                    .editor.document
-                    .with(|d| d.as_ref().map(|d| d.path.clone()))
+                let active = state.active_path()
                     .unwrap_or_default();
                 state
                     .editor.tabs

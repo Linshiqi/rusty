@@ -262,6 +262,29 @@ fn passes_filter(text: &str, filter: &str) -> bool {
     })
 }
 
+#[cfg(test)]
+mod filter_tests {
+    use super::passes_filter;
+
+    /// Terms AND together and ignore case: "warn flash" wants both words.
+    #[test]
+    fn every_term_must_match_and_case_is_ignored() {
+        assert!(passes_filter("FLASH: warning: slow", "warn flash"));
+        assert!(!passes_filter("FLASH: ok", "warn flash"));
+        assert!(passes_filter("anything at all", ""));
+    }
+
+    /// A `!` prefix excludes; a bare `!` while it is being typed excludes
+    /// nothing rather than everything.
+    #[test]
+    fn a_bang_excludes_and_a_bare_bang_is_harmless() {
+        assert!(passes_filter("Compiling blinky", "!warning"));
+        assert!(!passes_filter("warning: unused", "!warning"));
+        assert!(passes_filter("warning: unused", "!"));
+        assert!(passes_filter("error[E0425]", "error !warning"));
+    }
+}
+
 /// Where a right-click on a diagnostic row landed, and what the row named.
 #[derive(Clone)]
 struct DiagMenuAt {

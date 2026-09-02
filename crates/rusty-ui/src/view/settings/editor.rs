@@ -66,7 +66,10 @@ pub(super) fn EditorSettings() -> impl IntoView {
                                         1.0
                                     } else {
                                         (state.editor.zoom.get_untracked() + step * 0.1)
-                                            .clamp(0.6, 2.4)
+                                            .clamp(
+                                                crate::state::EDITOR_ZOOM_RANGE.0,
+                                                crate::state::EDITOR_ZOOM_RANGE.1,
+                                            )
                                     };
                                     state.editor.zoom.set(next);
                                     crate::state::remember_zoom(next);

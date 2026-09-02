@@ -40,11 +40,7 @@ pub fn WavesTab() -> impl IntoView {
 
     // The first paint happens before the plot mounts and would draw into a
     // fallback width; a nudge on mount re-runs it against the real box.
-    Effect::new(move |_| {
-        if plot.get().is_some() {
-            window.update(|_| {});
-        }
-    });
+    plot.on_load(move |_| window.update(|_| {}));
 
     let plot_width = move || {
         plot.get()
@@ -78,9 +74,9 @@ pub fn WavesTab() -> impl IntoView {
                 {move || {
                     let trace = state.sim.trace.get();
                     let clock = match trace.clock {
-                        Some(TraceClock::Firmware) => "clock: firmware systimer (µs)",
-                        Some(TraceClock::Host) => "clock: host arrival time — firmware sent no stamps",
-                        None => "no trace yet — run a simulation",
+                        Some(TraceClock::Firmware) => t!("waves.clock-firmware"),
+                        Some(TraceClock::Host) => t!("waves.clock-host"),
+                        None => t!("waves.no-trace"),
                     };
                     view! {
                         <span class="text-footnote text-label-3">{clock}</span>
@@ -94,7 +90,7 @@ pub fn WavesTab() -> impl IntoView {
                                 }
                             })}
                         <span class="font-mono text-caption text-label-4">
-                            {format!("{} edges", trace.events.len())}
+                            {t!("waves.edges", count = trace.events.len().to_string())}
                         </span>
                     }
                 }}
@@ -212,28 +208,9 @@ pub fn WavesTab() -> impl IntoView {
                     let end = start + width * per_px;
 
                     // Axis ticks at a round step near 100px apart.
-                    let raw = per_px * 100.0;
-                    let step = 10f64.powf(raw.log10().floor());
-                    let step = [step, step * 2.0, step * 5.0, step * 10.0]
-                        .into_iter()
-                        .find(|s| *s >= raw)
-                        .unwrap_or(step);
-                    let first_tick = (start / step).ceil() * step;
-                    let ticks: Vec<f64> = (0..)
-                        .map(|i| first_tick + i as f64 * step)
-                        .take_while(|t| *t <= end)
-                        .take(40)
-                        .collect();
-
-                    let fmt_us = move |us: f64| -> String {
-                        if step >= 1_000_000.0 || us.abs() >= 10_000_000.0 {
-                            format!("{:.2}s", us / 1_000_000.0)
-                        } else if step >= 1_000.0 {
-                            format!("{:.1}ms", us / 1_000.0)
-                        } else {
-                            format!("{us:.0}µs")
-                        }
-                    };
+                    let step = tick_step(per_px);
+                    let ticks = ticks_between(start, end, step);
+                    let fmt_us = move |us: f64| format_us(step, us);
 
                     let lanes = pins
                         .iter()
@@ -408,5 +385,85 @@ pub fn WavesTab() -> impl IntoView {
                 )
             }}
         </div>
+    }
+}
+
+/// A round tick spacing, in microseconds, for a scale of `per_px` µs per
+/// pixel: the smallest of 1, 2, 5 × 10ⁿ that keeps ticks at least a hundred
+/// pixels apart.
+fn tick_step(per_px: f64) -> f64 {
+    let raw = per_px * 100.0;
+    let decade = 10f64.powf(raw.log10().floor());
+    [decade, decade * 2.0, decade * 5.0, decade * 10.0]
+        .into_iter()
+        .find(|s| *s >= raw)
+        .unwrap_or(decade)
+}
+
+/// Every multiple of `step` inside `start..=end`, capped so a runaway scale
+/// cannot draw thousands of labels.
+fn ticks_between(start: f64, end: f64, step: f64) -> Vec<f64> {
+    let first = (start / step).ceil() * step;
+    (0..)
+        .map(|i| first + i as f64 * step)
+        .take_while(|t| *t <= end)
+        .take(40)
+        .collect()
+}
+
+/// A tick label in the unit the scale calls for: seconds once ticks are a
+/// second apart (or the time is past ten), milliseconds from a millisecond
+/// step, microseconds below that.
+fn format_us(step: f64, us: f64) -> String {
+    if step >= 1_000_000.0 || us.abs() >= 10_000_000.0 {
+        format!("{:.2}s", us / 1_000_000.0)
+    } else if step >= 1_000.0 {
+        format!("{:.1}ms", us / 1_000.0)
+    } else {
+        format!("{us:.0}µs")
+    }
+}
+
+#[cfg(test)]
+mod axis_tests {
+    use super::{format_us, tick_step, ticks_between};
+
+    /// Ticks land on 1, 2, 5 × 10ⁿ and never closer than a hundred pixels:
+    /// a scale of 3 µs/px wants a step of at least 300 µs, and the nearest
+    /// round step above that is 500.
+    #[test]
+    fn ticks_are_round_and_at_least_a_hundred_pixels_apart() {
+        assert_eq!(tick_step(3.0), 500.0);
+        assert_eq!(tick_step(1.0), 100.0);
+        assert_eq!(tick_step(0.15), 20.0);
+        assert_eq!(tick_step(12.0), 2000.0);
+    }
+
+    /// The first tick is the first multiple at or after the window's start,
+    /// and none lands past its end.
+    #[test]
+    fn ticks_start_on_a_multiple_inside_the_window() {
+        assert_eq!(
+            ticks_between(130.0, 700.0, 100.0),
+            vec![200.0, 300.0, 400.0, 500.0, 600.0, 700.0]
+        );
+        assert_eq!(ticks_between(0.0, 250.0, 100.0), vec![0.0, 100.0, 200.0]);
+    }
+
+    /// A window many steps wide is capped rather than labelled to death.
+    #[test]
+    fn a_runaway_window_is_capped() {
+        assert_eq!(ticks_between(0.0, 1.0e9, 1.0).len(), 40);
+    }
+
+    /// The unit follows the step, so a millisecond axis does not read
+    /// "1000µs, 2000µs".
+    #[test]
+    fn labels_take_the_unit_of_the_step() {
+        assert_eq!(format_us(100.0, 300.0), "300µs");
+        assert_eq!(format_us(1_000.0, 2_500.0), "2.5ms");
+        assert_eq!(format_us(1_000_000.0, 1_500_000.0), "1.50s");
+        // A late time reads in seconds whatever the step.
+        assert_eq!(format_us(1_000.0, 12_000_000.0), "12.00s");
     }
 }

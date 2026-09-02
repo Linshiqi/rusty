@@ -27,16 +27,11 @@ use crate::{controller, state::AppState};
 const KEY: &str = "rusty.pinmap.open";
 
 fn stored_open() -> bool {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|storage| storage.get_item(KEY).ok().flatten())
-        .is_none_or(|value| value != "0")
+    crate::state::local_get(KEY).is_none_or(|value| value != "0")
 }
 
 fn remember(open: bool) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = storage.set_item(KEY, if open { "1" } else { "0" });
-    }
+    crate::state::local_set(KEY, if open { "1" } else { "0" });
 }
 
 #[component]
@@ -85,7 +80,7 @@ pub fn PinMap() -> impl IntoView {
                     }
                     class="pointer-events-auto absolute right-3 bottom-3 z-20 rounded-[8px] border border-line bg-raised/95 px-2.5 py-1.5 font-mono text-caption text-label-3 shadow-lg transition-colors hover:text-label"
                 >
-                    {chip}" pins"
+                    {t!("pinmap.pins", chip = chip.to_string())}
                 </button>
             }
             .into_any()
@@ -138,7 +133,7 @@ fn Body(report: PinReport) -> impl IntoView {
                                             }
                                             class="block w-full text-left font-mono text-caption text-crimson hover:underline"
                                         >
-                                            "GPIO"{claim.gpio}" — not on this part"
+                                            {t!("pinmap.not-on-part", gpio = claim.gpio.to_string())}
                                         </button>
                                     }
                                 })
@@ -154,8 +149,11 @@ fn Body(report: PinReport) -> impl IntoView {
                 .then(|| {
                     view! {
                         <p class="mt-1.5 text-caption leading-relaxed text-label-4">
-                            {claimed}" of "{report.pins.len()}" named in your source. \
-                             A pin reached through a binding is not seen here."
+                            {t!(
+                                "pinmap.claimed",
+                                claimed = claimed.to_string(),
+                                total = report.pins.len().to_string()
+                            )}
                         </p>
                     }
                 })}
@@ -184,7 +182,7 @@ fn Column(pins: Vec<PinInfo>) -> impl IntoView {
                     };
                     let mut hint = format!("GPIO{}", pin.gpio);
                     if pin.input_only {
-                        hint.push_str(" · input-only");
+                        hint.push_str(&format!(" · {}", t!("pinmap.input-only")));
                     }
                     if let Some(reserved) = &reserved {
                         hint.push_str(&format!(" · {reserved}"));
@@ -196,7 +194,7 @@ fn Column(pins: Vec<PinInfo>) -> impl IntoView {
                         Some(claim) => {
                             hint.push_str(&format!("\n{}:{}\n{}", claim.file, claim.line + 1, claim.text));
                         }
-                        None => hint.push_str("\nfree"),
+                        None => hint.push_str(&format!("\n{}", t!("pinmap.free"))),
                     }
                     let jump = used.clone();
                     view! {

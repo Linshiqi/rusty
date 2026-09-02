@@ -8,6 +8,7 @@ use leptos::task::spawn_local;
 
 use rusty_edit::Line as EditLine;
 use rusty_embed::{LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
 use rusty_lsp::{HoverInfo, LspEvent};
 
 // The sibling modules, flat: `controller` re-exports every one of them,
@@ -18,6 +19,24 @@ use crate::{
     state::{AppState, LspStatus},
 };
 
+/// The buffer as the server should now see it. Sent ahead of every request
+/// that reads the caret, so the answer is about this keystroke's text.
+#[derive(serde::Serialize)]
+struct Sync {
+    path: String,
+    text: String,
+}
+
+/// A position-anchored request: completion, signature help, code actions.
+/// One shape, defined once — it was declared inside each of the three
+/// functions that use it.
+#[derive(serde::Serialize)]
+struct Ask {
+    path: String,
+    line: u32,
+    col: u32,
+}
+
 /// Ask what could complete at the caret.
 ///
 /// The buffer is synced to the server first, without waiting for the pulse:
@@ -25,18 +44,6 @@ use crate::{
 /// 250ms-stale server answers about the wrong world. `did_change` dedups, so
 /// the extra sync costs nothing when the pulse already ran.
 pub fn request_completion(state: AppState, path: String, line: u32, col: u32, word_start: u32) {
-    #[derive(serde::Serialize)]
-    struct Sync {
-        path: String,
-        text: String,
-    }
-    #[derive(serde::Serialize)]
-    struct Ask {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
@@ -54,10 +61,7 @@ pub fn request_completion(state: AppState, path: String, line: u32, col: u32, wo
         if let Ok(items) =
             ipc::call::<_, Vec<rusty_lsp::CompletionItem>>(cmd::lsp::COMPLETE, &ask).await
         {
-            let current = state
-                .editor
-                .document
-                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+            let current = state.active_path_now();
             if current.as_deref() == Some(path.as_str()) && !items.is_empty() {
                 state
                     .editor
@@ -78,18 +82,6 @@ pub fn request_completion(state: AppState, path: String, line: u32, col: u32, wo
 /// Syncs the draft first, like completion does: an answer about stale text
 /// highlights the wrong parameter.
 pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
-    #[derive(serde::Serialize)]
-    struct Sync {
-        path: String,
-        text: String,
-    }
-    #[derive(serde::Serialize)]
-    struct Ask {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
@@ -108,10 +100,7 @@ pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
             .await
             .ok()
             .flatten();
-        let current = state
-            .editor
-            .document
-            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        let current = state.active_path_now();
         if current.as_deref() == Some(path.as_str()) {
             // None clears: the server saying "no call here" is how the card
             // learns the caret left the parentheses.
@@ -126,18 +115,6 @@ pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
 /// Ask what quick fixes exist at the caret, after syncing the draft — an
 /// answer about stale text splices into the wrong place.
 pub fn request_actions(state: AppState, path: String, line: u32, col: u32) {
-    #[derive(serde::Serialize)]
-    struct Sync {
-        path: String,
-        text: String,
-    }
-    #[derive(serde::Serialize)]
-    struct Ask {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
@@ -157,15 +134,12 @@ pub fn request_actions(state: AppState, path: String, line: u32, col: u32) {
         else {
             return;
         };
-        let current = state
-            .editor
-            .document
-            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        let current = state.active_path_now();
         if current.as_deref() == Some(path.as_str()) {
             if fixes.is_empty() {
                 state.push_log(LogLine {
                     stream: LogStream::Stdout,
-                    text: "no quick fixes at the cursor".to_string(),
+                    text: t!("misc.no-quick-fixes"),
                     level: None,
                 });
             } else {
@@ -195,10 +169,7 @@ pub fn request_semantic(state: AppState, path: String) {
         else {
             return;
         };
-        let current = state
-            .editor
-            .document
-            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        let current = state.active_path_now();
         if current.as_deref() == Some(path.as_str()) && !spans.is_empty() {
             state.editor.semantic.set(Some((path, spans)));
         }
@@ -211,7 +182,7 @@ pub fn request_semantic(state: AppState, path: String) {
 pub fn start_lsp(state: AppState) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     // A stale channel keeps sending after a restart; the session number is how
@@ -252,11 +223,7 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
         LspEvent::Ready {} => {
             state.lsp.status.set(LspStatus::Ready);
             // A file opened before the server came up was never announced.
-            if let Some(path) = state
-                .editor
-                .document
-                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
-            {
+            if let Some(path) = state.active_path_now() {
                 lsp_open_doc(path.clone(), state.editor.draft.get_untracked());
                 request_semantic(state, path);
             }
@@ -383,10 +350,7 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
         if problem.is_none() && info.is_none() {
             return;
         }
-        let current = state
-            .editor
-            .document
-            .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+        let current = state.active_path_now();
         if current.as_deref() != Some(path.as_str()) {
             return;
         }
@@ -496,10 +460,7 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
         if let Ok(Some(location)) =
             ipc::call::<_, Option<rusty_lsp::Location>>(cmd::lsp::DEFINITION, &args).await
         {
-            let current = state
-                .editor
-                .document
-                .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+            let current = state.active_path_now();
             if current.as_deref() != Some(location.path.as_str()) {
                 if location.external {
                     open_external(state, location.path.clone());
@@ -532,11 +493,7 @@ pub fn schedule_pulse(state: AppState) {
 }
 
 fn edit_pulse(state: AppState, generation: u64) {
-    let Some(path) = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
-    else {
+    let Some(path) = state.active_path_now() else {
         return;
     };
     let text = state.editor.draft.get_untracked();

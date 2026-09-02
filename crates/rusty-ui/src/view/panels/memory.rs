@@ -10,7 +10,7 @@
 
 use leptos::prelude::*;
 
-use rusty_embed::{CrateSize, Firmware, MemoryReport, SectionKindDto};
+use rusty_embed::{CrateSize, Firmware, MemoryReport, SectionKind};
 
 use rusty_i18n::t;
 
@@ -165,7 +165,7 @@ fn Report(report: MemoryReport) -> impl IntoView {
                 format::bytes(capacity as u64)
             )
         }
-        _ => "chip capacity unknown".to_string(),
+        _ => t!("memory.capacity-unknown"),
     };
 
     let attributed: u64 = report.crates.iter().map(|c| c.total).sum();
@@ -177,7 +177,7 @@ fn Report(report: MemoryReport) -> impl IntoView {
                 label=t!("memory.flash-image")
                 value=flash_value
                 unit=flash_unit
-                hint="code and constants written to the device"
+                hint=t!("memory.flash-hint")
             />
             <Readout
                 label=t!("memory.static-ram")
@@ -189,7 +189,7 @@ fn Report(report: MemoryReport) -> impl IntoView {
             <Readout
                 label=t!("memory.unattributed")
                 value=format::bytes(report.unattributed_bytes)
-                hint="assembly, C and ROM stubs — no crate to blame"
+                hint=t!("memory.unattributed-hint")
             />
         </div>
 
@@ -200,10 +200,10 @@ fn Report(report: MemoryReport) -> impl IntoView {
         <table class="w-full border-collapse text-callout">
             <thead>
                 <tr class="border-b border-line text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                    <th class="px-4 py-1.5 text-left font-semibold">"Section"</th>
-                    <th class="px-4 py-1.5 text-left font-semibold">"Costs"</th>
-                    <th class="px-4 py-1.5 text-right font-semibold">"Address"</th>
-                    <th class="px-4 py-1.5 text-right font-semibold">"Size"</th>
+                    <th class="px-4 py-1.5 text-left font-semibold">{t!("memory.col-section")}</th>
+                    <th class="px-4 py-1.5 text-left font-semibold">{t!("memory.col-costs")}</th>
+                    <th class="px-4 py-1.5 text-right font-semibold">{t!("memory.col-address")}</th>
+                    <th class="px-4 py-1.5 text-right font-semibold">{t!("memory.col-size")}</th>
                 </tr>
             </thead>
             <tbody>
@@ -213,10 +213,10 @@ fn Report(report: MemoryReport) -> impl IntoView {
                     .map(|section| {
                         let (in_flash, in_ram) = section.kind.budget();
                         let costs = match (in_flash, in_ram) {
-                            (true, true) => "flash + RAM",
-                            (true, false) => "flash",
-                            (false, true) => "RAM",
-                            (false, false) => "—",
+                            (true, true) => t!("memory.cost-both"),
+                            (true, false) => t!("memory.cost-flash"),
+                            (false, true) => t!("memory.cost-ram"),
+                            (false, false) => "—".to_string(),
                         };
                         view! {
                             <tr class="border-b border-line last:border-b-0">
@@ -263,8 +263,7 @@ fn CrateTable(crates: Vec<CrateSize>, largest: u64, total: u64) -> impl IntoView
     if crates.is_empty() {
         return view! {
             <p class="px-4 pb-4 text-callout text-label-2">
-                "No symbols could be attributed to a crate. That usually means the binary was \
-                 stripped, in which case a debug build will have the symbol table."
+                {t!("memory.no-symbols")}
             </p>
         }
         .into_any();
@@ -282,11 +281,11 @@ fn CrateTable(crates: Vec<CrateSize>, largest: u64, total: u64) -> impl IntoView
         <table class="w-full border-collapse text-callout">
             <thead>
                 <tr class="border-b border-line text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                    <th class="px-4 py-1.5 text-left font-semibold">"Crate"</th>
-                    <th class="px-4 py-1.5 text-right font-semibold">"Code"</th>
-                    <th class="px-4 py-1.5 text-right font-semibold">"Read-only"</th>
-                    <th class="px-4 py-1.5 text-right font-semibold">"RAM"</th>
-                    <th class="px-4 py-1.5 text-right font-semibold">"Total"</th>
+                    <th class="px-4 py-1.5 text-left font-semibold">{t!("memory.col-crate")}</th>
+                    <th class="px-4 py-1.5 text-right font-semibold">{t!("memory.col-code")}</th>
+                    <th class="px-4 py-1.5 text-right font-semibold">{t!("memory.col-rodata")}</th>
+                    <th class="px-4 py-1.5 text-right font-semibold">{t!("memory.col-ram")}</th>
+                    <th class="px-4 py-1.5 text-right font-semibold">{t!("memory.col-total")}</th>
                 </tr>
             </thead>
             <tbody>
@@ -377,11 +376,11 @@ fn CrateTable(crates: Vec<CrateSize>, largest: u64, total: u64) -> impl IntoView
         .into_any()
 }
 
-fn kind_tone(kind: SectionKindDto) -> Tone {
+fn kind_tone(kind: SectionKind) -> Tone {
     match kind {
-        SectionKindDto::Code => Tone::Rust,
-        SectionKindDto::ReadOnlyData => Tone::Slate,
-        SectionKindDto::InitialisedData => Tone::Amber,
-        SectionKindDto::ZeroedData => Tone::Patina,
+        SectionKind::Code => Tone::Rust,
+        SectionKind::ReadOnlyData => Tone::Slate,
+        SectionKind::InitialisedData => Tone::Amber,
+        SectionKind::ZeroedData => Tone::Patina,
     }
 }

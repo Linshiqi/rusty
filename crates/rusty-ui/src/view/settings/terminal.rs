@@ -21,6 +21,21 @@ pub(super) fn TerminalShell() -> impl IntoView {
         }
     });
     let custom = RwSignal::new(String::new());
+    // Seed the custom-path field from the stored preference once it arrives.
+    // In an effect, not mid-render: writing a signal while rendering is the
+    // pattern `plot.rs` warns against, and this view did exactly that.
+    Effect::new(move |_| {
+        let preference = state
+            .term
+            .info
+            .with(|info| info.as_ref().and_then(|info| info.preference.clone()));
+        if let Some(preference) = preference
+            && preference != "system"
+            && custom.get_untracked().is_empty()
+        {
+            custom.set(preference);
+        }
+    });
 
     view! {
         <Field
@@ -30,7 +45,7 @@ pub(super) fn TerminalShell() -> impl IntoView {
             {move || {
                 let Some(info) = state.term.info.get() else {
                     return view! {
-                        <p class="text-callout text-label-3">"Asking the backend…"</p>
+                        <p class="text-callout text-label-3">{t!("settings.terminal.asking")}</p>
                     }
                         .into_any();
                 };
@@ -38,9 +53,6 @@ pub(super) fn TerminalShell() -> impl IntoView {
                 let is_auto = preference.is_none();
                 let is_system = preference.as_deref() == Some("system");
                 let is_custom = !is_auto && !is_system;
-                if is_custom && custom.get_untracked().is_empty() {
-                    custom.set(preference.clone().unwrap_or_default());
-                }
                 let active = info.active.clone();
                 view! {
                     <div class="flex flex-col gap-3">
@@ -95,7 +107,7 @@ pub(super) fn TerminalShell() -> impl IntoView {
                                 .then(|| view! { <Pill label=t!("settings.terminal.in-use") tone=Tone::Rust /> })}
                         </div>
                         <div class="flex items-center gap-2 text-callout text-label-2">
-                            <span class="text-label-3">"Next shell:"</span>
+                            <span class="text-label-3">{t!("settings.terminal.next-shell")}</span>
                             <code class="rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote">
                                 {active}
                             </code>

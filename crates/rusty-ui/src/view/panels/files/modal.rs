@@ -6,6 +6,8 @@
 
 use leptos::{ev, html, prelude::*};
 
+use rusty_i18n::t;
+
 use super::*;
 use crate::{controller, state::AppState};
 
@@ -98,11 +100,7 @@ pub(super) fn vim_key(
                 if ask == Ask::SaveAndClose {
                     controller::save_file(state);
                 }
-                if let Some(path) = state
-                    .editor
-                    .document
-                    .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
-                {
+                if let Some(path) = state.active_path_now() {
                     controller::close_tab(state, path);
                 }
             }
@@ -189,11 +187,11 @@ pub(super) fn vim_key(
                     (false, true) => state
                         .editor
                         .vim
-                        .update(|vim| vim.rejected = Some("nowhere further back".into())),
+                        .update(|vim| vim.rejected = Some(t!("misc.vim-no-back"))),
                     (false, false) => state
                         .editor
                         .vim
-                        .update(|vim| vim.rejected = Some("nowhere further forward".into())),
+                        .update(|vim| vim.rejected = Some(t!("misc.vim-no-forward"))),
                 }
             }
         }

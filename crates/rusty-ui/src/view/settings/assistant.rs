@@ -7,7 +7,7 @@
 
 use leptos::prelude::*;
 
-use rusty_ai::{ProviderConfig, ProviderKind};
+use rusty_ai::{NotCheckedReason, ProviderCheck, ProviderConfig, ProviderKind};
 
 use rusty_i18n::t;
 
@@ -50,12 +50,14 @@ pub(super) fn Assistant() -> impl IntoView {
 
     // The stored-key check, refreshed whenever the profile changes: the whole
     // point of the write-only design is that this boolean is the only thing
-    // the screen can know.
+    // the screen can know. Through a memo of the profile alone — reading the
+    // whole draft here re-ran the check, a backend round trip, on every
+    // keystroke in the base URL and model fields.
+    let profile = Memo::new(move |_| draft.with(|d| d.profile.clone()));
     Effect::new(move |_| {
-        let profile = draft.with(|d| d.profile.clone());
-        crate::controller::refresh_key_state(state, profile);
+        crate::controller::refresh_key_state(state, profile.get());
     });
-    let verdict = RwSignal::new(None::<String>);
+    let verdict = RwSignal::new(None::<rusty_ai::ProviderCheck>);
     let models = RwSignal::new(Vec::<String>::new());
 
     Effect::new(move |first: Option<()>| {
@@ -99,7 +101,7 @@ pub(super) fn Assistant() -> impl IntoView {
                                         .then(|| {
                                             view! {
                                                 <span class="ml-1.5 text-footnote text-patina">
-                                                    "local"
+                                                    {t!("settings.assistant.local")}
                                                 </span>
                                             }
                                         })}
@@ -242,10 +244,11 @@ pub(super) fn Assistant() -> impl IntoView {
                 {move || {
                     verdict
                         .get()
-                        .map(|text| {
+                        .map(|check| {
+                            let (tone, text) = describe_check(&check);
                             view! {
                                 <span class="flex items-center gap-2 text-callout text-label-2">
-                                    <Dot tone=Tone::Patina />
+                                    <Dot tone=tone />
                                     {text}
                                 </span>
                             }
@@ -298,5 +301,52 @@ pub(super) fn Assistant() -> impl IntoView {
                 }}
             </div>
         </Field>
+    }
+}
+
+/// The connectivity check's facts as a sentence, and the colour they earn.
+///
+/// Worded here rather than on the backend so the sentence is in the window's
+/// language — and so a check that stopped short is amber, not the green a
+/// single "Reachable" string used to paint over every outcome.
+fn describe_check(check: &ProviderCheck) -> (Tone, String) {
+    match check {
+        ProviderCheck::Reachable {
+            model,
+            model_listed: Some(true),
+            ..
+        } => (
+            Tone::Patina,
+            t!(
+                "settings.assistant.check-model-listed",
+                model = model.clone()
+            ),
+        ),
+        ProviderCheck::Reachable {
+            model,
+            models_listed,
+            model_listed: Some(false),
+        } => (
+            Tone::Amber,
+            t!(
+                "settings.assistant.check-model-missing",
+                model = model.clone(),
+                count = models_listed.to_string()
+            ),
+        ),
+        ProviderCheck::Reachable { model, .. } => (
+            Tone::Patina,
+            t!("settings.assistant.check-reachable", model = model.clone()),
+        ),
+        ProviderCheck::NotChecked {
+            why: NotCheckedReason::NoModelListing { status },
+            ..
+        } => (
+            Tone::Amber,
+            t!(
+                "settings.assistant.check-no-listing",
+                status = status.to_string()
+            ),
+        ),
     }
 }

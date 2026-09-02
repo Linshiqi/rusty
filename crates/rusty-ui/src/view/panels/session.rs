@@ -148,7 +148,7 @@ pub fn Devices() -> impl IntoView {
                             // named as the board. "COM3 (CP210x)" tells you
                             // which bridge chip is fitted, not what is on it.
                             let described = if port.boards.is_empty() {
-                                port.bridge.clone().unwrap_or_else(|| "serial port".to_string())
+                                port.bridge.clone().unwrap_or_else(|| t!("session.serial-port"))
                             } else {
                                 port.boards.join(" / ")
                             };
@@ -160,7 +160,7 @@ pub fn Devices() -> impl IntoView {
                                     tone=tone
                                     name=port.name.clone()
                                     detail=described
-                                    badge=(!port.likely_board).then(|| "probably not a board".to_string())
+                                    badge=(!port.likely_board).then(|| t!("session.not-a-board"))
                                     on_pick=Callback::new(move |_| {
                                         state.device.transport.set(Some(Transport::Serial { port: name.clone() }))
                                     })
@@ -184,7 +184,7 @@ pub fn Devices() -> impl IntoView {
                                     tone=Tone::Rust
                                     name=probe.description.clone()
                                     detail=probe.identifier.clone()
-                                    badge=Some("debug probe".to_string())
+                                    badge=Some(t!("session.debug-probe"))
                                     on_pick=Callback::new(move |_| {
                                         state
                                             .device.transport
@@ -303,7 +303,7 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
                                         .then(|| {
                                             view! {
                                                 <Pill
-                                                    label=format!("built for {}", f.target)
+                                                    label=t!("session.built-for", target = f.target.to_string())
                                                     tone=Tone::Amber
                                                 />
                                             }
@@ -333,7 +333,7 @@ fn Plan(mode: RwSignal<FlashAction>) -> impl IntoView {
                                 view! {
                                     <span class="flex items-center gap-2 text-callout text-label-2">
                                         <Dot tone=Tone::Patina />
-                                        "attached — output is in the dock below"
+                                        {t!("session.attached")}
                                     </span>
                                 }
                             })}

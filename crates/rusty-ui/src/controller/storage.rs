@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_embed::{RelocateReport, StorageLocation};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -86,7 +87,7 @@ pub fn relocate_storage(
 /// The folder picker, for the storage screen.
 pub fn pick_storage_folder(on: Callback<Option<String>>) {
     spawn_local(async move {
-        let picked = ipc::pick_folder("Where should rusty keep its data?")
+        let picked = ipc::pick_folder(&t!("misc.pick-storage"))
             .await
             .ok()
             .flatten();

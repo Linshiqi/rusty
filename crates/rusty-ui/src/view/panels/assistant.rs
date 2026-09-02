@@ -140,7 +140,17 @@ fn Streaming() -> impl IntoView {
                     })}
                 <div class="flex items-center gap-2 text-callout text-label-3">
                     <Dot tone=Tone::Rust />
-                    "thinking"
+                    {t!("assistant.thinking")}
+                    // A way to stop. Without it the only way out of a slow
+                    // or looping answer was to wait — up to eight tool calls
+                    // — while the meter ran.
+                    <button
+                        type="button"
+                        on:click=move |_| controller::cancel_ask(state)
+                        class="rounded-[4px] px-1.5 py-0.5 text-footnote text-label-3 ring-1 ring-line hover:bg-sunken hover:text-label"
+                    >
+                        {t!("assistant.stop")}
+                    </button>
                 </div>
             </div>
         }
@@ -354,7 +364,9 @@ fn Composer() -> impl IntoView {
                         .get()
                         .map(|(input, output)| {
                             view! {
-                                <span class="tnum">{format!("{input} in / {output} out")}</span>
+                                <span class="tnum">
+                                    {t!("assistant.tokens", input = input.to_string(), output = output.to_string())}
+                                </span>
                             }
                         })
                 }}

@@ -168,18 +168,18 @@ fn Impact(impact: FeatureImpact) -> impl IntoView {
             <Readout
                 label=t!("features.resolved")
                 value=impact.resolved_crates.to_string()
-                hint=format!("{} under this package's defaults", impact.baseline_crates)
+                hint=t!("features.baseline-hint", count = impact.baseline_crates.to_string())
             />
             <Readout
                 label=t!("features.against-defaults")
                 value=delta_label
                 tone=delta_tone
-                hint="after workspace-wide unification"
+                hint=t!("features.unified-hint")
             />
             <Readout
                 label=t!("features.build-units")
                 value=units_label
-                hint="proc-macros and build scripts — they serialize the build"
+                hint=t!("features.units-hint")
             />
         </div>
 
@@ -240,7 +240,7 @@ fn Matrix() -> impl IntoView {
         if rows.is_empty() {
             return view! {
                 <p class="px-4 py-4 text-callout text-label-2">
-                    {format!("`{}` declares no features.", selection.package)}
+                    {t!("features.none-declared", package = selection.package.to_string())}
                 </p>
             }
             .into_any();
@@ -297,9 +297,15 @@ fn FeatureSwitch(row: FeatureRow, selection: FeatureSelection) -> impl IntoView 
     // Zero is the interesting case and needs saying, not leaving blank: it is
     // the unification result people do not believe until they see it.
     let (cost_label, cost_tone) = match marginal {
-        0 => ("no change".to_string(), Tone::Neutral),
-        d if d > 0 => (format!("+{d} crates"), Tone::Amber),
-        d => (format!("{d} crates"), Tone::Patina),
+        0 => (t!("features.no-change"), Tone::Neutral),
+        d if d > 0 => (
+            t!("features.crates-delta", delta = format!("+{d}")),
+            Tone::Amber,
+        ),
+        d => (
+            t!("features.crates-delta", delta = d.to_string()),
+            Tone::Patina,
+        ),
     };
 
     let enables = row.enables.clone();

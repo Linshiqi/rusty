@@ -132,7 +132,7 @@ pub(super) fn FindBar(
         if query.is_empty() {
             String::new()
         } else if matches.is_empty() {
-            "no results".to_string()
+            t!("find.no-results")
         } else {
             let current = state.find.index.get().min(matches.len() - 1);
             format!("{}/{}", current + 1, matches.len())

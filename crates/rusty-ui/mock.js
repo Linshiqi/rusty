@@ -227,6 +227,11 @@
     save_file: (a) => { window.__mock.saved[a.path] = a.text; return null; },
     // The real command is a long-lived stream; resolving would read as "the
     // server exited" and flip Ready back to Off.
+    // The connectivity check's amber outcome: reached, but the model named is
+    // not one the endpoint lists. The verdict is worded by the frontend.
+    ai_check_provider: (a) => ({ verdict: "reachable", model: a.config.model, modelsListed: 3, modelListed: false }),
+    pin_report: () => ({ chip: "esp32c3", pins: [], source: null, note: null, unknown: [] }),
+    ai_cancel: () => null,
     lsp_start: (a) => { window.__mock.lspChannel = a.onEvent; a.onEvent.send({ event: "ready" }); return new Promise(() => {}); },
     // Also long-lived. The channel is kept so a change can be injected by
     // hand — `__mock.watchChannel.send({changed: ["src/main.rs"], tree: false})`
@@ -417,7 +422,6 @@
     wizard_options: () => [],
     ai_presets: () => [],
     ai_tools: () => [],
-    window_is_maximized: () => false,
     window_minimize: () => null,
     window_toggle_maximize: () => null,
     terminal_close: () => null,

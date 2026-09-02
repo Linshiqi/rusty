@@ -4,8 +4,6 @@ use leptos::prelude::*;
 
 use rusty_i18n::t;
 
-use crate::state::AppState;
-
 use super::*;
 
 /// The proxy for tool downloads and crates.io queries.
@@ -16,7 +14,6 @@ use super::*;
 /// the proxy outright.
 #[component]
 pub(super) fn NetworkSettings() -> impl IntoView {
-    let state = AppState::expect();
     let stored = RwSignal::new(None::<String>);
     let detected = RwSignal::new(None::<String>);
     let saved = RwSignal::new(false);
@@ -26,7 +23,6 @@ pub(super) fn NetworkSettings() -> impl IntoView {
             crate::controller::load_proxy_setting(stored, detected);
         }
     });
-    let _ = state;
 
     let choose = move |value: Option<&'static str>| {
         crate::controller::save_proxy_setting(value.map(str::to_string), stored, detected, saved);
@@ -97,14 +93,10 @@ pub(super) fn NetworkSettings() -> impl IntoView {
                 </div>
                 {move || {
                     let line = match (stored.get(), detected.get()) {
-                        (None, Some(found)) => {
-                            format!("detected: {found} — downloads will use it")
-                        }
-                        (None, None) => "nothing detected — downloads go direct".to_string(),
-                        (Some(v), _) if v == "none" => {
-                            "forced direct, whatever the system says".to_string()
-                        }
-                        (Some(url), _) => format!("using {url}"),
+                        (None, Some(found)) => t!("settings.network.detected", proxy = found),
+                        (None, None) => t!("settings.network.none"),
+                        (Some(v), _) if v == "none" => t!("settings.network.forced-direct"),
+                        (Some(url), _) => t!("settings.network.using", url = url),
                     };
                     view! {
                         <p class="text-footnote text-label-3 select-text">{line}</p>
@@ -115,7 +107,7 @@ pub(super) fn NetworkSettings() -> impl IntoView {
                         .get()
                         .then(|| {
                             view! {
-                                <p class="text-footnote text-patina">"saved"</p>
+                                <p class="text-footnote text-patina">{t!("settings.network.saved")}</p>
                             }
                         })
                 }}

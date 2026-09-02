@@ -145,9 +145,9 @@ fn Curves(drawn: Vec<Drawn>, clock: Option<TraceClock>, truncated: bool) -> impl
     const H: f64 = 220.0;
 
     let note = match clock {
-        Some(TraceClock::Firmware) => "firmware clock",
-        Some(TraceClock::Host) => "arrival time — the firmware sent no stamp",
-        None => "",
+        Some(TraceClock::Firmware) => t!("plot.clock-firmware"),
+        Some(TraceClock::Host) => t!("plot.clock-host"),
+        None => String::new(),
     };
 
     view! {
@@ -195,9 +195,9 @@ fn Curves(drawn: Vec<Drawn>, clock: Option<TraceClock>, truncated: bool) -> impl
             {(!note.is_empty())
                 .then(|| {
                     let text = if truncated {
-                        format!("{note} · oldest samples dropped")
+                        t!("plot.dropped", note = note.clone())
                     } else {
-                        note.to_string()
+                        note.clone()
                     };
                     view! {
                         <p class="pt-1 text-caption text-label-4">{text}</p>
@@ -400,7 +400,6 @@ fn Link() -> impl IntoView {
     }
 }
 
-/// The tunables the firmware announced, and the sliders that change them.
 /// Feeding the firmware a sensor it asked for.
 ///
 /// The input mirror of [`Tunables`], and it follows the same rule for the
@@ -523,6 +522,7 @@ fn Sensors() -> impl IntoView {
     }
 }
 
+/// The tunables the firmware announced, and the sliders that change them.
 #[component]
 fn Tunables() -> impl IntoView {
     let state = AppState::expect();

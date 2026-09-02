@@ -44,14 +44,16 @@ pub(super) fn Appearance() -> impl IntoView {
                                 if let Ok(percent) =
                                     event_target_value(&event).parse::<f64>()
                                 {
-                                    preview.set(Some((percent / 100.0).clamp(0.7, 1.6)));
+                                    let (min, max) = crate::state::UI_ZOOM_RANGE;
+                                    preview.set(Some((percent / 100.0).clamp(min, max)));
                                 }
                             }
                             on:change=move |event| {
                                 if let Ok(percent) =
                                     event_target_value(&event).parse::<f64>()
                                 {
-                                    let factor = (percent / 100.0).clamp(0.7, 1.6);
+                                    let (min, max) = crate::state::UI_ZOOM_RANGE;
+                                    let factor = (percent / 100.0).clamp(min, max);
                                     preview.set(None);
                                     state.layout.zoom.set(factor);
                                     crate::state::remember_ui_zoom(factor);

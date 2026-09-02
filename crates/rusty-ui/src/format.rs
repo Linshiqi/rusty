@@ -4,6 +4,8 @@
 //! formats the same figures differently, and a model type that carries a
 //! pre-rendered string forces every consumer to accept one house style.
 
+use rusty_i18n::t;
+
 /// Bytes at the scale an embedded developer thinks in.
 ///
 /// Binary multiples, because that is what a datasheet, a linker script and
@@ -44,14 +46,14 @@ pub fn since(epoch_secs: u64) -> String {
     // a machine that just changed timezone. Saying "in 3 hours" would be worse
     // than admitting the timestamp is not usable.
     if elapsed < 0.0 {
-        return "clock skew".to_string();
+        return t!("misc.clock-skew");
     }
 
     match elapsed as u64 {
-        s if s < 90 => "just now".to_string(),
-        s if s < 3_600 => format!("{} min ago", s / 60),
-        s if s < 86_400 => format!("{} h ago", s / 3_600),
-        s => format!("{} d ago", s / 86_400),
+        s if s < 90 => t!("misc.just-now"),
+        s if s < 3_600 => t!("misc.minutes-ago", count = (s / 60).to_string()),
+        s if s < 86_400 => t!("misc.hours-ago", count = (s / 3_600).to_string()),
+        s => t!("misc.days-ago", count = (s / 86_400).to_string()),
     }
 }
 

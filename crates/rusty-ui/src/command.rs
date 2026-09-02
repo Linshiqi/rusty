@@ -83,7 +83,8 @@ pub struct Command {
     pub action: Action,
     pub title: String,
     /// The heading it appears under, and part of what a search matches.
-    pub group: &'static str,
+    /// Translated like the title: a heading is read, not typed.
+    pub group: String,
     /// Shown right-aligned. `None` for anything without a binding.
     pub shortcut: Option<String>,
 }
@@ -112,11 +113,11 @@ pub fn all(state: AppState) -> Vec<Command> {
         out.push(Command {
             action: Action::ShowPanel(panel.id),
             title: if blocked {
-                format!("{} — needs a project", panel.title)
+                t!("panel.needs-project", panel = panel.title.clone())
             } else {
                 panel.title.to_string()
             },
-            group: "Go to",
+            group: t!("palette.group-panels"),
             shortcut: chord(Action::ShowPanel(panel.id)),
         });
     }
@@ -124,7 +125,7 @@ pub fn all(state: AppState) -> Vec<Command> {
     let action = |action, title: &str, shortcut| Command {
         action,
         title: title.to_string(),
-        group: "Project",
+        group: t!("palette.group-project"),
         shortcut,
     };
 
@@ -152,7 +153,7 @@ pub fn all(state: AppState) -> Vec<Command> {
     let view = |action, title: &str, shortcut| Command {
         action,
         title: title.to_string(),
-        group: "View",
+        group: t!("palette.group-view"),
         shortcut,
     };
 
@@ -161,31 +162,17 @@ pub fn all(state: AppState) -> Vec<Command> {
         &t!("palette.toggle-dock"),
         chord(Action::ToggleDock),
     ));
-    out.push(view(
-        Action::ShowDock(DockTab::Problems),
-        &t!("palette.show-problems"),
-        None,
-    ));
-    out.push(view(
-        Action::ShowDock(DockTab::Output),
-        &t!("palette.show-output"),
-        None,
-    ));
-    out.push(view(
-        Action::ShowDock(DockTab::Terminal),
-        &t!("palette.show-terminal"),
-        None,
-    ));
-    out.push(view(
-        Action::ShowDock(DockTab::Waves),
-        &t!("palette.show-waves"),
-        None,
-    ));
-    out.push(view(
-        Action::ShowDock(DockTab::Devices),
-        &t!("palette.show-devices"),
-        None,
-    ));
+    // Every dock tab, from the one list the dock itself renders. Five of
+    // the nine were spelled out here once; the other four were reachable
+    // from nowhere but a click on the strip, which this module's header
+    // says is exactly the drift it exists to prevent.
+    for tab in DockTab::ALL {
+        out.push(view(
+            Action::ShowDock(tab),
+            &t!("palette.show-dock", name = tab.label()),
+            None,
+        ));
+    }
     out.push(view(
         Action::ResetLayout,
         &t!("menu.view.reset-layout"),
@@ -207,14 +194,14 @@ pub fn all(state: AppState) -> Vec<Command> {
         out.push(Command {
             action: Action::SetTheme(theme),
             title: t!("palette.theme", name = theme.label()),
-            group: "Settings",
+            group: t!("palette.group-settings"),
             shortcut: None,
         });
     }
     out.push(Command {
         action: Action::OpenSettings,
         title: t!("palette.settings"),
-        group: "Settings",
+        group: t!("palette.group-settings"),
         shortcut: chord(Action::OpenSettings),
     });
 
@@ -394,32 +381,15 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             &t!("menu.view.panel-below"),
             chord(Action::ToggleDock),
         ),
-        entry(
-            Action::ShowDock(DockTab::Problems),
-            &t!("dock.tab.problems"),
-            None,
-        ),
-        entry(
-            Action::ShowDock(DockTab::Output),
-            &t!("dock.tab.output"),
-            None,
-        ),
-        entry(
-            Action::ShowDock(DockTab::Terminal),
-            &t!("dock.tab.terminal"),
-            None,
-        ),
-        entry(
-            Action::ShowDock(DockTab::Waves),
-            &t!("dock.tab.waves"),
-            None,
-        ),
-        entry(
-            Action::ShowDock(DockTab::Devices),
-            &t!("dock.tab.devices"),
-            None,
-        ),
     ]);
+    // The dock's own list, so a tab added there appears here without anyone
+    // remembering to — the same reason the panels above come from the
+    // registry.
+    view_items.extend(
+        DockTab::ALL
+            .into_iter()
+            .map(|tab| entry(Action::ShowDock(tab), &tab.label(), None)),
+    );
 
     vec![
         Menu {
@@ -618,7 +588,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             let allowed = panels::all()
                 .into_iter()
                 .find(|p| p.id == id)
-                .is_some_and(|p| !p.needs_project || state.has_project());
+                .is_some_and(|p| !p.needs_project || state.has_project_now());
             if allowed {
                 state.layout.panel.set(id.to_string());
             }
@@ -676,10 +646,14 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::SetTheme(theme) => theme::set(theme),
         Action::ScaffoldC(direction) => controller::scaffold_c_interop(state, direction),
         Action::ResetLayout => {
-            state.layout.tree_width.set(240.0);
-            state.layout.dock_height.set(196.0);
-            remember_size(Divider::Tree, 240.0);
-            remember_size(Divider::Dock, 196.0);
+            // Every divider, from the one place its default is spelled. Two
+            // of the three were reset here with their defaults copied in by
+            // hand; the third was added later and this arm never heard.
+            for divider in Divider::ALL {
+                let size = divider.default_size();
+                state.layout.size_signal(divider).set(size);
+                remember_size(divider, size);
+            }
         }
     }
 }

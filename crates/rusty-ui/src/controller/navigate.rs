@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_embed::{LogLine, LogStream};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -37,10 +38,7 @@ pub fn remember_tabs(state: AppState) {
     else {
         return;
     };
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
     let tabs = state.editor.tabs.get_untracked();
     #[derive(serde::Serialize)]
     struct Args {
@@ -68,14 +66,8 @@ pub fn restore_tabs(state: AppState, root: &str) {
     // Read once, handed over, and deleted — so an upgrade does not cost
     // somebody the tabs they had open, and the key does not linger to be
     // read again by a later version that no longer understands it.
-    let carried = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|storage| {
-            let key = tabs_key(root);
-            let raw = storage.get_item(&key).ok().flatten()?;
-            let _ = storage.remove_item(&key);
-            serde_json::from_str::<serde_json::Value>(&raw).ok()
-        });
+    let carried = crate::state::local_take(&tabs_key(root))
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
 
     #[derive(serde::Serialize)]
     struct Args {
@@ -284,9 +276,8 @@ pub fn rename_symbol(state: AppState, path: String, line: u32, col: u32, new_nam
             state.push_log(LogLine {
                 stream: LogStream::Stdout,
                 text: match changed.len() {
-                    0 => "rename changed nothing — the server found no uses".to_string(),
-                    1 => "renamed in 1 file".to_string(),
-                    n => format!("renamed in {n} files"),
+                    0 => t!("misc.rename-nothing"),
+                    n => t!("misc.renamed-in", count = n.to_string()),
                 },
                 level: None,
             });
@@ -314,37 +305,33 @@ pub(super) fn editor_element() -> Option<web_sys::HtmlElement> {
 /// re-run half the editor's reactivity to record something only jumps ever
 /// read.
 fn here(state: AppState) -> Option<crate::state::NavPoint> {
+    let path = state.active_path_now()?;
+    let (line, col) = caret_position(state)?;
+    Some(crate::state::NavPoint { path, line, col })
+}
+
+/// Where the caret is right now, as `(line, scalar column)`.
+///
+/// Read off the DOM, in UTF-16 units as a textarea reports it, and converted
+/// through `rusty_lsp::positions` — the one implementation of that
+/// arithmetic. Two controllers carried their own loops for this, and the two
+/// counted the newline in a different order.
+pub(super) fn caret_position(state: AppState) -> Option<(u32, u32)> {
+    use rusty_lsp::positions::{self, Encoding::Utf16};
     use wasm_bindgen::JsCast;
 
-    let path = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))?;
-    let element = web_sys::window()?
-        .document()?
-        .get_element_by_id("editor-area")?
+    let element = editor_element()?
         .dyn_into::<web_sys::HtmlTextAreaElement>()
         .ok()?;
     let units = element.selection_start().ok().flatten()? as usize;
     let text = state.editor.draft.get_untracked();
-
-    // UTF-16 units to line and column, the same conversion the editor makes
-    // at every other boundary.
-    let mut seen = 0usize;
-    let (mut line, mut col) = (0u32, 0u32);
-    for c in text.chars() {
-        if seen >= units {
-            break;
-        }
-        if c == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-        seen += c.len_utf16();
-    }
-    Some(crate::state::NavPoint { path, line, col })
+    let byte = positions::byte_of_character(&text, units, Utf16);
+    let (line, character) = positions::offset_to_position(&text, byte, Utf16);
+    let line_text = text.split('\n').nth(line as usize).unwrap_or("");
+    Some((
+        line,
+        positions::character_to_scalar(line_text, character, Utf16),
+    ))
 }
 
 /// Note that we are leaving `here` for somewhere else.
@@ -384,10 +371,7 @@ pub fn nav_forward(state: AppState) {
 /// Go to a remembered position without recording it — walking the history is
 /// not itself a jump, or Back would never reach the beginning.
 fn travel(state: AppState, point: crate::state::NavPoint) {
-    let current = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let current = state.active_path_now();
     if current.as_deref() != Some(point.path.as_str()) {
         open_file(state, point.path.clone());
     }
@@ -408,10 +392,7 @@ pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
     if panel != "files" && panel != "search" {
         state.layout.panel.set("files".to_string());
     }
-    let current = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let current = state.active_path_now();
     if current.as_deref() != Some(path.as_str()) {
         open_file(state, path.clone());
     }

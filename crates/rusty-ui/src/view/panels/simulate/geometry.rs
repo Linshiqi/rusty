@@ -246,11 +246,14 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
     out
 }
 
-pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
-    let mut board = SimBoard {
+/// A board with nothing on it yet, for `chip`. The one place the empty
+/// literal is spelled: the editor's fallback and [`board_of`] both start
+/// from it, so a part list added to the wire model is added here once.
+pub(super) fn empty_board(chip: &str, kit: Option<(f64, f64)>) -> SimBoard {
+    SimBoard {
         chip: chip.to_string(),
-        kit_x: Some(kit.0),
-        kit_y: Some(kit.1),
+        kit_x: kit.map(|k| k.0),
+        kit_y: kit.map(|k| k.1),
         leds: Vec::new(),
         buttons: Vec::new(),
         rgbs: Vec::new(),
@@ -259,7 +262,11 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
         pots: Vec::new(),
         motors: Vec::new(),
         analogs: Vec::new(),
-    };
+    }
+}
+
+pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
+    let mut board = empty_board(chip, Some(kit));
     for part in parts {
         let place = part.place();
         match &part.kind {
@@ -643,6 +650,21 @@ pub(super) fn wire_path(
 /// bend whose neighbours run straight through it. This is what merges two
 /// segments the user has dragged into line — the KiCad behaviour: aligned
 /// segments become one segment, and the next grab moves them as one.
+/// Re-tidy one wire after its ends moved: the stub and the pin are put back
+/// on the route, collinear bends fold away, and what is stored is again only
+/// the bends between them. Two drag paths each spelled this; they had
+/// already drifted in how they read the pin.
+pub(super) fn retidy(part: &mut EditPart, slot: usize, kit: (f64, f64), rows: &[Row]) {
+    let Some(row) = row_of_gpio(rows, part.pins[slot]) else {
+        return;
+    };
+    let mut full = vec![stub_point(part, slot)];
+    full.extend(part.waypoints[slot].iter().copied());
+    full.push(row_point(kit, rows.len(), row));
+    let tidy = simplify_route(full);
+    part.waypoints[slot] = tidy[1..tidy.len() - 1].to_vec();
+}
+
 pub(super) fn simplify_route(full: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(full.len());
     for point in full {

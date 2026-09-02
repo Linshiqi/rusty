@@ -81,7 +81,7 @@ pub fn App() -> impl IntoView {
     controller::restore(state);
     // And correct the language if the stored setting differs from the
     // system's. Usually it does not, and this does nothing.
-    crate::i18n::restore_locale();
+    controller::restore_locale();
 
     // The browser's own chrome never belongs in the app: no native context
     // menu anywhere (surfaces that want one draw their own), and none of the
@@ -179,22 +179,32 @@ pub fn App() -> impl IntoView {
                 // leave a window with no way out.
                 <setup::SetupSheet />
                 <Sidebar />
-                <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-                    {move || {
-                        state
-                            .app.error
-                            .get()
-                            .map(|error| {
-                                view! {
-                                    <ErrorBanner
-                                        error=error
-                                        on_dismiss=Callback::new(move |_| {
-                                            controller::dismiss_error(state)
-                                        })
-                                    />
-                                }
-                            })
-                    }}
+                <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+                    // Over the working area, not in its flow. As a row above
+                    // the panel, the banner pushed everything under it down
+                    // forty pixels on arrival and back up on dismissal, and a
+                    // click already in flight landed on whatever had moved
+                    // under the pointer — a tree row, a dock tab — instead of
+                    // the thing aimed at.
+                    <div class="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-end">
+                        <div class="pointer-events-auto w-full max-w-[640px]">
+                            {move || {
+                                state
+                                    .app.error
+                                    .get()
+                                    .map(|error| {
+                                        view! {
+                                            <ErrorBanner
+                                                error=error
+                                                on_dismiss=Callback::new(move |_| {
+                                                    controller::dismiss_error(state)
+                                                })
+                                            />
+                                        }
+                                    })
+                            }}
+                        </div>
+                    </div>
                     // The dock sits under the panel rather than under the whole
                     // window, as Xcode's debug area does: the sidebar is
                     // navigation and stays whole, the output belongs to the

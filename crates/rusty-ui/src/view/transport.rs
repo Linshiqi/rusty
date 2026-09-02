@@ -26,7 +26,7 @@ pub fn DebugTransport() -> impl IntoView {
     move || {
         let debug = state.debug.session.get()?;
         let running = debug.running;
-        let step = move |action: &'static str, icon, title: &'static str| {
+        let step = move |action: &'static str, icon, title: String| {
             view! {
                 <button
                     type="button"
@@ -66,9 +66,9 @@ pub fn DebugTransport() -> impl IntoView {
                 }
                     .into_any()
             }}
-            {step("over", Icon::StepOver, "Step over (F10)")}
-            {step("into", Icon::StepInto, "Step into (F11)")}
-            {step("out", Icon::StepOut, "Step out (Shift+F11)")}
+            {step("over", Icon::StepOver, t!("debugger.step-over"))}
+            {step("into", Icon::StepInto, t!("debugger.step-into"))}
+            {step("out", Icon::StepOut, t!("debugger.step-out"))}
             // Named for what it actually does. The debug run is what booted
             // the target, so stopping it stops that too — the alternative was
             // an orphaned QEMU nothing in the window could reach.

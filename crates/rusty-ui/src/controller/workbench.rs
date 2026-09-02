@@ -33,7 +33,6 @@ pub fn open_url(state: AppState, url: String) {
     );
 }
 
-/// The stored shortcut overrides.
 /// Read the modal-editing switch at startup.
 ///
 /// From the file, not the WebView's storage: a second window boots the same
@@ -72,6 +71,13 @@ pub fn set_vim(state: AppState, enabled: bool) {
     );
 }
 
+/// The stored shortcut overrides.
+///
+/// Loaded at boot beside the Vim switch, because it is the same kind of
+/// thing: window-level, not project-level. It used to hang off the recents
+/// path alone, so a project opened through the picker, a reloaded WebView
+/// and a detached editor window all advertised the default chords while the
+/// overrides sat unread in the file.
 pub fn load_keybinds(state: AppState) {
     track(
         state,
@@ -104,5 +110,50 @@ pub fn save_keybind(state: AppState, id: String, chord: Option<String>) {
         state,
         async move { ipc::call::<_, ()>(cmd::workbench::SET_KEYBIND, &Args { id, chord }).await },
         |()| {},
+    );
+}
+
+/// The stored language, handed to `i18n` to reconcile with what this window
+/// booted into.
+///
+/// Guarded, because this runs at mount: with no backend the shim throws a
+/// synchronous TypeError rather than rejecting, and a task that dies that way
+/// records nothing — the trunk-only page rendered and then answered no click.
+pub fn restore_locale() {
+    if !ipc::backend_available() {
+        return;
+    }
+    spawn_local(async move {
+        if let Ok(stored) = ipc::get::<Option<String>>(cmd::workbench::LOCALE).await {
+            crate::i18n::reconcile(stored);
+        }
+    });
+}
+
+/// What the file says the language is — the *stored* choice, which the
+/// settings picker shows rather than the active one, because "follow the
+/// system" and "English" look identical on an English machine.
+pub fn load_locale(state: AppState, into: RwSignal<Option<Option<String>>>) {
+    track(
+        state,
+        async move { ipc::get::<Option<String>>(cmd::workbench::LOCALE).await },
+        move |stored| into.set(Some(stored)),
+    );
+}
+
+/// Store a language choice, then switch this window into it. `None` means
+/// follow the system. The switch waits for the save: a failed save shows as
+/// a banner and changes nothing, instead of a window that reloads into a
+/// language the file never heard about.
+pub fn choose_locale(state: AppState, tag: Option<String>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        tag: Option<String>,
+    }
+    let chosen = tag.clone();
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::SET_LOCALE, &Args { tag }).await },
+        move |()| crate::i18n::apply_choice(chosen),
     );
 }

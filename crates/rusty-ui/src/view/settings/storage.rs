@@ -40,11 +40,12 @@ pub(super) fn StorageSettings() -> impl IntoView {
                     return view! { <p class="text-callout text-label-2">"…"</p> }.into_any();
                 };
                 let (badge, tone) = if here.env_override {
-                    ("RUSTY_CONFIG_DIR", Tone::Amber)
+                    // The variable's own name: it is what to grep for.
+                    ("RUSTY_CONFIG_DIR".to_string(), Tone::Amber)
                 } else if here.is_default {
-                    ("default", Tone::Neutral)
+                    (t!("settings.storage.default"), Tone::Neutral)
                 } else {
-                    ("custom", Tone::Patina)
+                    (t!("settings.storage.custom"), Tone::Patina)
                 };
                 let env_note = here.env_override;
                 view! {

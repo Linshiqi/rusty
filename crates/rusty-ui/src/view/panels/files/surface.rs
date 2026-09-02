@@ -75,8 +75,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
     let line_in_view = move |line: u32| {
         scroller.get_untracked().map(|el| {
             (
-                8.0 + f64::from(row_for(state, line)) * row_height(zoom.get())
-                    - f64::from(el.scroll_top()),
+                row_top(state, line, zoom.get()) - f64::from(el.scroll_top()),
                 f64::from(el.client_height()),
             )
         })
@@ -161,10 +160,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
         }
         .into_any()
     });
-    Effect::new(move |_| {
-        state.layout.toolbar.set(Some(toolbar));
-    });
-    on_cleanup(move || state.layout.toolbar.set(None));
+    register_toolbar(state, toolbar);
     // Which completion row the keyboard is on. Reset when a new popup arrives.
     let picked = RwSignal::new(0usize);
     Effect::new(move |_| {
@@ -177,10 +173,15 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
         picked_action.set(0);
     });
     // The strip is remembered whenever it changes, so a crash loses nothing.
-    Effect::new(move |_| {
-        let _ = state.editor.tabs.get();
-        let _ = state.editor.document.get();
-        controller::remember_tabs(state);
+    // Keyed on the paths, not the documents: `document` is replaced by every
+    // save's re-read, and each of those was a `workbench.toml` write about a
+    // strip that had not changed.
+    Effect::new(move |previous: Option<(Vec<String>, Option<String>)>| {
+        let key = (state.editor.tabs.get(), state.active_path());
+        if previous.as_ref() != Some(&key) {
+            controller::remember_tabs(state);
+        }
+        key
     });
 
     // Apply a pending goto once this document is the one on screen.
@@ -411,22 +412,6 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                     label=t!("context.editor-paste")
                                     shortcut="Ctrl+V"
                                     disabled=read_only
-                        // Normal and visual mode cannot type, and this is
-                        // what guarantees it — not `preventDefault` on every
-                        // key, which only covers the keys we thought of.
-                        //
-                        // An IME is the one that got through: `is_composing`
-                        // returns before Vim is consulted, so with Chinese
-                        // input active a `j` in normal mode composed and
-                        // replaced the character the block cursor was on. A
-                        // read-only textarea cannot be typed into by anything
-                        // — IME, dictation, paste, a key nobody enumerated —
-                        // while Vim's own edits go through `set_value`, which
-                        // read-only does not touch.
-                        prop:readonly=move || {
-                            state.editor.vim_on.get()
-                                && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert)
-                        }
                                     on_select=Callback::new(move |_| {
                                         paste_at_caret(state, area);
                                         editor_menu.set(None);
@@ -521,7 +506,8 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                 }
                 event.prevent_default();
                 let step = if event.delta_y() < 0.0 { 1.1 } else { 1.0 / 1.1 };
-                zoom.update(|z| *z = (*z * step).clamp(0.6, 2.4));
+                let (min, max) = crate::state::EDITOR_ZOOM_RANGE;
+                zoom.update(|z| *z = (*z * step).clamp(min, max));
                 crate::state::remember_zoom(zoom.get_untracked());
             }
         >
@@ -779,11 +765,11 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             .map(|(index, (from, to))| {
                                 let (line, col) = line_col_of_byte(&text, *from);
                                 let (_, end_col) = line_col_of_byte(&text, *to);
-                                let x = 8.0 + column_px(&text, line, col) * z;
+                                let x = col_left(&text, line, col, z);
                                 let width = ((column_px(&text, line, end_col)
                                     - column_px(&text, line, col)) * z)
                                     .max(2.0);
-                                let y = 8.0 + f64::from(row_for(state, line)) * row_height(z);
+                                let y = row_top(state, line, z);
                                 let wash = if index == current {
                                     "pointer-events-none absolute rounded-[3px] bg-amber-fill"
                                 } else {
@@ -883,6 +869,27 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         autocapitalize="off"
                         autocomplete="off"
                         disabled=read_only
+                        // Normal and visual mode cannot type, and this is
+                        // what guarantees it — not `preventDefault` on every
+                        // key, which only covers the keys we thought of.
+                        //
+                        // An IME is the one that got through: `is_composing`
+                        // returns before Vim is consulted, so with Chinese
+                        // input active a `j` in normal mode composed and
+                        // replaced the character the block cursor was on. A
+                        // read-only textarea cannot be typed into by anything
+                        // — IME, dictation, paste, a key nobody enumerated —
+                        // while Vim's own edits go through `set_value`, which
+                        // read-only does not touch.
+                        //
+                        // On the textarea, and it has to be: the `files.rs`
+                        // split once left this attribute on the context
+                        // menu's Paste row, where Leptos spread it onto a
+                        // button and the guard silently guarded nothing.
+                        prop:readonly=move || {
+                            state.editor.vim_on.get()
+                                && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert)
+                        }
                         class=move || {
                             let base = "absolute inset-0 m-0 resize-none overflow-hidden \
                                         border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre \
@@ -1332,7 +1339,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 return None;
                             }
                             let line = frame.line?;
-                            let y = 8.0 + f64::from(row_for(state, line)) * row_height(zoom.get());
+                            let y = row_top(state, line, zoom.get());
                             let height = row_height(zoom.get());
                             Some(view! {
                                 <div
@@ -1409,13 +1416,7 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 return ().into_any();
                             }
                             let chosen = picked_action.get().min(fixes.len().saturating_sub(1));
-                            let place = if opens_up(line) {
-                                let y = 8.0 + f64::from(row_for(state, line)) * row_height(zoom.get()) - 4.0;
-                                format!("top: {y}px; transform: translateY(-100%)")
-                            } else {
-                                let y = 8.0 + f64::from(row_for(state, line) + 1) * row_height(zoom.get()) + 2.0;
-                                format!("top: {y}px")
-                            };
+                            let place = card_place(state, line, zoom.get(), opens_up(line));
                             view! {
                                 <div
                                     class="absolute z-20 min-w-[280px] rounded-[8px] bg-raised py-1 font-mono text-footnote shadow-2xl ring-1 ring-line-strong"
@@ -1475,15 +1476,8 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
             // Above by nature — it describes the call being typed — but
                             // near the top of the view "above" is off screen,
                             // so it flips below the line there.
-                            let place = if line_in_view(line)
-                                .is_some_and(|(top, _)| top < 96.0)
-                            {
-                                let y = 8.0 + f64::from(row_for(state, line) + 1) * row_height(zoom.get()) + 2.0;
-                                format!("top: {y}px")
-                            } else {
-                                let y = 8.0 + f64::from(row_for(state, line)) * row_height(zoom.get()) - 4.0;
-                                format!("top: {y}px; transform: translateY(-100%)")
-                            };
+                            let near_top = line_in_view(line).is_some_and(|(top, _)| top < 96.0);
+                            let place = card_place(state, line, zoom.get(), !near_top);
                             let label = info.label;
                             let split = match (info.param_start, info.param_end) {
                                 (Some(start), Some(end)) => {
@@ -1571,14 +1565,9 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 return ().into_any();
                             }
                             let chosen = picked.get().min(shown.len() - 1);
-                            let x = 8.0 + column_px(&draft, popup.line, popup.word_start) * zoom.get();
-                            let place = if opens_up(popup.line) {
-                                let y = 8.0 + f64::from(row_for(state, popup.line)) * row_height(zoom.get()) - 4.0;
-                                format!("top: {y}px; transform: translateY(-100%)")
-                            } else {
-                                let y = 8.0 + f64::from(row_for(state, popup.line) + 1) * row_height(zoom.get()) + 2.0;
-                                format!("top: {y}px")
-                            };
+                            let x = col_left(&draft, popup.line, popup.word_start, zoom.get());
+                            let place =
+                                card_place(state, popup.line, zoom.get(), opens_up(popup.line));
                             // A window around the selection rather than a
                             // scrollbar: nine rows is what the eye takes in,
                             // and the arrows walk the rest into view.

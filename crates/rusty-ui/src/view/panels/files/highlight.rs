@@ -97,7 +97,6 @@ pub(super) fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyV
         .into_any()
 }
 
-/// Hover text arrives as markdown with code fences; the tooltip is plain.
 /// Hover markdown, minimally: fenced blocks become highlighted code, `---`
 /// becomes a divider, everything else is prose. The code gets the same
 /// lexical colours the editor uses, so the tooltip does not describe Rust

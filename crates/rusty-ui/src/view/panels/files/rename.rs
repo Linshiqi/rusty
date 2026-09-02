@@ -30,9 +30,9 @@ pub(super) fn RenameBar() -> impl IntoView {
         let (path, line, col, word) = state.editor.rename.get()?;
         Some(view! {
             <div class="flex flex-none items-center gap-2 border-b border-line bg-raised px-3 py-1.5">
-                <span class="text-caption text-label-3">"Rename"</span>
+                <span class="text-caption text-label-3">{t!("find.rename")}</span>
                 <span class="font-mono text-caption text-label-2">{word.clone()}</span>
-                <span class="text-caption text-label-4">"to"</span>
+                <span class="text-caption text-label-4">{t!("find.rename-to")}</span>
                 <input
                     node_ref=box_ref
                     prop:value=word

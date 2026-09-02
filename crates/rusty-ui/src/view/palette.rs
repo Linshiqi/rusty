@@ -14,7 +14,6 @@ use crate::{
     state::AppState,
 };
 
-/// Install the global key handler. Called once, from the shell.
 /// One customisable shortcut: a stable id (what workbench.toml stores
 /// overrides against), the label Settings shows, the factory default, and
 /// what it runs.
@@ -163,6 +162,7 @@ pub fn chord_of(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<String>
     Some(chord)
 }
 
+/// Install the global key handler. Called once, from the shell.
 pub fn install(state: AppState, chrome: Chrome) {
     let Chrome {
         palette_open,
@@ -245,7 +245,7 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
         let needle = query.get();
         command::all(state)
             .into_iter()
-            .filter(|c| command::matches(&needle, &c.title) || command::matches(&needle, c.group))
+            .filter(|c| command::matches(&needle, &c.title) || command::matches(&needle, &c.group))
             .collect::<Vec<_>>()
     });
 
@@ -309,17 +309,17 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
                                 }
                                     .into_any();
                             }
-                            let mut previous_group = "";
+                            let mut previous_group = String::new();
                             commands
                                 .into_iter()
                                 .enumerate()
                                 .map(|(index, command)| {
                                     let heading = (command.group != previous_group)
                                         .then(|| {
-                                            previous_group = command.group;
+                                            previous_group = command.group.clone();
                                             view! {
                                                 <div class="px-4 pt-2 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                                                    {command.group}
+                                                    {command.group.clone()}
                                                 </div>
                                             }
                                         });
@@ -361,9 +361,9 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
                     </div>
 
                     <div class="flex flex-none items-center gap-3 border-t border-line px-4 py-1.5 text-footnote text-label-3">
-                        <span>"↑↓ to move"</span>
-                        <span>"↵ to run"</span>
-                        <span>"esc to close"</span>
+                        <span>{t!("palette.hint-move")}</span>
+                        <span>{t!("palette.hint-run")}</span>
+                        <span>{t!("palette.hint-close")}</span>
                     </div>
                 </div>
             </div>

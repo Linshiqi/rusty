@@ -34,23 +34,66 @@ const YAW: [&str; 4] = ["gyro_y", "yaw", "gyro_z", "rate_yaw"];
 
 /// The last value on a channel, if it has one.
 fn latest(state: AppState, channel: &str) -> Option<f32> {
-    state.sim.plot.with(|plot| {
-        plot.channels
-            .iter()
-            .find(|(name, _)| name == channel)
-            .and_then(|(_, samples)| samples.last())
-            .map(|(_, value)| *value)
-    })
+    state.sim.plot.with(|plot| latest_in(plot, channel))
+}
+
+fn latest_in(plot: &crate::state::Plot, channel: &str) -> Option<f32> {
+    plot.channels
+        .iter()
+        .find(|(name, _)| name == channel)
+        .and_then(|(_, samples)| samples.last())
+        .map(|(_, value)| *value)
 }
 
 /// The first of `wanted` that the firmware is actually talking about.
 fn preferred(state: AppState, wanted: &[&str]) -> Option<String> {
-    state.sim.plot.with(|plot| {
-        wanted
-            .iter()
-            .find(|name| plot.channels.iter().any(|(known, _)| known == *name))
-            .map(|name| (*name).to_string())
-    })
+    state.sim.plot.with(|plot| preferred_in(plot, wanted))
+}
+
+fn preferred_in(plot: &crate::state::Plot, wanted: &[&str]) -> Option<String> {
+    wanted
+        .iter()
+        .find(|name| plot.channels.iter().any(|(known, _)| known == *name))
+        .map(|name| (*name).to_string())
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::{PITCH, ROLL, YAW, latest_in, preferred_in};
+    use crate::state::Plot;
+
+    fn plot_with(channels: &[(&str, &[f32])]) -> Plot {
+        let mut plot = Plot::default();
+        for (name, samples) in channels {
+            let bucket = plot.channel(name);
+            for (at, value) in samples.iter().enumerate() {
+                bucket.push((at as u64, *value));
+            }
+        }
+        plot
+    }
+
+    /// The panel prefers the rate loop's own word for an axis over the
+    /// generic one: with both `gyro_r` and `roll` present, `gyro_r` is shown,
+    /// and a channel the firmware never printed is never picked.
+    #[test]
+    fn the_firmwares_own_axis_name_is_preferred() {
+        let plot = plot_with(&[("roll", &[1.0]), ("gyro_r", &[2.0])]);
+        assert_eq!(preferred_in(&plot, &ROLL).as_deref(), Some("gyro_r"));
+        assert_eq!(preferred_in(&plot, &PITCH), None);
+        assert_eq!(preferred_in(&plot, &YAW), None);
+    }
+
+    /// The value shown is the newest sample; a channel with none yields
+    /// nothing rather than zero, because zero is a reading.
+    #[test]
+    fn the_latest_sample_is_the_one_shown() {
+        let plot = plot_with(&[("gyro_r", &[0.5, -1.25])]);
+        assert_eq!(latest_in(&plot, "gyro_r"), Some(-1.25));
+        assert_eq!(latest_in(&plot, "gyro_p"), None);
+        let empty = plot_with(&[("gyro_p", &[])]);
+        assert_eq!(latest_in(&empty, "gyro_p"), None);
+    }
 }
 
 #[component]
@@ -191,7 +234,7 @@ fn Readout(label: String, axis: Option<(String, Option<f32>)>) -> impl IntoView 
                     <span class="text-caption text-label-3">{label}</span>
                     <span class="font-mono text-callout text-label-3">"—"</span>
                 </div>
-                <span class="text-caption text-label-3">"no channel named for it"</span>
+                <span class="text-caption text-label-3">{t!("dock.flight.no-channel")}</span>
             </div>
         }
         .into_any(),
@@ -262,15 +305,9 @@ fn ClosedLoop() -> impl IntoView {
         // three-axis sensor there is nowhere to inject, and without four
         // driven pins there is no aircraft to model.
         let blocker = if feeds.is_empty() {
-            Some(
-                "no sensor the plant recognises — the firmware has to print \
-                 [rusty:sensor] gyro=3 (or accel=3) before anything can be fed to it"
-                    .to_string(),
-            )
+            Some(t!("dock.flight.no-sensor"))
         } else if motors < 4 {
-            Some(format!(
-                "{motors} motor pins reported, four needed — the plant mixes quad-X",
-            ))
+            Some(t!("dock.flight.few-motors", motors = motors.to_string()))
         } else {
             None
         };
@@ -288,7 +325,7 @@ fn ClosedLoop() -> impl IntoView {
                         }
                         class="accent-rust disabled:opacity-40"
                     />
-                    <span class="text-callout text-label">"Close the loop"</span>
+                    <span class="text-callout text-label">{t!("dock.flight.close-loop")}</span>
                     <Show when=move || closed>
                         <span class="font-mono text-caption text-rust">
                             {feeds
@@ -300,17 +337,7 @@ fn ClosedLoop() -> impl IntoView {
                     </Show>
                 </label>
                 <p class="max-w-[46rem] text-caption leading-relaxed text-label-3">
-                    {blocker
-                        .clone()
-                        .unwrap_or_else(|| {
-                            "A rigid body between the motors and the gyro, so the loop can be \
-                             watched settling rather than only answering. It is a model: no \
-                             gravity, no attitude, and constants that describe a small brushed \
-                             quad rather than yours. What transfers is the sign of each axis, \
-                             the motor order, and whether the loop is stable in shape — not \
-                             the gains."
-                                .to_string()
-                        })}
+                    {blocker.clone().unwrap_or_else(|| t!("dock.flight.plant-help"))}
                 </p>
             </div>
         }
@@ -347,7 +374,7 @@ fn Craft() -> impl IntoView {
                     radians[1].to_degrees(),
                     radians[2].to_degrees(),
                 ]),
-                "from the plant".to_string(),
+                t!("dock.flight.from-plant"),
             )
         } else {
             let pick = |names: &[&str]| {
@@ -358,10 +385,9 @@ fn Craft() -> impl IntoView {
                 pick(&["att_pitch", "pitch", "pit"]),
                 pick(&["att_yaw", "yaw"]),
             ) {
-                (Some((rn, r)), Some((_, p)), Some((_, y))) => (
-                    Some([r, p, y]),
-                    format!("from {rn} and friends, read as degrees"),
-                ),
+                (Some((rn, r)), Some((_, p)), Some((_, y))) => {
+                    (Some([r, p, y]), t!("dock.flight.from-channels", name = rn))
+                }
                 _ => (None, String::new()),
             }
         };
@@ -369,8 +395,7 @@ fn Craft() -> impl IntoView {
         let Some([roll, pitch, yaw]) = angles else {
             return view! {
                 <div class="grid size-[132px] shrink-0 place-items-center rounded-[8px] border border-line bg-sunken px-3 text-center text-caption leading-relaxed text-label-3">
-                    "No attitude. Close the loop, or publish roll/pitch/yaw as telemetry — \
-                     rates are not angles and this will not pretend they are."
+                    {t!("dock.flight.no-attitude")}
                 </div>
             }
                 .into_any();

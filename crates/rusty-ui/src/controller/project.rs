@@ -12,6 +12,7 @@ use rusty_embed::{
     Board, Chip, EmbeddedProject, Firmware, LogLevel, LogLine, LogStream, MemoryReport, Migration,
     ToolchainReport,
 };
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -64,8 +65,6 @@ pub fn open_recent(state: AppState, path: String, announce: bool) {
             Ok(result) => {
                 project_opened(state, result);
                 load_recents(state);
-                load_keybinds(state);
-                apply_ui_zoom(state);
             }
             Err(error) => {
                 state.push_log(LogLine {
@@ -93,7 +92,7 @@ pub fn open_recent(state: AppState, path: String, announce: bool) {
 /// does not go through `track`.
 pub fn choose_project(state: AppState) {
     spawn_local(async move {
-        match ipc::pick_folder("Open a Cargo project").await {
+        match ipc::pick_folder(&t!("misc.pick-project")).await {
             Ok(Some(path)) => open_project(state, path),
             Ok(None) => {}
             Err(e) => state.app.error.set(Some(e)),
@@ -193,7 +192,7 @@ fn project_opened(state: AppState, result: OpenResult) {
 /// the backend to re-check nothing produces an error banner about no project
 /// being open, which the user can see for themselves.
 pub fn refresh_project(state: AppState) {
-    if state.has_project() {
+    if state.has_project_now() {
         reload_project(state);
     }
 }
@@ -256,7 +255,7 @@ fn refresh_workspace(state: AppState) {
 /// four-byte read per candidate, and a memory panel showing yesterday's build
 /// list is worse than useless — it is confidently wrong.
 pub fn refresh_firmware(state: AppState) {
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     track(
@@ -355,8 +354,12 @@ pub fn restore(state: AppState) {
 
     // Before anything else, because it decides what the keyboard means. Not
     // tied to opening a project: someone who edits in Vim keys wants them in
-    // the window that is already open, and in the next one.
+    // the window that is already open, and in the next one. The shortcut
+    // overrides and the interface scale are the same kind of thing, and used
+    // to load only when a project came back through the recents list.
     load_vim(state);
+    load_keybinds(state);
+    apply_ui_zoom(state);
 
     // Neither the catalogue nor the machine's toolchain depends on a project,
     // so both load unconditionally. Sequencing them after the project probe

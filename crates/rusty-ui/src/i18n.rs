@@ -31,23 +31,15 @@
 //! and half translated is worse than the language you did not want, because
 //! you cannot tell which half is stale.
 
-use leptos::task::spawn_local;
-
 use rusty_i18n::Locale;
-
-use crate::ipc::{self, cmd};
 
 /// Where the boot cache lives. Not the setting — see the header.
 const CACHE: &str = "rusty.locale";
 
-fn storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.local_storage().ok().flatten()
-}
-
 /// What the cache says, if anything. `Some(None)` is a cached "follow the
 /// system", which is different from never having chosen.
 fn cached() -> Option<Option<Locale>> {
-    let raw = storage()?.get_item(CACHE).ok().flatten()?;
+    let raw = crate::state::local_get(CACHE)?;
     Some(match raw.as_str() {
         "system" => None,
         tag => Some(Locale::parse(tag)?),
@@ -55,9 +47,7 @@ fn cached() -> Option<Option<Locale>> {
 }
 
 fn cache(tag: Option<&str>) {
-    if let Some(storage) = storage() {
-        let _ = storage.set_item(CACHE, tag.unwrap_or("system"));
-    }
+    crate::state::local_set(CACHE, tag.unwrap_or("system"));
 }
 
 /// What the browser says the user's language is.
@@ -84,61 +74,52 @@ pub fn apply_boot_locale() {
     }
 }
 
-/// Reconcile with the file, which is the setting.
+/// Reconcile with the file, which is the setting. `stored` is what the file
+/// says; the controller fetched it, because this module knows the WebView
+/// and the cache and nothing about IPC.
 ///
 /// Almost always agrees and does nothing. It matters when the cache is gone
 /// (a cleared WebView, a fresh profile) or stale (another window changed it,
 /// somebody edited the TOML), and then it corrects the cache **before**
 /// reloading, so the next boot agrees and this happens at most once.
-pub fn restore_locale() {
-    spawn_local(async move {
-        let Ok(stored) = ipc::get::<Option<String>>(cmd::workbench::LOCALE).await else {
-            return;
-        };
-        let wanted = match stored.as_deref() {
-            None => system_locale().unwrap_or_default(),
-            Some(tag) => match Locale::parse(tag) {
-                Some(locale) => locale,
-                // A tag the catalogue does not have is not a reason to reload
-                // into the same confusion every boot.
-                None => return,
-            },
-        };
-        let known = cached();
-        let agreed = known == Some(stored.as_deref().and_then(Locale::parse));
-        if agreed && wanted == rusty_i18n::locale() {
-            return;
-        }
-        cache(stored.as_deref());
-        if wanted != rusty_i18n::locale() {
-            reload();
-        }
-    });
+pub fn reconcile(stored: Option<String>) {
+    let wanted = match stored.as_deref() {
+        None => system_locale().unwrap_or_default(),
+        Some(tag) => match Locale::parse(tag) {
+            Some(locale) => locale,
+            // A tag the catalogue does not have is not a reason to reload
+            // into the same confusion every boot.
+            None => return,
+        },
+    };
+    let known = cached();
+    let agreed = known == Some(stored.as_deref().and_then(Locale::parse));
+    if agreed && wanted == rusty_i18n::locale() {
+        return;
+    }
+    cache(stored.as_deref());
+    if wanted != rusty_i18n::locale() {
+        reload();
+    }
 }
 
-/// Store a choice and reload into it.
+/// Switch this window into a choice the file has already accepted.
 ///
-/// `None` means follow the system. The cache is written first and
-/// synchronously: it is what the reloaded window reads before it paints, and
-/// what stops [`restore_locale`] finding the same disagreement again.
-pub fn choose_locale(tag: Option<String>) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        tag: Option<String>,
-    }
-
+/// `None` means follow the system. Called once the backend has written the
+/// setting — not before: a cache written ahead of a save that then failed
+/// would make the next boot find the file disagreeing and quietly revert the
+/// choice. The cache is still written *before* the reload, which is what
+/// stops [`reconcile`] finding the same disagreement again.
+pub fn apply_choice(tag: Option<String>) {
     let current = rusty_i18n::locale();
     let wanted = match tag.as_deref() {
         None => system_locale().unwrap_or_default(),
         Some(tag) => Locale::parse(tag).unwrap_or_default(),
     };
     cache(tag.as_deref());
-    spawn_local(async move {
-        let _ = ipc::call::<_, ()>(cmd::workbench::SET_LOCALE, &Args { tag }).await;
-        if wanted != current {
-            reload();
-        }
-    });
+    if wanted != current {
+        reload();
+    }
 }
 
 /// A tool's purpose, in this window's language.
@@ -363,8 +344,11 @@ mod tests {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                for (index, _) in text.match_indices("t!(\"") {
-                    // `format!("…")` ends in `t!("` too. The macro's name is
+                // Spelled in two halves so this test's own source is not a
+                // call site the scan finds.
+                const NEEDLE: &str = concat!("t!", "(");
+                for (index, _) in text.match_indices(NEEDLE) {
+                    // `format!("…")` ends in `t!(` too. The macro's name is
                     // one character long, so what precedes it has to not be
                     // part of an identifier.
                     let preceded_by_a_name = text[..index]
@@ -374,7 +358,15 @@ mod tests {
                     if preceded_by_a_name {
                         continue;
                     }
-                    let rest = &text[index + 4..];
+                    // rustfmt breaks a call with arguments after the paren,
+                    // so the key may start on the next line. A scan that
+                    // demanded `t!("` on one line skipped exactly those —
+                    // six of them, all calls with arguments, which are the
+                    // keys most often renamed.
+                    let rest = text[index + 3..].trim_start();
+                    let Some(rest) = rest.strip_prefix('"') else {
+                        continue;
+                    };
                     if let Some(end) = rest.find('"') {
                         used.push((path.clone(), rest[..end].to_string()));
                     }
@@ -401,5 +393,132 @@ mod tests {
             "these keys are used but not defined in locales/en.toml:\n  {}",
             missing.join("\n  ")
         );
+    }
+
+    /// User-visible prose reaches the screen through `t!`, not as a literal.
+    ///
+    /// The two tests above check keys; a sentence that never became a key is
+    /// invisible to them, and that is how some sixty English sentences sat
+    /// in the Chinese window — a palette footer, a waves header, a flight
+    /// blocker. So this reads `view/` and `controller/` for string literals
+    /// that *read as sentences*: three or more words, and one of them a word
+    /// only prose uses. Class lists, keys, ids and paths have no such word.
+    ///
+    /// Comments, tests and the lines where an English string is correct — a
+    /// panic message, an assertion, a log line — are skipped, and the short
+    /// allowlist below names the developer-only text that is meant to stay
+    /// English. Anything else is a translation that will be missed.
+    #[test]
+    fn user_visible_prose_goes_through_the_catalogue() {
+        const STOP_WORDS: &[&str] = &[
+            "the", "a", "an", "to", "of", "is", "no", "in", "and", "or", "for", "with", "on",
+            "not", "this", "it", "was", "are", "has", "have", "be", "its", "from", "by",
+        ];
+        const SKIP_LINE_IF: &[&str] = &[
+            concat!("t!", "("),
+            "assert",
+            "panic!(",
+            "expect(",
+            "unreachable!",
+            "eprintln!",
+            "console",
+            "log::",
+            "#[",
+            "class=",
+            "class:",
+            "\"class\"",
+            "title=\"",
+            "href=",
+            "id=\"",
+            "data-",
+            "aria-",
+            "\\u{",
+            "format_args",
+        ];
+        // Text that is meant to stay English: it is shown only by the trunk
+        // dev server, to whoever is developing rusty.
+        const ALLOWED: &[&str] = &["outside Tauri", "Trunk dev server", "cargo tauri dev"];
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src.join("view"), src.join("controller")];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read src") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("read source");
+                // Everything after the test module is a test.
+                let body = text.split("#[cfg(test)]").next().unwrap_or("");
+                for (number, line) in body.lines().enumerate() {
+                    let code = match line.find("//") {
+                        Some(at) => &line[..at],
+                        None => line,
+                    };
+                    if SKIP_LINE_IF.iter().any(|marker| code.contains(marker)) {
+                        continue;
+                    }
+                    for literal in string_literals(code) {
+                        if ALLOWED.iter().any(|ok| literal.contains(ok)) {
+                            continue;
+                        }
+                        if reads_as_prose(&literal, STOP_WORDS) {
+                            offenders.push(format!(
+                                "{}:{}: {literal:?}",
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                                number + 1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these literals read as user-visible prose; put them in the catalogue and use `t!`:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The `"…"` literals on one line of source, unescaped enough to read.
+    fn string_literals(code: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = code;
+        while let Some(start) = rest.find('"') {
+            let after = &rest[start + 1..];
+            let mut end = None;
+            let mut escaped = false;
+            for (at, ch) in after.char_indices() {
+                match ch {
+                    '\\' if !escaped => escaped = true,
+                    '"' if !escaped => {
+                        end = Some(at);
+                        break;
+                    }
+                    _ => escaped = false,
+                }
+            }
+            let Some(end) = end else { break };
+            out.push(after[..end].to_string());
+            rest = &after[end + 1..];
+        }
+        out
+    }
+
+    /// Three or more words, at least one of which is a word only prose uses.
+    fn reads_as_prose(literal: &str, stop_words: &[&str]) -> bool {
+        let words: Vec<&str> = literal
+            .split_whitespace()
+            .filter(|w| w.chars().all(|c| c.is_ascii_alphabetic() || c == '\''))
+            .collect();
+        words.len() >= 3
+            && words
+                .iter()
+                .any(|w| stop_words.contains(&w.to_lowercase().as_str()))
     }
 }

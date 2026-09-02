@@ -30,17 +30,37 @@ pub(super) fn RegistersTab() -> impl IntoView {
     // On every stop, re-read the selected peripheral: the values on screen
     // must be the ones the target holds *now*, not the ones from before the
     // last step.
-    Effect::new(move |_| {
-        let stopped = state
-            .debug
-            .session
-            .with(|debug| debug.as_ref().is_some_and(|debug| !debug.running));
-        let Some(name) = state.debug.peripheral.get() else {
-            return;
+    //
+    // Keyed on *where* the target stopped and *which* peripheral is shown,
+    // and compared with the previous run — not on the session as a whole.
+    // The read's own result arrives as a session update, so an effect that
+    // re-ran on every update asked gdb for the block again the moment the
+    // block came back: a loop bounded only by round-trip latency, with the
+    // whole tab re-rendering each time round.
+    Effect::new(move |previous: Option<Option<(String, String)>>| {
+        let stopped_at = state.debug.session.with(|debug| {
+            let debug = debug.as_ref().filter(|debug| !debug.running)?;
+            // A stop with no frame yet is still a stop; an empty address
+            // keeps it distinct from "running".
+            Some(
+                debug
+                    .stack
+                    .first()
+                    .map(|frame| frame.address.clone())
+                    .unwrap_or_default(),
+            )
+        });
+        let key = match (stopped_at, state.debug.peripheral.get()) {
+            (Some(address), Some(name)) => Some((address, name)),
+            _ => None,
         };
-        if !stopped {
-            return;
+        if key.is_none() || previous.flatten() == key {
+            return key;
         }
+        let name = key
+            .as_ref()
+            .map(|(_, name)| name.clone())
+            .unwrap_or_default();
         let span = state.debug.registers.with_untracked(|map| {
             map.as_ref()
                 .and_then(Option::as_ref)
@@ -59,6 +79,7 @@ pub(super) fn RegistersTab() -> impl IntoView {
         if let Some((base, bytes)) = span {
             controller::read_peripheral(state, base, bytes);
         }
+        key
     });
 
     move || {
@@ -124,9 +145,7 @@ pub(super) fn RegistersTab() -> impl IntoView {
                         .then(|| {
                             view! {
                                 <p class="px-4 py-2 text-caption leading-snug text-label-4">
-                                    {format!(
-                                        "{dropped} more inherit from another peripheral, which rusty does not resolve yet.",
-                                    )}
+                                    {t!("dock.registers.inherited", count = dropped.to_string())}
                                 </p>
                             }
                         })}
@@ -211,7 +230,7 @@ fn RegisterRow(base: u64, register: rusty_embed::Register) -> impl IntoView {
                         // reading zero are different facts, and showing zero
                         // for both is how a debugger lies.
                         None if readable => "—".to_string(),
-                        None => "write-only".to_string(),
+                        None => t!("dock.registers.write-only"),
                     }}
                 </span>
                 <span class="min-w-0 truncate text-caption text-label-3">{description}</span>

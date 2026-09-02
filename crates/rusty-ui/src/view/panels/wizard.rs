@@ -93,7 +93,7 @@ pub fn Wizard() -> impl IntoView {
     move || {
         let Some(choice) = state.wizard.choice.get() else {
             return view! {
-                <p class="p-6 text-callout text-label-2">"Loading the chip catalogue…"</p>
+                <p class="p-6 text-callout text-label-2">{t!("wizard.loading-catalogue")}</p>
             }
             .into_any();
         };
@@ -197,11 +197,6 @@ fn Footer(step: RwSignal<Step>) -> impl IntoView {
     }
 }
 
-/// A step's working area: a list on the left, the detail for whatever is
-/// selected on the right.
-///
-/// The split is the whole point. Ten rows of prose is a wall; ten rows plus one
-/// paragraph is a choice with its consequence attached.
 /// Change one field of the choice in flight and ask what it now means.
 ///
 /// Every control on every step does exactly this, so it is worth a name: the
@@ -364,9 +359,9 @@ fn ChipDetail(chip: Chip) -> impl IntoView {
         <DetailHeading title=chip.name.clone() />
         <div class="mb-3 flex flex-wrap gap-1.5">
             <Pill label=chip.arch.label() />
-            <Pill label=format!("{} core", chip.cores) />
+            <Pill label=t!("wizard.cores", count = chip.cores.to_string()) />
             {forked
-                .then(|| view! { <Pill label="needs espup" tone=Tone::Amber /> })}
+                .then(|| view! { <Pill label=t!("wizard.needs-espup") tone=Tone::Amber /> })}
         </div>
 
         // The single fact that most changes what the next hour looks like. It
@@ -380,21 +375,21 @@ fn ChipDetail(chip: Chip) -> impl IntoView {
         </p>
 
         <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-footnote">
-            <dt class="text-label-3">"SRAM"</dt>
+            <dt class="text-label-3">{t!("wizard.sram")}</dt>
             <dd class="m-0 font-mono text-label-2">{sram}</dd>
             {flash
                 .map(|flash| {
                     view! {
-                        <dt class="text-label-3">"Flash"</dt>
+                        <dt class="text-label-3">{t!("wizard.flash")}</dt>
                         <dd class="m-0 font-mono text-label-2">{flash}</dd>
                     }
                 })}
-            <dt class="text-label-3">"Target"</dt>
+            <dt class="text-label-3">{t!("wizard.target")}</dt>
             <dd class="m-0 font-mono text-label-2 select-text">{chip.bare_metal_target.clone()}</dd>
             {(!radios.is_empty())
                 .then(|| {
                     view! {
-                        <dt class="text-label-3">"Radios"</dt>
+                        <dt class="text-label-3">{t!("wizard.radios")}</dt>
                         <dd class="m-0 text-label-2">{radios}</dd>
                     }
                 })}

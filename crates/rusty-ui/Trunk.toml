@@ -10,8 +10,9 @@ tailwindcss = "4.3.0"
 
 [build]
 target = "./index.html"
-# Release builds optimise the wasm for size: 20 languages of strings and a full
-# UI otherwise produce a blob that is slow to load on a cold start.
+# Release builds optimise the wasm for size: every language's catalogue is
+# compiled in, and with a full UI beside it the blob is otherwise slow to load
+# on a cold start.
 wasm_opt = "z"
 
 [watch]

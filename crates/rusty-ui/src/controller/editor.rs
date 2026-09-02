@@ -9,6 +9,7 @@ use leptos::task::spawn_local;
 
 use rusty_edit::{Document, Entry};
 use rusty_embed::{LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -27,7 +28,7 @@ pub fn create_entry(state: AppState, path: String, dir: bool) {
         dir: bool,
     }
 
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     let opened = path.clone();
@@ -74,7 +75,6 @@ pub fn apply_ui_zoom(state: AppState) {
     );
 }
 
-/// What shell the terminal will start.
 /// The shells the picker can offer. Loaded once; a machine does not grow
 /// shells mid-session often enough to poll for.
 pub fn load_shell_choices(state: AppState) {
@@ -83,15 +83,16 @@ pub fn load_shell_choices(state: AppState) {
     }
     track(
         state,
-        async move { ipc::get::<Vec<rusty_embed::ShellChoice>>(cmd::terminal::SHELLS).await },
+        async move { ipc::get::<Vec<rusty_term::ShellChoice>>(cmd::terminal::SHELLS).await },
         move |choices| state.term.choices.set(choices),
     );
 }
 
+/// What shell the terminal will start, and where the choice came from.
 pub fn load_shell_info(state: AppState) {
     track(
         state,
-        async move { ipc::call::<_, rusty_embed::ShellInfo>(cmd::terminal::SHELL_INFO, &()).await },
+        async move { ipc::call::<_, rusty_term::ShellInfo>(cmd::terminal::SHELL_INFO, &()).await },
         move |info| state.term.info.set(Some(info)),
     );
 }
@@ -158,7 +159,7 @@ pub fn watch_reattach(state: AppState) {
 
 /// Re-read the project tree.
 pub fn refresh_tree(state: AppState) {
-    if !state.has_project() {
+    if !state.has_project_now() {
         return;
     }
     track(
@@ -180,10 +181,7 @@ pub fn open_file(state: AppState, path: String) {
         path: String,
     }
 
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
     if active.as_deref() == Some(path.as_str()) {
         return;
     }
@@ -225,10 +223,7 @@ fn reload_active(state: AppState, path: String) {
 /// A different path parks the current editor first; the same path replaces it
 /// in place, which is how a save's re-read lands without disturbing the strip.
 fn show_document(state: AppState, document: Document, announce: bool) {
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
     if active.is_some() && active.as_deref() != Some(document.path.as_str()) {
         park_active(state);
     }
@@ -283,30 +278,7 @@ fn park_active(state: AppState) {
 /// threading a caret through every caller of every function that might park —
 /// and the editor's textarea is as much a singleton as the signals are.
 fn active_caret(state: AppState) -> Option<(u32, u32)> {
-    use wasm_bindgen::JsCast;
-    let element = web_sys::window()?
-        .document()?
-        .get_element_by_id("editor-area")?
-        .dyn_into::<web_sys::HtmlTextAreaElement>()
-        .ok()?;
-    let units = element.selection_start().ok().flatten()? as usize;
-    let text = state.editor.draft.get_untracked();
-    let mut seen = 0usize;
-    let mut line = 0u32;
-    let mut col = 0u32;
-    for ch in text.chars() {
-        if seen >= units {
-            break;
-        }
-        seen += ch.len_utf16();
-        if ch == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
-    Some((line, col))
+    caret_position(state)
 }
 
 fn clear_editor_transients(state: AppState) {
@@ -323,10 +295,7 @@ fn clear_editor_transients(state: AppState) {
 
 /// Front an already open tab, parking the current one.
 pub fn activate_tab(state: AppState, path: String) {
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
     if active.as_deref() == Some(path.as_str()) {
         return;
     }
@@ -383,10 +352,7 @@ fn front_parked(state: AppState, path: &str) -> bool {
 
 /// Close a tab. Discarding unsaved work requires saying so first.
 pub fn close_tab(state: AppState, path: String) {
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
     let is_active = active.as_deref() == Some(path.as_str());
 
     let dirty = if is_active {
@@ -406,10 +372,8 @@ pub fn close_tab(state: AppState, path: String) {
     if dirty {
         let confirmed = web_sys::window()
             .map(|w| {
-                w.confirm_with_message(&format!(
-                    "{path} has unsaved changes.\nClose the tab and discard them?"
-                ))
-                .unwrap_or(false)
+                w.confirm_with_message(&t!("misc.discard-confirm", path = path.to_string()))
+                    .unwrap_or(false)
             })
             .unwrap_or(false);
         if !confirmed {
@@ -458,10 +422,7 @@ pub fn open_external(state: AppState, path: String) {
         path: String,
     }
 
-    let active = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()));
+    let active = state.active_path_now();
     if active.as_deref() == Some(path.as_str()) {
         return;
     }
@@ -504,11 +465,7 @@ pub fn save_file(state: AppState) {
         text: String,
     }
 
-    let Some(path) = state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
-    else {
+    let Some(path) = state.active_path_now() else {
         return;
     };
     let args = Args {

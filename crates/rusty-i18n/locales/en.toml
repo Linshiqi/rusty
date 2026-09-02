@@ -73,13 +73,14 @@ group-view = "View"
 group-settings = "Settings"
 group-help = "Help"
 toggle-dock = "Toggle the panel below"
-show-problems = "Show problems"
-show-output = "Show output"
-show-terminal = "Show terminal"
-show-waves = "Show waves"
-show-devices = "Show devices"
+# One template for every dock tab, filled with the tab's own name — the list
+# is generated from the dock's, so a new tab needs no new key here.
+show-dock = "Show {name}"
 theme = "Theme: {name}"
 settings = "Settings"
+hint-move = "↑↓ to move"
+hint-run = "↵ to run"
+hint-close = "esc to close"
 
 [context]
 # Right-click menus. Every dock surface answers a right-click with its own
@@ -153,6 +154,7 @@ none = "Nothing wrong that rusty can see."
 no-project = "Open a project to see what would stop it building."
 
 [files]
+not-text = "This is not a text file. rusty will not render a firmware image as characters — the result is noise, and for a large one it would take the window down with it."
 no-project-title = "No project open"
 no-project-detail = "Open a folder to browse and edit what is in it."
 choose = "Choose a file."
@@ -281,12 +283,16 @@ text-size-help = "The editor's own zoom, separate from the interface scale in Ap
 reset = "Reset"
 
 [settings.keyboard]
+press-keys = "press keys…"
+reset = "reset"
 shortcuts = "Shortcuts"
 shortcuts-help = "Click a key to change it: press the new combination, Esc cancels, Backspace restores the default. Two commands on one chord — the lower one wins — show in amber. Esc itself closes whatever is in front and cannot be rebound."
 rebind = "Click, then press the new combination"
 restore = "Restore the default"
 
 [settings.terminal]
+asking = "Asking the backend…"
+next-shell = "Next shell:"
 shell = "Shell"
 shell-help = "Auto is rusty's own built-in shell: bash syntax — pipes, redirection, variables, globs — compiled into the app, starting the instant the terminal opens and reading the same on every OS. Changing this restarts the shell."
 auto = "Auto"
@@ -295,6 +301,12 @@ custom-placeholder = "or a program: nu, fish, C:\\tools\\zsh.exe"
 in-use = "in use"
 
 [settings.assistant]
+local = "local"
+# The connectivity check's verdicts. Facts from the backend, worded here.
+check-reachable = "Reachable. Using {model}."
+check-model-listed = "Reachable. {model} is available."
+check-model-missing = "Reachable, but `{model}` is not among the {count} models this endpoint lists."
+check-no-listing = "The endpoint answered {status} to /models: either it does not list its models or the base URL is wrong. Neither the key nor the model name has been verified."
 start-from = "Start from"
 start-from-help = "Local runtimes are first-class: nothing leaves the machine and no key is needed. Picking one only fills the fields below — nothing is sent."
 endpoint = "Endpoint"
@@ -320,6 +332,9 @@ tools-help = "The assistant does not read your configuration files and theorise;
 
 in-use = "in use: {model} at {url}"
 [settings.catalogue]
+built-in-where = "compiled into rusty"
+yours = "yours"
+project = "project"
 sources = "Where definitions come from"
 sources-help = "Later layers win, so you can correct a built-in entry without forking anything, and a team can check its boards into the repository."
 built-in = "built in"
@@ -328,6 +343,8 @@ broken-help = "A malformed file is kept out of the catalogue rather than blankin
 loaded = "Loaded"
 
 [settings.storage]
+default = "default"
+custom = "custom"
 data-directory = "Data directory"
 data-directory-help = "Board definitions and the workbench's memory live here, as plain files. Point it at a synced folder and every machine sees the same boards. API keys are not in it — they stay in the operating system's credential store and never sync."
 env-override = "Set by the RUSTY_CONFIG_DIR environment variable — a move made here would be silently outvoted, so the button below is disabled."
@@ -338,10 +355,17 @@ already-has-data = "That folder already holds rusty data. Use what is there inst
 use-existing = "Use the folder's existing data"
 
 [settings.network]
+detected = "detected: {proxy} — downloads will use it"
+none = "nothing detected — downloads go direct"
+forced-direct = "forced direct, whatever the system says"
+using = "using {url}"
+saved = "saved"
 proxy = "Proxy"
 proxy-help = "Used by the QEMU installer and the Crates panel. Detect follows the environment variables, then the system proxy — the one the browser uses. cargo and rustup keep their own proxy settings."
 
 [settings.update]
+available = "{version} available"
+newest = "This is the newest release."
 version = "Version"
 version-help = "Installing a new one is a download today. In-place updates need the release to be signed; the release workflow emits the signed feed as soon as the keypair exists."
 check = "Check for updates"
@@ -380,11 +404,26 @@ variables = "Variables"
 show-whole = "Show the whole value"
 
 [dock.registers]
+inherited = "{count} more inherit from another peripheral, which rusty does not resolve yet."
+write-only = "write-only"
 reading = "Reading the chip's SVD…"
 no-svd = "No SVD for this chip on this machine. rusty will not guess register addresses — fetch the vendor's description, or drop one in the project at .rusty/svd/<chip>.svd."
 fetch = "Fetch the SVD"
 
+[dock.devices]
+named-against = "named against {boards} boards and {chips} chips"
+
 [dock.flight]
+no-channel = "no channel named for it"
+no-sensor = "no sensor the plant recognises — the firmware has to print [rusty:sensor] gyro=3 (or accel=3) before anything can be fed to it"
+few-motors = "{motors} motor pins reported, four needed — the plant mixes quad-X"
+close-loop = "Close the loop"
+plant-help = "A rigid body between the motors and the gyro, so the loop can be watched settling rather than only answering. It is a model: no gravity, no attitude, and constants that describe a small brushed quad rather than yours. What transfers is the sign of each axis, the motor order, and whether the loop is stable in shape — not the gains."
+from-plant = "from the plant"
+from-channels = "from {name} and friends, read as degrees"
+no-attitude = "No attitude. Close the loop, or publish roll/pitch/yaw as telemetry — rates are not angles and this will not pretend they are."
+feed-rates = "rates"
+feed-gravity = "gravity"
 empty-lead = "Nothing to show yet. This panel reads two things the firmware says: "
 empty-mid = " for the attitude and "
 empty-tail = " for the motors. "
@@ -394,6 +433,10 @@ pitch = "pitch"
 yaw = "yaw"
 motors = "Motors"
 [assistant]
+thinking = "thinking"
+stop = "Stop"
+stopped = "stopped"
+tokens = "{input} in / {output} out"
 # The right-hand drawer. Its openers are questions, not features: what somebody
 # would type is what teaches them the panel calls real analyses.
 no-model-title = "No model configured"
@@ -410,6 +453,8 @@ ask-placeholder = "Ask about this project…"
 ask = "Ask"
 clear = "Clear"
 [toolchain]
+downloads-here = "QEMU and the debuggers rusty downloads live here"
+reading = "Reading the toolchain…"
 # The Toolchain panel. Deliberately useful with no project open — "is my
 # machine set up?" is a fair question to ask before there is anything to build.
 refresh = "Probe the machine again"
@@ -441,7 +486,29 @@ probe-rs = "Flashes and debugs through a JTAG/SWD probe, and decodes defmt over 
 esp-generate = "Generates bare-metal project templates"
 rust-analyzer = "Completion, diagnostics and navigation in the editor"
 ldproxy = "Linker shim required by ESP-IDF (std) builds"
+qemu-system-riscv32 = "Runs RISC-V firmware (C3, C6, H2) on this machine, no board attached"
+qemu-system-xtensa = "Runs Xtensa firmware (ESP32, S2, S3) on this machine, no board attached"
+riscv32-esp-elf-gdb = "Debugs RISC-V firmware in the emulator: breakpoints, stepping, registers"
+xtensa-esp-elf-gdb = "Debugs Xtensa firmware in the emulator: breakpoints, stepping, registers"
+riscv32-esp-elf-gcc = "C compiler for RISC-V parts; needed only when a project builds C alongside Rust"
+xtensa-esp-elf-gcc = "C compiler for Xtensa parts; needed only when a project builds C alongside Rust"
 [memory]
+capacity-unknown = "chip capacity unknown"
+flash-hint = "code and constants written to the device"
+unattributed-hint = "assembly, C and ROM stubs — no crate to blame"
+col-section = "Section"
+col-costs = "Costs"
+col-address = "Address"
+col-size = "Size"
+cost-both = "flash + RAM"
+cost-flash = "flash"
+cost-ram = "RAM"
+no-symbols = "No symbols could be attributed to a crate. That usually means the binary was stripped, in which case a debug build will have the symbol table."
+col-crate = "Crate"
+col-code = "Code"
+col-rodata = "Read-only"
+col-ram = "RAM"
+col-total = "Total"
 no-project-title = "No project open"
 no-project-detail = "Memory analysis reads the linked ELF a build produces, so there has to be a project to have built one."
 nothing-built-title = "Nothing built yet"
@@ -458,6 +525,8 @@ reread = "Re-read"
 reread-hint = "Analyse the binary again, after a rebuild"
 
 [crates]
+none = "No registry dependencies — or the Cargo analysis is unavailable for this project."
+upgrade-rationale = "updates Cargo.toml to the requested version and re-resolves the lockfile"
 refresh = "Ask crates.io again"
 no-project-title = "No project open"
 no-project-detail = "Open a project to see its dependencies."
@@ -478,6 +547,12 @@ as-you-type = "Matches appear as you type."
 nothing = "Nothing matches."
 
 [features]
+baseline-hint = "{count} under this package's defaults"
+unified-hint = "after workspace-wide unification"
+units-hint = "proc-macros and build scripts — they serialize the build"
+none-declared = "`{package}` declares no features."
+no-change = "no change"
+crates-delta = "{delta} crates"
 no-analysis-title = "No Cargo analysis"
 no-analysis-detail = "Feature resolution runs over the whole dependency graph, which needs `cargo metadata` to have succeeded. The Problems panel says why it did not."
 resolved = "Resolved crates"
@@ -490,6 +565,11 @@ default = "default"
 marginal = "What changes if you flip only this switch, with every other feature held where it is. No change means another workspace member already requires it, so turning it off frees nothing."
 
 [session]
+serial-port = "serial port"
+not-a-board = "probably not a board"
+debug-probe = "debug probe"
+built-for = "built for {target}"
+attached = "attached — output is in the dock below"
 nothing-built-title = "Nothing built yet"
 nothing-built-detail = "There has to be a binary before there is anything to put on a board."
 flash-and-monitor = "Flash and monitor"
@@ -526,13 +606,20 @@ close = "Close"
 copy = "Copy"
 
 [debugger]
+step-over = "Step over (F10)"
+step-into = "Step into (F11)"
+step-out = "Step out (Shift+F11)"
 pause = "Pause the target"
 continue = "Continue (F5)"
 stop = "Stop debugging and the run it started"
 
 [terminal]
+starting = "Starting a shell…"
 exited = "The shell exited with status {code}."
 [find]
+rename = "Rename"
+rename-to = "to"
+no-results = "no results"
 find = "Find"
 match-case = "Match case"
 previous = "Previous (Shift+Enter)"
@@ -548,14 +635,26 @@ read-only = "read-only"
 read-only-hint = "A dependency's source. rusty will not edit the shared registry cache — a fix made here would bleed into every project on the machine and vanish on the next update."
 
 [tree]
+folder-name = "folder name"
+file-name = "file name"
+empty = "Nothing to show."
 files = "Files"
 refresh = "Re-read the project"
 
 [pinmap]
+pins = "{chip} pins"
+not-on-part = "GPIO{gpio} — not on this part"
+claimed = "{claimed} of {total} named in your source. A pin reached through a binding is not seen here."
+input-only = "input-only"
+free = "free"
 hide = "Hide the pin map"
 show = "Show the chip's pins"
 
 [waves]
+clock-firmware = "clock: firmware systimer (µs)"
+clock-host = "clock: host arrival time — firmware sent no stamps"
+no-trace = "no trace yet — run a simulation"
+edges = "{count} edges"
 follow = "Follow"
 fit = "Fit"
 fit-hint = "Frame the whole capture"
@@ -564,6 +663,9 @@ export-hint = "Write target/rusty-sim/trace.vcd for PulseView"
 empty = "Waveforms appear as the firmware reports pin changes — run a simulation."
 
 [plot]
+clock-firmware = "firmware clock"
+clock-host = "arrival time — the firmware sent no stamp"
+dropped = "{note} · oldest samples dropped"
 empty = "Nothing is being plotted. Firmware prints a line per loop and this draws it:"
 empty-note = "The stamp is optional and is the firmware's own clock in microseconds. Without it the panel times by arrival and says so — a plot that mixed the two silently would lie about when, which is the only thing a control loop is read for. examples/pid-tune is a working end of both lines."
 disconnect = "Disconnect"
@@ -580,6 +682,13 @@ tunables = "Tunables"
 tunables-empty-lead = "None announced. Firmware prints "
 tunables-empty-tail = " and it appears here — no config file, so the panel cannot drift from the binary that is running. Print it on a timer rather than only at boot: this panel usually connects to a board that has been flying for a while, and would otherwise never hear the announcement."
 [wizard]
+loading-catalogue = "Loading the chip catalogue…"
+cores = "{count} core"
+needs-espup = "needs espup"
+sram = "SRAM"
+flash = "Flash"
+target = "Target"
+radios = "Radios"
 # New project. Each step's detail pane exists to answer "what does this commit
 # me to" *before* the click, which is why the runtime and architecture blurbs
 # are about consequences rather than features.
@@ -614,6 +723,10 @@ espup = "Installs the Xtensa compiler this chip needs. Nothing upstream ships on
 [setup.manual]
 rustup = "Rust itself is not installed. Everything else here rides on it, so install rustup first — https://rustup.rs — and rusty can do the rest."
 [simulate]
+planning = "Working out the plan…"
+no-duty = "— no duty reported"
+wire-bends = "{bends} bend(s) — drag any segment of the wire to move it; right-click for more"
+wire-hint = "wire pins by dragging the gold stubs to the chip"
 # The board canvas and the run controls. The two pin-source captions are the
 # load-bearing pair: which emulator is running is never assumed, and a caption
 # promising register-level truth over a stock build would send somebody with a
@@ -655,6 +768,10 @@ reset-view = "Reset view"
 wire = "Wire"
 nothing-selected = "Select a part or a wire. Drag a part's gold stub to a chip pin to wire it — wiring is what sets the pin. Wheel zooms, background or middle-drag pans, R turns, X mirrors, F fits, Del removes."
 [parts]
+color-green = "green"
+color-blue = "blue"
+color-red = "red"
+color-yellow = "yellow"
 # The simulator's parts library. Each tooltip says what the part *does on the
 # wire*, because that is what decides whether it is the one you want.
 heading = "Parts"
@@ -677,6 +794,24 @@ pot = "potentiometer"
 pot-hint = "A slider that sends P<pin>=<0..255>"
 
 [misc]
+copy-action = "copy"
+copied = "copied"
+no-quick-fixes = "no quick fixes at the cursor"
+vim-no-back = "nowhere further back"
+vim-no-forward = "nowhere further forward"
+clock-skew = "clock skew"
+just-now = "just now"
+minutes-ago = "{count} min ago"
+hours-ago = "{count} h ago"
+days-ago = "{count} d ago"
+pick-project = "Open a Cargo project"
+pick-storage = "Where should rusty keep its data?"
+pick-destination = "Where should the project go?"
+discard-confirm = "{path} has unsaved changes.\nClose the tab and discard them?"
+finished = "— finished"
+exited-with = "— exited with status {code}"
+rename-nothing = "rename changed nothing — the server found no uses"
+renamed-in = "renamed in {count} file(s)"
 which-shell = "Which shell the terminal runs"
 panels = "Panels"
 unsaved = "Unsaved"

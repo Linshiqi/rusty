@@ -27,9 +27,7 @@ pub(crate) fn Editor() -> impl IntoView {
                     <TabStrip />
                     <div class="flex flex-1 items-center justify-center px-6 text-center">
                         <p class="max-w-[44ch] text-callout leading-relaxed text-label-2">
-                            "This is not a text file. rusty will not render a firmware image as \
-                             characters — the result is noise, and for a large one it would take \
-                             the window down with it."
+                            {t!("files.not-text")}
                         </p>
                     </div>
                 </div>

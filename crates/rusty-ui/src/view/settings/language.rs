@@ -14,19 +14,17 @@ use leptos::prelude::*;
 use rusty_i18n::t;
 
 use super::*;
+use crate::{controller, state::AppState};
 
 #[component]
 pub(super) fn Language() -> impl IntoView {
+    let state = AppState::expect();
     // What is *stored*, as opposed to what is active: "follow the system" and
     // "English" look identical on an English machine, and a picker that could
     // not tell them apart would move the highlight the first time somebody
-    // opened it.
-    let stored = LocalResource::new(|| async move {
-        crate::ipc::get::<Option<String>>(crate::ipc::cmd::workbench::LOCALE)
-            .await
-            .ok()
-            .flatten()
-    });
+    // opened it. `None` until the answer arrives, then `Some(the choice)`.
+    let stored = RwSignal::new(None::<Option<String>>);
+    controller::load_locale(state, stored);
 
     view! {
         <Field label=t!("settings.language") help=t!("settings.language-hint")>
@@ -60,7 +58,7 @@ pub(super) fn Language() -> impl IntoView {
                                     type="button"
                                     on:click=move |_| {
                                         chosen.set(Some(pick.clone()));
-                                        crate::i18n::choose_locale(pick.clone());
+                                        controller::choose_locale(state, pick.clone());
                                     }
                                     class=move || {
                                         let base =

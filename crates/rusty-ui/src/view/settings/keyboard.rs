@@ -109,7 +109,7 @@ pub(super) fn Keyboard() -> impl IntoView {
                                 >
                                     {move || {
                                         if capturing.get() {
-                                            "press keys…".to_string()
+                                            t!("settings.keyboard.press-keys")
                                         } else {
                                             chord.clone()
                                         }
@@ -132,7 +132,7 @@ pub(super) fn Keyboard() -> impl IntoView {
                                                     }
                                                     class="rounded-[4px] px-1.5 py-0.5 text-footnote text-label-3 hover:bg-sunken hover:text-label"
                                                 >
-                                                    "reset"
+                                                    {t!("settings.keyboard.reset")}
                                                 </button>
                                             }
                                         })}

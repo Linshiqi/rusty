@@ -10,7 +10,11 @@ use leptos::prelude::*;
 use rusty_i18n::t;
 
 use crate::view::icon::{Icon, IconView};
-use crate::{controller, state::AppState, view::components::Empty};
+use crate::{
+    controller,
+    state::AppState,
+    view::components::{Empty, register_toolbar},
+};
 
 #[component]
 pub fn Crates() -> impl IntoView {
@@ -29,10 +33,7 @@ pub fn Crates() -> impl IntoView {
         }
         .into_any()
     });
-    Effect::new(move |_| {
-        state.layout.toolbar.set(Some(toolbar));
-    });
-    on_cleanup(move || state.layout.toolbar.set(None));
+    register_toolbar(state, toolbar);
 
     Effect::new(move |first: Option<()>| {
         if first.is_none() && state.project.crate_rows.with(Option::is_none) {
@@ -72,8 +73,7 @@ pub fn Crates() -> impl IntoView {
                         if rows.is_empty() {
                             return view! {
                                 <p class="text-callout text-label-3">
-                                    "No registry dependencies — or the Cargo analysis is \
-                                     unavailable for this project."
+                                    {t!("crates.none")}
                                 </p>
                             }
                             .into_any();

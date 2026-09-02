@@ -109,10 +109,14 @@ where
     state.app.in_flight.update(|n| *n += 1);
     spawn_local(async move {
         match future.await {
-            Ok(value) => {
-                state.app.error.set(None);
-                apply(value);
-            }
+            // Success clears nothing. It used to clear the error banner, and
+            // since every controller call comes through here, a background
+            // success — the toolchain re-probe chained onto the environment
+            // check, the pin report the pin map asks for on mount — dismissed
+            // a banner before it had been read. The banner goes when the user
+            // dismisses it or the next failure replaces it; the dock keeps a
+            // copy either way.
+            Ok(value) => apply(value),
             Err(e) => {
                 if owns_session {
                     // A session that failed to start is a session that is not
