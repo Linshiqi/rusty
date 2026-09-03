@@ -138,6 +138,16 @@ pub fn reattach(state: AppState, path: String) {
 pub fn watch_reattach(state: AppState) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
+    // Guarded like every other call that runs at mount. `catch` on an async
+    // extern turns a *rejected promise* into `Err` and nothing else: with no
+    // `window.__TAURI__`, the shim throws synchronously, the generated glue
+    // swallows that and hands back `undefined`, and the wasm side then calls
+    // `.then` on it. The uncaught TypeError kills the executor, so the page
+    // paints once and answers nothing afterwards — no banner, no clue.
+    if !ipc::backend_available() {
+        return;
+    }
+
     #[derive(serde::Deserialize)]
     struct Event {
         payload: String,

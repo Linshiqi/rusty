@@ -29,7 +29,7 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
   -p rusty-edit -p rusty-lsp -p rusty-dbg --no-default-features \
   --target wasm32-unknown-unknown
 
-# Frontend alone, on http://localhost:1425 — much faster to iterate on than a
+# Frontend alone, on http://localhost:17425 — much faster to iterate on than a
 # full `tauri dev` rebuild. Anything needing the backend reports that it cannot
 # run; the layout, styling and every click that needs no backend are real.
 # (They were not, for a while: one boot-time IPC call ran unguarded, the shim
@@ -1019,7 +1019,7 @@ usty`) holds `location.toml`
   build with "unknown configuration field" and a misleading suggestion to update
   your Tauri crates. Explain the config here instead.
 - **One `cargo tauri dev` at a time, and stop the old one first.** A second
-  instance fails with `os error 10048` on port 1425 — and stopping the task
+  instance fails with `os error 10048` on port 17425 — and stopping the task
   kills `trunk serve` but *not* the app window, which is a detached child. Kill
   `rusty-app.exe` too, or the next run inherits a stale window.
 - **Never run `trunk build` while `trunk serve` is running.** They share `dist/`
@@ -1176,6 +1176,33 @@ usty`) holds `location.toml`
   And a DSR query is answered *after* the bytes before it in the same write
   have reached the emulator, or a program that prints and asks gets the
   cursor from before its own output.
+- **"It paints once and then ignores every click" is a wasm trap, and the
+  console is the only place it says so.** No panic banner, no CPU spinning,
+  and right-click falls through to the WebView's own menu because every
+  Leptos handler is dead. Two different faults produced exactly that screen
+  in one afternoon: a stack overflow (`RuntimeError: memory access out of
+  bounds`, fixed by `.cargo/config.toml` — read it, it explains the size) and
+  a panic reading a disposed signal, which in wasm aborts the module. Read
+  the console rather than guessing: start the app with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`,
+  connect to `http://127.0.0.1:9333/json/list` over CDP (suppress the
+  `Origin` header or the socket is refused 403), enable `Runtime`/`Log`, and
+  reload — the first exception names the component, and every one after it is
+  that one's corpse.
+- **A `set_timeout` closure outlives the component that made it.** The
+  editor's hover grace period reads `hover_gen`/`hover_cell`/`on_card` 300ms
+  later; close the tab or switch projects inside that window and those
+  signals are disposed, reading one panics, and the panic takes the whole
+  window down. Anything deferred past a frame uses `try_get_untracked` and
+  returns on `None`. The signals that belong to `AppState` are fine — it is
+  the component-local ones that die.
+- **The build follows the chip; the tests follow the user.** `run_command`
+  runs in `firmware_root`, which for the standard layout is the *excluded*
+  bare-metal crate — and `cargo test` there fails with "can't find crate for
+  `test`", because a `no_std` target has no test harness, which is the whole
+  reason that crate is excluded. Host commands pass `at_project_root`, so
+  they run where the testable members are. The Run Test lens and `debug_test`
+  both do.
 - **CI's clippy is today's stable; the machine's is whenever `rustup update`
   last ran.** v0.3.1 was tagged with clippy green here on 1.97 and failed on
   the runners' 1.98 — `chunks_exact(5)` where `as_chunks::<5>()` now exists,

@@ -947,9 +947,22 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 if state.editor.hover.with_untracked(Option::is_some) {
                                     set_timeout(
                                         move || {
-                                            if hover_gen.get_untracked() == generation
-                                                && !on_card.get_untracked()
-                                            {
+                                            // The surface can be disposed inside the
+                                            // grace period — the tab closed, the project
+                                            // switched, the file replaced — and these are
+                                            // *its* signals, not the app's. Reading a
+                                            // disposed one panics, and a panic in wasm
+                                            // aborts the module: the window keeps its
+                                            // last paint and every handler in it is dead,
+                                            // right down to the close button. `try_` is
+                                            // None once the owner is gone.
+                                            let (Some(current), Some(on_card)) = (
+                                                hover_gen.try_get_untracked(),
+                                                on_card.try_get_untracked(),
+                                            ) else {
+                                                return;
+                                            };
+                                            if current == generation && !on_card {
                                                 state.editor.hover.set(None);
                                             }
                                         },
@@ -961,9 +974,14 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                 let path = path.clone();
                                 set_timeout(
                                     move || {
-                                        if hover_gen.get_untracked() == generation
-                                            && hover_cell.get_untracked() == Some((line, col))
-                                        {
+                                        // Disposed-safe, as above.
+                                        let (Some(current), Some(cell)) = (
+                                            hover_gen.try_get_untracked(),
+                                            hover_cell.try_get_untracked(),
+                                        ) else {
+                                            return;
+                                        };
+                                        if current == generation && cell == Some((line, col)) {
                                             controller::request_hover(state, path, line, col);
                                         }
                                     },
@@ -977,9 +995,15 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             hover_gen.set(generation);
                             set_timeout(
                                 move || {
-                                    if hover_gen.get_untracked() == generation
-                                        && !on_card.get_untracked()
-                                    {
+                                    // Disposed-safe, as above. Leaving the surface is
+                                    // exactly when it is most likely to go away.
+                                    let (Some(current), Some(on_card)) = (
+                                        hover_gen.try_get_untracked(),
+                                        on_card.try_get_untracked(),
+                                    ) else {
+                                        return;
+                                    };
+                                    if current == generation && !on_card {
                                         state.editor.hover.set(None);
                                     }
                                 },

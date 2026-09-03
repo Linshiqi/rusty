@@ -172,10 +172,21 @@ pub async fn create_project(
 pub async fn run_command(
     program: String,
     args: Vec<String>,
+    at_project_root: Option<bool>,
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let working_dir = state.firmware_root().await;
+    // The build follows the chip; the tests follow the user. `firmware_root`
+    // is the bare-metal crate whenever the opened directory has no chip of its
+    // own, and `cargo test` there fails with "can't find crate for `test`" —
+    // there is no test harness for a `no_std` target, which is the very reason
+    // that crate is `exclude`d from the workspace. Host tests belong at the
+    // opened project, where the testable members are.
+    let working_dir = if at_project_root.unwrap_or(false) {
+        state.root().await
+    } else {
+        state.firmware_root().await
+    };
     let plan = CommandPlan {
         display: std::iter::once(program.clone())
             .chain(args.iter().cloned())

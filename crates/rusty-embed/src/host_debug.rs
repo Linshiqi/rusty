@@ -130,15 +130,27 @@ fn names(paths: &[PathBuf]) -> String {
 /// The msvc target's debug information is a PDB. gdb reads DWARF; handed a
 /// PDB build it loads, sets breakpoints that never hit and shows addresses
 /// where lines should be — a session that looks alive and answers nothing.
+///
+/// **This is a gap in rusty, and the message says so.** LLDB reads PDB
+/// perfectly well — pointed at a Rust msvc test binary it resolves
+/// `tests::rotations_do_not_commute` to `quaternion.rs:242` — so debugging
+/// host code on Windows is an ordinary thing to want and an ordinary thing
+/// to do. What is missing is a second backend here: `rusty-dbg` speaks
+/// gdb's machine interface, and LLDB's equivalent is the Debug Adapter
+/// Protocol through `lldb-dap`. Telling somebody to go and use Linux is the
+/// wrong answer, so the refusal names the real cause instead.
 pub fn gdb_reads(host: &str) -> Result<()> {
     if host.ends_with("-msvc") {
         return Err(Error::Refused {
             detail: format!(
-                "This machine's Rust builds for {host}, whose debug information is a PDB \
-                 that gdb cannot read: breakpoints would land nowhere and every stop would \
-                 show a bare address. Debug host tests on Linux or macOS, or build with the \
-                 x86_64-pc-windows-gnu target and a MinGW gdb. rusty will not switch a \
-                 project's target on its own."
+                "rusty's debugger drives gdb, and gdb cannot read the PDB debug information \
+                 that {host} produces: every breakpoint would land nowhere and every stop \
+                 would show a bare address instead of your source. This is a missing piece \
+                 in rusty rather than something you can configure — LLDB reads these builds \
+                 correctly, and driving it needs a second debugger backend that is not \
+                 written yet. Running tests works here; only stepping through them does \
+                 not. A project built for x86_64-pc-windows-gnu debugs today with a MinGW \
+                 gdb, and rusty will not switch a project's target on its own."
             ),
         });
     }

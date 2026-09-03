@@ -98,10 +98,9 @@ pub async fn debug_test(
 ) -> Result<(), CommandError> {
     use rusty_embed::{host_debug, process};
 
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    // The opened project, not `firmware_root`: a host test is built and run
+    // for this machine, and the firmware crate has no test harness to link.
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
 
     let host = blocking("rustc", {
         let root = root.clone();

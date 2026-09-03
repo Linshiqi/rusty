@@ -160,6 +160,24 @@ pub(super) fn run_command_then(
     line: String,
     after: impl FnOnce(Option<i32>) + 'static,
 ) {
+    run_command_in(state, line, false, after);
+}
+
+/// Run at the opened project rather than at the firmware crate.
+///
+/// For the host half: `cargo test` in a bare-metal crate cannot link a test
+/// harness, and that crate is excluded from the workspace for exactly that
+/// reason. See `run_command` on the backend.
+pub(super) fn run_command_at_root(state: AppState, line: String) {
+    run_command_in(state, line, true, |_| {});
+}
+
+fn run_command_in(
+    state: AppState,
+    line: String,
+    at_project_root: bool,
+    after: impl FnOnce(Option<i32>) + 'static,
+) {
     state.dock.source.set("commands");
     let mut parts = line.split_whitespace().map(str::to_string);
     let Some(program) = parts.next() else {
@@ -168,9 +186,11 @@ pub(super) fn run_command_then(
     let args: Vec<String> = parts.collect();
 
     #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         program: String,
         args: Vec<String>,
+        at_project_root: bool,
     }
 
     // Echo it first. Without this the output has no header and a scrollback of
@@ -182,7 +202,11 @@ pub(super) fn run_command_then(
     });
 
     let channel = stream_to_terminal(state);
-    let args = Args { program, args };
+    let args = Args {
+        program,
+        args,
+        at_project_root,
+    };
     track_session(
         state,
         async move {
@@ -238,5 +262,6 @@ pub fn run_test(state: AppState, filter: String) {
     } else {
         format!("cargo test {filter} -- --nocapture")
     };
-    run_command(state, line);
+    // At the project, not at the firmware crate: see `run_command_at_root`.
+    run_command_at_root(state, line);
 }

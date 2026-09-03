@@ -5,7 +5,7 @@
   "identifier": "dev.rusty.workbench",
   "build": {
     "frontendDist": "../rusty-ui/dist",
-    "devUrl": "http://localhost:1425",
+    "devUrl": "http://localhost:17425",
     "beforeDevCommand": {
       "script": "trunk serve",
       "cwd": "../rusty-ui"

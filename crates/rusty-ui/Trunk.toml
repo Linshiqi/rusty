@@ -21,8 +21,11 @@ wasm_opt = "z"
 ignore = ["../rusty-app"]
 
 [serve]
-# Not 1420. That is Tauri's conventional default, so every Tauri app on the
-# machine wants it — including velo, which is developed alongside this one.
-# `tauri.conf.json`'s `devUrl` must match.
-port = 1425
+# Deliberately nowhere near 1420. That is Tauri's conventional default, so
+# every Tauri app on the machine wants it — and 1421..1430 is where each of
+# them moves *next*, which is how this one and velo ended up one apart and
+# still able to collide. A port outside the range no other scaffold reaches
+# for is the only version of this that stays fixed. `tauri.conf.json`'s
+# `devUrl` and `.claude/launch.json` must match.
+port = 17425
 open = false

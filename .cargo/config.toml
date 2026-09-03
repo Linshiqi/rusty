@@ -1,0 +1,29 @@
+# The wasm build's stack.
+#
+# `wasm-ld` reserves 1 MiB by default, and the frontend overruns it in a debug
+# build — the symptom being the worst one this project has produced: the window
+# paints once, completely and correctly, and then answers nothing. No banner, no
+# panic message, no CPU burning; right-clicking falls through to the WebView's
+# own menu because every Leptos handler is dead. What actually happened is a
+# wasm trap, `RuntimeError: memory access out of bounds`, and the frame that
+# takes it is the editor surface's attribute tuple:
+#
+#   rusty_ui::view::panels::files::surface::__component_surface::{closure#16..}
+#       as tachys::html::attribute::Attribute>::into_cloneable_owned
+#
+# One `<textarea>` there carries twenty attributes — style, class, node_ref,
+# two `prop:`s and seven `on:`s among them — and tachys monomorphises that into
+# one deeply nested tuple type whose builder is a single enormous stack frame.
+# Release builds fit; unoptimised ones do not, so the *installed* app was fine
+# while `cargo tauri dev` was unusable, which is the wrong way round for the
+# build you develop in.
+#
+# Raised rather than worked around: splitting the element's attributes would buy
+# one element's worth of headroom and leave the next component to rediscover
+# this, and the stack is reserved address space in linear memory rather than
+# something paid for per run. Any new "renders once, then ignores every click"
+# report starts here — read the console over CDP
+# (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`), and if
+# it says "memory access out of bounds", this number is the answer.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16777216"]
