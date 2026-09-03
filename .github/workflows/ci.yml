@@ -95,7 +95,33 @@ jobs:
       # `rusty-core`'s fixture is a real standalone workspace that
       # `cargo metadata` resolves at test time, so the runner needs to be able
       # to reach crates.io. It is excluded from this workspace on purpose.
-      - run: cargo test --workspace
+      #
+      # Through `tee`, with `pipefail` so cargo's exit code survives the pipe:
+      # the step below reads the log back. `--color never` outranks the
+      # `CARGO_TERM_COLOR` above for this one command, so the log is greppable.
+      - name: cargo test --workspace
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --color never 2>&1 | tee test.log
+
+      # The failing tests, named where they can be read without signing in.
+      # The job log needs a GitHub login; annotations and the step summary
+      # are on the run page for anyone, and are what a bug report quotes.
+      - name: Name what failed
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "^test .* FAILED$|panicked at" test.log | head -40 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+          {
+            echo "### Failing tests (${{ matrix.os }})"
+            echo
+            echo '```'
+            grep -E "^test .* FAILED$|panicked at|^  (left|right):|^failures:$|^    [a-z_:]+$|^error(\[E[0-9]+\])?: " test.log | head -80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   wasm:
     runs-on: ubuntu-22.04

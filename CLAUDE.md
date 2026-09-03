@@ -1128,6 +1128,16 @@ usty`) holds `location.toml`
   And a DSR query is answered *after* the bytes before it in the same write
   have reached the emulator, or a program that prints and asks gets the
   cursor from before its own output.
+- **CI's clippy is today's stable; the machine's is whenever `rustup update`
+  last ran.** v0.3.1 was tagged with clippy green here on 1.97 and failed on
+  the runners' 1.98 — `chunks_exact(5)` where `as_chunks::<5>()` now exists,
+  and three `use leptos::prelude::*` lines that `use super::*` already
+  supplied. Neither is wrong code; both are `-D warnings`. Before a tag, run
+  the four gates on the runner's toolchain — `rustup toolchain install
+  <latest> --profile minimal -c clippy -c rustfmt` and `cargo +<latest>
+  clippy --workspace --all-targets -- -D warnings` — or update. The job log
+  needs a GitHub login, so the test job now also names what failed in
+  annotations and the step summary, which the run page shows to anyone.
 
 ## Meeting C
 

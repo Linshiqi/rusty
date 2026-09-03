@@ -4,8 +4,6 @@
 //! memory report, and both have to be visible at once. The channel each line
 //! came from is kept so the filter can narrow without losing the ordering.
 
-use leptos::prelude::*;
-
 use rusty_embed::LogLevel;
 
 use super::*;

@@ -195,9 +195,11 @@ pub(crate) fn semantic_spans(
     let mut spans = Vec::with_capacity(data.len() / 5);
     let mut line = 0u32;
     let mut unit_col = 0u32;
-    for token in data.chunks_exact(5) {
-        let (delta_line, delta_start, unit_len, type_index) =
-            (token[0], token[1], token[2], token[3]);
+    // Five integers per token, and the pattern names them; a trailing partial
+    // token — a server bug — is in the remainder and is dropped, as
+    // `chunks_exact` dropped it.
+    let (tokens, _partial) = data.as_chunks::<5>();
+    for &[delta_line, delta_start, unit_len, type_index, _modifiers] in tokens {
         if delta_line > 0 {
             line += delta_line;
             unit_col = delta_start;

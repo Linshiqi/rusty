@@ -4,8 +4,6 @@
 //! together — they are the same question asked of different files, and a
 //! reader who has to look in two places to answer it will look in one.
 
-use leptos::prelude::*;
-
 use rusty_lsp::DiagSeverity;
 
 use rusty_i18n::t;

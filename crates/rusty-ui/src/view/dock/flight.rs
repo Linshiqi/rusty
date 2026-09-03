@@ -15,8 +15,6 @@
 
 use std::collections::HashMap;
 
-use leptos::prelude::*;
-
 use rusty_i18n::t;
 
 use super::*;
