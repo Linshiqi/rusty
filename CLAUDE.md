@@ -1205,7 +1205,13 @@ usty`) holds `location.toml`
   the string. `Path::strip_prefix` is the same trap from the other side:
   `rusty-dbg`'s tests feed records from real Windows gdb sessions, and on
   Linux the fullname was one component no root could be a prefix of, so
-  `relative` relativises textually after bringing both sides to `/`.
+  `relative` relativises textually after bringing both sides to `/`. And
+  `cfg!(windows)` is the wrong question for whether a drive letter's case
+  folds: a path with a drive letter is a Windows path whatever host reads
+  it, so `rusty-lsp`'s `same_path_text` folds the letter everywhere and the
+  rest only on Windows. Three crates, one class of bug, found one per push
+  because `cargo test` stops at the first failing binary — the CI passes
+  `--no-fail-fast` now so a run names them all.
 
 ## Meeting C
 

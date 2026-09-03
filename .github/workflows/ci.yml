@@ -99,11 +99,14 @@ jobs:
       # Through `tee`, with `pipefail` so cargo's exit code survives the pipe:
       # the step below reads the log back. `--color never` outranks the
       # `CARGO_TERM_COLOR` above for this one command, so the log is greppable.
+      # `--no-fail-fast` so one run names every failing crate: cargo stops at
+      # the first test binary that fails, and three Linux-only failures in
+      # three crates took three pushes to find one at a time.
       - name: cargo test --workspace
         shell: bash
         run: |
           set -o pipefail
-          cargo test --workspace --color never 2>&1 | tee test.log
+          cargo test --workspace --no-fail-fast --color never 2>&1 | tee test.log
 
       # The failing tests, named where they can be read without signing in.
       # The job log needs a GitHub login; annotations and the step summary

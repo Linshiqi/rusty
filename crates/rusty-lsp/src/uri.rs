@@ -88,12 +88,30 @@ pub(crate) fn uri_to_relative(uri: &str, root: &Path) -> Option<String> {
 }
 
 /// Whether two spellings name the same path on this platform's disk.
+///
+/// On Windows the whole path is case-insensitive. Elsewhere only a drive
+/// letter folds — a path that has one is a Windows path whatever host is
+/// reading it, and rust-analyzer's `e%3A` for this side's `E:` is a fact
+/// about that path, not about the machine. The tests feed real Windows
+/// sessions' spellings on every OS, and `cfg!(windows)` alone made the
+/// Linux runner the one place they failed.
 fn same_path_text(a: &str, b: &str) -> bool {
     if cfg!(windows) {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
+        return a.eq_ignore_ascii_case(b);
     }
+    match (drive_split(a), drive_split(b)) {
+        (Some((a_drive, a_rest)), Some((b_drive, b_rest))) => {
+            a_drive.eq_ignore_ascii_case(b_drive) && a_rest == b_rest
+        }
+        _ => a == b,
+    }
+}
+
+/// `E:/x` → (`E`, `:/x`); a path with no drive letter is `None`.
+fn drive_split(text: &str) -> Option<(&str, &str)> {
+    let bytes = text.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        .then(|| text.split_at(1))
 }
 
 /// Whether two file URIs name the same file, tolerating the one difference
