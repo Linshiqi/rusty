@@ -88,7 +88,7 @@ cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
-| `rusty-dbg` | Debugging: gdb's machine interface parsed, folded into a session state — breakpoints, stepping, stack, variables |
+| `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
 | `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
@@ -1196,6 +1196,31 @@ usty`) holds `location.toml`
   window down. Anything deferred past a frame uses `try_get_untracked` and
   returns on `None`. The signals that belong to `AppState` are fine — it is
   the component-local ones that die.
+- **Which debugger is a property of the target, not a preference.** gdb reads
+  DWARF; Rust's default Windows target emits a PDB, so on `-msvc` gdb loads
+  the binary, sets breakpoints that never hit and shows addresses where lines
+  should be. LLDB reads PDB — it resolves a Rust test symbol to its source
+  line on that exact target — and LLDB's machine interface is DAP, not MI. So
+  `rusty-dbg` has two backends and `any.rs` picks between them; `gdb_reads`
+  answers "is gdb usable here" and `host_adapters` answers "what instead".
+- **Drive a debug adapter over its socket, never over its stdin.** Both
+  `lldb-dap` and `codelldb` hand the debuggee their own stdout, so the test's
+  `running 1 test` lands inside a DAP frame and every frame after it is
+  garbage. Over `--port` the two separate: the socket carries the protocol and
+  the adapter's stdout carries only the program's output, which is what the
+  dock shows. Measured on this machine, not feared.
+- **"The adapter exists" and "the adapter answers" are different facts.**
+  LLVM 19.1.0's Windows `lldb-dap` starts, stays alive, and answers nothing —
+  not stdio, not a socket. So discovery returns a *list*, the caller tries
+  each, and the connect timeout is short because a working adapter listens at
+  once. `cargo run -p rusty-dbg --example dap_probe -- <project> <exe> <file>
+  <line> [args…]` is the check that a machine can debug at all.
+- **A debug adapter takes breakpoints only between `initialized` and
+  `configurationDone`.** After that the program is running and a breakpoint
+  placed then is one a short test has already run past. The standing list
+  therefore travels *with* the launch request rather than being placed on
+  attach the way the gdb path does it, and the panel's first resume is a
+  no-op rather than an error about a program that is already going.
 - **The build follows the chip; the tests follow the user.** `run_command`
   runs in `firmware_root`, which for the standard layout is the *excluded*
   bare-metal crate — and `cargo test` there fails with "can't find crate for

@@ -12,6 +12,14 @@ pub mod pretty;
 pub use model::*;
 
 #[cfg(feature = "backend")]
+pub mod any;
+#[cfg(feature = "backend")]
+pub mod dap;
+#[cfg(feature = "backend")]
 pub mod session;
+#[cfg(feature = "backend")]
+pub use any::AnySession;
+#[cfg(feature = "backend")]
+pub use dap::{DapLaunch, DapSession};
 #[cfg(feature = "backend")]
 pub use session::{Debugger, Error, Events, Launch, Target};

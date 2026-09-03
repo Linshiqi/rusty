@@ -11,6 +11,15 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Debugging tests on Windows.** rusty drove gdb and nothing else, and gdb
+cannot read the debug information Rust's default Windows target emits — so
+Debug beside a test refused on the platform most people are on. It now speaks
+the Debug Adapter Protocol as well, which is how LLDB is driven, and picks the
+backend from what the target actually produces. Breakpoints, stepping, the
+call stack and locals work the same either way. Install `lldb-dap` (it ships
+with LLVM) or CodeLLDB's adapter and Debug works; with neither, the message
+says so and says which to get, instead of suggesting another operating system.
+
 **Tests, where VS Code puts them.** A `▶ Run Test | Debug` lens sits beside
 every `#[test]` and test module — on the attribute line above it — in place
 of the small arrow that used to hide at the left edge of the margin. Run is

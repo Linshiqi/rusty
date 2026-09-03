@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use rusty_dbg::{DebugState, Debugger, Events, Launch, Target};
+use rusty_dbg::{AnySession, DapLaunch, DapSession, DebugState, Debugger, Events, Launch, Target};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -77,7 +77,7 @@ pub async fn debug_start(
     };
 
     let (debugger, events) = blocking("the debugger", move || Debugger::start(&launch)).await??;
-    stream_session(debugger, events, on_state, &state).await
+    stream_session(AnySession::Gdb(debugger), events, on_state, &state).await
 }
 
 /// Debug one test built for this machine: build the test binaries, find the
@@ -93,6 +93,7 @@ pub async fn debug_start(
 #[tauri::command]
 pub async fn debug_test(
     filter: String,
+    breakpoints: Vec<(String, u32)>,
     on_state: Channel<DebugState>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
@@ -107,14 +108,29 @@ pub async fn debug_test(
         move || host_debug::host_triple(&root)
     })
     .await??;
-    host_debug::gdb_reads(&host)?;
-    let gdb = host_debug::host_gdb().ok_or_else(|| {
-        CommandError::new(
-            "No `gdb` for this machine is on PATH. The chips' debuggers — riscv32-esp-elf-gdb, \
-             xtensa-esp32-elf-gdb — cannot debug a process built for this machine; install \
-             the platform's own gdb.",
-        )
-    })?;
+    // Which debugger can read what this toolchain builds. gdb where the debug
+    // information is DWARF; a debug adapter — LLDB — where it is a PDB, which
+    // is Windows' default and the case gdb cannot serve at all.
+    enum Backend {
+        Gdb(std::path::PathBuf),
+        Adapters(Vec<std::path::PathBuf>),
+    }
+    let backend = match host_debug::gdb_reads(&host) {
+        Ok(()) => Backend::Gdb(host_debug::host_gdb().ok_or_else(|| {
+            CommandError::new(
+                "No `gdb` for this machine is on PATH. The chips' debuggers — \
+                 riscv32-esp-elf-gdb, xtensa-esp32-elf-gdb — cannot debug a process built \
+                 for this machine; install the platform's own gdb.",
+            )
+        })?),
+        Err(why) => {
+            let adapters = host_debug::host_adapters();
+            if adapters.is_empty() {
+                return Err(CommandError::from(why));
+            }
+            Backend::Adapters(adapters)
+        }
+    };
 
     // The build, visibly, and stoppable like any other command.
     let plan = host_debug::build_plan();
@@ -152,29 +168,66 @@ pub async fn debug_test(
     })
     .await??;
 
-    let launch = Launch {
-        gdb,
-        elf: exe,
-        target: Target::Host {
-            // One thread, so a step is a step and not a switch to whichever
-            // test the scheduler picked; `--nocapture` because what the test
-            // prints is usually why it is being run this way.
-            args: vec![
-                filter,
-                "--nocapture".to_string(),
-                "--test-threads=1".to_string(),
-            ],
-        },
-        root,
+    // One thread, so a step is a step and not a switch to whichever test the
+    // scheduler picked; `--nocapture` because what the test prints is usually
+    // why it is being run this way.
+    let args = vec![
+        filter,
+        "--nocapture".to_string(),
+        "--test-threads=1".to_string(),
+    ];
+
+    let (session, events) = match backend {
+        Backend::Gdb(gdb) => {
+            let launch = Launch {
+                gdb,
+                elf: exe,
+                target: Target::Host { args },
+                root,
+            };
+            let (session, events) =
+                blocking("the debugger", move || Debugger::start(&launch)).await??;
+            (AnySession::Gdb(session), events)
+        }
+        // Each in turn: "the adapter exists" and "the adapter answers" are
+        // different facts, and LLVM ships a Windows `lldb-dap` that starts and
+        // then does nothing at all. The first one that talks is the one used.
+        Backend::Adapters(adapters) => {
+            let mut refused: Vec<String> = Vec::new();
+            let mut started = None;
+            for adapter in adapters {
+                let launch = DapLaunch {
+                    adapter: adapter.clone(),
+                    program: exe.clone(),
+                    args: args.clone(),
+                    root: root.clone(),
+                    breakpoints: breakpoints.clone(),
+                };
+                match blocking("the debug adapter", move || DapSession::start(&launch)).await? {
+                    Ok(pair) => {
+                        started = Some(pair);
+                        break;
+                    }
+                    Err(e) => refused.push(format!("{}: {e}", adapter.display())),
+                }
+            }
+            let Some((session, events)) = started else {
+                return Err(CommandError::new(format!(
+                    "No debug adapter on this machine would start, so there is nothing to \
+                     debug with. Tried:\n{}",
+                    refused.join("\n"),
+                )));
+            };
+            (AnySession::Dap(session), events)
+        }
     };
-    let (debugger, events) = blocking("the debugger", move || Debugger::start(&launch)).await??;
-    stream_session(debugger, events, on_state, &state).await
+    stream_session(session, events, on_state, &state).await
 }
 
 /// Own the session for its life: register it, push every state to the
 /// panel, and let go when it ends. Shared by the two ways a session starts.
 async fn stream_session(
-    debugger: Debugger,
+    debugger: AnySession,
     events: Events,
     on_state: Channel<DebugState>,
     state: &AppState,

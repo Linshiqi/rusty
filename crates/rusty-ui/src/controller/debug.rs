@@ -43,11 +43,19 @@ pub fn debug_test(state: AppState, filter: String) {
     #[derive(serde::Serialize)]
     struct Args {
         filter: String,
+        breakpoints: Vec<(String, u32)>,
     }
+    // The standing list travels with the request rather than being placed on
+    // attach. A debug adapter only accepts breakpoints between `initialized`
+    // and `configurationDone`; after that the program is running, and a
+    // breakpoint placed then is one a short test has already run past.
     attach_session(
         state,
         cmd::debug::TEST,
-        Args { filter },
+        Args {
+            filter,
+            breakpoints: state.debug.breakpoints.get_untracked(),
+        },
         crate::state::DockTab::Output,
     );
 }

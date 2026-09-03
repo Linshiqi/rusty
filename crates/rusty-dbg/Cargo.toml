@@ -15,9 +15,21 @@ serde = { version = "1.0.229", features = ["derive"] }
 # of the derive machinery built for nothing.
 thiserror = { version = "2.0.20", optional = true }
 
+# The Debug Adapter Protocol is JSON, where gdb's machine interface is its own
+# grammar (`mi.rs`). Backend-only: the frontend takes the model and none of
+# the transport.
+serde_json = { version = "1.0.151", optional = true }
+
+[dev-dependencies]
+# `dap_probe` only. Adapter discovery is tool discovery, which lives with
+# every other tool ladder in rusty-embed; the probe borrows it rather than
+# keeping a second copy that could disagree about where to look. No cycle:
+# rusty-embed does not depend on this crate.
+rusty-embed = { path = "../rusty-embed" }
+
 [features]
 default = ["backend"]
-backend = ["dep:thiserror"]
+backend = ["dep:thiserror", "dep:serde_json"]
 
 [lints]
 workspace = true

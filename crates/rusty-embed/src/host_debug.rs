@@ -10,10 +10,13 @@
 //! question this module refuses to answer by picking, and none is the filter
 //! that would make `cargo test` exit zero having run nothing.
 //!
-//! Whether gdb can read the binary at all is a property of the *target*, not
-//! of gdb: an msvc build carries its debug information in a PDB, which gdb
-//! does not read, so every breakpoint would land nowhere and every stop would
-//! show a bare address. That is refused with the reason, before the build.
+//! Which *debugger* can read the binary is a property of the target, not of
+//! taste: an msvc build carries its debug information in a PDB, which gdb
+//! does not read, so with gdb every breakpoint would land nowhere and every
+//! stop would show a bare address. LLDB reads it, and LLDB is driven through
+//! a debug adapter rather than through MI — so this module answers both
+//! halves: [`gdb_reads`] says whether gdb is usable, and [`host_adapters`]
+//! offers what to use when it is not.
 
 use std::path::{Path, PathBuf};
 
@@ -131,26 +134,23 @@ fn names(paths: &[PathBuf]) -> String {
 /// PDB build it loads, sets breakpoints that never hit and shows addresses
 /// where lines should be — a session that looks alive and answers nothing.
 ///
-/// **This is a gap in rusty, and the message says so.** LLDB reads PDB
+/// **This answers "which debugger", not "whether".** LLDB reads PDB
 /// perfectly well — pointed at a Rust msvc test binary it resolves
-/// `tests::rotations_do_not_commute` to `quaternion.rs:242` — so debugging
-/// host code on Windows is an ordinary thing to want and an ordinary thing
-/// to do. What is missing is a second backend here: `rusty-dbg` speaks
-/// gdb's machine interface, and LLDB's equivalent is the Debug Adapter
-/// Protocol through `lldb-dap`. Telling somebody to go and use Linux is the
-/// wrong answer, so the refusal names the real cause instead.
+/// `tests::rotations_do_not_commute` to its own source line — so a `-msvc`
+/// host is not a refusal to debug, it is a refusal to debug *with gdb*.
+/// [`host_adapters`] is the other half, and the caller falls through to it;
+/// this error is only ever seen when neither is available, so it says how to
+/// get one rather than describing a limitation.
 pub fn gdb_reads(host: &str) -> Result<()> {
     if host.ends_with("-msvc") {
         return Err(Error::Refused {
             detail: format!(
-                "rusty's debugger drives gdb, and gdb cannot read the PDB debug information \
-                 that {host} produces: every breakpoint would land nowhere and every stop \
-                 would show a bare address instead of your source. This is a missing piece \
-                 in rusty rather than something you can configure — LLDB reads these builds \
-                 correctly, and driving it needs a second debugger backend that is not \
-                 written yet. Running tests works here; only stepping through them does \
-                 not. A project built for x86_64-pc-windows-gnu debugs today with a MinGW \
-                 gdb, and rusty will not switch a project's target on its own."
+                "Nothing on this machine can debug a {host} build. gdb cannot: this target's \
+                 debug information is a PDB and gdb reads DWARF, so every breakpoint would \
+                 land nowhere and every stop would show a bare address. LLDB can, and rusty \
+                 drives it through a debug adapter — install one and this works: `lldb-dap` \
+                 ships with LLVM, and CodeLLDB's adapter is the other. Running tests needs \
+                 none of this and works already."
             ),
         });
     }
@@ -184,6 +184,55 @@ pub fn host_triple(root: &Path) -> Result<String> {
 /// are not it: neither can debug an x86-64 process.
 pub fn host_gdb() -> Option<PathBuf> {
     crate::tools::find("gdb")
+}
+
+/// Debug adapters that can drive this machine's own binaries, best first.
+///
+/// A *list*, not a choice, because "the binary exists" and "the binary works"
+/// are different facts here and only one of them can be checked cheaply.
+/// LLVM's own Windows build of `lldb-dap` is on this machine and answers
+/// nothing at all — not over stdio, not over a socket — so a discovery that
+/// returned the first name it found would pick it and stop. The caller tries
+/// each in turn and keeps the one that talks.
+///
+/// `lldb-dap` first because it is LLDB's own and is what Linux and macOS
+/// carry. `codelldb` after it: CodeLLDB ships a standalone adapter, and
+/// where it was installed as a VS Code extension it is the one adapter on a
+/// stock Windows machine that works. Reading that directory is a read of a
+/// known path, nothing more — rusty neither drives nor needs the editor.
+pub fn host_adapters() -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = ["lldb-dap", "codelldb"]
+        .iter()
+        .filter_map(|name| crate::tools::find(name))
+        .collect();
+    found.extend(codelldb_extensions());
+    found.dedup();
+    found
+}
+
+/// CodeLLDB's adapter where its VS Code extension puts it, newest first.
+fn codelldb_extensions() -> Vec<PathBuf> {
+    let Some(home) = crate::tools::home_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(home.join(".vscode").join("extensions")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("vadimcn.vscode-lldb-"))
+        })
+        .map(|path| path.join("adapter").join(crate::tools::exe("codelldb")))
+        .filter(|path| path.is_file())
+        .collect();
+    // The directory name carries the version, so the newest sorts last.
+    found.sort();
+    found.reverse();
+    found
 }
 
 #[cfg(test)]
@@ -239,13 +288,19 @@ mod tests {
     }
 
     /// The refusal names the target and says why, so the person reading it
-    /// learns the fact rather than "debugging failed".
+    /// learns the fact rather than "debugging failed" — and, because an
+    /// adapter is the way out, it names that rather than another platform.
     #[test]
     fn an_msvc_host_is_refused_by_name_and_a_gnu_one_is_not() {
         let refused = gdb_reads("x86_64-pc-windows-msvc").expect_err("PDB is not DWARF");
         let text = refused.to_string();
         assert!(text.contains("x86_64-pc-windows-msvc"), "{text}");
         assert!(text.contains("PDB"), "{text}");
+        assert!(text.contains("lldb-dap"), "the way out is named: {text}");
+        assert!(
+            !text.to_lowercase().contains("linux or macos"),
+            "and it is not 'go and use another operating system': {text}",
+        );
         assert!(gdb_reads("x86_64-pc-windows-gnu").is_ok());
         assert!(gdb_reads("x86_64-unknown-linux-gnu").is_ok());
         assert!(gdb_reads("aarch64-apple-darwin").is_ok());

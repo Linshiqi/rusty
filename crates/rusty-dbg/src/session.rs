@@ -127,6 +127,12 @@ impl Events {
     pub fn next(&self) -> Option<DebugState> {
         self.0.recv().ok()
     }
+
+    /// For the other backend: both sessions push the same states, so both
+    /// hand the caller the same stream.
+    pub(crate) fn new(receiver: Receiver<DebugState>) -> Self {
+        Self(receiver)
+    }
 }
 
 /// The write half of the session, shared with the reader.
@@ -619,7 +625,7 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
 /// gdb mixes them within a single field — `src\bin/main.rs` came back from
 /// a real session — and a path that differs from the editor's by one
 /// backslash is a breakpoint that never lights up.
-fn normalise(path: &str) -> String {
+pub(crate) fn normalise(path: &str) -> String {
     path.replace('\\', "/")
 }
 
@@ -635,7 +641,7 @@ fn normalise(path: &str) -> String {
 /// first. The drive letter's case is folded, as `same_file_uri` folds it
 /// for rust-analyzer, and nothing else is: the rest of a path is
 /// case-sensitive on every other filesystem.
-fn relative(full: &str, root: &Path) -> String {
+pub(crate) fn relative(full: &str, root: &Path) -> String {
     let full = normalise(full);
     let root = normalise(&root.to_string_lossy());
     let root = root.trim_end_matches('/');
