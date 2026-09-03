@@ -626,10 +626,42 @@ fn normalise(path: &str) -> String {
 /// gdb reports absolute paths; the editor and the gutter speak
 /// project-relative, `/`-separated ones. One spelling per file, or a
 /// breakpoint set in the editor never matches the one gdb reports back.
+///
+/// Textual, not `Path::strip_prefix`: on Linux a backslash is not a
+/// separator, so a Windows path — from a Windows gdb, or from the tests
+/// below, which feed real Windows sessions' records on every OS — is one
+/// component that no root is a prefix of, and the Linux runner failed two
+/// tests this machine could not. Both sides are brought to one spelling
+/// first. The drive letter's case is folded, as `same_file_uri` folds it
+/// for rust-analyzer, and nothing else is: the rest of a path is
+/// case-sensitive on every other filesystem.
 fn relative(full: &str, root: &Path) -> String {
-    let path = Path::new(full);
-    let relative = path.strip_prefix(root).unwrap_or(path);
-    normalise(&relative.to_string_lossy())
+    let full = normalise(full);
+    let root = normalise(&root.to_string_lossy());
+    let root = root.trim_end_matches('/');
+    let inside = full.len() > root.len()
+        && full.is_char_boundary(root.len())
+        && full.as_bytes()[root.len()] == b'/'
+        && fold_drive(&full[..root.len()]) == fold_drive(root);
+    if inside {
+        full[root.len() + 1..].to_string()
+    } else {
+        full
+    }
+}
+
+/// `E:/x` and `e:/x` are one path on Windows.
+fn fold_drive(path: &str) -> String {
+    let mut chars = path.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => {
+            let mut folded = letter.to_ascii_lowercase().to_string();
+            folded.push(':');
+            folded.push_str(chars.as_str());
+            folded
+        }
+        _ => path.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -638,6 +670,38 @@ mod tests {
 
     fn root() -> PathBuf {
         PathBuf::from(r"E:\embeded\blinky")
+    }
+
+    /// The records the tests below feed are from Windows sessions, and the
+    /// runner they must pass on is Linux, where a backslash is not a
+    /// separator. Relativising is textual for exactly that reason.
+    #[test]
+    fn a_windows_fullname_is_made_project_relative_on_every_host() {
+        assert_eq!(
+            relative(r"E:\embeded\blinky\src\bin\main.rs", &root()),
+            "src/bin/main.rs"
+        );
+        assert_eq!(
+            relative("e:/embeded/blinky/src/bin/main.rs", &root()),
+            "src/bin/main.rs",
+            "the drive letter's case is folded, nothing else",
+        );
+        assert_eq!(
+            relative(r"E:\elsewhere\lib.rs", &root()),
+            "E:/elsewhere/lib.rs",
+            "outside the project the path stays absolute, in one spelling",
+        );
+    }
+
+    #[test]
+    fn a_posix_fullname_is_made_project_relative_too() {
+        let root = PathBuf::from("/home/u/blinky");
+        assert_eq!(relative("/home/u/blinky/src/main.rs", &root), "src/main.rs");
+        assert_eq!(
+            relative("/home/u/blinky-other/src/main.rs", &root),
+            "/home/u/blinky-other/src/main.rs",
+            "a sibling that merely starts with the root's text is not inside it",
+        );
     }
 
     /// The whole point of the session layer: records in, a state the panel

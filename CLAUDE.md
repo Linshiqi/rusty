@@ -1202,7 +1202,10 @@ usty`) holds `location.toml`
   failing the test that asserts the spelling a Windows user sees. A path
   that must read as Windows is spelled as text; and `Path::ends_with`
   compares components, so a test matching a Windows suffix on Linux compares
-  the string.
+  the string. `Path::strip_prefix` is the same trap from the other side:
+  `rusty-dbg`'s tests feed records from real Windows gdb sessions, and on
+  Linux the fullname was one component no root could be a prefix of, so
+  `relative` relativises textually after bringing both sides to `/`.
 
 ## Meeting C
 
