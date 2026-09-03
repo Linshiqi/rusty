@@ -38,13 +38,19 @@ pub fn find_rust_analyzer() -> Option<PathBuf> {
             && out.status.success()
         {
             let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-            if path.is_file() {
+            if path.is_file() && answers_as_rust_analyzer(&path) {
                 return Some(path);
             }
         }
     }
 
-    // No rustup: take PATH literally.
+    // No rustup: take PATH literally — but not on faith. The file found there
+    // is usually rustup's own proxy, which exists on every machine with
+    // rustup whether or not the component does; with it missing, the proxy
+    // starts, prints an error and exits, and a client that trusted the file
+    // spawned it, lost it, and reported "spawn rust-analyzer" failed. That
+    // was the CI runner: no component, a proxy on PATH, and a test that was
+    // written to skip without rust-analyzer running instead.
     let path = std::env::var_os("PATH")?;
     let name = if cfg!(windows) {
         "rust-analyzer.exe"
@@ -53,7 +59,26 @@ pub fn find_rust_analyzer() -> Option<PathBuf> {
     };
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| candidate.is_file() && answers_as_rust_analyzer(candidate))
+}
+
+/// Whether the file is rust-analyzer itself: it answers `--version` with its
+/// own name. rustup's proxy for a missing component answers with an error
+/// and a non-zero exit; a stale or foreign binary with neither.
+fn answers_as_rust_analyzer(candidate: &Path) -> bool {
+    let mut command = Command::new(candidate);
+    command.arg("--version");
+    command.env_remove("RUSTUP_TOOLCHAIN");
+    no_console_window(&mut command);
+    command.output().is_ok_and(|out| {
+        out.status.success() && is_rust_analyzer_version(&String::from_utf8_lossy(&out.stdout))
+    })
+}
+
+/// What `rust-analyzer --version` prints begins with the name; what the
+/// rustup proxy prints for a missing component does not (and goes to stderr).
+fn is_rust_analyzer_version(stdout: &str) -> bool {
+    stdout.trim_start().starts_with("rust-analyzer")
 }
 
 /// The server process, ready to spawn: stdio piped, and the environment as
@@ -142,6 +167,19 @@ pub(crate) fn no_console_window(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real binary names itself; the proxy's complaint, and an empty
+    /// answer, are not it.
+    #[test]
+    fn only_a_binary_that_names_itself_is_rust_analyzer() {
+        assert!(is_rust_analyzer_version(
+            "rust-analyzer 1.98.0 (88d9e12ae 2026-08-18)\n"
+        ));
+        assert!(!is_rust_analyzer_version(""));
+        assert!(!is_rust_analyzer_version(
+            "error: 'rust-analyzer' is not installed for the toolchain 'stable-x86_64-pc-windows-msvc'\n"
+        ));
+    }
 
     /// The layout this exists for: a workspace whose firmware is excluded
     /// because it cross-compiles. Without the link, every file under it comes

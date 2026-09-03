@@ -106,10 +106,13 @@ fn shell_choices(
                 push(label, path);
             }
         }
-        for candidate in [
-            program_files.join(r"Git\bin\bash.exe"),
-            program_files.join(r"Git\usr\bin\bash.exe"),
-        ] {
+        // Spelled with backslashes rather than `join`ed: `Path::join` inserts
+        // the *host's* separator, so on the Linux CI runner the Windows list
+        // came out as `C:\Program Files/Git\usr\bin\bash.exe` and the test
+        // of it, which asserts the spelling a Windows user sees, failed there
+        // and nowhere else. This branch only ever runs for Windows.
+        for tail in [r"Git\bin\bash.exe", r"Git\usr\bin\bash.exe"] {
+            let candidate = PathBuf::from(format!("{}\\{tail}", program_files.display()));
             if is_file(&candidate) {
                 push("Git Bash", candidate);
                 break;
@@ -354,7 +357,11 @@ mod tests {
             asked.borrow_mut().push(program.to_string());
             (program == "pwsh.exe").then(|| PathBuf::from(r"C:\Tools\pwsh.exe"))
         };
-        let is_file = |path: &Path| path.ends_with(r"Git\usr\bin\bash.exe");
+        // On the text, not through `Path::ends_with`: that compares components,
+        // and on Linux a backslash is not a separator, so the Windows path is
+        // one component and the suffix never matches. The test runs on every
+        // OS on purpose — see `shell_choices`.
+        let is_file = |path: &Path| path.to_string_lossy().ends_with(r"Git\usr\bin\bash.exe");
 
         let choices = shell_choices(
             true,

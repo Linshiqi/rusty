@@ -1186,6 +1186,23 @@ usty`) holds `location.toml`
   clippy --workspace --all-targets -- -D warnings` — or update. The job log
   needs a GitHub login, so the test job now also names what failed in
   annotations and the step summary, which the run page shows to anyone.
+- **A file on PATH called `rust-analyzer` is usually rustup's proxy, not
+  rust-analyzer.** The proxy exists on every machine with rustup whether or
+  not the component does; with the component missing it starts, prints an
+  error and exits. `find_rust_analyzer` used to return it because it was a
+  file, and the end-to-end test — written to *skip* when there is no
+  rust-analyzer — spawned it and failed on every runner. A candidate is a
+  rust-analyzer when `--version` says so. The same trap waits for every tool
+  rustup proxies (`rustfmt`, `cargo-clippy`, `rust-gdb`): existence is not
+  installation.
+- **`Path::join` inserts the host's separator, so a Windows path built with
+  it is Windows-only.** `shell_choices` is pure over its probes and takes
+  `windows: bool` precisely so both lists are tested on every OS — and on the
+  Linux runner its Git Bash candidate came out `C:\Program Files/Git\usr\…`,
+  failing the test that asserts the spelling a Windows user sees. A path
+  that must read as Windows is spelled as text; and `Path::ends_with`
+  compares components, so a test matching a Windows suffix on Linux compares
+  the string.
 
 ## Meeting C
 
