@@ -166,6 +166,10 @@ fold = "Click to collapse the range"
 unfold = "Click to expand the range"
 run-test = "Run {name}"
 run-module = "Run the tests in {name}"
+lens-run-test = "Run Test"
+lens-run-tests = "Run Tests"
+lens-debug = "Debug"
+debug-test = "Debug {name} under gdb, stopping at your breakpoints"
 
 [toolbar]
 save = "Format and save (Ctrl+S)"
@@ -397,7 +401,7 @@ empty = "Output from flashing, monitoring and anything you run below lands here,
 open-in-editor = "Open in the editor"
 
 [dock.debug]
-idle = "Nothing is being debugged. The Simulate panel's Debug button boots the firmware frozen and attaches here."
+idle = "Nothing is being debugged. The Simulate panel's Debug button boots the firmware frozen and attaches here; Debug beside a test in the editor runs that test under gdb."
 running = "Running — pause or hit a breakpoint to read the stack."
 call-stack = "Call stack"
 variables = "Variables"

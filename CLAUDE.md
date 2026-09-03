@@ -393,10 +393,11 @@ probe, the recipes, the archive downloads — and none of it ran unless asked.
 
 ## The gutter, and one line height
 
-The margin now carries three things beside each line — a run arrow for a
-`#[test]`, a fold chevron, the breakpoint dot — and adding them cost two bugs
-worth writing down, because both read as "the editor is broken" rather than as
-a layout mistake.
+The margin carries two things beside each line — a fold chevron and the
+breakpoint dot — and for a while a third, a run arrow for a `#[test]`, which
+has since moved beside the item as a lens (next section). Adding them cost
+two bugs worth writing down, because both read as "the editor is broken"
+rather than as a layout mistake.
 
 - **One integral row height, and nothing computes its own.** `row_height(zoom)`
   rounds `LINE_HEIGHT * zoom` to whole pixels, and the two layers plus every
@@ -413,10 +414,57 @@ a layout mistake.
   run arrows were invisible for a while: the width reserved a column for them
   and then the chevron took it. The width counts the columns the file actually
   needs.
-- Fold chevron right of the number, hard against the code, as VSCode puts it;
-  the run arrow left of the breakpoint dot. Each is its own click target,
-  because one glyph that means two things depending on where you hit it is how
-  you set a breakpoint when you meant to run a test.
+- Fold chevron right of the number, hard against the code, as VSCode puts it.
+  Each control is its own click target, because one glyph that means two
+  things depending on where you hit it is how you set a breakpoint when you
+  meant to run a test — the reason the run arrow was never folded into the
+  dot, and the reason it is a lens now.
+
+## Test lenses
+
+`▶ Run Test | Debug` beside every `#[test]` and every module holding one,
+where VS Code puts it, in place of the margin's run arrow. The user's
+complaint was exact: an entry point at the far edge of the margin is not
+where anyone looks for it, and the margin had no room to say "Debug".
+
+- **An overlay, never a row.** VS Code inserts a row above the item. This
+  editor cannot: the textarea and the echo must stay glyph for glyph (see
+  "Code folding"), and a row present in one and absent from the other is a
+  caret that drifts. So `lens_anchor` (`view/panels/files/lens.rs`, pure,
+  tested) puts the lens on the attribute line above the item — the row VS
+  Code's lens occupies — after that line's text, and on the item's own line
+  when nothing is above it. Positioned through `row_top`/`col_left` like
+  every overlay, skipped when its line is inside a collapsed fold.
+- **Run is what the arrow did**: `controller::run_test`, a substring filter
+  with `--nocapture`, for the reasons written above that function.
+- **Debug builds, asks, then runs.** `debug_test` (rusty-app) runs `cargo
+  test --no-run` visibly, then the same with `--message-format=json` to learn
+  where each test executable landed, then asks each binary `<exe> <filter>
+  --list` and starts the *one* that lists a match under gdb
+  (`rusty_dbg::Target::Host`). Which binary holds a test is cargo's private
+  knowledge — `src/lib.rs` tests live in the library's, `tests/x.rs` in its
+  own, a `#[path]` module anywhere — so the binaries are asked rather than
+  the path read. Two matches are refused by name; none is refused because
+  `cargo test` with such a filter exits zero having run nothing.
+- **A host program is run, not attached to.** `Target::Host` sends
+  `-exec-arguments` instead of `-target-select`, is `attached` from the start
+  (pushed at once, so the frontend places its breakpoints *before* the first
+  resume), turns that first resume into `-exec-run`, forwards the program's
+  stdout — raw lines in gdb's pipe, since a native inferior inherits it — as
+  `DebugState.output`, and quits gdb when the program exits, because a gdb
+  with nothing left to debug is a session that never ends.
+- **Refuse where gdb could only pretend.** An `-msvc` host carries its debug
+  information in a PDB, which gdb does not read: it would load the binary,
+  set breakpoints that never hit and show addresses where lines should be.
+  `host_debug::gdb_reads` refuses that before the build with the reason and
+  the alternative, and does not switch the project's target itself. The
+  chips' gdbs are not a host gdb either; `host_gdb` looks for plain `gdb`.
+- **One channel carries the build too.** The build's lines travel as
+  `DebugState { output }` snapshots on the session's channel, so the command
+  has one streaming argument like `debug_start`, and the frontend appends
+  `output` to the dock whatever produced it. The Output tab shows first and
+  the Debug tab takes over on attach; a Debug panel saying "starting" over a
+  two-minute compile looked hung.
 
 ## Languages
 

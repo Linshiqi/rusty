@@ -14,27 +14,84 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use crate::mi::{self, Record, Value};
 use crate::model::{Breakpoint, DebugState, MemoryRead, StackFrame, StopReason, Variable};
 
-/// What gdb connects to.
-#[derive(Debug, Clone, Copy)]
+/// What gdb connects to — or, for a program built for this machine, starts.
+#[derive(Debug, Clone)]
 pub enum Target {
     /// Espressif QEMU's gdbstub, frozen at reset by `-s -S`.
     Qemu { port: u16 },
     /// probe-rs serving gdb for real hardware.
     Probe { port: u16 },
+    /// A program for this machine — a test binary — that gdb runs itself,
+    /// with these arguments. Nothing is listening: the first resume is
+    /// `-exec-run` rather than `-exec-continue`, the program's own stdout
+    /// arrives in the pipe beside gdb's records, and its exit ends the
+    /// session, since there is no target left to talk to.
+    Host { args: Vec<String> },
 }
 
 impl Target {
-    fn port(self) -> u16 {
-        match self {
-            Target::Qemu { port } | Target::Probe { port } => port,
-        }
+    fn is_host(&self) -> bool {
+        matches!(self, Target::Host { .. })
+    }
+}
+
+/// `-exec-arguments` takes the rest of the line, split the way a shell
+/// would, so an argument with a space or a quote in it is quoted.
+fn exec_arguments(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| {
+            if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"') {
+                format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What "resume" means: a host program that has not started yet is started,
+/// and everything else — a remote target frozen at reset, a program already
+/// running — is continued. `-exec-continue` against a program that was never
+/// run is gdb's "The program is not being run.", which the panel would show
+/// as an error on the one button that had to work.
+fn resume_command(first_host_run: bool) -> &'static str {
+    if first_host_run {
+        "-exec-run"
+    } else {
+        "-exec-continue"
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn arguments_with_spaces_or_quotes_are_quoted_and_plain_ones_are_not() {
+        let args = vec![
+            "tests::it_works".to_string(),
+            "--nocapture".to_string(),
+            "a b".to_string(),
+            "say \"hi\"".to_string(),
+        ];
+        assert_eq!(
+            exec_arguments(&args),
+            r#"tests::it_works --nocapture "a b" "say \"hi\"""#
+        );
+    }
+
+    #[test]
+    fn a_host_program_is_run_once_and_continued_after() {
+        assert_eq!(resume_command(true), "-exec-run");
+        assert_eq!(resume_command(false), "-exec-continue");
     }
 }
 
@@ -97,6 +154,10 @@ pub struct Debugger {
     child: Mutex<Child>,
     wire: Arc<Wire>,
     state: Arc<Mutex<DebugState>>,
+    /// A program gdb runs itself, as opposed to a target it attached to.
+    host: bool,
+    /// Whether that program has been started — the first resume is the run.
+    launched: AtomicBool,
 }
 
 impl Debugger {
@@ -144,17 +205,21 @@ impl Debugger {
             token: AtomicU32::new(1),
         });
 
+        let host = launch.target.is_host();
+        let initial = sender.clone();
         {
             let state = Arc::clone(&state);
             let wire = Arc::clone(&wire);
             let root = launch.root.clone();
-            std::thread::spawn(move || pump(stdout, state, wire, sender, root));
+            std::thread::spawn(move || pump(stdout, state, wire, sender, root, host));
         }
 
         let debugger = Self {
             child: Mutex::new(child),
             wire,
             state,
+            host,
+            launched: AtomicBool::new(false),
         };
 
         // Connect, and stop before anything runs. `set` lines first: a
@@ -163,10 +228,27 @@ impl Debugger {
         debugger.send("-gdb-set mi-async on")?;
         debugger.send("-gdb-set pagination off")?;
         debugger.send("-gdb-set confirm off")?;
-        debugger.send(&format!(
-            "-target-select extended-remote localhost:{}",
-            launch.target.port(),
-        ))?;
+        match &launch.target {
+            Target::Qemu { port } | Target::Probe { port } => {
+                debugger.send(&format!("-target-select extended-remote localhost:{port}"))?;
+            }
+            Target::Host { args } => {
+                // Nothing to connect to: gdb has the binary from its command
+                // line and starts it on the first resume. So the session is
+                // attached from the start, and says so now rather than after
+                // the first record, because the frontend places its
+                // breakpoints on that word and then asks for the run — and
+                // a breakpoint placed after `-exec-run` is one the program
+                // may already have run past.
+                debugger.send(&format!("-exec-arguments {}", exec_arguments(args)))?;
+                let snapshot = {
+                    let mut state = debugger.state.lock().expect("state");
+                    state.attached = true;
+                    state.clone()
+                };
+                let _ = initial.send(snapshot);
+            }
+        }
         Ok((debugger, Events(receiver)))
     }
 
@@ -186,7 +268,8 @@ impl Debugger {
     }
 
     pub fn resume(&self) -> Result<()> {
-        self.send("-exec-continue")
+        let first_host_run = self.host && !self.launched.swap(true, Ordering::SeqCst);
+        self.send(resume_command(first_host_run))
     }
 
     pub fn pause(&self) -> Result<()> {
@@ -247,10 +330,29 @@ fn pump(
     wire: Arc<Wire>,
     sender: Sender<DebugState>,
     root: PathBuf,
+    host: bool,
 ) {
     let reader = BufReader::new(stdout);
     for line in reader.lines().map_while(std::result::Result::ok) {
         let Some(record) = mi::parse(&line) else {
+            // Not a record. On a host run that is the program's own stdout:
+            // it inherits gdb's, which is this pipe, so a test's `println!`
+            // arrives here between the records. Forwarded as `output`, one
+            // push per line and cleared once sent, because the reason to
+            // run a test under a debugger rather than read its assertion is
+            // usually what it prints on the way there.
+            if host && !line.trim().is_empty() && line.trim() != "(gdb)" {
+                let snapshot = {
+                    let mut state = state.lock().expect("state");
+                    state.output.push(line);
+                    state.clone()
+                };
+                let gone = sender.send(snapshot).is_err();
+                state.lock().expect("state").output.clear();
+                if gone {
+                    break;
+                }
+            }
             continue;
         };
         // A stop is only half an answer: it names one frame. The rest of
@@ -264,15 +366,23 @@ fn pump(
             let _ = wire.send("-stack-list-frames");
             let _ = wire.send("-stack-list-variables --all-values");
         }
-        let changed = {
+        let (changed, exited) = {
             let mut state = state.lock().expect("state");
-            apply(&mut state, &record, &root)
+            let changed = apply(&mut state, &record, &root);
+            (changed, state.exited.is_some())
         };
         if changed {
             let snapshot = state.lock().expect("state").clone();
             if sender.send(snapshot).is_err() {
                 break;
             }
+        }
+        // A host program that has exited leaves gdb with nothing to debug;
+        // a remote target that stopped with an exit code is QEMU's or the
+        // probe's to end. Quitting here is what closes this pipe and lets
+        // the loop below report the session over.
+        if host && exited {
+            let _ = wire.send("-gdb-exit");
         }
     }
     // gdb is gone; say so once so the panel stops offering to step. A target

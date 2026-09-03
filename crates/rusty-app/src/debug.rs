@@ -10,10 +10,13 @@
 
 use std::sync::Arc;
 
-use rusty_dbg::{DebugState, Debugger, Launch, Target};
+use rusty_dbg::{DebugState, Debugger, Events, Launch, Target};
 use tauri::{State, ipc::Channel};
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    error::CommandError,
+    state::{AppState, blocking},
+};
 
 /// Start gdb against a target that is already listening, and stream the
 /// session's state until it ends.
@@ -73,10 +76,110 @@ pub async fn debug_start(
         root,
     };
 
-    let (debugger, events) = tokio::task::spawn_blocking(move || Debugger::start(&launch))
-        .await
-        .map_err(|e| CommandError::new(format!("the debugger panicked while starting: {e}")))??;
+    let (debugger, events) = blocking("the debugger", move || Debugger::start(&launch)).await??;
+    stream_session(debugger, events, on_state, &state).await
+}
 
+/// Debug one test built for this machine: build the test binaries, find the
+/// one holding the test, run it under gdb with the standing breakpoints
+/// placed. What `Debug` beside a test in the editor does.
+///
+/// Refusals come before the build — a five-minute compile in front of "gdb
+/// cannot read this" is the wrong order — and the build itself streams into
+/// the same channel the session will, as `output` lines: one channel carries
+/// the whole story from `Compiling` to the exit code. Which binary holds the
+/// test is asked of the binaries rather than inferred from the file's path;
+/// see `rusty_embed::host_debug` for why.
+#[tauri::command]
+pub async fn debug_test(
+    filter: String,
+    on_state: Channel<DebugState>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    use rusty_embed::{host_debug, process};
+
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
+
+    let host = blocking("rustc", {
+        let root = root.clone();
+        move || host_debug::host_triple(&root)
+    })
+    .await??;
+    host_debug::gdb_reads(&host)?;
+    let gdb = host_debug::host_gdb().ok_or_else(|| {
+        CommandError::new(
+            "No `gdb` for this machine is on PATH. The chips' debuggers — riscv32-esp-elf-gdb, \
+             xtensa-esp32-elf-gdb — cannot debug a process built for this machine; install \
+             the platform's own gdb.",
+        )
+    })?;
+
+    // The build, visibly, and stoppable like any other command.
+    let plan = host_debug::build_plan();
+    let session = process::spawn(&plan, Some(&root))?;
+    let ours = state.start_session(session.stopper()).await;
+    let progress = on_state.clone();
+    let code = blocking("the test build", move || {
+        while let Some(line) = session.recv() {
+            let _ = progress.send(DebugState {
+                output: vec![line.text],
+                ..DebugState::default()
+            });
+        }
+        session.wait()
+    })
+    .await?;
+    state.release_session(&ours).await;
+    if code != Some(0) {
+        return Err(CommandError::new(format!(
+            "`{}` did not succeed{}; its output is in the dock.",
+            plan.display,
+            code.map(|c| format!(" (exit code {c})"))
+                .unwrap_or_default(),
+        )));
+    }
+
+    let exe = blocking("finding the test binary", {
+        let root = root.clone();
+        let filter = filter.clone();
+        move || -> rusty_embed::Result<std::path::PathBuf> {
+            let json = host_debug::built_json(&root)?;
+            let built = host_debug::test_executables(&json);
+            host_debug::binary_holding(&built, &filter)
+        }
+    })
+    .await??;
+
+    let launch = Launch {
+        gdb,
+        elf: exe,
+        target: Target::Host {
+            // One thread, so a step is a step and not a switch to whichever
+            // test the scheduler picked; `--nocapture` because what the test
+            // prints is usually why it is being run this way.
+            args: vec![
+                filter,
+                "--nocapture".to_string(),
+                "--test-threads=1".to_string(),
+            ],
+        },
+        root,
+    };
+    let (debugger, events) = blocking("the debugger", move || Debugger::start(&launch)).await??;
+    stream_session(debugger, events, on_state, &state).await
+}
+
+/// Own the session for its life: register it, push every state to the
+/// panel, and let go when it ends. Shared by the two ways a session starts.
+async fn stream_session(
+    debugger: Debugger,
+    events: Events,
+    on_state: Channel<DebugState>,
+    state: &AppState,
+) -> Result<(), CommandError> {
     let debugger = Arc::new(debugger);
     let ours = Arc::clone(&debugger);
     state.set_debugger(Some(Arc::clone(&debugger))).await;
@@ -84,7 +187,7 @@ pub async fn debug_start(
     // Blocking by nature — it sits on a channel — so it belongs on a
     // blocking thread rather than starving an async worker for the life of
     // a debug session.
-    tokio::task::spawn_blocking(move || {
+    blocking("the debug reader", move || {
         while let Some(update) = events.next() {
             let ended = update.exited.is_some();
             if on_state.send(update).is_err() {
@@ -100,8 +203,7 @@ pub async fn debug_start(
             }
         }
     })
-    .await
-    .map_err(|e| CommandError::new(format!("the debug reader panicked: {e}")))?;
+    .await?;
 
     state.release_debugger(&ours).await;
     Ok(())

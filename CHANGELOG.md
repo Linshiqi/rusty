@@ -9,6 +9,23 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Tests, where VS Code puts them.** A `▶ Run Test | Debug` lens sits beside
+every `#[test]` and test module — on the attribute line above it — in place
+of the small arrow that used to hide at the left edge of the margin. Run is
+what the arrow did: `cargo test <name> -- --nocapture` in the dock. Debug is
+new: it builds the test binaries, asks each which one holds the test, and runs
+that one under gdb with your breakpoints placed, stepping and inspecting in
+the Debug panel like a firmware session. What the test prints goes to the
+Output tab.
+
+Debug refuses, with the reason, where it could only pretend: on a Windows
+toolchain that builds for `-msvc`, whose PDB debug information gdb cannot
+read, and when no `gdb` for this machine is on PATH (the chips' debuggers
+are not it). A filter that names tests in two binaries is refused too, rather
+than silently running one of them.
+
 ## v0.3.1
 
 A review release: a hundred findings from a top-to-bottom read of the

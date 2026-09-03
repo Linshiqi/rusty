@@ -120,4 +120,11 @@ pub struct DebugState {
     /// view wants what the target holds *now*, and keeping history would
     /// mean showing a value from before the last step.
     pub memory: Vec<MemoryRead>,
+    /// What the session printed since the last state: the build that
+    /// produced a host test binary, then the program's own stdout under
+    /// gdb. Lines, not an accumulation — the frontend appends them to the
+    /// dock and the next state starts empty. Empty on a remote target,
+    /// whose console is the simulator's serial line and not gdb's.
+    #[serde(default)]
+    pub output: Vec<String>,
 }

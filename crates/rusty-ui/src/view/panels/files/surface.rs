@@ -530,15 +530,15 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // padding explicitly.
                         let digits = count.to_string().len().max(3);
                         // Padding, the breakpoint dot and its gap, plus a
-                        // column for each margin affordance the file actually
-                        // has. Reserving them unconditionally would push the
-                        // code right by two characters in every file that has
-                        // neither; reserving *neither* was the bug that made
+                        // column for the fold chevron when the file has
+                        // anything to fold. Reserving it unconditionally would
+                        // push the code right by two characters in every flat
+                        // file; reserving *nothing* was the bug that once made
                         // the run arrows invisible — the row is `justify-end`,
                         // so anything that does not fit overflows off the left
-                        // edge rather than wrapping or scrolling.
-                        let columns = usize::from(!runnables.get().is_empty())
-                            + usize::from(!foldables.get().is_empty());
+                        // edge rather than wrapping or scrolling. (The arrows
+                        // have since moved beside the item, as a lens.)
+                        let columns = usize::from(!foldables.get().is_empty());
                         let extra = 32 + columns * 17;
                         // The icons scale with the row. A fixed 13px chevron
                         // is taller than the row itself once the editor is
@@ -553,7 +553,6 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                         // step with its neighbours reads as the gutter having
                         // lost track of the file.
                         let slot = format!("width: {icon_px}px");
-                        let runs_column = !runnables.get().is_empty();
                         let folds_column = !foldables.get().is_empty();
                         view! {
                             <div
@@ -586,45 +585,6 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 list.iter().any(|(f, l)| f == &file && *l == line)
                                             })
                                         });
-                                        // The test declared on this line, if
-                                        // any, as its own click target rather
-                                        // than a second meaning for the
-                                        // margin. The margin already means
-                                        // "breakpoint", and one glyph that did
-                                        // two things depending on where you
-                                        // hit it is how you set a breakpoint
-                                        // when you meant to run a test.
-                                        let run = runnables
-                                            .get()
-                                            .into_iter()
-                                            .find(|r| r.line == line)
-                                            .map(|r| {
-                                                let label = match r.kind {
-                                                    rusty_edit::RunnableKind::Module => {
-                                                        t!("files.run-module", name = r.name)
-                                                    }
-                                                    rusty_edit::RunnableKind::Test => {
-                                                        t!("files.run-test", name = r.name)
-                                                    }
-                                                };
-                                                let filter = r.filter.clone();
-                                                view! {
-                                                    <button
-                                                        type="button"
-                                                        title=label
-                                                        on:click=move |event: ev::MouseEvent| {
-                                                            event.stop_propagation();
-                                                            controller::run_test(
-                                                                state,
-                                                                filter.clone(),
-                                                            );
-                                                        }
-                                                        class="flex shrink-0 items-center text-accent/60 hover:text-accent"
-                                                    >
-                                                        <IconView icon=Icon::Play size=icon_px />
-                                                    </button>
-                                                }
-                                            });
                                         // Fold control. Shown only where
                                         // something can collapse, and only on
                                         // hover unless it is already folded —
@@ -689,17 +649,6 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                                                 title=t!("files.breakpoint")
                                                 class="group flex cursor-pointer items-center justify-end gap-1.5"
                                             >
-                                                {runs_column
-                                                    .then(|| {
-                                                        view! {
-                                                            <span
-                                                                class="flex shrink-0 items-center justify-center"
-                                                                style=slot.clone()
-                                                            >
-                                                                {run}
-                                                            </span>
-                                                        }
-                                                    })}
                                                 <span class=move || {
                                                     if marked.get() {
                                                         "text-crimson"
@@ -1323,6 +1272,91 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
                             }
                         }}
                     />
+
+                    // The tests, offered where VS Code offers them — beside
+                    // the item, not at the far edge of the margin — and with
+                    // the half the margin never had room for: Debug. An
+                    // overlay, not a row of its own: the textarea and the echo
+                    // have to stay glyph for glyph, and a row that exists in
+                    // one and not the other is a caret that drifts. So the
+                    // lens sits on the attribute line above the item (the row
+                    // VS Code draws its lens on), after that line's text, or
+                    // on the item's own line when nothing is above it.
+                    {move || {
+                        let found = runnables.get();
+                        if found.is_empty() {
+                            return ().into_any();
+                        }
+                        let draft = state.editor.draft.get();
+                        let lines: Vec<&str> = draft.lines().collect();
+                        let z = zoom.get();
+                        let height = row_height(z);
+                        let icon_px = (height * 0.6).round().max(7.0) as u32;
+                        found
+                            .into_iter()
+                            .filter_map(|r| {
+                                let (line, col) = lens_anchor(&lines, r.line)?;
+                                // Inside a collapsed region the header stands
+                                // for the line, and a stack of lenses on one
+                                // header would say nothing readable.
+                                if line_of_row(state, row_for(state, line)) != line {
+                                    return None;
+                                }
+                                let x = col_left(&draft, line, col, z);
+                                let y = row_top(state, line, z);
+                                let (run_label, run_title) = match r.kind {
+                                    rusty_edit::RunnableKind::Module => (
+                                        t!("files.lens-run-tests"),
+                                        t!("files.run-module", name = r.name.clone()),
+                                    ),
+                                    rusty_edit::RunnableKind::Test => (
+                                        t!("files.lens-run-test"),
+                                        t!("files.run-test", name = r.name.clone()),
+                                    ),
+                                };
+                                let debug_title = t!("files.debug-test", name = r.name.clone());
+                                let run_filter = r.filter.clone();
+                                let debug_filter = r.filter.clone();
+                                Some(view! {
+                                    <div
+                                        class="pointer-events-none absolute z-10 flex items-center gap-2 font-sans text-footnote leading-none text-label-3 select-none"
+                                        style=format!("left: {x}px; top: {y}px; height: {height}px")
+                                    >
+                                        <button
+                                            type="button"
+                                            title=run_title
+                                            // The editor keeps focus: a lens is a
+                                            // command, not a place to be.
+                                            on:mousedown=|event: ev::MouseEvent| event.prevent_default()
+                                            on:click=move |event: ev::MouseEvent| {
+                                                event.stop_propagation();
+                                                controller::run_test(state, run_filter.clone());
+                                            }
+                                            class="pointer-events-auto flex items-center gap-1 hover:text-label"
+                                        >
+                                            <IconView icon=Icon::Play size=icon_px />
+                                            {run_label}
+                                        </button>
+                                        <span class="text-label-4">"|"</span>
+                                        <button
+                                            type="button"
+                                            title=debug_title
+                                            on:mousedown=|event: ev::MouseEvent| event.prevent_default()
+                                            on:click=move |event: ev::MouseEvent| {
+                                                event.stop_propagation();
+                                                controller::debug_test(state, debug_filter.clone());
+                                            }
+                                            class="pointer-events-auto flex items-center gap-1 hover:text-label"
+                                        >
+                                            <IconView icon=Icon::Bug size=icon_px />
+                                            {t!("files.lens-debug")}
+                                        </button>
+                                    </div>
+                                })
+                            })
+                            .collect_view()
+                            .into_any()
+                    }}
 
                     // Where the target is stopped. Drawn under the text like
                     // a find match rather than as a border, so it survives

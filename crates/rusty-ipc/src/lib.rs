@@ -160,6 +160,9 @@ pub mod lsp {
 /// Breakpoints, stepping, and what the target is doing.
 pub mod debug {
     pub const START: &str = "debug_start";
+    /// A host test under gdb: builds it, finds its binary, runs it. Streams
+    /// like [`START`].
+    pub const TEST: &str = "debug_test";
     pub const BREAKPOINT: &str = "debug_breakpoint";
     pub const CONTROL: &str = "debug_control";
     pub const FRAME: &str = "debug_frame";

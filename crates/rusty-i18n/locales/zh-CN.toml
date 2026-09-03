@@ -159,6 +159,10 @@ fold = "点击折叠这一段"
 unfold = "点击展开这一段"
 run-test = "运行 {name}"
 run-module = "运行 {name} 里的测试"
+lens-run-test = "运行测试"
+lens-run-tests = "运行全部测试"
+lens-debug = "调试"
+debug-test = "在 gdb 下调试 {name}，在你的断点处停下"
 
 [toolbar]
 save = "格式化并保存（Ctrl+S）"
@@ -377,7 +381,7 @@ empty = "烧录、监视，以及你在下面运行的任何东西，输出都�
 open-in-editor = "在编辑器中打开"
 
 [dock.debug]
-idle = "当前没有在调试。仿真面板的「调试」按钮会冻结启动固件并挂到这里。"
+idle = "当前没有在调试。仿真面板的「调试」按钮会冻结启动固件并挂到这里；编辑器里测试旁的「调试」会在 gdb 下运行那个测试。"
 running = "运行中——暂停或命中断点后才能读调用栈。"
 call-stack = "调用栈"
 variables = "变量"

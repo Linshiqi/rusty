@@ -51,6 +51,8 @@ pub mod firmware;
 #[cfg(feature = "backend")]
 pub mod flash;
 #[cfg(feature = "backend")]
+pub mod host_debug;
+#[cfg(feature = "backend")]
 pub mod install;
 #[cfg(feature = "backend")]
 pub mod memory;

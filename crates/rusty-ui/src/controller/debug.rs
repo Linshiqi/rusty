@@ -19,12 +19,49 @@ use crate::{
 /// run — so a debug run booted the unoptimised image while gdb read the
 /// optimised one and no breakpoint could ever hit.
 pub fn debug_start(state: AppState, hardware: bool) {
-    use wasm_bindgen::{JsValue, prelude::Closure};
-
     #[derive(serde::Serialize)]
     struct Args {
         hardware: bool,
     }
+    attach_session(
+        state,
+        cmd::debug::START,
+        Args { hardware },
+        crate::state::DockTab::Debug,
+    );
+}
+
+/// Run one test under gdb — the Debug half of the lens beside a test. The
+/// backend builds the test binaries, finds the one holding the test, and
+/// starts it frozen; the standing breakpoints are placed before it runs, the
+/// same way a QEMU debug run's are.
+///
+/// The Output tab first: the build streams there, and a Debug panel showing
+/// "starting" over a two-minute compile is a panel that looks hung. The
+/// switch to Debug happens when gdb reports itself attached.
+pub fn debug_test(state: AppState, filter: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        filter: String,
+    }
+    attach_session(
+        state,
+        cmd::debug::TEST,
+        Args { filter },
+        crate::state::DockTab::Output,
+    );
+}
+
+/// The one session loop behind both ways of starting a debugger: generation
+/// guard, breakpoint placement on attach, the first resume, following the
+/// stopped line, and the program's output into the dock.
+fn attach_session<A: serde::Serialize + 'static>(
+    state: AppState,
+    command: &'static str,
+    args: A,
+    first_tab: crate::state::DockTab,
+) {
+    use wasm_bindgen::{JsValue, prelude::Closure};
 
     // Generations, exactly as the terminal needed them: a replaced
     // session's late frames must not overwrite the one that replaced it.
@@ -38,7 +75,7 @@ pub fn debug_start(state: AppState, hardware: bool) {
         .debug
         .session
         .set(Some(rusty_dbg::DebugState::default()));
-    state.show_dock(crate::state::DockTab::Debug);
+    state.show_dock(first_tab);
 
     let channel = ipc::Channel::new();
     let on_state = Closure::wrap(Box::new(move |value: JsValue| {
@@ -46,11 +83,23 @@ pub fn debug_start(state: AppState, hardware: bool) {
             return;
         }
         if let Ok(update) = serde_wasm_bindgen::from_value::<rusty_dbg::DebugState>(value) {
+            // What the session printed: the build of a test binary, then
+            // the program's own stdout. To the dock, where every other
+            // command's output goes, so a test's `println!` is read in the
+            // same place whether it ran plainly or under gdb.
+            for text in &update.output {
+                state.push_log(rusty_embed::LogLine {
+                    stream: rusty_embed::LogStream::Stdout,
+                    text: text.clone(),
+                    level: None,
+                });
+            }
             // The standing list, once there is a session to place it in.
             // Sending before attach would be refused: the backend has no
             // debugger registered until gdb has answered.
             if update.attached && !placed.get_untracked() {
                 placed.set(true);
+                state.show_dock(crate::state::DockTab::Debug);
                 for (file, line) in state.debug.breakpoints.get_untracked() {
                     send_breakpoint(state, file, line, None);
                 }
@@ -108,10 +157,8 @@ pub fn debug_start(state: AppState, hardware: bool) {
     channel.set_onmessage(&on_state);
     on_state.forget();
 
-    let args = Args { hardware };
     spawn_local(async move {
-        let outcome =
-            ipc::call_streaming::<_, ()>(cmd::debug::START, &args, "onState", &channel).await;
+        let outcome = ipc::call_streaming::<_, ()>(command, &args, "onState", &channel).await;
         if state.debug.epoch.get_untracked() != epoch {
             return;
         }
