@@ -1196,7 +1196,16 @@ usty`) holds `location.toml`
   window down. Anything deferred past a frame uses `try_get_untracked` and
   returns on `None`. The signals that belong to `AppState` are fine — it is
   the component-local ones that die.
-- **Which debugger is a property of the target, not a preference.** gdb reads
+- **No completion inside a macro's arguments is rust-analyzer's, not ours.**
+  Reported as "a new line offers completions, editing an existing one does
+  not", which is a real difference and a misleading description of it.
+  Measured against the server directly, same file and same document text:
+  `e.` on a line of its own answers with 14 items, and the `e.` left behind by
+  deleting the `x` in `assert!(…, e.x)` answers with none. `assert!` has to be
+  expanded before `e` has a type, and arguments reading `e.)` do not parse, so
+  there is nothing to expand. VS Code behaves the same way for the same
+  reason. Nothing to fix here, and inventing a list would be the guess this
+  project refuses; the trigger in `surface.rs` fires on `.` wherever it is. gdb reads
   DWARF; Rust's default Windows target emits a PDB, so on `-msvc` gdb loads
   the binary, sets breakpoints that never hit and shows addresses where lines
   should be. LLDB reads PDB — it resolves a Rust test symbol to its source
