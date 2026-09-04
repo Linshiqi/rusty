@@ -731,6 +731,29 @@ pub struct Git {
     /// only after that, so a project nobody looks at the history of costs no
     /// `git log` per save.
     pub loaded: RwSignal<bool>,
+    /// Which of the three views is showing.
+    pub mode: RwSignal<GitMode>,
+    /// The working tree, for the Changes view.
+    pub status: RwSignal<Option<rusty_git::Status>>,
+    pub stashes: RwSignal<Vec<rusty_git::Stash>>,
+    /// The diff of the working-tree path last clicked, and which path and
+    /// side it is for — so an answer arriving after another click is dropped.
+    pub diff: RwSignal<Option<String>>,
+    pub diff_for: RwSignal<Option<(String, bool)>>,
+    /// The commit message being written. Kept across re-renders and tab
+    /// switches; cleared by the commit that uses it.
+    pub message: RwSignal<String>,
+    pub stash_note: RwSignal<String>,
+    /// The name of a branch being created, while the field is open.
+    pub new_branch: RwSignal<Option<String>>,
+}
+
+/// The Git panel's three views.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GitMode {
+    History,
+    Changes,
+    Stashes,
 }
 
 /// Project-wide search. Separate from [`Find`] because they are different
@@ -1104,6 +1127,14 @@ impl AppState {
                 file: RwSignal::new(None),
                 unavailable: RwSignal::new(None),
                 loaded: RwSignal::new(false),
+                mode: RwSignal::new(GitMode::History),
+                status: RwSignal::new(None),
+                stashes: RwSignal::new(Vec::new()),
+                diff: RwSignal::new(None),
+                diff_for: RwSignal::new(None),
+                message: RwSignal::new(String::new()),
+                stash_note: RwSignal::new(String::new()),
+                new_branch: RwSignal::new(None),
             },
             search: Search {
                 query: RwSignal::new(String::new()),

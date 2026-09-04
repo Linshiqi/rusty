@@ -172,28 +172,43 @@ pub(super) fn run_command_at_root(state: AppState, line: String) {
     run_command_in(state, line, true, |_| {});
 }
 
-/// [`run_command_at_root`], with a word once it has finished — for a
-/// caller that has something to refresh afterwards.
-pub(super) fn run_command_at_root_then(
-    state: AppState,
-    line: String,
-    after: impl FnOnce(Option<i32>) + 'static,
-) {
-    run_command_in(state, line, true, after);
-}
-
+/// A command given as one line, split on whitespace — what the palette and
+/// the recipes hand over. An argument that must keep its spaces goes through
+/// [`run_args_at_root_then`] instead.
 fn run_command_in(
     state: AppState,
     line: String,
     at_project_root: bool,
     after: impl FnOnce(Option<i32>) + 'static,
 ) {
-    state.dock.source.set("commands");
     let mut parts = line.split_whitespace().map(str::to_string);
     let Some(program) = parts.next() else {
         return;
     };
     let args: Vec<String> = parts.collect();
+    run_parts_in(state, program, args, at_project_root, after);
+}
+
+/// A command given as a program and its arguments, one argument one string
+/// however many spaces it holds — a commit message, a stash note. The dock
+/// shows it quoted the way a shell would want it typed.
+pub(super) fn run_args_at_root_then(
+    state: AppState,
+    program: impl Into<String>,
+    args: Vec<String>,
+    after: impl FnOnce(Option<i32>) + 'static,
+) {
+    run_parts_in(state, program.into(), args, true, after);
+}
+
+fn run_parts_in(
+    state: AppState,
+    program: String,
+    args: Vec<String>,
+    at_project_root: bool,
+    after: impl FnOnce(Option<i32>) + 'static,
+) {
+    state.dock.source.set("commands");
 
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -205,6 +220,10 @@ fn run_command_in(
 
     // Echo it first. Without this the output has no header and a scrollback of
     // several runs becomes unreadable.
+    let line = std::iter::once(program.clone())
+        .chain(args.iter().map(|arg| shell_word(arg)))
+        .collect::<Vec<_>>()
+        .join(" ");
     state.push_log(LogLine {
         stream: LogStream::Stdout,
         text: format!("$ {line}"),
@@ -228,6 +247,21 @@ fn run_command_in(
             after(code);
         },
     );
+}
+
+/// How the dock spells an argument: as it is when a shell would read it
+/// back as one word, quoted otherwise. Display only — the process gets the
+/// argument itself, never this.
+fn shell_word(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_alphanumeric() || "-_./:=@+,~".contains(c))
+    {
+        arg.to_string()
+    } else {
+        format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\""))
+    }
 }
 
 /// End the running session. The normal way a monitor finishes, not an error.
@@ -274,4 +308,42 @@ pub fn run_test(state: AppState, filter: String) {
     };
     // At the project, not at the firmware crate: see `run_command_at_root`.
     run_command_at_root(state, line);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_word;
+
+    #[test]
+    fn a_word_a_shell_reads_back_whole_is_shown_as_itself() {
+        assert_eq!(shell_word("commit"), "commit");
+        assert_eq!(shell_word("--include-untracked"), "--include-untracked");
+        assert_eq!(shell_word("origin/main"), "origin/main");
+        assert_eq!(shell_word("v0.4.0"), "v0.4.0");
+    }
+
+    #[test]
+    fn anything_a_shell_would_split_or_expand_is_quoted() {
+        assert_eq!(shell_word("a b"), "\"a b\"");
+        // Braces expand in bash; a stash name has to be quoted to be typed.
+        assert_eq!(shell_word("stash@{0}"), "\"stash@{0}\"");
+        assert_eq!(shell_word(""), "\"\"");
+    }
+
+    #[test]
+    fn quotes_and_backslashes_inside_are_escaped() {
+        assert_eq!(shell_word("say \"hi\""), "\"say \\\"hi\\\"\"");
+        assert_eq!(shell_word("C:\\path"), "\"C:\\\\path\"");
+    }
+
+    #[test]
+    fn a_message_with_paragraphs_is_one_quoted_word() {
+        let shown = shell_word("first line\n\nsecond paragraph");
+        assert!(shown.starts_with('"') && shown.ends_with('"'));
+        assert_eq!(shown.matches('"').count(), 2, "one opening, one closing");
+        assert!(
+            shown.contains("\n\n"),
+            "the newlines are shown, not escaped"
+        );
+    }
 }

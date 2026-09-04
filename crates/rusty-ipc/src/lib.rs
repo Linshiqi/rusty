@@ -227,4 +227,12 @@ pub mod git {
     pub const HISTORY: &str = "git_history";
     pub const COMMIT: &str = "git_commit";
     pub const BRANCHES: &str = "git_branches";
+    /// The working tree: branch, upstream, every changed path.
+    pub const STATUS: &str = "git_status";
+    pub const STASHES: &str = "git_stashes";
+    /// One path's diff — index against HEAD, or tree against index.
+    pub const DIFF: &str = "git_diff";
+    /// Put paths in the index, or take them out. Quiet: everything that
+    /// rewrites history or talks to a remote runs as a dock command instead.
+    pub const STAGE: &str = "git_stage";
 }

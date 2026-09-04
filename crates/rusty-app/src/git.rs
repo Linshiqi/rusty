@@ -9,7 +9,7 @@
 //! user's checkout, and the standard embedded layout puts the firmware crate
 //! *inside* it, not the other way round.
 
-use rusty_git::{Branch, CommitDetail, History};
+use rusty_git::{Branch, CommitDetail, History, Stash, Status};
 use tauri::State;
 
 use crate::{
@@ -41,4 +41,47 @@ pub async fn git_commit(id: String, state: State<'_, AppState>) -> Answer<Commit
 pub async fn git_branches(state: State<'_, AppState>) -> Answer<Vec<Branch>> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     Ok(blocking("git branch", move || rusty_git::repo::branches(&root)).await??)
+}
+
+/// Where the working tree stands.
+#[tauri::command]
+pub async fn git_status(state: State<'_, AppState>) -> Answer<Status> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("git status", move || rusty_git::repo::status(&root)).await??)
+}
+
+/// Every stash, newest first.
+#[tauri::command]
+pub async fn git_stashes(state: State<'_, AppState>) -> Answer<Vec<Stash>> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("git stash list", move || rusty_git::repo::stashes(&root)).await??)
+}
+
+/// One path's diff, for the Changes view.
+#[tauri::command]
+pub async fn git_diff(
+    path: String,
+    staged: bool,
+    untracked: bool,
+    state: State<'_, AppState>,
+) -> Answer<String> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("git diff", move || {
+        rusty_git::repo::diff_file(&root, &path, staged, untracked)
+    })
+    .await??)
+}
+
+/// Stage paths (`on`), or take them back out of the index.
+#[tauri::command]
+pub async fn git_stage(paths: Vec<String>, on: bool, state: State<'_, AppState>) -> Answer<()> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("git add", move || {
+        if on {
+            rusty_git::repo::stage(&root, &paths)
+        } else {
+            rusty_git::repo::unstage(&root, &paths)
+        }
+    })
+    .await??)
 }

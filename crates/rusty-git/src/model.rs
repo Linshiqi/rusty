@@ -130,3 +130,47 @@ pub struct Branch {
     /// The short hash of its tip.
     pub tip: String,
 }
+
+/// One path the working tree or the index differs in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusEntry {
+    /// Repository-relative, `/`-separated. For a rename, the new name.
+    pub path: String,
+    /// How the index differs from HEAD — what the next commit would carry.
+    pub staged: Option<ChangeKind>,
+    /// How the working tree differs from the index.
+    pub unstaged: Option<ChangeKind>,
+    /// Not in the index at all.
+    pub untracked: bool,
+    /// A merge left it with conflict markers.
+    pub conflicted: bool,
+}
+
+/// Where the working tree stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    /// The branch checked out, or `None` when HEAD is detached.
+    pub head: Option<String>,
+    pub detached: bool,
+    /// The branch this one tracks, when it does.
+    pub upstream: Option<String>,
+    /// Commits here the upstream does not have, and the reverse.
+    pub ahead: u32,
+    pub behind: u32,
+    pub entries: Vec<StatusEntry>,
+}
+
+/// One stash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stash {
+    /// Its position, newest first — what `stash@{n}` counts.
+    pub index: u32,
+    /// `stash@{0}`, as git names it.
+    pub label: String,
+    /// The note it was saved with, or git's own `WIP on main: …`.
+    pub message: String,
+    pub time: u64,
+}

@@ -37,6 +37,12 @@ pub enum Icon {
     /// A branch: a trunk with a line forking off and rejoining — the
     /// repository's history.
     Branch,
+    Plus,
+    /// Arrows against a baseline: down into it is pull, up out of it is
+    /// push, and down between brackets is fetch — brought in, not applied.
+    Pull,
+    Push,
+    Fetch,
 }
 
 impl Icon {
@@ -104,6 +110,10 @@ impl Icon {
             Icon::Branch => {
                 "M6.5 5.5a1.75 1.75 0 1 0 0 .01zM6.5 14.5a1.75 1.75 0 1 0 0 .01zM13.5 6.5a1.75 1.75 0 1 0 0 .01zM6.5 7.25v5.5M13.5 8.25c0 3-7 2.5-7 5.5"
             }
+            Icon::Plus => "M10 4.5v11M4.5 10h11",
+            Icon::Pull => "M10 4v9.5M6.5 10l3.5 3.5 3.5-3.5M4.5 16.5h11",
+            Icon::Push => "M10 16V6.5M6.5 10 10 6.5 13.5 10M4.5 3.5h11",
+            Icon::Fetch => "M10 4v9M7 10l3 3 3-3M4.5 4v12M15.5 4v12",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

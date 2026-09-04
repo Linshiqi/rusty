@@ -342,11 +342,46 @@ positioned in a coordinate system that is not the document's.
 
 ## The Git panel
 
-The project's history, with Fork as the reference for what it should look
-like: a graph of lanes beside the commits, labels on the commits that carry
-branches and tags, a commit opened below with its files and each file's
-patch, and a branch strip that filters and can check out.
+The repository, with Fork as the reference for what it should look like.
+Three views (`state::GitMode`) behind one branch strip: *History* — a graph
+of lanes beside the commits, labels on the commits that carry branches and
+tags, a commit opened below with its files and each file's patch; *Changes*
+— the working tree as staged and unstaged lists, a file's diff, the commit
+box; *Stashes*. The rail carries fetch, pull, push and a new branch.
 
+- **Reads are IPC; writes are dock commands.** The log, a commit, the status,
+  the stash list and one path's diff answer with model types and touch
+  nothing. Commit, stash, checkout, branch, fetch, pull and push run through
+  the same runner every `cargo` uses, so the exact `git` line and everything
+  it says back are in the dock — a checkout refused on a dirty tree or a
+  rejected push is a paragraph there, not a banner nobody can act on. The
+  one quiet write is staging: `git add` on a path is instant and reversible,
+  and a dock line per click would bury the commands that matter.
+- **Changes is two columns, not a stack.** Files and the commit box on the
+  left, the diff on the right at full height — Fork's and VS Code's shape.
+  Stacked, the diff at a fixed fraction and the commit box at its natural
+  height took the space between them, and the file lists — the thing the view
+  is for — were three rows tall in a panel two thousand pixels wide.
+- **A commit message is one argument however many lines it has.** The dock's
+  line runner splits on whitespace, which would tear a message at its first
+  space; `run_args_at_root_then` takes an argument vector and hands it to the
+  process as-is, and `shell_word` quotes it *for display only*. Anything
+  passing user prose to a command goes that way.
+- **`git diff` exits 1 when there is a difference**, which is the answer
+  wanted, so `run_allowing` treats the codes a caller names as success and
+  `run` is the `&[0]` case. An untracked file's diff is `--no-index` against
+  `/dev/null`, a name git resolves itself on every platform, Windows included.
+- **Status is porcelain v2 with `-z`**, the one format whose field layout is
+  a contract: branch headers, `1`/`2`/`u`/`?` entries, a rename carrying its
+  old path as the next NUL-separated token. Parsed once, in `parse::status`,
+  under tests pinning the real output.
+- **Branch delete is `-d`, never `-D`.** A branch whose work is merged
+  nowhere is refused, and that refusal in the dock is the right answer;
+  force-deleting is a decision for a terminal, not a button. The new-branch
+  field creates from the branch selected in the strip, or from HEAD.
+- **A push with no upstream sets one** (`-u origin <head>`), because a bare
+  `git push` on a new branch refuses with a hint nobody reads. Stash is
+  `push --include-untracked` — "everything I have" is what the button says.
 - **The graph is laid out on the backend and only drawn on the frontend.**
   `rusty_git::graph::lay_out` is pure and under tests that name the shapes
   that go wrong — a merge, two tips, a branch bending back into a lane that
@@ -372,10 +407,10 @@ patch, and a branch strip that filters and can check out.
 - **A merge is shown against its first parent** (`-m --first-parent`), as
   Fork does — `git show` on a clean merge prints an empty combined diff,
   which reads as "this merge changed nothing".
-- **Checkout is a dock command** through `run_command_at_root_then`, so the
-  command and everything git says are readable, and the log and branch strip
-  refresh when it finishes. The tree and the open files follow through the
-  watcher like any other change to the checkout.
+- **After any write, everything is read back** (`after_git`): history,
+  branches, status and stashes, and the tree — so the panel never shows a
+  state git has already left. The open files follow through the watcher like
+  any other change to the checkout.
 - **The history follows the disk.** `.git/` is a dot directory and unwatched,
   so the refresh rides on the working-tree batches a commit, checkout or
   fetch produces; it is a no-op until the panel has been opened once, so a

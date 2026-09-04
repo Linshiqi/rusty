@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::graph;
-use crate::model::{Branch, CommitDetail, History};
+use crate::model::{Branch, CommitDetail, History, Stash, Status};
 use crate::parse;
 
 #[derive(Debug, thiserror::Error)]
@@ -142,6 +142,77 @@ pub fn branches(root: &Path) -> Result<Vec<Branch>> {
     Ok(parse::branches(&text))
 }
 
+/// Where the working tree stands: branch, upstream, and every changed path.
+pub fn status(root: &Path) -> Result<Status> {
+    ensure_repository(root)?;
+    let text = run(
+        root,
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--untracked-files=all",
+            "-z",
+        ],
+    )?;
+    Ok(parse::status(&text))
+}
+
+/// Every stash, newest first.
+pub fn stashes(root: &Path) -> Result<Vec<Stash>> {
+    ensure_repository(root)?;
+    let text = run(
+        root,
+        &[
+            "stash",
+            "list",
+            &format!("--format={}", parse::STASH_FORMAT),
+        ],
+    )?;
+    Ok(parse::stashes(&text))
+}
+
+/// One path's difference: the index against HEAD when `staged`, the tree
+/// against the index otherwise, and the whole file as added for one the
+/// index has never seen.
+///
+/// `git diff` exits 1 when there *is* a difference, which is the answer
+/// wanted, so 1 is not a failure here.
+pub fn diff_file(root: &Path, path: &str, staged: bool, untracked: bool) -> Result<String> {
+    ensure_repository(root)?;
+    let args: Vec<&str> = if untracked {
+        // `/dev/null` is a name git's own diff understands on every platform,
+        // Windows included; it is not a file that has to exist.
+        vec!["diff", "--no-index", "--no-color", "--", "/dev/null", path]
+    } else if staged {
+        vec!["diff", "--cached", "--no-color", "--", path]
+    } else {
+        vec!["diff", "--no-color", "--", path]
+    };
+    run_allowing(root, &args, &[0, 1])
+}
+
+/// Put paths in the index. Quiet on purpose: instant, reversible, and a dock
+/// line per click would bury the commands that matter.
+pub fn stage(root: &Path, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["add", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    run(root, &args).map(drop)
+}
+
+/// Take paths back out of the index, leaving the working tree alone.
+pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["reset", "-q", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    run(root, &args).map(drop)
+}
+
 /// A directory with no repository above it gets a plain answer, not a
 /// `git log` error about a missing ref.
 fn ensure_repository(root: &Path) -> Result<()> {
@@ -155,6 +226,12 @@ fn ensure_repository(root: &Path) -> Result<()> {
 
 /// One `git` invocation, its stdout as text.
 fn run<S: AsRef<str>>(root: &Path, args: &[S]) -> Result<String> {
+    run_allowing(root, args, &[0])
+}
+
+/// [`run`], treating any of `ok` as success — for the commands whose exit
+/// code is an answer rather than a verdict.
+fn run_allowing<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> Result<String> {
     let mut command = Command::new("git");
     command
         .args(["-c", "core.quotepath=off", "-c", "color.ui=never"])
@@ -172,7 +249,8 @@ fn run<S: AsRef<str>>(root: &Path, args: &[S]) -> Result<String> {
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let output = command.output().map_err(|source| Error::Spawn { source })?;
-    if !output.status.success() {
+    let accepted = output.status.code().is_some_and(|code| ok.contains(&code));
+    if !accepted {
         return Err(Error::Git {
             command: args
                 .iter()

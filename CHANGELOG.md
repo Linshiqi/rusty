@@ -11,17 +11,34 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
-**A Git panel.** The project's history as a graph — lanes for branches,
-merges bending back in, branch and tag labels on the commits that carry them
-— beside the commit list, with the way Fork draws it as the reference. Open a
-commit and its message, the files it touched and each file's patch are below.
-A strip of branches above filters the log to one of them, and a branch that is
-not checked out can be, as a visible `git checkout` in the dock. The history
-follows the disk: a commit made in a terminal appears without a click.
+**A Git panel, with Fork as the reference.** Three views behind one strip of
+branches.
 
-It is the user's own `git` doing the work — their config, their credentials,
-their hooks — and a project that is not a repository says so in the panel
-rather than raising an error.
+*History* is the log as a graph — lanes for branches, merges bending back in,
+branch and tag labels on the commits that carry them — beside the commit
+list. Open a commit and its message, the files it touched and each file's
+patch are below. The strip filters the log to one branch; the history follows
+the disk, so a commit made in a terminal appears without a click.
+
+*Changes* is the working tree in two lists: what the next commit would carry
+and what it would not, each file's diff on the right, and a click moves a
+file between the two (or all of them at once). A commit box below takes a
+message of any length — Ctrl+Enter commits.
+
+*Stashes* puts the working tree aside, untracked files included, with a note;
+each stash can be applied, popped or dropped.
+
+Branches: check one out, create one from the branch selected in the strip (or
+from HEAD), delete one the safe way — `git branch -d` refuses unmerged work,
+and that refusal is the right answer. The rail carries fetch, pull and push;
+a push with no upstream yet sets one on `origin`.
+
+Every write is a visible `git` command in the dock, so the exact line and
+everything git says back are readable — a checkout refused on a dirty tree, a
+push rejected — except staging, which is instant and reversible and would
+bury the commands that matter. It is the user's own `git` doing the work:
+their config, their credentials, their hooks. A project that is not a
+repository says so in the panel rather than raising an error.
 
 ## v0.4.0
 
