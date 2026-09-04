@@ -1218,6 +1218,16 @@ usty`) holds `location.toml`
   garbage. Over `--port` the two separate: the socket carries the protocol and
   the adapter's stdout carries only the program's output, which is what the
   dock shows. Measured on this machine, not feared.
+- **The adapter is a download, like QEMU and the debuggers.** CodeLLDB
+  bundles its own LLDB, so one archive is the whole dependency — which
+  matters because the `lldb-dap` LLVM ships for Windows does not work and a
+  VS Code extension is not something rusty may require. Its `.vsix` is a zip
+  that bsdtar reads, but its payload sits under `extension/`, so it unpacks
+  into `tools/codelldb/` of its own rather than over `tools/`: the adapter
+  has to keep the `lldb/` beside it that it loads its debugger from.
+  `tools::find` cannot see it — that ladder looks for `<family>/bin/<exe>` —
+  so `host_adapters` knows the one shape, and `tool_bin_dirs` does not reach
+  two levels down, which is why nothing new lands on a child's PATH.
 - **"The adapter exists" and "the adapter answers" are different facts.**
   LLVM 19.1.0's Windows `lldb-dap` starts, stays alive, and answers nothing —
   not stdio, not a socket. So discovery returns a *list*, the caller tries

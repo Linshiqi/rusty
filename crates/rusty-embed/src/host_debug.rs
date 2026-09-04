@@ -201,13 +201,30 @@ pub fn host_gdb() -> Option<PathBuf> {
 /// stock Windows machine that works. Reading that directory is a read of a
 /// known path, nothing more — rusty neither drives nor needs the editor.
 pub fn host_adapters() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = ["lldb-dap", "codelldb"]
-        .iter()
-        .filter_map(|name| crate::tools::find(name))
-        .collect();
+    let mut found: Vec<PathBuf> = Vec::new();
+    // rusty's own copy first, the way the tool ladder puts it first for every
+    // other binary. It cannot come through `tools::find`: that looks for
+    // `<family>/bin/<exe>` and a `.vsix` unpacks its adapter beside the LLDB
+    // it loads, so this one knows its own shape.
+    found.extend(installed_codelldb());
+    found.extend(
+        ["lldb-dap", "codelldb"]
+            .iter()
+            .filter_map(|name| crate::tools::find(name)),
+    );
     found.extend(codelldb_extensions());
     found.dedup();
     found
+}
+
+/// CodeLLDB where rusty's installer unpacks it.
+fn installed_codelldb() -> Option<PathBuf> {
+    let adapter = crate::tools::data_tools_dir()?
+        .join(crate::install::CODELLDB_DIR)
+        .join("extension")
+        .join("adapter")
+        .join(crate::tools::exe("codelldb"));
+    adapter.is_file().then_some(adapter)
 }
 
 /// CodeLLDB's adapter where its VS Code extension puts it, newest first.

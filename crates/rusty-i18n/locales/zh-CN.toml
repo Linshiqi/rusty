@@ -466,6 +466,7 @@ probe-rs = "通过 JTAG/SWD 调试器烧录和调试，并解码 RTT 上的 defm
 esp-generate = "生成裸机项目模板"
 rust-analyzer = "编辑器里的补全、诊断和跳转"
 ldproxy = "ESP-IDF（std）构建需要的链接器垫片"
+codelldb = "调试适配器；Windows 上 gdb 读不了 PDB，测试和宿主代码的调试靠它"
 qemu-system-riscv32 = "在本机运行 RISC-V 固件（C3、C6、H2），无需连接开发板"
 qemu-system-xtensa = "在本机运行 Xtensa 固件（ESP32、S2、S3），无需连接开发板"
 riscv32-esp-elf-gdb = "在模拟器里调试 RISC-V 固件：断点、单步、寄存器"

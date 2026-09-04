@@ -71,11 +71,14 @@ enum Archive {
     Qemu,
     Gdb,
     Gcc,
+    CodeLldb,
 }
 
 fn install_method(name: &str) -> InstallMethod {
     if name.starts_with("qemu-system-") {
         InstallMethod::Archive(Archive::Qemu)
+    } else if name == "codelldb" {
+        InstallMethod::Archive(Archive::CodeLldb)
     } else if name.ends_with("-gdb") {
         InstallMethod::Archive(Archive::Gdb)
     } else if name.ends_with("-gcc") {
@@ -313,6 +316,7 @@ async fn install_archive(
             Archive::Gcc => install::gcc_download(&name),
             Archive::Gdb => install::gdb_download(&name),
             Archive::Qemu => install::qemu_download(&name),
+            Archive::CodeLldb => install::codelldb_download(),
         })
         .await?
         .map_err(CommandError::from)?

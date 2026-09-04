@@ -350,6 +350,35 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         });
     }
 
+    // The debug adapter, on the platform that cannot debug host code without
+    // one. Rust's default Windows target emits a PDB and gdb reads DWARF, so
+    // on Windows "Debug" beside a test needs LLDB, and LLDB is driven through
+    // an adapter. Listed, not required: it changes nothing about building,
+    // flashing or running tests, and a red badge for an optional tool is the
+    // crying-wolf this panel is careful about.
+    if cfg!(windows) {
+        let path = crate::host_debug::host_adapters().into_iter().next();
+        let fetchable = crate::install::codelldb_available();
+        status.tools.push(ToolStatus {
+            name: "codelldb".to_string(),
+            purpose: "Debugs tests and host code on Windows — gdb cannot read this target's \
+                      PDB debug information and LLDB can"
+                .to_string(),
+            version: None,
+            path: path.map(|found| found.display().to_string()),
+            // A URL where there is nothing to fetch: CodeLLDB publishes no
+            // ARM64 Windows build, and the panel shows the link rather than a
+            // button that could only fail.
+            install_command: if fetchable {
+                "download".to_string()
+            } else {
+                crate::install::codelldb_page()
+            },
+            installable: fetchable,
+            required: false,
+        });
+    }
+
     // The required target follows from chip + runtime; either being unknown
     // means there is nothing to check rather than something to complain about.
     let required_target = match (&chip, project.and_then(|p| p.runtime)) {

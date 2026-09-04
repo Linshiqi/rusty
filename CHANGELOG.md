@@ -16,9 +16,14 @@ cannot read the debug information Rust's default Windows target emits — so
 Debug beside a test refused on the platform most people are on. It now speaks
 the Debug Adapter Protocol as well, which is how LLDB is driven, and picks the
 backend from what the target actually produces. Breakpoints, stepping, the
-call stack and locals work the same either way. Install `lldb-dap` (it ships
-with LLVM) or CodeLLDB's adapter and Debug works; with neither, the message
-says so and says which to get, instead of suggesting another operating system.
+call stack and locals work the same either way.
+
+The adapter is one click in the Toolchain panel, the way QEMU and the esp
+debuggers already were: rusty fetches CodeLLDB into its own tools directory
+and uses it from there. It carries its own LLDB, so nothing else is needed and
+no editor has to be installed. An `lldb-dap` already on your PATH is used if
+it answers; where a platform has no published build, the panel links the
+release page instead of offering a button that could only fail.
 
 **Tests, where VS Code puts them.** A `▶ Run Test | Debug` lens sits beside
 every `#[test]` and test module — on the attribute line above it — in place

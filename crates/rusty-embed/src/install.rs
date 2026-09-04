@@ -286,6 +286,100 @@ fn qemu_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
     })
 }
 
+/// CodeLLDB, pinned like every other archive here.
+///
+/// The debug adapter that makes host debugging work on Windows: Rust's
+/// default target there emits a PDB, gdb reads DWARF, and LLDB is what reads
+/// the difference. CodeLLDB bundles its own LLDB, so this is one download and
+/// no system dependency — which is the point, because the `lldb-dap` that
+/// LLVM ships for Windows has been observed to start and then answer nothing
+/// at all.
+///
+/// Fetched rather than bundled: it is tens of megabytes of debugger per
+/// platform, and only the people who debug host code on Windows need it.
+const CODELLDB_RELEASE: &str = "v1.12.3";
+
+/// The asset for a platform, in CodeLLDB's own naming.
+///
+/// Transcribed from the release's actual asset list rather than assembled
+/// from `env::consts`, for the reason [`tools::host_platform`] gives: a name
+/// that is nearly right 404s exactly like a network problem. `armhf` and the
+/// bootstrap package are deliberately absent — rusty has no 32-bit ARM host
+/// to offer them to.
+fn codelldb_asset(os: &str, arch: &str) -> Option<&'static str> {
+    Some(match (os, arch) {
+        ("windows", "x86_64") => "codelldb-win32-x64.vsix",
+        ("macos", "aarch64") => "codelldb-darwin-arm64.vsix",
+        ("macos", "x86_64") => "codelldb-darwin-x64.vsix",
+        ("linux", "x86_64") => "codelldb-linux-x64.vsix",
+        ("linux", "aarch64") => "codelldb-linux-arm64.vsix",
+        _ => return None,
+    })
+}
+
+/// Where the adapter ends up, relative to `tools/`.
+///
+/// A `.vsix` is a zip whose payload sits under `extension/`, so it unpacks
+/// into a directory of its own rather than over `tools/`: the adapter has to
+/// keep the `lldb/` beside it that it loads its debugger from, and dropping
+/// a bare `extension/` into the shared directory would name nothing.
+pub(crate) const CODELLDB_DIR: &str = "codelldb";
+
+/// Whether this platform has a published adapter to fetch.
+///
+/// The panel asks before drawing an Install button: CodeLLDB publishes no
+/// ARM64 Windows build, and a button that always fails is worse than the
+/// link it sits on top of — the same rule the chip picker follows for a part
+/// behind another HAL.
+pub fn codelldb_available() -> bool {
+    codelldb_asset(std::env::consts::OS, std::env::consts::ARCH).is_some()
+}
+
+/// Where to get it by hand, for the platforms rusty cannot fetch for.
+pub fn codelldb_page() -> String {
+    format!("https://github.com/vadimcn/codelldb/releases/tag/{CODELLDB_RELEASE}")
+}
+
+pub fn codelldb_download() -> Result<ToolDownload> {
+    let plan = codelldb_download_into(&data_tools_dir()?)?;
+    prepare(&plan)?;
+    // `tar -C` will not make its destination, and this one is a directory of
+    // rusty's own choosing rather than something the archive brings.
+    if let Some(into) = plan.extract.args.last() {
+        std::fs::create_dir_all(into).map_err(|source| Error::Write {
+            path: into.clone(),
+            source,
+        })?;
+    }
+    Ok(plan)
+}
+
+fn codelldb_download_into(tools: &Path) -> Result<ToolDownload> {
+    let asset = codelldb_asset(std::env::consts::OS, std::env::consts::ARCH).ok_or_else(|| {
+        Error::refused(format!(
+            "CodeLLDB publishes no build for {}/{}, so rusty cannot fetch one. Manual \
+             fallback: https://github.com/vadimcn/codelldb/releases/tag/{CODELLDB_RELEASE}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ))
+    })?;
+    let archive = tools.join("codelldb.vsix");
+    let into = tools.join(CODELLDB_DIR);
+    Ok(ToolDownload {
+        urls: vec![format!(
+            "https://github.com/vadimcn/codelldb/releases/download/{CODELLDB_RELEASE}/{asset}"
+        )],
+        extract: extract_step(
+            &archive,
+            &into,
+            "unpacks the debug adapter into the data directory's tools/codelldb — a .vsix is \
+             a zip, which bsdtar reads",
+            cfg!(windows),
+        ),
+        archive,
+    })
+}
+
 /// Fetch `urls` in order until one delivers, streaming progress through
 /// `progress`. In-process on rustls: the OS TLS stack (schannel) aborts on
 /// some CDNs with "server closed abruptly", and a spawned curl cannot be
@@ -480,6 +574,53 @@ mod tests {
             ),
         }
         assert!(plan.extract.display.starts_with("tar -xf"));
+    }
+
+    /// Every platform rusty runs on has an adapter to offer, and the names
+    /// are the release's own. A name that is nearly right 404s exactly like
+    /// a network problem, which is the whole reason this is a table.
+    #[test]
+    fn codelldb_publishes_a_build_for_every_platform_rusty_runs_on() {
+        for (os, arch, expected) in [
+            ("windows", "x86_64", "codelldb-win32-x64.vsix"),
+            ("macos", "aarch64", "codelldb-darwin-arm64.vsix"),
+            ("macos", "x86_64", "codelldb-darwin-x64.vsix"),
+            ("linux", "x86_64", "codelldb-linux-x64.vsix"),
+            ("linux", "aarch64", "codelldb-linux-arm64.vsix"),
+        ] {
+            assert_eq!(codelldb_asset(os, arch), Some(expected), "{os}/{arch}");
+        }
+        assert_eq!(
+            codelldb_asset("linux", "powerpc64"),
+            None,
+            "a platform with no published build is refused rather than guessed at",
+        );
+    }
+
+    /// The adapter unpacks into a directory of its own, and the plan says so
+    /// before anything is downloaded.
+    #[test]
+    fn the_adapter_unpacks_into_its_own_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = codelldb_download_into(dir.path()).expect("this platform has an asset");
+        assert!(
+            plan.urls[0].ends_with(".vsix"),
+            "the asset is a vsix: {}",
+            plan.urls[0],
+        );
+        assert!(
+            plan.urls[0].contains(CODELLDB_RELEASE),
+            "pinned, not latest"
+        );
+        let into = plan.extract.args.last().expect("a destination");
+        assert!(
+            into.ends_with(CODELLDB_DIR),
+            "unpacks into tools/{CODELLDB_DIR}, not over tools/: {into}",
+        );
+        assert!(
+            !dir.path().join(CODELLDB_DIR).exists(),
+            "planning creates nothing; only `codelldb_download` does",
+        );
     }
 
     #[test]

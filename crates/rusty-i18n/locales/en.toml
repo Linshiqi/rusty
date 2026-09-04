@@ -490,6 +490,7 @@ probe-rs = "Flashes and debugs through a JTAG/SWD probe, and decodes defmt over 
 esp-generate = "Generates bare-metal project templates"
 rust-analyzer = "Completion, diagnostics and navigation in the editor"
 ldproxy = "Linker shim required by ESP-IDF (std) builds"
+codelldb = "Debug adapter that debugs tests and host code on Windows, where gdb cannot read the PDB"
 qemu-system-riscv32 = "Runs RISC-V firmware (C3, C6, H2) on this machine, no board attached"
 qemu-system-xtensa = "Runs Xtensa firmware (ESP32, S2, S3) on this machine, no board attached"
 riscv32-esp-elf-gdb = "Debugs RISC-V firmware in the emulator: breakpoints, stepping, registers"
