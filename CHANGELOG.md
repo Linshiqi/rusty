@@ -9,36 +9,49 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.4.0
 
-**Debugging tests on Windows.** rusty drove gdb and nothing else, and gdb
-cannot read the debug information Rust's default Windows target emits — so
-Debug beside a test refused on the platform most people are on. It now speaks
-the Debug Adapter Protocol as well, which is how LLDB is driven, and picks the
-backend from what the target actually produces. Breakpoints, stepping, the
-call stack and locals work the same either way.
+Tests get an entry point where you look for one, and a debugger behind it —
+including on Windows, which until now could not debug host code at all.
+
+**Run and debug a test from beside it.** A `▶ Run Test | Debug` lens sits by
+every `#[test]` and every module holding one, on the attribute line above it,
+in place of the small arrow that used to hide at the left edge of the margin.
+Run is what the arrow did: `cargo test <name> -- --nocapture`, in the dock.
+Debug is new. It builds the test binaries, asks each one which of them holds
+the test you clicked, and runs that one under a debugger with your breakpoints
+already placed — stepping, the call stack and locals in the Debug panel, the
+same as a firmware session. What the test prints goes to the Output tab.
+
+**Debugging on Windows.** rusty drove gdb and nothing else, and gdb reads
+DWARF. Rust's default Windows target emits a PDB, so Debug could only have
+set breakpoints that never hit and shown addresses where your source should
+be. It now speaks the Debug Adapter Protocol as well, which is how LLDB is
+driven, and chooses the debugger from what the target actually produces.
 
 The adapter is one click in the Toolchain panel, the way QEMU and the esp
 debuggers already were: rusty fetches CodeLLDB into its own tools directory
-and uses it from there. It carries its own LLDB, so nothing else is needed and
-no editor has to be installed. An `lldb-dap` already on your PATH is used if
-it answers; where a platform has no published build, the panel links the
-release page instead of offering a button that could only fail.
+and runs it from there. It carries its own LLDB, so there is nothing else to
+install and no editor to have. An `lldb-dap` already on your PATH is used if
+it answers. Where a platform publishes no build, the panel links the release
+page rather than offering a button that could only fail.
 
-**Tests, where VS Code puts them.** A `▶ Run Test | Debug` lens sits beside
-every `#[test]` and test module — on the attribute line above it — in place
-of the small arrow that used to hide at the left edge of the margin. Run is
-what the arrow did: `cargo test <name> -- --nocapture` in the dock. Debug is
-new: it builds the test binaries, asks each which one holds the test, and runs
-that one under gdb with your breakpoints placed, stepping and inspecting in
-the Debug panel like a firmware session. What the test prints goes to the
-Output tab.
+**Fixed.**
 
-Debug refuses, with the reason, where it could only pretend: on a Windows
-toolchain that builds for `-msvc`, whose PDB debug information gdb cannot
-read, and when no `gdb` for this machine is on PATH (the chips' debuggers
-are not it). A filter that names tests in two binaries is refused too, rather
-than silently running one of them.
+- The editor could take the whole window with it. Moving the pointer over
+  code arms a short timer for the hover card, and closing the file or
+  switching project inside that moment left the timer reading state that had
+  gone — which ends the interface, not just the hover. The window kept its
+  last frame and answered nothing: no error, and even the close button dead.
+- Run Test ran in the firmware crate on the standard embedded layout, where
+  a bare-metal target has no test harness, so it failed with "can't find
+  crate for `test`" against tests that were fine. Host commands run at the
+  project you opened, which is where the testable crates are.
+
+Debug still refuses rather than pretending: when nothing on the machine can
+read the target's debug information it says which adapter to install, and a
+test name that matches in two binaries is refused instead of one of them
+being run silently.
 
 ## v0.3.1
 
