@@ -76,11 +76,20 @@ impl Tone {
 pub fn Pill(
     #[prop(into)] label: String,
     #[prop(default = Tone::Neutral)] tone: Tone,
+    /// Off for a label that is an identifier — a branch, a tag — where
+    /// `MASTER` is not the name of anything and a user would type `master`.
+    #[prop(default = true)]
+    uppercase: bool,
 ) -> impl IntoView {
+    let case = if uppercase {
+        "tracking-wide uppercase"
+    } else {
+        "font-mono"
+    };
     view! {
         <span class=format!(
             "inline-flex h-[18px] items-center rounded-full px-2 text-caption font-semibold \
-             tracking-wide uppercase whitespace-nowrap {}",
+             whitespace-nowrap {case} {}",
             tone.fill(),
         )>
             {label}

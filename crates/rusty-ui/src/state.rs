@@ -463,6 +463,7 @@ pub struct AppState {
     pub lsp: Lsp,
     pub sim: Sim,
     pub debug: Debug,
+    pub git: Git,
     pub term: Terminal,
     pub layout: Layout,
     pub dock: Dock,
@@ -702,6 +703,34 @@ pub struct Find {
     pub replace: RwSignal<String>,
     /// Which match is current, clamped to the match count at use.
     pub index: RwSignal<usize>,
+}
+
+/// The repository's history, as the Git panel shows it.
+///
+/// Session state: which branch is being looked at, which commit is open,
+/// which of its files. Reset when the project changes, because a selection
+/// from one repository names nothing in another.
+#[derive(Clone, Copy)]
+pub struct Git {
+    /// The log, laid out by the backend. `None` until asked, or when the
+    /// project is not a repository — `unavailable` then says why.
+    pub history: RwSignal<Option<rusty_git::History>>,
+    pub branches: RwSignal<Vec<rusty_git::Branch>>,
+    /// The branch the log is filtered to; `None` is every branch.
+    pub rev: RwSignal<Option<String>>,
+    /// The commit that is open, by full hash.
+    pub selected: RwSignal<Option<String>>,
+    pub detail: RwSignal<Option<rusty_git::CommitDetail>>,
+    /// Which of the open commit's files is showing its patch.
+    pub file: RwSignal<Option<String>>,
+    /// Why there is no history — "not inside a git repository", no `git` on
+    /// PATH — in the panel rather than on the banner, because a project
+    /// without a repository is an ordinary thing to open.
+    pub unavailable: RwSignal<Option<String>>,
+    /// Whether the panel has asked once. The watcher refreshes the history
+    /// only after that, so a project nobody looks at the history of costs no
+    /// `git log` per save.
+    pub loaded: RwSignal<bool>,
 }
 
 /// Project-wide search. Separate from [`Find`] because they are different
@@ -1065,6 +1094,16 @@ impl AppState {
                 case: RwSignal::new(false),
                 replace: RwSignal::new(String::new()),
                 index: RwSignal::new(0),
+            },
+            git: Git {
+                history: RwSignal::new(None),
+                branches: RwSignal::new(Vec::new()),
+                rev: RwSignal::new(None),
+                selected: RwSignal::new(None),
+                detail: RwSignal::new(None),
+                file: RwSignal::new(None),
+                unavailable: RwSignal::new(None),
+                loaded: RwSignal::new(false),
             },
             search: Search {
                 query: RwSignal::new(String::new()),

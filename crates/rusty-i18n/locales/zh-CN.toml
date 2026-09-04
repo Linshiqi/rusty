@@ -129,7 +129,22 @@ crates = "依赖"
 simulate = "仿真"
 wizard = "新建项目"
 assistant = "助手"
+git = "Git"
 needs-project = "{panel} —— 需要先打开一个项目"
+
+[git]
+refresh = "重新读取历史"
+all = "全部分支"
+checkout = "检出"
+current = "当前检出"
+head = "HEAD"
+loading = "正在读取历史…"
+truncated = "只显示最新的 {count} 个提交。"
+no-files = "没有文件改动。"
+binary = "二进制"
+no-project-title = "没有打开项目"
+no-project-detail = "打开一个项目，这里会显示它的提交历史。"
+unavailable-title = "没有可显示的历史"
 
 [dock.tab]
 problems = "问题"

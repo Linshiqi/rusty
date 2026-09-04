@@ -34,6 +34,9 @@ pub enum Icon {
     StepInto,
     StepOut,
     Pause,
+    /// A branch: a trunk with a line forking off and rejoining — the
+    /// repository's history.
+    Branch,
 }
 
 impl Icon {
@@ -96,6 +99,11 @@ impl Icon {
             }
             // Two bars.
             Icon::Pause => "M7 4.5v11M13 4.5v11",
+            // Two commits on a trunk and one off to the side, joined: the
+            // shape every git client draws for a branch.
+            Icon::Branch => {
+                "M6.5 5.5a1.75 1.75 0 1 0 0 .01zM6.5 14.5a1.75 1.75 0 1 0 0 .01zM13.5 6.5a1.75 1.75 0 1 0 0 .01zM6.5 7.25v5.5M13.5 8.25c0 3-7 2.5-7 5.5"
+            }
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

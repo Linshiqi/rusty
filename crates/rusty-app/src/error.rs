@@ -105,6 +105,12 @@ impl From<rusty_dbg::Error> for CommandError {
     }
 }
 
+impl From<rusty_git::Error> for CommandError {
+    fn from(error: rusty_git::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
 impl From<serde_json::Error> for CommandError {
     fn from(error: serde_json::Error) -> Self {
         Self::from_source(&error)

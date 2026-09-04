@@ -8,6 +8,7 @@ mod debug;
 mod error;
 mod files;
 mod flash;
+mod git;
 mod lsp;
 mod simulate;
 mod state;
@@ -107,6 +108,9 @@ fn main() {
             debug::debug_read_memory,
             debug::register_map,
             debug::fetch_svd,
+            git::git_history,
+            git::git_commit,
+            git::git_branches,
             flash::run_flash,
             flash::stop_flash,
             flash::serial_link,
@@ -191,7 +195,7 @@ mod wire_names {
 
     #[test]
     fn every_constant_names_a_real_handler() {
-        use crate::{ai, commands, debug, files, flash, lsp, simulate, terminal, window};
+        use crate::{ai, commands, debug, files, flash, git, lsp, simulate, terminal, window};
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
@@ -272,6 +276,9 @@ mod wire_names {
             cmd::debug::READ => debug::debug_read_memory,
             cmd::debug::REGISTERS => debug::register_map,
             cmd::debug::FETCH_SVD => debug::fetch_svd,
+            cmd::git::HISTORY => git::git_history,
+            cmd::git::COMMIT => git::git_commit,
+            cmd::git::BRANCHES => git::git_branches,
             cmd::flash::RUN => flash::run_flash,
             cmd::flash::STOP => flash::stop_flash,
             cmd::flash::LINK => flash::serial_link,

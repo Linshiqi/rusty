@@ -16,6 +16,7 @@ rusty-ipc = { path = "../rusty-ipc" }
 rusty-lsp = { path = "../rusty-lsp" }
 rusty-dbg = { path = "../rusty-dbg" }
 rusty-term = { path = "../rusty-term" }
+rusty-git = { path = "../rusty-git" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tauri = { version = "2.11.5", features = [] }

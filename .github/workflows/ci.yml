@@ -142,7 +142,7 @@ jobs:
       - name: model layers compile to wasm32
         run: |
           cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
-            -p rusty-edit -p rusty-lsp -p rusty-dbg \
+            -p rusty-edit -p rusty-lsp -p rusty-dbg -p rusty-git \
             --no-default-features --target wasm32-unknown-unknown
 
       # And the frontend itself, which is what actually consumes them.

@@ -1,0 +1,25 @@
+[package]
+name = "rusty-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+# The repository side: running `git` and reading what it says. Same major as
+# every other crate here.
+thiserror = { version = "2.0.20", optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[features]
+default = ["backend"]
+backend = ["dep:thiserror"]
+
+[lints]
+workspace = true

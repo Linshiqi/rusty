@@ -22,6 +22,7 @@ rusty-ipc = { path = "../rusty-ipc" }
 rusty-lsp = { path = "../rusty-lsp", default-features = false }
 rusty-dbg = { path = "../rusty-dbg", default-features = false }
 rusty-term = { path = "../rusty-term", default-features = false }
+rusty-git = { path = "../rusty-git", default-features = false }
 # A real Markdown parser, for reading a README rather than for the six
 # constructs a hover tooltip uses. Pure Rust, no unsafe, compiles to wasm —
 # and the hand-rolled block splitter it replaces was already wrong about

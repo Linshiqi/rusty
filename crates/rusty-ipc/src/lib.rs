@@ -221,3 +221,10 @@ pub mod ai {
     pub const LIST_MODELS: &str = "ai_list_models";
     pub const CHECK_PROVIDER: &str = "ai_check_provider";
 }
+
+/// The repository: its history, one commit, the branches.
+pub mod git {
+    pub const HISTORY: &str = "git_history";
+    pub const COMMIT: &str = "git_commit";
+    pub const BRANCHES: &str = "git_branches";
+}

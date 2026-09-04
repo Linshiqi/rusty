@@ -73,6 +73,12 @@ fn absorb(state: AppState, changes: FileChanges) {
     if changes.tree {
         refresh_tree(state);
     }
+    // The history follows the disk too: a commit made in a terminal, a
+    // checkout, a fetch. `.git/` itself is a dot directory and unwatched, so
+    // this rides on the working-tree changes those actions produce; a
+    // refresh is one `git log`, and `refresh_git` is a no-op for a project
+    // whose history nobody has opened.
+    refresh_git(state);
     for path in changes.changed {
         follow(state, path);
     }

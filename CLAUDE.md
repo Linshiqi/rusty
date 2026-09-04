@@ -26,7 +26,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # The frontend links only the model layers, so these must stay green
 cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
-  -p rusty-edit -p rusty-lsp -p rusty-dbg --no-default-features \
+  -p rusty-edit -p rusty-lsp -p rusty-dbg -p rusty-git --no-default-features \
   --target wasm32-unknown-unknown
 
 # Frontend alone, on http://localhost:17425 — much faster to iterate on than a
@@ -89,6 +89,7 @@ cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
+| `rusty-git` | The repository's history, Fork-shaped: `graph.rs` lays the log out into lanes and edges (pure, tested — the frontend only turns a lane into an x), `parse.rs` reads `git`'s machine formats, `repo.rs` runs the user's own `git` in the opened project. No libgit2: one binary on PATH is one implementation of the repository format to agree with |
 | `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
@@ -338,6 +339,47 @@ positioned in a coordinate system that is not the document's.
 - Folds are session state, parked per tab like the caret, and **not
   persisted**: restoring yesterday's folds onto a file somebody else has since
   edited collapses the wrong lines.
+
+## The Git panel
+
+The project's history, with Fork as the reference for what it should look
+like: a graph of lanes beside the commits, labels on the commits that carry
+branches and tags, a commit opened below with its files and each file's
+patch, and a branch strip that filters and can check out.
+
+- **The graph is laid out on the backend and only drawn on the frontend.**
+  `rusty_git::graph::lay_out` is pure and under tests that name the shapes
+  that go wrong — a merge, two tips, a branch bending back into a lane that
+  was waiting for it, a lane reused once free. The view turns a lane index
+  into an x coordinate and nothing more, so which lane a commit sits in is
+  one fact rather than two opinions.
+- **One row is one SVG whose lines run past its bottom edge.** Each row knows
+  only its outgoing edges (this row's centre to the next row's), so a line is
+  drawn by the row it leaves and `overflow: visible` lets it reach the row it
+  arrives at. A lane a commit *opens* for a second parent has no line arriving
+  from above, and the layout must not emit one — it did, and every merge grew
+  a stray tail.
+- **Lane colours are fixed hex, the board sheet's exemption applied again**:
+  a commit graph is the same colours in every client that draws one, and a
+  lane that changed colour with the theme would read as a different branch.
+- **`git`, not libgit2.** Every question is one invocation with a machine
+  format — `%x1f`/`%x1e` separators for the log, because a subject can carry
+  tabs and newlines; `--name-status` and `--numstat` for the files; the patch
+  split on `diff --git`. The user's own git, config, credentials and hooks;
+  `GIT_PAGER=cat` and `GIT_TERMINAL_PROMPT=0` because a git that waited on
+  either would hang the panel. Not a repository is a sentence in the panel,
+  not the banner: it is an ordinary thing to open.
+- **A merge is shown against its first parent** (`-m --first-parent`), as
+  Fork does — `git show` on a clean merge prints an empty combined diff,
+  which reads as "this merge changed nothing".
+- **Checkout is a dock command** through `run_command_at_root_then`, so the
+  command and everything git says are readable, and the log and branch strip
+  refresh when it finishes. The tree and the open files follow through the
+  watcher like any other change to the checkout.
+- **The history follows the disk.** `.git/` is a dot directory and unwatched,
+  so the refresh rides on the working-tree batches a commit, checkout or
+  fetch produces; it is a no-op until the panel has been opened once, so a
+  project nobody looks at the history of costs no `git log` per save.
 
 ## Following the disk
 

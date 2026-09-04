@@ -132,9 +132,26 @@ crates = "Crates"
 simulate = "Simulate"
 wizard = "New project"
 assistant = "Assistant"
+git = "Git"
 # Appended to a panel's tooltip when it is disabled, so the tooltip says why
 # rather than the button just refusing.
 needs-project = "{panel} — open a project first"
+
+[git]
+# The repository's history. Branch and tag names, hashes and paths are never
+# translated — they are the user's own words, retyped and searched.
+refresh = "Re-read the history"
+all = "All branches"
+checkout = "Check out"
+current = "Checked out"
+head = "HEAD"
+loading = "Reading the history…"
+truncated = "Showing the newest {count} commits."
+no-files = "No files changed."
+binary = "binary"
+no-project-title = "No project open"
+no-project-detail = "Open a project to see its history."
+unavailable-title = "No history to show"
 
 [dock.tab]
 # The tab strip. Its own table because the panels below each need one of

@@ -9,6 +9,20 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**A Git panel.** The project's history as a graph — lanes for branches,
+merges bending back in, branch and tag labels on the commits that carry them
+— beside the commit list, with the way Fork draws it as the reference. Open a
+commit and its message, the files it touched and each file's patch are below.
+A strip of branches above filters the log to one of them, and a branch that is
+not checked out can be, as a visible `git checkout` in the dock. The history
+follows the disk: a commit made in a terminal appears without a click.
+
+It is the user's own `git` doing the work — their config, their credentials,
+their hooks — and a project that is not a repository says so in the panel
+rather than raising an error.
+
 ## v0.4.0
 
 Tests get an entry point where you look for one, and a debugger behind it —

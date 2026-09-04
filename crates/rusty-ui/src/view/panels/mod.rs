@@ -8,6 +8,7 @@ mod assistant;
 mod crates;
 mod features;
 mod files;
+mod git;
 mod memory;
 mod search;
 pub(crate) mod session;
@@ -46,6 +47,15 @@ pub fn all() -> Vec<Panel> {
             needs_project: true,
             hidden: false,
             render: || search::SearchPanel().into_any(),
+        },
+        Panel {
+            id: "git",
+            title: t!("panel.git"),
+            section: "Project",
+            icon: Icon::Branch,
+            needs_project: true,
+            hidden: false,
+            render: || git::GitPanel().into_any(),
         },
         Panel {
             id: "toolchain",

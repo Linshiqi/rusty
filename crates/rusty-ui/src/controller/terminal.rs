@@ -172,6 +172,16 @@ pub(super) fn run_command_at_root(state: AppState, line: String) {
     run_command_in(state, line, true, |_| {});
 }
 
+/// [`run_command_at_root`], with a word once it has finished — for a
+/// caller that has something to refresh afterwards.
+pub(super) fn run_command_at_root_then(
+    state: AppState,
+    line: String,
+    after: impl FnOnce(Option<i32>) + 'static,
+) {
+    run_command_in(state, line, true, after);
+}
+
 fn run_command_in(
     state: AppState,
     line: String,

@@ -5343,6 +5343,7 @@ dependencies = [
  "rusty-dbg",
  "rusty-edit",
  "rusty-embed",
+ "rusty-git",
  "rusty-ipc",
  "rusty-lsp",
  "rusty-term",
@@ -5423,6 +5424,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty-git"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "rusty-i18n"
 version = "0.4.0"
 dependencies = [
@@ -5473,6 +5483,7 @@ dependencies = [
  "rusty-dbg",
  "rusty-edit",
  "rusty-embed",
+ "rusty-git",
  "rusty-i18n",
  "rusty-ipc",
  "rusty-lsp",
