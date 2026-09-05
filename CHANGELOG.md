@@ -9,6 +9,11 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed.** The dock hides behind an X, as VS Code's panel does, instead of a
+downward chevron that read as "expand" on a dock already open.
+
 ## v0.5.2
 
 Three things a first run on a fresh Windows machine, behind a busy proxy,

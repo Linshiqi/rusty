@@ -47,6 +47,8 @@ pub enum Icon {
     Rows,
     /// A box split down the middle: a diff read side by side.
     Columns,
+    /// An X: hides the dock, as VS Code's panel header does.
+    Close,
 }
 
 impl Icon {
@@ -120,6 +122,7 @@ impl Icon {
             Icon::Fetch => "M10 4v9M7 10l3 3 3-3M4.5 4v12M15.5 4v12",
             Icon::Rows => "M4 6h12M4 10h12M4 14h12",
             Icon::Columns => "M4 4.5h12v11H4zM10 4.5v11",
+            Icon::Close => "M6 6l8 8M14 6l-8 8",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

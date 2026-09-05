@@ -166,13 +166,15 @@ fn DockTabs() -> impl IntoView {
 
             // Only ever closes: the strip it lives in is not drawn when the
             // dock is shut, so there is no state here where it would open one.
+            // An X, then, as VS Code's panel header has — a downward chevron
+            // read as "expand" on a dock that is already open.
             <button
                 type="button"
                 title=t!("dock.chrome.collapse")
                 class="grid size-6 place-items-center rounded-[5px] text-label-2 hover:bg-sunken hover:text-label"
                 on:click=move |_| state.layout.dock_open.set(false)
             >
-                <IconView icon=Icon::Chevron size=13 />
+                <IconView icon=Icon::Close size=13 />
             </button>
         </div>
     }
