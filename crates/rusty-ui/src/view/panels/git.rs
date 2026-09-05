@@ -672,8 +672,18 @@ fn split_rows(state: AppState, hunks: &[Hunk]) -> AnyView {
             {hunks
                 .iter()
                 .map(|hunk| {
+                    // The hunk header once per side, as Fork draws it: one
+                    // header across both would cross the line between old
+                    // and new, and a row that crosses it reads as a layout
+                    // that has come apart rather than as a heading.
+                    let header = hunk.header.clone();
                     view! {
-                        <div class="col-span-4 bg-sunken px-3 py-0.5 text-slate">{hunk.header.clone()}</div>
+                        <div class="col-span-2 min-w-0 bg-sunken px-3 py-0.5 text-slate break-words whitespace-pre-wrap">
+                            {header.clone()}
+                        </div>
+                        <div class="col-span-2 min-w-0 bg-sunken px-3 py-0.5 text-slate break-words whitespace-pre-wrap">
+                            {header}
+                        </div>
                         {hunk
                             .rows
                             .iter()

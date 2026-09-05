@@ -9,6 +9,12 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed.** The hunk header of a side-by-side diff is drawn once on each side,
+as Fork draws it, instead of once across both — the single header crossed
+the line between old and new.
+
 ## v0.5.1
 
 The Git panel, rounded off from a day of using it beside Fork.

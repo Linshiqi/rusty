@@ -386,7 +386,10 @@ box; *Stashes*. The rail carries fetch, pull, push and a new branch.
   pure reader is under tests that pin Fork's exact shape. The hunk carries
   both readings (`rows` and `lines`), because rebuilding git's order from the
   paired rows puts a note after the additions it preceded. The view only
-  decides what a row looks like; the toggle is remembered.
+  decides what a row looks like; the toggle is remembered. The hunk header
+  is drawn once per side, as Fork draws it — one header across both columns
+  crossed the centre line, and a row crossing it reads as a layout that has
+  come apart.
 - **The right-click menu is local to the thing under the pointer**: a commit
   offers copy hash, a branch from here, a detached checkout, cherry-pick and
   revert; a file offers open and copy path. Every write in it is the same
