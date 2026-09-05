@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.5.3
 
 **Fixed.** The dock hides behind an X, as VS Code's panel does, instead of a
 downward chevron that read as "expand" on a dock already open.
