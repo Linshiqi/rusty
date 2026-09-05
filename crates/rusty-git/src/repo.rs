@@ -26,6 +26,12 @@ pub enum Error {
     Git { command: String, detail: String },
     #[error("no commit {id}")]
     NoSuchCommit { id: String },
+    #[error("could not read {path}: {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -203,6 +209,20 @@ pub fn stage(root: &Path, paths: &[String]) -> Result<()> {
     run(root, &args).map(drop)
 }
 
+/// One file's bytes: at `spec` — a hash, `HEAD`, or `:0` for the index —
+/// through `git show`, or straight from the working tree when `spec` is
+/// `None`. Bytes rather than text, because the caller is showing an image.
+pub fn blob(root: &Path, spec: Option<&str>, path: &str) -> Result<Vec<u8>> {
+    ensure_repository(root)?;
+    match spec {
+        None => std::fs::read(root.join(path)).map_err(|source| Error::Read {
+            path: path.to_string(),
+            source,
+        }),
+        Some(spec) => run_bytes(root, &["show", &format!("{spec}:{path}")], &[0]),
+    }
+}
+
 /// Take paths back out of the index, leaving the working tree alone.
 pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
@@ -232,6 +252,12 @@ fn run<S: AsRef<str>>(root: &Path, args: &[S]) -> Result<String> {
 /// [`run`], treating any of `ok` as success — for the commands whose exit
 /// code is an answer rather than a verdict.
 fn run_allowing<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> Result<String> {
+    run_bytes(root, args, ok).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The invocation itself, stdout as bytes — what [`blob`] needs, and what
+/// every text reader lossily decodes.
+fn run_bytes<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> Result<Vec<u8>> {
     let mut command = Command::new("git");
     command
         .args(["-c", "core.quotepath=off", "-c", "color.ui=never"])
@@ -266,7 +292,7 @@ fn run_allowing<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> Result<St
                 .to_string(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(output.stdout)
 }
 
 #[cfg(test)]

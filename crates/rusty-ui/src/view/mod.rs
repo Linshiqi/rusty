@@ -9,6 +9,7 @@
 //! returns — the commitment in `docs/extensibility.md` that a contributed panel
 //! can slot in later without the shell being rewritten to accept it.
 
+mod clone;
 pub mod components;
 pub mod dock;
 pub mod icon;
@@ -148,6 +149,25 @@ pub fn App() -> impl IntoView {
         .into_any();
     }
 
+    // A `?gitdiff=<target>` boot is one commit torn off into its own window,
+    // as Fork does: the commit's pane and nothing else. It reattaches to the
+    // backend's project like the editor window does, then opens the commit.
+    if let Some(target) = state.git.window_target.get_untracked() {
+        let opened = RwSignal::new(false);
+        Effect::new(move |_| {
+            if state.has_project() && !opened.get_untracked() {
+                opened.set(true);
+                controller::select_commit(state, target.clone());
+            }
+        });
+        return view! {
+            <div class="flex h-full flex-col bg-content text-label">
+                {panels::git::commit_window()}
+            </div>
+        }
+        .into_any();
+    }
+
     let palette_open = RwSignal::new(false);
     let chrome = crate::command::Chrome {
         settings_open,
@@ -178,6 +198,7 @@ pub fn App() -> impl IntoView {
                 // every other overlay, so it cannot cover the title bar and
                 // leave a window with no way out.
                 <setup::SetupSheet />
+                <clone::CloneSheet />
                 <Sidebar />
                 <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
                     // Over the working area, not in its flow. As a row above

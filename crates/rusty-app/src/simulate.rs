@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// A line of rusty's own into the dock, beside the tools' output.
-fn note(on_line: &Channel<LogLine>, text: impl Into<String>) {
+pub(crate) fn note(on_line: &Channel<LogLine>, text: impl Into<String>) {
     let _ = on_line.send(LogLine {
         stream: LogStream::Stdout,
         text: text.into(),

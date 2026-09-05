@@ -49,6 +49,8 @@ pub enum Icon {
     Columns,
     /// An X: hides the dock, as VS Code's panel header does.
     Close,
+    /// An arrow leaving a box: open this in a window of its own.
+    External,
 }
 
 impl Icon {
@@ -123,6 +125,7 @@ impl Icon {
             Icon::Rows => "M4 6h12M4 10h12M4 14h12",
             Icon::Columns => "M4 4.5h12v11H4zM10 4.5v11",
             Icon::Close => "M6 6l8 8M14 6l-8 8",
+            Icon::External => "M8.5 4.5H4.5v11h11v-4M11.5 4.5h4v4M15.5 4.5l-7 7",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

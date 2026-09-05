@@ -20,8 +20,10 @@ pub mod model;
 pub mod parse;
 #[cfg(feature = "backend")]
 pub mod repo;
+pub mod url;
 
 pub use model::*;
+pub use url::repo_name;
 
 #[cfg(feature = "backend")]
 pub use repo::{Error, Result};

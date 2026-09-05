@@ -26,6 +26,8 @@ use rusty_embed::{REPO_ISSUES as ISSUES, REPO_RELEASES as RELEASES};
 pub enum Action {
     ShowPanel(&'static str),
     OpenProject,
+    /// The clone dialog: a URL, a folder, and a project at the end of it.
+    CloneRepository,
     RefreshProject,
     RefreshToolchain,
     ReloadCatalog,
@@ -133,6 +135,11 @@ pub fn all(state: AppState) -> Vec<Command> {
         Action::OpenProject,
         &t!("menu.file.open-project"),
         chord(Action::OpenProject),
+    ));
+    out.push(action(
+        Action::CloneRepository,
+        &t!("menu.file.clone"),
+        chord(Action::CloneRepository),
     ));
     out.push(action(
         Action::RefreshProject,
@@ -406,6 +413,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                         &t!("menu.file.open-project"),
                         chord(Action::OpenProject),
                     ),
+                    entry(
+                        Action::CloneRepository,
+                        &t!("menu.file.clone"),
+                        chord(Action::CloneRepository),
+                    ),
                 ];
                 let recents = state.app.recents.get_untracked();
                 if !recents.is_empty() {
@@ -594,6 +606,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             }
         }
         Action::OpenProject => controller::choose_project(state),
+        Action::CloneRepository => controller::open_clone_dialog(state),
         Action::OpenRecent(index) => {
             if let Some(path) = state
                 .app

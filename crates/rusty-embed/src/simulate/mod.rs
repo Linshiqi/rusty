@@ -70,6 +70,14 @@ impl Machine {
     }
 }
 
+/// QEMU's data directory beside an emulator binary — `bin/../share/qemu`,
+/// the layout both Espressif's package and rusty's use — when it is there.
+/// The ROM images live in it, and a QEMU that cannot find it boots nothing.
+fn qemu_data_dir(emulator: &Path) -> Option<PathBuf> {
+    let data = emulator.parent()?.parent()?.join("share").join("qemu");
+    data.is_dir().then_some(data)
+}
+
 /// Everything needed to simulate `project`, or exactly why not.
 ///
 /// `debug` changes the build, not just the QEMU flags: a release build has
@@ -196,7 +204,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
             .to_string(),
         warning: None,
     };
-    let qemu_args = vec![
+    let mut qemu_args = vec![
         "-M".to_string(),
         chip.to_string(),
         "-nographic".to_string(),
@@ -205,6 +213,17 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         "-serial".to_string(),
         "mon:stdio".to_string(),
     ];
+    // Where the ROM images are, said outright. QEMU is meant to find
+    // `../share/qemu` beside its own `bin/` on its own, and Espressif's build
+    // does; rusty's Windows build, configured with a build-tree prefix, does
+    // not — it started, printed "-bios argument not set, and ROM code binary
+    // not found" and exited, on a machine where the file sat exactly where
+    // the package had put it. `-L` names the directory and is harmless to a
+    // build that would have found it anyway.
+    if let Some(data) = qemu_data_dir(&qemu) {
+        qemu_args.push("-L".to_string());
+        qemu_args.push(data.to_string_lossy().into_owned());
+    }
     let run = CommandPlan {
         display: format!("{emulator} {}", qemu_args.join(" ")),
         program: qemu.to_string_lossy().into_owned(),
@@ -885,6 +904,39 @@ mod tests {
         assert!(
             sim.notes.is_empty(),
             "nothing to note about a plain project"
+        );
+    }
+
+    /// The ROM directory is named on the command line when it exists beside
+    /// the emulator, and left to QEMU when it does not: rusty's Windows
+    /// build cannot find `../share/qemu` on its own, and Espressif's needs
+    /// no help — `-L` is right for both.
+    #[test]
+    fn the_rom_directory_is_named_when_it_sits_beside_the_emulator() {
+        let dir = firmware(BLINKY);
+        let bare = machine(dir.path(), &[("qemu", "qemu-system-riscv32")]);
+        let without = plan_on(&c3(dir.path()), false, &bare);
+        assert!(
+            !without.steps[2].args.iter().any(|a| a == "-L"),
+            "no share/qemu, nothing to name: {}",
+            without.steps[2].display
+        );
+
+        let share = dir
+            .path()
+            .join("tools")
+            .join("qemu")
+            .join("share")
+            .join("qemu");
+        std::fs::create_dir_all(&share).unwrap();
+        let with = plan_on(&c3(dir.path()), false, &bare);
+        let args = &with.steps[2].args;
+        let at = args.iter().position(|a| a == "-L").expect("-L present");
+        assert_eq!(
+            std::path::Path::new(&args[at + 1]),
+            share.as_path(),
+            "{}",
+            with.steps[2].display
         );
     }
 

@@ -5338,6 +5338,7 @@ dependencies = [
 name = "rusty-app"
 version = "0.5.3"
 dependencies = [
+ "base64 0.22.1",
  "rusty-ai",
  "rusty-core",
  "rusty-dbg",

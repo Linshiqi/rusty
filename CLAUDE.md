@@ -450,6 +450,24 @@ box; *Stashes*. The rail carries fetch, pull, push and a new branch.
 - **A merge is shown against its first parent** (`-m --first-parent`), as
   Fork does — `git show` on a clean merge prints an empty combined diff,
   which reads as "this merge changed nothing".
+- **Clone is the one git command that runs with no project open**, because
+  it is how a project arrives: `git_clone` streams like an install step
+  (same session slot, same dock), and the frontend opens the checkout on
+  exit zero. The directory it creates is `rusty_git::repo_name(url)` — what
+  `git clone` itself would pick — and the dialog says so before running.
+- **An image is compared as pictures, not as a patch.** `is_image_path` is
+  decided by extension in the model crate so both sides agree; `git_blob`
+  hands back base64 of `git show <spec>:<path>` (a hash, `HEAD`, or `:0`
+  for the index) or the working-tree file, and the frontend builds a
+  `data:` URL. Which two specs to compare is the caller's knowledge: a
+  commit's first parent against the commit, `HEAD` against the index for a
+  staged change, the index against the disk for an unstaged one, and no old
+  side at all for a file git has never seen.
+- **A commit tears off into its own window** through the same
+  query-parameter boot the detached editor uses (`?gitdiff=<target>`,
+  `query_param` in `state.rs`); the window reattaches to the backend's
+  project and shows `Detail` standalone. Hide folds the pane to a strip and
+  is session state.
 - **After any write, everything is read back** (`after_git`): history,
   branches, status and stashes, and the tree — so the panel never shows a
   state git has already left. The open files follow through the watcher like
@@ -1406,7 +1424,10 @@ usty`) holds `location.toml`
   rust-analyzer — spawned it and failed on every runner. A candidate is a
   rust-analyzer when `--version` says so. The same trap waits for every tool
   rustup proxies (`rustfmt`, `cargo-clippy`, `rust-gdb`): existence is not
-  installation.
+  installation. The Toolchain panel's probe follows the same rule now
+  (`component_binary`): it did not, and a setup sheet declared a machine
+  ready above a status bar saying rust-analyzer was missing — one side had
+  asked `--version`, the other had only found a file.
 - **`Path::join` inserts the host's separator, so a Windows path built with
   it is Windows-only.** `shell_choices` is pure over its probes and takes
   `windows: bool` precisely so both lists are tested on every OS — and on the

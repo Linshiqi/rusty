@@ -14,14 +14,14 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_git::{Branch, CommitDetail, History, Stash, Status};
+use rusty_git::{Branch, ChangeKind, CommitDetail, History, Stash, Status};
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, remember_split},
+    state::{AppState, CloneDraft, ImagePair, ImageSide, ImageSource, remember_split},
 };
 
 /// The log for the chosen branch, or for every branch.
@@ -154,11 +154,192 @@ pub fn select_commit(state: AppState, id: String) {
             if state.git.selected.get_untracked().as_deref() != Some(id.as_str()) {
                 return;
             }
-            state
-                .git
-                .file
-                .set(detail.files.first().map(|f| f.path.clone()));
+            let first = detail.files.first().map(|f| f.path.clone());
             state.git.detail.set(Some(detail));
+            match first {
+                Some(path) => show_commit_file(state, path),
+                None => state.git.file.set(None),
+            }
+        },
+    );
+}
+
+/// Show one of the opened commit's files — its patch, or, for an image, the
+/// picture before and after. The two sides are the commit's first parent
+/// and the commit itself, less whichever side an added or deleted file does
+/// not have.
+pub fn show_commit_file(state: AppState, path: String) {
+    state.git.file.set(Some(path.clone()));
+    if !rusty_git::is_image_path(&path) {
+        return;
+    }
+    let Some(detail) = state.git.detail.get_untracked() else {
+        return;
+    };
+    let kind = detail.files.iter().find(|f| f.path == path).map(|f| f.kind);
+    let old = match (kind, detail.commit.parents.first()) {
+        (Some(ChangeKind::Added), _) | (_, None) => None,
+        (_, Some(parent)) => Some(ImageSource::Rev(parent.clone())),
+    };
+    let new = match kind {
+        Some(ChangeKind::Deleted) => None,
+        _ => Some(ImageSource::Rev(detail.commit.id.clone())),
+    };
+    load_images(state, path, old, new);
+}
+
+/// Fetch an image's two sides as `data:` URLs. Each side answers on its own,
+/// so a missing old side never delays the new one, and an answer for a
+/// picture no longer showing is dropped.
+pub fn load_images(
+    state: AppState,
+    path: String,
+    old: Option<ImageSource>,
+    new: Option<ImageSource>,
+) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        spec: Option<String>,
+        path: String,
+    }
+    let side = |source: &Option<ImageSource>| match source {
+        None => ImageSide::Absent,
+        Some(_) => ImageSide::Loading,
+    };
+    state.git.images.set(Some(ImagePair {
+        path: path.clone(),
+        old: side(&old),
+        new: side(&new),
+    }));
+    let mime = rusty_git::image_mime(&path).unwrap_or("application/octet-stream");
+    for (is_old, source) in [(true, old), (false, new)] {
+        let Some(source) = source else {
+            continue;
+        };
+        let args = Args {
+            spec: match source {
+                ImageSource::Worktree => None,
+                ImageSource::Rev(rev) => Some(rev),
+            },
+            path: path.clone(),
+        };
+        let path = path.clone();
+        spawn_local(async move {
+            let side = match ipc::call::<_, String>(cmd::git::BLOB, &args).await {
+                Ok(base64) => ImageSide::Ready {
+                    // Base64 is four characters for three bytes.
+                    bytes: base64.trim_end_matches('=').len() * 3 / 4,
+                    url: format!("data:{mime};base64,{base64}"),
+                },
+                Err(error) => ImageSide::Failed(error.message),
+            };
+            state.git.images.update(|pair| {
+                if let Some(pair) = pair
+                    && pair.path == path
+                {
+                    if is_old {
+                        pair.old = side;
+                    } else {
+                        pair.new = side;
+                    }
+                }
+            });
+        });
+    }
+}
+
+/// Fold the opened commit's pane down to a strip, or bring it back.
+pub fn toggle_detail(state: AppState) {
+    state.git.detail_hidden.update(|hidden| *hidden = !*hidden);
+}
+
+/// Tear the opened commit off into a window of its own.
+pub fn open_commit_window(state: AppState, target: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        target: String,
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::git::WINDOW, &Args { target }).await },
+        |()| {},
+    );
+}
+
+/// Open the clone dialog, empty.
+pub fn open_clone_dialog(state: AppState) {
+    state.git.clone.set(Some(CloneDraft::default()));
+}
+
+/// Ask the OS for the folder the clone lands in.
+pub fn choose_clone_folder(state: AppState) {
+    spawn_local(async move {
+        match ipc::pick_folder(&rusty_i18n::t!("git.clone-into")).await {
+            Ok(Some(folder)) => state.git.clone.update(|draft| {
+                if let Some(draft) = draft {
+                    draft.into = Some(folder);
+                }
+            }),
+            Ok(None) => {}
+            Err(error) => state.app.error.set(Some(error)),
+        }
+    });
+}
+
+/// Run the clone the dialog describes: into `<folder>/<name>`, where `name`
+/// is what `git clone` itself would pick, streamed to the dock; the project
+/// opens when git exits zero. The dialog stays up while it runs, so a second
+/// click cannot start a second clone into the same directory.
+pub fn clone_repository(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        url: String,
+        into: String,
+    }
+    let Some(draft) = state.git.clone.get_untracked() else {
+        return;
+    };
+    let url = draft.url.trim().to_string();
+    let (Some(folder), Some(name)) = (draft.into.clone(), rusty_git::repo_name(&url)) else {
+        return;
+    };
+    if draft.running {
+        return;
+    }
+    let separator = if folder.contains('\\') && !folder.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let into = format!("{}{separator}{name}", folder.trim_end_matches(['/', '\\']));
+    state.git.clone.update(|draft| {
+        if let Some(draft) = draft {
+            draft.running = true;
+        }
+    });
+    state.dock.source.set("commands");
+    let channel = stream_to_terminal(state);
+    let args = Args {
+        url,
+        into: into.clone(),
+    };
+    track_session(
+        state,
+        async move {
+            ipc::call_streaming::<_, Option<i32>>(cmd::git::CLONE, &args, "onLine", &channel).await
+        },
+        move |code| {
+            note_exit(state, code);
+            if code == Some(0) {
+                state.git.clone.set(None);
+                open_project(state, into);
+            } else {
+                state.git.clone.update(|draft| {
+                    if let Some(draft) = draft {
+                        draft.running = false;
+                    }
+                });
+            }
         },
     );
 }
@@ -174,6 +355,25 @@ pub fn load_diff(state: AppState, path: String, staged: bool, untracked: bool) {
     let key = (path.clone(), staged);
     state.git.diff_for.set(Some(key.clone()));
     state.git.diff.set(None);
+    // An image is compared as pictures: what was committed against the index
+    // for a staged change, the index against the disk for an unstaged one —
+    // and a file git has never seen has no old side at all.
+    if rusty_git::is_image_path(&path) {
+        let (old, new) = if staged {
+            (
+                Some(ImageSource::Rev("HEAD".to_string())),
+                Some(ImageSource::Rev(":0".to_string())),
+            )
+        } else if untracked {
+            (None, Some(ImageSource::Worktree))
+        } else {
+            (
+                Some(ImageSource::Rev(":0".to_string())),
+                Some(ImageSource::Worktree),
+            )
+        };
+        load_images(state, path.clone(), old, new);
+    }
     let args = Args {
         path,
         staged,

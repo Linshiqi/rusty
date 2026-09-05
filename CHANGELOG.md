@@ -9,6 +9,41 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+More of the repository, and two things a fresh machine tripped on.
+
+**Clone from a URL.** File ▸ Clone repository… (also offered by the Git
+panel when no project is open): paste the address GitHub shows, choose the
+folder it lands in, and the dialog says which directory it will create before
+anything runs. The clone streams into the dock like every other command, and
+the new checkout opens as the project when git finishes — remote already
+attached, since that is what a clone is.
+
+**Images compared as pictures.** A PNG, SVG, JPEG, GIF, WebP, BMP or icon in
+a diff — a commit's file, a working-tree change, a stash's — shows before and
+after side by side on a checkerboard, with sizes, instead of git's "binary
+files differ". A side the file does not have (the old of an added picture)
+says so.
+
+**The commit pane hides and tears off.** Two buttons by the message, as Fork
+has them: one folds the opened commit down to a strip so the graph can have
+the panel, the other opens the commit in a window of its own. The message,
+the files and the patch now sit on three different grounds, so the eye finds
+the boundaries without reading for them.
+
+**Fixed.**
+
+- The simulator on a machine that had only ever installed rusty's own QEMU
+  stopped at "-bios argument not set, and ROM code binary not found": that
+  build does not find its `share/qemu` beside itself on Windows. rusty names
+  the directory on the command line, which both builds accept.
+- The environment check could declare a machine ready while the status bar
+  said rust-analyzer was missing. The Toolchain panel took the file rustup
+  puts on every PATH — its proxy — for the component itself; it now asks the
+  binary, as the editor always did, and a proxy with nothing behind it
+  counts as not installed. The sheet then offers the one-click install.
+
 ## v0.5.3
 
 **Fixed.** The dock hides behind an X, as VS Code's panel does, instead of a

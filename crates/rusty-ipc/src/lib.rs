@@ -235,4 +235,12 @@ pub mod git {
     /// Put paths in the index, or take them out. Quiet: everything that
     /// rewrites history or talks to a remote runs as a dock command instead.
     pub const STAGE: &str = "git_stage";
+    /// One file's bytes at a revision (or in the working tree), base64 — how
+    /// an image in a diff reaches the screen.
+    pub const BLOB: &str = "git_blob";
+    /// `git clone`, streamed like an install: the one git command that runs
+    /// with no project open, because it is how a project arrives.
+    pub const CLONE: &str = "git_clone";
+    /// A commit in a window of its own, as Fork tears one off.
+    pub const WINDOW: &str = "open_git_window";
 }

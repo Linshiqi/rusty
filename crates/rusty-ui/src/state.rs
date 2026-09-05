@@ -393,11 +393,19 @@ impl Divider {
 /// The `detach` query parameter, percent-decoded — the file this window
 /// exists to edit, when it is that kind of window.
 fn detached_path() -> Option<String> {
+    query_param("detach")
+}
+
+/// One query parameter of this window's URL, percent-decoded. How the
+/// backend tells a window what kind it is — `detach=<file>` for an editor,
+/// `gitdiff=<commit>` for a torn-off commit — and `None` for the shell.
+fn query_param(name: &str) -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
+    let prefix = format!("{name}=");
     let raw = search
         .trim_start_matches('?')
         .split('&')
-        .find_map(|pair| pair.strip_prefix("detach="))?;
+        .find_map(|pair| pair.strip_prefix(prefix.as_str()))?;
     // Decode %XX; the backend encodes everything outside [A-Za-z0-9._-/].
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -834,6 +842,55 @@ pub struct Git {
     pub amend: RwSignal<bool>,
     /// The right-click menu while it is open: where, and what it is about.
     pub menu: RwSignal<Option<GitMenu>>,
+    /// The clone dialog while it is open: what has been typed and chosen.
+    pub clone: RwSignal<Option<CloneDraft>>,
+    /// The two sides of an image being compared, once a picture is picked.
+    pub images: RwSignal<Option<ImagePair>>,
+    /// The opened commit's pane folded away to a strip — Fork's hide.
+    pub detail_hidden: RwSignal<bool>,
+    /// `Some(target)` when this window was booted with `?gitdiff=<target>`:
+    /// a window showing one commit and nothing else.
+    pub window_target: RwSignal<Option<String>>,
+}
+
+/// What the clone dialog holds while it is open.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CloneDraft {
+    pub url: String,
+    /// The folder the repository's directory is created *in*.
+    pub into: Option<String>,
+    /// Set while `git clone` runs, so the button cannot start a second.
+    pub running: bool,
+}
+
+/// An image's two sides, each resolved on its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImagePair {
+    pub path: String,
+    pub old: ImageSide,
+    pub new: ImageSide,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageSide {
+    /// Nothing to show: the file did not exist on this side.
+    Absent,
+    Loading,
+    /// A `data:` URL ready for an `<img>`, and the size in bytes.
+    Ready {
+        url: String,
+        bytes: usize,
+    },
+    Failed(String),
+}
+
+/// Where an image's side comes from, as the backend is asked for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageSource {
+    /// The file as it is on disk.
+    Worktree,
+    /// `git show <rev>:<path>` — a hash, `HEAD`, or `:0` for the index.
+    Rev(String),
 }
 
 /// A right-click in the Git panel: the pointer, and what was under it.
@@ -1269,6 +1326,10 @@ impl AppState {
                 limit: RwSignal::new(rusty_git::LIMIT),
                 amend: RwSignal::new(false),
                 menu: RwSignal::new(None),
+                clone: RwSignal::new(None),
+                images: RwSignal::new(None),
+                detail_hidden: RwSignal::new(false),
+                window_target: RwSignal::new(query_param("gitdiff")),
             },
             search: Search {
                 query: RwSignal::new(String::new()),

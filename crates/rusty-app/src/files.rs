@@ -50,15 +50,7 @@ pub async fn open_editor_window(path: String, app: tauri::AppHandle) -> Result<(
         return Ok(());
     }
 
-    let encoded: String = path
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'/' => {
-                char::from(byte).to_string()
-            }
-            other => format!("%{other:02X}"),
-        })
-        .collect();
+    let encoded = query_encode(&path);
     let name = path.rsplit('/').next().unwrap_or(&path).to_string();
     tauri::WebviewWindowBuilder::new(
         &app,
@@ -70,6 +62,21 @@ pub async fn open_editor_window(path: String, app: tauri::AppHandle) -> Result<(
     .build()
     .map_err(|error| CommandError::new(format!("could not open the editor window: {error}")))?;
     Ok(())
+}
+
+/// A value for a window's query string: everything outside
+/// `[A-Za-z0-9._-/]` as `%XX`, which is exactly what the frontend's decoder
+/// undoes. Shared by the editor window and the commit window.
+pub(crate) fn query_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'/' => {
+                char::from(byte).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 /// Send a detached editor's file back to the main window and close it.

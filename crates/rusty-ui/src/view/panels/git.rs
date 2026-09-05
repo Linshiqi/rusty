@@ -45,7 +45,7 @@ use crate::view::icon::{Icon, IconView};
 use crate::view::split;
 use crate::{
     controller, format,
-    state::{AppState, Divider, GitMenu, GitMode, GitTarget},
+    state::{AppState, Divider, GitMenu, GitMode, GitTarget, ImageSide},
     view::components::{
         Button, ButtonKind, ContextMenu, Empty, MenuItem, MenuSeparator, Pill, Tone,
         copy_to_clipboard, register_toolbar,
@@ -124,8 +124,18 @@ pub fn GitPanel() -> impl IntoView {
 
     move || {
         if !state.has_project() {
+            // No project is also how a project starts: the clone lives here
+            // as well as in the File menu.
             return view! {
-                <Empty title=t!("git.no-project-title") detail=t!("git.no-project-detail") />
+                <div class="flex min-h-0 flex-1 flex-col">
+                    <Empty title=t!("git.no-project-title") detail=t!("git.no-project-detail") />
+                    <div class="flex justify-center pb-6">
+                        <Button
+                            label=t!("git.clone-button")
+                            on_click=Callback::new(move |_| controller::open_clone_dialog(state))
+                        />
+                    </div>
+                </div>
             }
             .into_any();
         }
@@ -549,6 +559,11 @@ fn graph_cell(row: &GraphRow, lanes: u32) -> AnyView {
 /// layouts, then the rows. Reads the layout signal, so the closure that
 /// calls this re-renders when the toggle is pressed.
 fn diff_pane(state: AppState, path: String, text: &str) -> AnyView {
+    // A picture is compared as pictures. The controller that picked the file
+    // has already asked for both sides; this only draws what has arrived.
+    if rusty_git::is_image_path(&path) {
+        return image_pane(state, path);
+    }
     let hunks = rusty_git::diff::hunks(text);
     let split = state.git.split.get();
     let body = if hunks.is_empty() {
@@ -577,6 +592,65 @@ fn diff_pane(state: AppState, path: String, text: &str) -> AnyView {
             <div class="min-h-0 min-w-0 flex-1 overflow-auto font-mono text-footnote leading-relaxed select-text">
                 {body}
             </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// An image's two sides, before and after, each on a checkerboard so a
+/// transparent PNG shows its edges. A side the file does not have — the
+/// old of an added picture, the new of a deleted one — says so rather than
+/// showing an empty box that reads as a broken load.
+fn image_pane(state: AppState, path: String) -> AnyView {
+    let pair = state.git.images.get().filter(|pair| pair.path == path);
+    let (old, new) = match pair {
+        Some(pair) => (pair.old, pair.new),
+        None => (ImageSide::Loading, ImageSide::Loading),
+    };
+    view! {
+        <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1">
+                <span class="min-w-0 flex-1 truncate font-mono text-footnote text-label-2 select-text">
+                    {path}
+                </span>
+            </div>
+            <div class="grid min-h-0 flex-1 grid-cols-2 gap-px overflow-auto bg-line">
+                {image_side(t!("git.image-old"), old)}
+                {image_side(t!("git.image-new"), new)}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+fn image_side(label: String, side: ImageSide) -> AnyView {
+    let body = match side {
+        ImageSide::Absent => view! {
+            <p class="text-footnote text-label-4">{t!("git.image-none")}</p>
+        }
+        .into_any(),
+        ImageSide::Loading => view! {
+            <p class="text-footnote text-label-4">{t!("git.image-loading")}</p>
+        }
+        .into_any(),
+        ImageSide::Failed(why) => view! { <p class="text-footnote text-crimson">{why}</p> }.into_any(),
+        ImageSide::Ready { url, bytes } => view! {
+            <img
+                src=url
+                alt=""
+                class="max-h-full max-w-full object-contain"
+                style="background: repeating-conic-gradient(rgba(127,127,127,.18) 0 25%, transparent 0 50%) 0 0 / 16px 16px"
+            />
+            <span class="text-caption text-label-4 tnum">{t!("git.image-size", bytes = bytes)}</span>
+        }
+        .into_any(),
+    };
+    view! {
+        <div class="flex min-h-0 flex-col items-center gap-2 bg-content p-3">
+            <span class="self-start text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                {label}
+            </span>
+            <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2">{body}</div>
         </div>
     }
     .into_any()
@@ -833,7 +907,7 @@ fn path_menu(state: AppState, event: &ev::MouseEvent, path: &str) {
 /// The opened commit (or stash): message, files, one file's patch — under
 /// the log or the stash list, behind a divider, with two more inside.
 #[component]
-fn Detail() -> impl IntoView {
+fn Detail(#[prop(default = false)] standalone: bool) -> impl IntoView {
     let state = AppState::expect();
     move || {
         let selected = state.git.selected.get()?;
@@ -847,8 +921,30 @@ fn Detail() -> impl IntoView {
                 .into_any(),
             );
         };
-        let chosen = state.git.file.get();
         let commit = detail.commit.clone();
+        // Folded to a strip: the hash and the summary, and the way back.
+        // Fork's hide, so a wide graph can have the whole panel.
+        if !standalone && state.git.detail_hidden.get() {
+            let summary = commit.summary.clone();
+            return Some(
+                view! {
+                    <div class="flex shrink-0 items-center gap-3 border-t border-line bg-sunken px-4 py-1.5">
+                        <span class="font-mono text-footnote text-label-2">{commit.short.clone()}</span>
+                        <span class="min-w-0 flex-1 truncate text-footnote text-label-3">{summary}</span>
+                        <button
+                            type="button"
+                            title=t!("git.detail-show")
+                            class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
+                            on:click=move |_| controller::toggle_detail(state)
+                        >
+                            <span class="-rotate-180"><IconView icon=Icon::Chevron size=13 /></span>
+                        </button>
+                    </div>
+                }
+                .into_any(),
+            );
+        }
+        let chosen = state.git.file.get();
         let when = format::since(commit.time);
         let files = detail.files.clone();
         let patch = chosen
@@ -863,32 +959,69 @@ fn Detail() -> impl IntoView {
             }
             .into_any(),
         };
+        let target = selected.clone();
+        // The pane's frame: in the panel, a divider above and a dragged
+        // height capped at most of the panel; in a window of its own, the
+        // whole window.
+        let frame = if standalone {
+            "flex min-h-0 flex-1 flex-col overflow-hidden"
+        } else {
+            "flex max-h-[80%] min-h-0 shrink-0 flex-col overflow-hidden"
+        };
+        let height = move || {
+            if standalone {
+                String::new()
+            } else {
+                format!("height: {}px", state.layout.git_detail_height.get())
+            }
+        };
         Some(
             view! {
-                <split::Handle divider=Divider::GitDetail />
+                {(!standalone).then(|| view! { <split::Handle divider=Divider::GitDetail /> })}
                 // Never more than most of the panel, whatever the divider was
                 // dragged to, and *everything* inside it bounded and scrolling
                 // on its own: a header that took an essay-length message's
                 // natural height once pushed this pane straight over the dock.
-                <div
-                    class="flex max-h-[80%] min-h-0 shrink-0 flex-col overflow-hidden"
-                    style=move || format!("height: {}px", state.layout.git_detail_height.get())
-                >
+                // The three regions wear three grounds — message, files, patch
+                // — so the eye finds the boundaries without reading for them.
+                <div class=frame style=height>
                     <div
-                        class="shrink-0 overflow-y-auto px-4 py-2"
+                        class="flex shrink-0 items-start gap-2 bg-sunken px-4 py-2"
                         style=move || format!("max-height: {}px", state.layout.git_message_height.get())
                     >
-                        <div class="flex items-center gap-2 text-footnote text-label-3">
-                            <span class="font-mono text-label-2 select-text">{commit.short.clone()}</span>
-                            <span>{commit.author.clone()}</span>
-                            <span class="text-label-4">{when}</span>
+                        <div class="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                            <div class="flex items-center gap-2 text-footnote text-label-3">
+                                <span class="font-mono text-label-2 select-text">{commit.short.clone()}</span>
+                                <span>{commit.author.clone()}</span>
+                                <span class="text-label-4">{when}</span>
+                            </div>
+                            <p class="mt-1 text-body whitespace-pre-wrap select-text">{detail.body.clone()}</p>
                         </div>
-                        <p class="mt-1 text-body whitespace-pre-wrap select-text">{detail.body.clone()}</p>
+                        {(!standalone).then(|| view! {
+                            <div class="flex shrink-0 items-center gap-0.5">
+                                <button
+                                    type="button"
+                                    title=t!("git.detail-window")
+                                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
+                                    on:click=move |_| controller::open_commit_window(state, target.clone())
+                                >
+                                    <IconView icon=Icon::External size=13 />
+                                </button>
+                                <button
+                                    type="button"
+                                    title=t!("git.detail-hide")
+                                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
+                                    on:click=move |_| controller::toggle_detail(state)
+                                >
+                                    <IconView icon=Icon::Close size=13 />
+                                </button>
+                            </div>
+                        })}
                     </div>
                     <split::Handle divider=Divider::GitMessage />
                     <div class="flex min-h-0 flex-1">
                         <div
-                            class="shrink-0 overflow-y-auto py-1"
+                            class="shrink-0 overflow-y-auto bg-sidebar py-1"
                             style=move || format!("width: {}px", state.layout.git_files_width.get())
                         >
                             {if files.is_empty() {
@@ -919,7 +1052,7 @@ fn Detail() -> impl IntoView {
                                             <button
                                                 type="button"
                                                 class=class
-                                                on:click=move |_| state.git.file.set(Some(pick.clone()))
+                                                on:click=move |_| controller::show_commit_file(state, pick.clone())
                                                 on:dblclick=move |_| controller::open_file(state, open.clone())
                                                 on:contextmenu=move |event: ev::MouseEvent| path_menu(state, &event, &menu)
                                             >
@@ -941,6 +1074,11 @@ fn Detail() -> impl IntoView {
             .into_any(),
         )
     }
+}
+
+/// One commit filling a window of its own — what `?gitdiff=<target>` boots.
+pub fn commit_window() -> AnyView {
+    view! { <Detail standalone=true /> }.into_any()
 }
 
 // ─── the working tree ────────────────────────────────────────────────────────
@@ -987,7 +1125,7 @@ fn Changes() -> impl IntoView {
             }}
             <div class="flex min-h-0 flex-1">
                 <div
-                    class="flex min-h-0 shrink-0 flex-col"
+                    class="flex min-h-0 shrink-0 flex-col bg-sidebar"
                     style=move || format!("width: {}px", state.layout.git_changes_width.get())
                 >
                     <div class="min-h-0 flex-1 overflow-y-auto py-1">
@@ -1147,7 +1285,7 @@ fn CommitBox() -> impl IntoView {
             && (staged_count.get() == 0 || state.git.message.with(|m| m.trim().is_empty()))
     });
     view! {
-        <div class="shrink-0 border-t border-line px-4 py-3">
+        <div class="shrink-0 border-t border-line bg-sunken px-4 py-3">
             <textarea
                 rows="3"
                 placeholder=t!("git.commit-placeholder")

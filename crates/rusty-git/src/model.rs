@@ -174,3 +174,51 @@ pub struct Stash {
     pub message: String,
     pub time: u64,
 }
+
+/// Whether a path names an image the panel shows as pictures — old beside
+/// new — rather than as a patch git can only call binary.
+pub fn is_image_path(path: &str) -> bool {
+    image_mime(path).is_some()
+}
+
+/// The MIME type an image path's extension implies, for a `data:` URL; `None`
+/// for anything that is not an image this panel draws. SVG is text to git and
+/// a picture to a person, so it is here.
+pub fn image_mime(path: &str) -> Option<&'static str> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let (_, ext) = name.rsplit_once('.')?;
+    Some(match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn images_are_told_by_extension_case_blind_and_nothing_else_is_one() {
+        assert_eq!(
+            image_mime("book/src/figures/fig-23-osd.svg"),
+            Some("image/svg+xml")
+        );
+        assert_eq!(image_mime("logo.PNG"), Some("image/png"));
+        assert_eq!(image_mime("a/b/photo.JPEG"), Some("image/jpeg"));
+        assert!(is_image_path("icon.ico"));
+        assert!(!is_image_path("src/main.rs"));
+        assert!(!is_image_path("Makefile"));
+        assert!(!is_image_path("images/README"));
+        assert!(
+            !is_image_path("dir.png/notes.txt"),
+            "the extension is the file's, not a folder's"
+        );
+    }
+}

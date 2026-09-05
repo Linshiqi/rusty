@@ -17,6 +17,8 @@ rusty-lsp = { path = "../rusty-lsp" }
 rusty-dbg = { path = "../rusty-dbg" }
 rusty-term = { path = "../rusty-term" }
 rusty-git = { path = "../rusty-git" }
+# An image in a diff crosses the wire as a `data:` URL; already in the tree.
+base64 = "0.22"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tauri = { version = "2.11.5", features = [] }

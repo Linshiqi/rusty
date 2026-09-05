@@ -9,12 +9,15 @@
 //! user's checkout, and the standard embedded layout puts the firmware crate
 //! *inside* it, not the other way round.
 
+use base64::Engine;
+use rusty_embed::{CommandPlan, LogLine, process};
 use rusty_git::{Branch, CommitDetail, History, Stash, Status};
-use tauri::State;
+use tauri::{State, ipc::Channel};
 
 use crate::{
     error::CommandError,
     state::{AppState, blocking},
+    stream,
 };
 
 type Answer<T> = Result<T, CommandError>;
@@ -92,4 +95,91 @@ pub async fn git_stage(paths: Vec<String>, on: bool, state: State<'_, AppState>)
         }
     })
     .await??)
+}
+
+/// One file's bytes at `spec` (a hash, `HEAD`, `:0` for the index) or in
+/// the working tree when `spec` is absent, as base64 — the panel turns it
+/// into a `data:` URL and shows the picture. Base64 rather than a byte array
+/// because a JS array of a megabyte of numbers is the slow way across IPC.
+#[tauri::command]
+pub async fn git_blob(
+    spec: Option<String>,
+    path: String,
+    state: State<'_, AppState>,
+) -> Answer<String> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let bytes = blocking("git show", move || {
+        rusty_git::repo::blob(&root, spec.as_deref(), &path)
+    })
+    .await??;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// `git clone <url> <into>`, streamed to the dock like an install step. The
+/// one git command that runs with no project open, because it is how a
+/// project arrives; the frontend opens `into` once the exit code is zero.
+#[tauri::command]
+pub async fn git_clone(
+    url: String,
+    into: String,
+    on_line: Channel<LogLine>,
+    state: State<'_, AppState>,
+) -> Answer<Option<i32>> {
+    let step = CommandPlan {
+        program: "git".to_string(),
+        args: vec![
+            "clone".to_string(),
+            "--progress".to_string(),
+            url.clone(),
+            into.clone(),
+        ],
+        display: format!("git clone --progress {url} {into}"),
+        rationale: "clones the repository into the chosen folder; the project opens when \
+                    it finishes"
+            .to_string(),
+        warning: None,
+    };
+    crate::simulate::note(&on_line, format!("$ {}", step.display));
+    let session = process::spawn(&step, None)?;
+    let ours = state.start_session(session.stopper()).await;
+    let feed = on_line.clone();
+    let code = blocking("git clone", move || {
+        stream::forward(|| session.recv(), &feed);
+        session.wait()
+    })
+    .await?;
+    state.release_session(&ours).await;
+    Ok(code)
+}
+
+/// A commit in a window of its own — Fork's tear-off. The window boots the
+/// same frontend with `?gitdiff=<target>` and shows only that commit's pane;
+/// `target` is a hash or a `stash@{n}` name, whatever `git show` accepts.
+#[tauri::command]
+pub async fn open_git_window(target: String, app: tauri::AppHandle) -> Answer<()> {
+    use tauri::Manager;
+
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in target.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    let label = format!("git-{hash:x}");
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+    let short: String = target.chars().take(7).collect();
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(
+            format!("index.html?gitdiff={}", crate::files::query_encode(&target)).into(),
+        ),
+    )
+    .title(format!("{short} — rusty"))
+    .inner_size(1100.0, 760.0)
+    .build()
+    .map_err(|error| CommandError::new(format!("could not open the commit window: {error}")))?;
+    Ok(())
 }
