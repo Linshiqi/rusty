@@ -48,7 +48,7 @@ use crate::{
     state::{AppState, Divider, GitMenu, GitMode, GitTarget, ImageSide},
     view::components::{
         Button, ButtonKind, ContextMenu, Empty, MenuItem, MenuSeparator, Pill, Tone,
-        copy_to_clipboard, register_toolbar,
+        copy_to_clipboard,
     },
 };
 
@@ -62,39 +62,6 @@ const LANE_PX: u32 = 14;
 #[component]
 pub fn GitPanel() -> impl IntoView {
     let state = AppState::expect();
-
-    let toolbar = Callback::new(move |_| {
-        let push_title = move || {
-            let has_upstream = state
-                .git
-                .status
-                .with(|s| s.as_ref().is_some_and(|s| s.upstream.is_some()));
-            if has_upstream {
-                t!("git.push")
-            } else {
-                t!("git.push-upstream")
-            }
-        };
-        view! {
-            {rail_button(t!("git.refresh"), Icon::Refresh, move |_| controller::load_git(state))}
-            {rail_button(t!("git.fetch"), Icon::Fetch, move |_| controller::fetch(state))}
-            {rail_button(t!("git.pull"), Icon::Pull, move |_| controller::pull(state))}
-            <button
-                type="button"
-                title=push_title
-                on:click=move |_| controller::push(state)
-                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-            >
-                <IconView icon=Icon::Push size=15 />
-            </button>
-            {rail_button(t!("git.new-branch"), Icon::Plus, move |_| {
-                state.git.branch_from.set(None);
-                state.git.new_branch.set(Some(String::new()));
-            })}
-        }
-        .into_any()
-    });
-    register_toolbar(state, toolbar);
 
     // Load for the project that is open, and again when a different one is:
     // keyed on the root, so a keystroke elsewhere re-renders nothing here and
@@ -163,16 +130,19 @@ pub fn GitPanel() -> impl IntoView {
     }
 }
 
-/// One rail action, in the shape every panel's are.
-fn rail_button(title: String, icon: Icon, on_click: impl Fn(ev::MouseEvent) + 'static) -> AnyView {
+/// The shape of one action in the branch row: an icon button in the row that
+/// names the view, as VS Code's view titles carry theirs.
+const HEADER_BUTTON: &str =
+    "grid size-7 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label";
+
+fn header_button(
+    title: String,
+    icon: Icon,
+    on_click: impl Fn(ev::MouseEvent) + 'static,
+) -> AnyView {
     view! {
-        <button
-            type="button"
-            title=title
-            on:click=on_click
-            class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-        >
-            <IconView icon=icon size=15 />
+        <button type="button" title=title on:click=on_click class=HEADER_BUTTON>
+            <IconView icon=icon size=14 />
         </button>
     }
     .into_any()
@@ -180,7 +150,7 @@ fn rail_button(title: String, icon: Icon, on_click: impl Fn(ev::MouseEvent) + 's
 
 /// Every branch as a chip. The current one is marked; the selected one
 /// filters the log; a selected local branch that is not current offers
-/// checkout and delete; the plus in the rail opens a field for a new one.
+/// checkout and delete; the plus at the row's end opens a field for a new one.
 #[component]
 fn Branches() -> impl IntoView {
     let state = AppState::expect();
@@ -310,6 +280,36 @@ fn Branches() -> impl IntoView {
                     />
                 })
             }}
+            <span class="flex-1" />
+            // The repository's verbs, at the right of the row that names the
+            // branch — Fork's toolbar, at this panel's scale. They were in
+            // the rail, where a panel's actions and the project's read as
+            // one column.
+            {header_button(t!("git.refresh"), Icon::Refresh, move |_| controller::load_git(state))}
+            {header_button(t!("git.fetch"), Icon::Fetch, move |_| controller::fetch(state))}
+            {header_button(t!("git.pull"), Icon::Pull, move |_| controller::pull(state))}
+            <button
+                type="button"
+                title=move || {
+                    let has_upstream = state
+                        .git
+                        .status
+                        .with(|s| s.as_ref().is_some_and(|s| s.upstream.is_some()));
+                    if has_upstream {
+                        t!("git.push")
+                    } else {
+                        t!("git.push-upstream")
+                    }
+                }
+                on:click=move |_| controller::push(state)
+                class=HEADER_BUTTON
+            >
+                <IconView icon=Icon::Push size=14 />
+            </button>
+            {header_button(t!("git.new-branch"), Icon::Plus, move |_| {
+                state.git.branch_from.set(None);
+                state.git.new_branch.set(Some(String::new()));
+            })}
         </div>
         {move || {
             let (x, y) = picker.get()?;

@@ -8,7 +8,9 @@
 //! three commands before it becomes clutter with no organising principle —
 //! which is exactly what "Open project" and "Re-check" sitting in the corner had
 //! become. Everything a menu can reach is an [`Action`], the same ones the
-//! palette lists and the keyboard fires.
+//! palette lists and the keyboard fires. The one row of buttons kept is the
+//! four verbs beside the project's name — Build, Run, Debug, Flash — which is
+//! the row Xcode's toolbar holds; why it is kept is written in `run.rs`.
 
 use leptos::{ev, prelude::*};
 
@@ -121,6 +123,8 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
                         }
                     })
             }}
+            // What you do with it, one reach from its name.
+            <crate::view::run::RunControls />
 
             <span data-tauri-drag-region class="flex-1 self-stretch" />
 

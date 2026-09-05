@@ -175,6 +175,13 @@ fn project_opened(state: AppState, result: OpenResult) {
             refresh_tree(state);
             start_lsp(state);
             start_watch(state);
+            // The title bar's Run and Debug read the plan on every panel, so
+            // it is asked for here rather than when the Simulate panel first
+            // mounts — and the last project's answer is dropped first, or a
+            // C3 project would show an ESP32 project's verdict until the
+            // reply landed.
+            state.sim.plan.set(None);
+            load_sim_plan(state);
             if let Some(root) = state
                 .project
                 .detected
@@ -188,7 +195,7 @@ fn project_opened(state: AppState, result: OpenResult) {
 
 /// Re-read the project's files without reopening it.
 ///
-/// Guarded, because this is what the toolbar button and `Ctrl R` reach: asking
+/// Guarded, because this is what the menu entry and `Ctrl R` reach: asking
 /// the backend to re-check nothing produces an error banner about no project
 /// being open, which the user can see for themselves.
 pub fn refresh_project(state: AppState) {
@@ -217,6 +224,7 @@ fn reload_project(state: AppState) {
             refresh_tree(state);
             start_lsp(state);
             start_watch(state);
+            load_sim_plan(state);
             // A WebView reload reaches a project the backend never closed —
             // this path skips project_opened, so the strip is replayed here
             // too or a refresh would silently drop every open tab.

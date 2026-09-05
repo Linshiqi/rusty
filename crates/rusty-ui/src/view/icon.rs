@@ -51,6 +51,10 @@ pub enum Icon {
     Close,
     /// An arrow leaving a box: open this in a window of its own.
     External,
+    /// A page with a plus, and a folder with one: the tree header's new
+    /// file and new folder.
+    FilePlus,
+    FolderPlus,
 }
 
 impl Icon {
@@ -126,6 +130,10 @@ impl Icon {
             Icon::Columns => "M4 4.5h12v11H4zM10 4.5v11",
             Icon::Close => "M6 6l8 8M14 6l-8 8",
             Icon::External => "M8.5 4.5H4.5v11h11v-4M11.5 4.5h4v4M15.5 4.5l-7 7",
+            Icon::FilePlus => "M5 2.5h6l4 4V17.5H5zM11 2.5V7h4M10 9.5v5M7.5 12h5",
+            Icon::FolderPlus => {
+                "M2.5 5.5a1 1 0 0 1 1-1h4.3l1.6 1.6h7.1a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1zM10 8.5v5M7.5 11h5"
+            }
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

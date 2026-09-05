@@ -10,30 +10,11 @@ use leptos::prelude::*;
 use rusty_i18n::t;
 
 use crate::view::icon::{Icon, IconView};
-use crate::{
-    controller,
-    state::AppState,
-    view::components::{Empty, register_toolbar},
-};
+use crate::{controller, state::AppState, view::components::Empty};
 
 #[component]
 pub fn Crates() -> impl IntoView {
     let state = AppState::expect();
-
-    let toolbar = Callback::new(move |_| {
-        view! {
-            <button
-                type="button"
-                title=t!("crates.refresh")
-                on:click=move |_| controller::load_crate_report(state)
-                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-            >
-                <IconView icon=Icon::Refresh size=15 />
-            </button>
-        }
-        .into_any()
-    });
-    register_toolbar(state, toolbar);
 
     Effect::new(move |first: Option<()>| {
         if first.is_none() && state.project.crate_rows.with(Option::is_none) {
@@ -58,6 +39,15 @@ pub fn Crates() -> impl IntoView {
                     <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                         {t!("crates.direct")}
                     </span>
+                    <span class="flex-1" />
+                    <button
+                        type="button"
+                        title=t!("crates.refresh")
+                        on:click=move |_| controller::load_crate_report(state)
+                        class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
+                    >
+                        <IconView icon=Icon::Refresh size=13 />
+                    </button>
                 </div>
                 <div class="min-h-0 flex-1 overflow-y-auto">
                     <div class="px-5 py-3">

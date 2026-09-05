@@ -7,7 +7,8 @@
 //! (`[rusty:gpio]`, and friends to come) is the contract every part speaks.
 //!
 //! The page is a small board editor in the Wokwi shape: a component library
-//! on the left, a canvas with the devkit on the right, a toolbar above.
+//! on the left, a canvas with the devkit on the right, and the sheet's own
+//! controls in the canvas's corner.
 //! LEDs are added from the library, dragged into place, given a pin and a
 //! colour, and saved into the project's `.rusty/sim.toml` — a file diffed
 //! and reviewed like any other. At run time each LED lights from the pin
@@ -29,7 +30,7 @@ use rusty_i18n::t;
 use crate::{
     controller,
     state::AppState,
-    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator, register_toolbar},
+    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
     view::icon::{Icon, IconView},
 };
 
@@ -37,6 +38,11 @@ use crate::{
 /// both clamp to it; spelled once so the two cannot disagree about what
 /// "as far as it goes" means.
 const CANVAS_ZOOM_RANGE: (f64, f64) = (0.35, 2.5);
+
+/// One control in the sheet's corner cluster.
+const SHEET_BUTTON: &str = "grid size-7 place-items-center rounded-[6px] text-label-2 \
+                            hover:bg-sunken hover:text-label disabled:pointer-events-none \
+                            disabled:opacity-35";
 
 #[component]
 pub fn Simulate() -> impl IntoView {
@@ -78,7 +84,6 @@ pub fn Simulate() -> impl IntoView {
         }
 
         let mut missing = plan.missing.clone();
-        let blocked = !missing.is_empty();
         // The gdb gates only Debug, so it joins the card without blocking Run.
         if let Some(tool) = plan.debug_tool.clone() {
             missing.push(tool);
@@ -168,8 +173,6 @@ pub fn Simulate() -> impl IntoView {
                             .unwrap_or_default();
                         geometry::empty_board(&chip, None)
                     })
-                    blocked=blocked
-                    debuggable=plan.debug.is_some()
                     user_parts=plan.parts.clone()
                 />
 
@@ -180,15 +183,10 @@ pub fn Simulate() -> impl IntoView {
     }
 }
 
-/// The editor: library, canvas, toolbar. Local state until Save writes it
+/// The editor: library, canvas, corner controls. Local state until Save writes it
 /// into `.rusty/sim.toml` and the plan reloads.
 #[component]
-fn BoardEditor(
-    board: SimBoard,
-    blocked: bool,
-    debuggable: bool,
-    user_parts: Vec<rusty_embed::PartDef>,
-) -> impl IntoView {
+fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl IntoView {
     let state = AppState::expect();
     let running = state.app.session_running;
     let chip = board.chip.clone();
@@ -366,146 +364,6 @@ fn BoardEditor(
             remove_part(index);
         }
     };
-
-    // The editor's tools live on the global toolbar while this panel is on
-    // screen — registered on mount, cleared on unmount, so the row always
-    // describes the work in front of the user.
-    let toolbar = Callback::new(move |_| {
-        view! {
-
-                {move || {
-                    if running.get() {
-                        view! {
-                            <button
-                                type="button"
-                                title=t!("simulate.stop")
-                                on:click=move |_| controller::stop_session_now(state)
-                                class="grid size-8 place-items-center rounded-[6px] text-crimson hover:bg-sunken"
-                            >
-                                <IconView icon=Icon::Stop size=15 />
-                            </button>
-                        }
-                            .into_any()
-                    } else {
-                        let disabled = blocked;
-                        view! {
-                            <button
-                                type="button"
-                                title=t!("simulate.run")
-                                disabled=disabled
-                                on:click=move |_| controller::run_simulation(state, false)
-                                class="grid size-8 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
-                            >
-                                <IconView icon=Icon::Play size=15 />
-                            </button>
-                            <button
-                                type="button"
-                                disabled=disabled || !debuggable
-                                title=if debuggable {
-                                    t!("simulate.debug")
-                                } else {
-                                    t!("simulate.debug-blocked")
-                                }
-                                on:click=move |_| controller::run_simulation(state, true)
-                                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                            >
-                                <IconView icon=Icon::Bug size=15 />
-                            </button>
-                        }
-                            .into_any()
-                    }
-                }}
-                // Pressing Debug lands you here, watching the board — so this
-                // is one of the two places that has to be able to continue,
-                // step and stop. Without it a session started from this panel
-                // could only be ended from the editor's.
-                <crate::view::transport::DebugTransport />
-                <button
-                    type="button"
-                    title=t!("simulate.save")
-                    disabled=move || !dirty.get()
-                    on:click=move |_| save.run(())
-                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                >
-                    <IconView icon=Icon::Save size=15 />
-                </button>
-                <span class="my-1 h-px w-5 bg-line" />
-                <button
-                    type="button"
-                    title=t!("simulate.undo")
-                    disabled=move || history.with(Vec::is_empty)
-                    on:click=move |_| undo()
-                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                >
-                    "↶"
-                </button>
-                <button
-                    type="button"
-                    title=t!("simulate.redo")
-                    disabled=move || future.with(Vec::is_empty)
-                    on:click=move |_| redo()
-                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                >
-                    "↷"
-                </button>
-                <span class="my-1 h-px w-5 bg-line" />
-                <button
-                    type="button"
-                    title=t!("simulate.zoom-out")
-                    on:click=move |_| {
-                        view.update(|(_, _, k)| *k = (*k / 1.2).max(0.35))
-                    }
-                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-                >
-                    "−"
-                </button>
-                <span class="min-w-[5ch] text-center font-mono text-footnote text-label-3">
-                    {move || format!("{:.0}%", view.get().2 * 100.0)}
-                </span>
-                <button
-                    type="button"
-                    title=t!("simulate.zoom-in")
-                    on:click=move |_| {
-                        view.update(|(_, _, k)| *k = (*k * 1.2).min(2.5))
-                    }
-                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-                >
-                    "+"
-                </button>
-                <button
-                    type="button"
-                    title=t!("simulate.fit")
-                    on:click=move |_| fit_view()
-                    class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-                >
-                    <IconView icon=Icon::Fit size=14 />
-                </button>
-                <button
-                    type="button"
-                    title=t!("simulate.grid")
-                    on:click=move |_| {
-                        grid.update(|g| {
-                            *g = match *g as i32 {
-                                1 => 4.0,
-                                4 => 8.0,
-                                8 => 16.0,
-                                _ => 1.0,
-                            }
-                        })
-                    }
-                    class="flex h-7 items-center gap-1 rounded-[6px] px-1.5 font-mono text-caption text-label-2 hover:bg-sunken hover:text-label"
-                >
-                    <IconView icon=Icon::Grid size=13 />
-                    // leading-none, or the caption line box out-talls the
-                    // icon and the digit prints below the glyph's centre.
-                    <span class="tnum leading-none">
-                        {move || format!("{}", grid.get() as i32)}
-                    </span>
-                </button>
-                    }
-        .into_any()
-    });
-    register_toolbar(state, toolbar);
 
     view! {
         <div class="flex min-h-0 flex-1 flex-col">
@@ -883,6 +741,105 @@ fn BoardEditor(
                     }
                     class="relative min-w-0 flex-1 overflow-hidden bg-[#101216] outline-none"
                 >
+                    // The sheet's own controls, in its corner as every
+                    // schematic editor keeps them: Save once there is
+                    // something to save, undo and redo, zoom, fit, the snap
+                    // grid. They were in the rail, where a zoom percentage sat
+                    // in a 46px column between Run and Stop. Pointer events
+                    // stop here, or a press on Zoom would also be a press on
+                    // the sheet under it — dropping an armed part, or starting
+                    // a pan.
+                    <div
+                        class="absolute top-2 right-2 z-20 flex items-center gap-0.5 rounded-[8px] bg-raised p-0.5 ring-1 ring-line-strong"
+                        on:pointerdown=move |event: ev::PointerEvent| event.stop_propagation()
+                        on:contextmenu=move |event: ev::MouseEvent| {
+                            event.prevent_default();
+                            event.stop_propagation();
+                        }
+                    >
+                        <button
+                            type="button"
+                            title=t!("simulate.save")
+                            disabled=move || !dirty.get()
+                            on:click=move |_| save.run(())
+                            class=SHEET_BUTTON
+                        >
+                            <IconView icon=Icon::Save size=14 />
+                        </button>
+                        <span class="mx-0.5 h-4 w-px bg-line" />
+                        <button
+                            type="button"
+                            title=t!("simulate.undo")
+                            disabled=move || history.with(Vec::is_empty)
+                            on:click=move |_| undo()
+                            class=SHEET_BUTTON
+                        >
+                            "↶"
+                        </button>
+                        <button
+                            type="button"
+                            title=t!("simulate.redo")
+                            disabled=move || future.with(Vec::is_empty)
+                            on:click=move |_| redo()
+                            class=SHEET_BUTTON
+                        >
+                            "↷"
+                        </button>
+                        <span class="mx-0.5 h-4 w-px bg-line" />
+                        <button
+                            type="button"
+                            title=t!("simulate.zoom-out")
+                            on:click=move |_| {
+                                view.update(|(_, _, k)| *k = (*k / 1.2).max(CANVAS_ZOOM_RANGE.0))
+                            }
+                            class=SHEET_BUTTON
+                        >
+                            "−"
+                        </button>
+                        <span class="min-w-[5ch] text-center font-mono text-footnote text-label-3">
+                            {move || format!("{:.0}%", view.get().2 * 100.0)}
+                        </span>
+                        <button
+                            type="button"
+                            title=t!("simulate.zoom-in")
+                            on:click=move |_| {
+                                view.update(|(_, _, k)| *k = (*k * 1.2).min(CANVAS_ZOOM_RANGE.1))
+                            }
+                            class=SHEET_BUTTON
+                        >
+                            "+"
+                        </button>
+                        <button
+                            type="button"
+                            title=t!("simulate.fit")
+                            on:click=move |_| fit_view()
+                            class=SHEET_BUTTON
+                        >
+                            <IconView icon=Icon::Fit size=14 />
+                        </button>
+                        <button
+                            type="button"
+                            title=t!("simulate.grid")
+                            on:click=move |_| {
+                                grid.update(|g| {
+                                    *g = match *g as i32 {
+                                        1 => 4.0,
+                                        4 => 8.0,
+                                        8 => 16.0,
+                                        _ => 1.0,
+                                    }
+                                })
+                            }
+                            class="flex h-7 items-center gap-1 rounded-[6px] px-1.5 font-mono text-caption text-label-2 hover:bg-sunken hover:text-label"
+                        >
+                            <IconView icon=Icon::Grid size=13 />
+                            // leading-none, or the caption line box out-talls the
+                            // icon and the digit prints below the glyph's centre.
+                            <span class="tnum leading-none">
+                                {move || format!("{}", grid.get() as i32)}
+                            </span>
+                        </button>
+                    </div>
                     <div
                         class="absolute"
                         style=move || {

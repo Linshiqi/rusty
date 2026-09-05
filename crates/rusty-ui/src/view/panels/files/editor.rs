@@ -1,6 +1,6 @@
 //! The editor pane: whichever document is in front, or the empty state.
 
-use leptos::prelude::*;
+use leptos::{html, prelude::*};
 
 use rusty_i18n::t;
 
@@ -65,11 +65,14 @@ pub(crate) fn Editor() -> impl IntoView {
             .into_any();
         }
 
+        // One textarea reference for the two components that need it: the
+        // surface owns the element, the header's Save formats through it.
+        let area: NodeRef<html::Textarea> = NodeRef::new();
         view! {
             <div class="flex min-h-0 min-w-0 flex-1 flex-col">
                 <TabStrip />
-                <Header document=document.clone() />
-                <Surface document=document />
+                <Header document=document.clone() area=area />
+                <Surface document=document area=area />
             </div>
         }
         .into_any()

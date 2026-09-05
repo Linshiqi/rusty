@@ -9,6 +9,27 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Changed.** The left rail only switches panels now. It had grown into one
+column of sixteen icons — panel switchers, the project's verbs, the
+debugger's transport and each panel's own actions, all at the same weight,
+with Run in a different place on every panel. Each kind has its own home:
+
+- Build, Run, Debug and Flash sit in the title bar beside the project's name,
+  in the same place on every panel; Run turns into Stop while something
+  runs. The simulation plan is asked for when a project opens, so they know
+  whether the machine can simulate before the Simulate panel has been
+  visited, and say what is missing if it cannot.
+- The debugger's continue, step and stop float over the working area while a
+  session is live — the same reach from the editor and from the board — and
+  go away with it.
+- Each panel's actions moved into the row that names the panel: the Files
+  header (New file and New folder beside Refresh), the Git branch row
+  (refresh, fetch, pull, push, new branch), the Crates and Toolchain
+  headings, and the board sheet's corner (save, undo, redo, zoom, fit, grid).
+- Save sits at the right of the file's header, beside its unsaved dot.
+
 ## v0.6.2
 
 **Fixed.**

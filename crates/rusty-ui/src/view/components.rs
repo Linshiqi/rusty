@@ -371,17 +371,3 @@ pub fn MenuItem(
 pub fn MenuSeparator() -> impl IntoView {
     view! { <div class="my-1 h-px bg-line" /> }
 }
-
-/// Put a panel's actions on the rail while the panel is on screen.
-///
-/// Registered on mount, cleared on unmount, so the rail always describes the
-/// work in front of the user. An unconditional clear is safe because the
-/// stage drops the old panel before building the next: this cleanup always
-/// runs before a successor registers. Four panels each carried this pair of
-/// lines; one of them would eventually have forgotten the cleanup.
-pub fn register_toolbar(state: crate::state::AppState, toolbar: Callback<(), AnyView>) {
-    Effect::new(move |_| {
-        state.layout.toolbar.set(Some(toolbar));
-    });
-    on_cleanup(move || state.layout.toolbar.set(None));
-}

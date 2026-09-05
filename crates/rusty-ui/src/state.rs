@@ -1044,7 +1044,7 @@ pub struct Sim {
 #[derive(Clone, Copy)]
 pub struct Debug {
     /// The live debug session's state, or `None` when nothing is being
-    /// debugged. Everything the gutter, the toolbar and the Debug panel
+    /// debugged. Everything the gutter, the floating transport and the Debug panel
     /// draw comes from this one value.
     pub session: RwSignal<Option<rusty_dbg::DebugState>>,
     /// Which session's frames are current — the same generation guard the
@@ -1120,11 +1120,6 @@ pub struct Layout {
     /// hidden drawer is a build whose failure the user finds out about later.
     pub dock_open: RwSignal<bool>,
     pub dock_tab: RwSignal<DockTab>,
-    /// The global toolbar's content, registered by whatever the workspace
-    /// currently shows. A slot rather than a switch: each panel mounts its
-    /// own tools and clears them on unmount, so the row always answers to
-    /// the work on screen and a new panel needs no central edit to join.
-    pub toolbar: RwSignal<Option<Callback<(), AnyView>>>,
     pub panel: RwSignal<String>,
     /// Whole-interface scale, browser-zoom style. 1.0 is native.
     pub zoom: RwSignal<f64>,
@@ -1415,7 +1410,6 @@ impl AppState {
                 drag_from: RwSignal::new((0.0, 0.0, 1.0)),
                 dock_open: RwSignal::new(true),
                 dock_tab: RwSignal::new(DockTab::Problems),
-                toolbar: RwSignal::new(None),
                 panel: RwSignal::new("files".to_string()),
                 zoom: RwSignal::new(stored_ui_zoom()),
             },

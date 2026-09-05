@@ -400,7 +400,7 @@ pub fn export_vcd(state: AppState) {
 }
 
 /// `cargo build --release` for the open project, streamed to the dock —
-/// the coding toolbar's Build, sharing the one session slot with
+/// the title bar's Build, sharing the one session slot with
 /// everything else that runs.
 pub fn build_project(state: AppState) {
     if state.app.session_running.get_untracked() {

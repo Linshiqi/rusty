@@ -35,7 +35,7 @@ pub use tree::FilesPanel;
 
 // Reached from most of these modules; declared once here, where every child's
 // `use super::*` picks it up.
-use crate::view::components::{copy_to_clipboard, register_toolbar};
+use crate::view::components::copy_to_clipboard;
 
 use caret::*;
 use complete::*;

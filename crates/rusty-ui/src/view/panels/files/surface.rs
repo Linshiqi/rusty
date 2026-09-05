@@ -29,9 +29,8 @@ use crate::{
 /// Without the immediate patch, typed characters are invisible for a quarter
 /// of a second — the textarea's own glyphs are transparent by design.
 #[component]
-pub(super) fn Surface(document: Document) -> impl IntoView {
+pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl IntoView {
     let state = AppState::expect();
-    let area: NodeRef<html::Textarea> = NodeRef::new();
     let scroller: NodeRef<html::Div> = NodeRef::new();
     let path = document.path.clone();
     let read_only = document.truncated || document.read_only;
@@ -84,83 +83,6 @@ pub(super) fn Surface(document: Document) -> impl IntoView {
     let opens_up =
         move |line: u32| line_in_view(line).is_some_and(|(top, height)| top > height * 0.55);
 
-    // The coding toolbar: what a person editing firmware reaches for. Save
-    // rides the same format-then-save path as Ctrl+S; Build shares the one
-    // session slot; the last two are the places this work goes next.
-    let toolbar = Callback::new(move |_| {
-        let running = state.app.session_running;
-        view! {
-            <button
-                type="button"
-                title=t!("toolbar.save")
-                disabled=read_only
-                on:click=move |_| format_and_save(state, area)
-                class="grid size-8 place-items-center rounded-[6px] text-rust hover:bg-sunken disabled:pointer-events-none disabled:opacity-40"
-            >
-                <IconView icon=Icon::Save size=15 />
-            </button>
-            <button
-                type="button"
-                title=t!("toolbar.build")
-                disabled=move || running.get()
-                on:click=move |_| controller::build_project(state)
-                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
-            >
-                <IconView icon=Icon::Hammer size=15 />
-            </button>
-            <span class="my-1 h-px w-5 bg-line" />
-            <button
-                type="button"
-                title=t!("toolbar.flash")
-                on:click=move |_| state.show_dock(crate::state::DockTab::Devices)
-                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-            >
-                <IconView icon=Icon::Flash size=15 />
-            </button>
-            // While a session is live the toolbar is the debugger's: the
-            // transport controls belong where the eye already is, not in a
-            // panel the stopped line just navigated away from.
-            <crate::view::transport::DebugTransport />
-            // Debug sits beside Run, because that is the pair: run it, or
-            // run it and stop where you said. Hidden while a session is
-            // live — the transport controls above are what it becomes.
-            {move || {
-                state.debug.session.with(Option::is_none).then(|| {
-                    view! {
-                        <button
-                            type="button"
-                            title=t!("toolbar.debug")
-                            disabled=move || running.get()
-                            on:click=move |_| {
-                                state.layout.panel.set("simulate".to_string());
-                                controller::run_simulation(state, true);
-                            }
-                            class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
-                        >
-                            <IconView icon=Icon::Bug size=15 />
-                        </button>
-                    }
-                })
-            }}
-            // A play icon runs — switching panels without running is the
-            // mismatch that got this button reported. It also switches, so
-            // the board is on screen while the build streams to the dock.
-            <button
-                type="button"
-                title=t!("toolbar.run")
-                disabled=move || running.get()
-                on:click=move |_| {
-                    state.layout.panel.set("simulate".to_string());
-                    controller::run_simulation(state, false);
-                }
-                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-40"
-            >
-                <IconView icon=Icon::Play size=15 />
-            </button>
-        }
-        .into_any()
-    });
-    register_toolbar(state, toolbar);
     // Which completion row the keyboard is on. Reset when a new popup arrives.
     let picked = RwSignal::new(0usize);
     Effect::new(move |_| {

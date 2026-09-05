@@ -83,6 +83,25 @@ fn Tree() -> impl IntoView {
                 <span class="flex-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                     {t!("tree.files")}
                 </span>
+                // New file and new folder at the root, where VS Code's
+                // Explorer header offers them; the context menu still offers
+                // them on any folder.
+                <button
+                    type="button"
+                    title=t!("context.tree-new-file")
+                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
+                    on:click=move |_| naming.set(Some((String::new(), false)))
+                >
+                    <IconView icon=Icon::FilePlus size=13 />
+                </button>
+                <button
+                    type="button"
+                    title=t!("context.tree-new-folder")
+                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
+                    on:click=move |_| naming.set(Some((String::new(), true)))
+                >
+                    <IconView icon=Icon::FolderPlus size=13 />
+                </button>
                 <button
                     type="button"
                     title=t!("tree.refresh")

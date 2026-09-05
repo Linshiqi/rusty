@@ -15,7 +15,7 @@ use crate::view::icon::{Icon, IconView};
 use crate::{
     controller,
     state::AppState,
-    view::components::{CommandLine, Dot, Pill, Readout, SectionLabel, Tone, register_toolbar},
+    view::components::{CommandLine, Dot, Pill, Readout, SectionLabel, Tone},
 };
 
 /// What rusty downloaded itself, how much of the disk it is, and the way to
@@ -74,22 +74,9 @@ fn Downloads() -> impl IntoView {
 pub fn Toolchain() -> impl IntoView {
     let state = AppState::expect();
 
-    let toolbar = Callback::new(move |_| {
-        view! {
-            <button
-                type="button"
-                title=t!("toolchain.refresh")
-                on:click=move |_| controller::refresh_toolchain(state)
-                class="grid size-8 place-items-center rounded-[6px] text-label-2 hover:bg-sunken hover:text-label"
-            >
-                <IconView icon=Icon::Refresh size=15 />
-            </button>
-        }
-        .into_any()
-    });
-    register_toolbar(state, toolbar);
-
-    move || {
+    // The report, or the wait for it — under a header row that names the
+    // panel and carries its one action, as the other panels' do.
+    let body = move || {
         let Some(report) = state.project.toolchain.get() else {
             return view! {
                 <div class="flex flex-1 items-center justify-center p-10">
@@ -345,5 +332,25 @@ pub fn Toolchain() -> impl IntoView {
             </div>
         }
         .into_any()
+    };
+
+    view! {
+        <div class="flex min-h-0 flex-1 flex-col">
+            <div class="flex items-center gap-2 border-b border-line px-5 py-2">
+                <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                    {t!("panel.toolchain")}
+                </span>
+                <span class="flex-1" />
+                <button
+                    type="button"
+                    title=t!("toolchain.refresh")
+                    on:click=move |_| controller::refresh_toolchain(state)
+                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
+                >
+                    <IconView icon=Icon::Refresh size=13 />
+                </button>
+            </div>
+            {body}
+        </div>
     }
 }

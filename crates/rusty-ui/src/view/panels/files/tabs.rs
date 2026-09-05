@@ -1,6 +1,6 @@
 //! The open editors, one tab each.
 
-use leptos::{ev, prelude::*};
+use leptos::{ev, html, prelude::*};
 
 use rusty_edit::Document;
 
@@ -11,6 +11,7 @@ use crate::{
     controller,
     state::AppState,
     view::components::{ContextMenu, MenuItem, MenuSeparator},
+    view::icon::{Icon, IconView},
 };
 
 /// The open editors, one tab each. Clicking fronts a tab with its draft and
@@ -205,10 +206,18 @@ pub(super) fn TabStrip() -> impl IntoView {
 }
 
 #[component]
-pub(super) fn Header(document: Document) -> impl IntoView {
+pub(super) fn Header(
+    document: Document,
+    /// The editing surface's textarea, when the document is open in one:
+    /// Save formats through it and lands the caret where the eye is. The
+    /// Markdown page view has no textarea, and saves the draft as it is.
+    #[prop(optional)]
+    area: Option<NodeRef<html::Textarea>>,
+) -> impl IntoView {
     let state = AppState::expect();
     let saved = document.text.clone();
     let path = document.path.clone();
+    let read_only = document.truncated || document.read_only;
     let dirty = Signal::derive(move || state.editor.draft.with(|draft| draft != &saved));
 
     view! {
@@ -224,6 +233,28 @@ pub(super) fn Header(document: Document) -> impl IntoView {
                     })
             }}
             <span class="flex-1" />
+            // Save, at the right of the file it saves. It was in the rail,
+            // between Build and Flash, as if it acted on the project.
+            <button
+                type="button"
+                title=t!("toolbar.save")
+                disabled=read_only
+                on:click=move |_| match area {
+                    Some(area) => format_and_save(state, area),
+                    None => controller::save_file(state),
+                }
+                class=move || {
+                    let base = "grid size-6 shrink-0 place-items-center rounded-[5px] \
+                                hover:bg-sunken disabled:pointer-events-none disabled:opacity-40";
+                    if dirty.get() {
+                        format!("{base} text-rust")
+                    } else {
+                        format!("{base} text-label-3 hover:text-label")
+                    }
+                }
+            >
+                <IconView icon=Icon::Save size=14 />
+            </button>
             // Markdown only: every other file has one way to read it, and a
             // toggle that does nothing on 95% of tabs is chrome.
             {super::editor::is_markdown(&path)

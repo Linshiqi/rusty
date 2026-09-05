@@ -440,7 +440,7 @@ pub(super) const SLOT_PITCH: f64 = 16.0;
 /// disconnecting returns here. 255 is no GPIO on any supported chip.
 pub(super) const UNWIRED: u8 = 255;
 
-/// The same rounding on a user-chosen grid — the toolbar offers 1/4/8/16px,
+/// The same rounding on a user-chosen grid — the sheet's corner control offers 1/4/8/16px,
 /// because "the grid is too coarse to align" deserved a dial, even after
 /// the real cause (off-grid anchors) was fixed.
 pub(super) fn snap_to(value: f64, grid: f64) -> f64 {

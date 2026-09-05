@@ -350,7 +350,8 @@ nobody reads: *History* — a graph
 of lanes beside the commits, labels on the commits that carry branches and
 tags, a commit opened below with its files and each file's patch; *Changes*
 — the working tree as staged and unstaged lists, a file's diff, the commit
-box; *Stashes*. The rail carries fetch, pull, push and a new branch.
+box; *Stashes*. The branch row's right end carries refresh, fetch, pull, push
+and a new branch.
 
 - **Reads are IPC; writes are dock commands.** The log, a commit, the status,
   the stash list and one path's diff answer with model types and touch
@@ -700,12 +701,24 @@ translation fails a test rather than reaching a screen.
 
 ## UI conventions
 
-**The panel's actions live in the left rail, under the panel switchers** —
-there is no toolbar row. A full-width strip cost forty pixels of height on
-every panel to hold four buttons, and put the thing you press most as far from
-the panel it acts on as the window allows. A panel that registers no actions
-leaves no gap. Toolbar content is authored for a *column*: dividers are
-`h-px w-5`, and nothing in one may be wider than the 46px rail.
+**The rail switches panels and does nothing else.** It once carried the
+active panel's actions under the switchers — save, build, flash, run, debug,
+the debugger's transport, git's fetch/pull/push — and read as one 46px column
+of sixteen icons at one weight, with Run in a different place on every panel
+and the transport pushing it down the column when a session began. Four kinds
+of button, four homes now. The **project's verbs** (Build, Run/Stop, Debug,
+Flash) sit in the title bar beside the project's name (`view/run.rs`), where
+Xcode and CLion put them: one position on every panel, in a row the window
+already spends, and Run switches to the board itself so nothing is far from
+anything. The **debugger's transport** floats over the working area while a
+session is live (`view/transport.rs`) — VS Code's debug toolbar, an overlay so
+its arrival moves nothing, and one copy where there were two. A **panel's own
+actions** sit at the right of the row that names the panel — the Files
+header, Git's branch row, the Crates and Toolchain headings, the board
+sheet's corner — as VS Code's view titles carry theirs. **Save** sits at the
+right of the file header beside the dirty dot, because it acts on the file.
+A full-width toolbar row was tried before the rail and cost forty pixels on
+every panel; the title bar is the row that already exists.
 
 Chrome actions are icon buttons with a `title` tooltip — flat like VSCode's,
 no ring, no fill; colour lands on the glyph (accent Play, crimson Stop). Text

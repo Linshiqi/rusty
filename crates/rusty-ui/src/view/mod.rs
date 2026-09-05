@@ -1,9 +1,12 @@
 //! The shell, and the registry it renders.
 //!
-//! Structure: a VSCode-style activity bar of icons down the left edge, a
-//! unified toolbar, and a status bar carrying the facts you check without
-//! looking away from what you are doing. The labels went when the bar did —
-//! a tooltip names the icon, and the width the labels cost bought nothing.
+//! Structure: a VSCode-style activity bar of icons down the left edge that
+//! only switches panels, the project's verbs in the title bar beside the
+//! project's name (`run.rs`), the debugger's transport floating over the
+//! working area while a session is live (`transport.rs`), and a status bar
+//! carrying the facts you check without looking away from what you are
+//! doing. The labels went when the bar did — a tooltip names the icon, and
+//! the width the labels cost bought nothing.
 //!
 //! The shell knows no panel by name. It renders whatever [`panels::all`]
 //! returns — the commitment in `docs/extensibility.md` that a contributed panel
@@ -20,6 +23,7 @@ pub mod palette;
 pub mod panels;
 pub mod pinmap;
 pub mod plot;
+mod run;
 pub mod settings;
 mod setup;
 pub mod split;
@@ -185,12 +189,15 @@ pub fn App() -> impl IntoView {
             // they cannot cover the title bar. Settings used to: its own Done
             // button ended up underneath the menu bar and the page became a
             // room with no door.
-            // The context actions used to be a strip across the top of the
-            // window. They are in the rail now, under the panel switchers —
-            // see `Sidebar`. A full-width row cost forty pixels of height on
-            // every panel to hold four buttons, and put the thing you press
-            // most (Run) as far from the thing you press next (the panel it
-            // switches to) as the window allows.
+            // The context actions were a strip across the top of the window,
+            // then a column in the rail under the panel switchers. Neither
+            // survived: the strip cost forty pixels on every panel, and the
+            // column mixed four kinds of button — switchers, project verbs, a
+            // debug session's transport and the panel's own actions — at one
+            // weight, with Run in a different place on every panel. Each
+            // kind has its own home now: verbs in the title bar (`run.rs`),
+            // the transport floating below, panel actions in the panel's
+            // header row, and the rail switches panels and nothing else.
             <div class="relative flex min-h-0 flex-1">
 
                 <palette::Palette open=palette_open chrome=chrome />
@@ -224,6 +231,16 @@ pub fn App() -> impl IntoView {
                                         }
                                     })
                             }}
+                        </div>
+                    </div>
+                    // The debugger's transport, floating over the working area
+                    // while a session is live — VS Code's debug toolbar. An
+                    // overlay, so its arrival moves nothing; centred, so it is
+                    // the same reach from the editor and from the board, the
+                    // two places a stopped program sends you.
+                    <div class="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center">
+                        <div class="pointer-events-auto">
+                            <transport::DebugTransport />
                         </div>
                     </div>
                     // The dock sits under the panel rather than under the whole
@@ -443,18 +460,6 @@ fn Sidebar() -> impl IntoView {
                     }
                 })
                 .collect_view()}
-            // The active panel's own actions — save, build, flash, debug,
-            // run — under the switchers rather than in a strip across the
-            // top of the window. Same rail, so the panel and the things you
-            // do to it are one reach apart; and a panel that registers
-            // nothing leaves no gap, exactly as the old row collapsed.
-            {move || {
-                let content = state.layout.toolbar.get()?;
-                Some(view! {
-                    <div class="mx-3 my-2 h-px bg-line" />
-                    <div class="flex flex-col items-center gap-0.5">{content.run(())}</div>
-                })
-            }}
             <div class="mt-auto flex flex-col items-center pt-2">
                 {
                     let SettingsOpen(settings) = expect_context::<SettingsOpen>();
