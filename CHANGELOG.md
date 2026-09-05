@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.0
 
 More of the repository, and two things a fresh machine tripped on.
 
