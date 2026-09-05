@@ -343,7 +343,10 @@ positioned in a coordinate system that is not the document's.
 ## The Git panel
 
 The repository, with Fork as the reference for what it should look like.
-Three views (`state::GitMode`) behind one branch strip: *History* — a graph
+Three views (`state::GitMode`) behind one branch picker — a button naming
+the branch the log is filtered to, opening a menu of them all, because a
+repository with thirty branches is ordinary and thirty chips are a paragraph
+nobody reads: *History* — a graph
 of lanes beside the commits, labels on the commits that carry branches and
 tags, a commit opened below with its files and each file's patch; *Changes*
 — the working tree as staged and unstaged lists, a file's diff, the commit
@@ -362,6 +365,40 @@ box; *Stashes*. The rail carries fetch, pull, push and a new branch.
   Stacked, the diff at a fixed fraction and the commit box at its natural
   height took the space between them, and the file lists — the thing the view
   is for — were three rows tall in a panel two thousand pixels wide.
+- **Every boundary somebody would want to move is a `Divider`.** The log
+  against the opened commit, the message against the files, the files against
+  the patch, the Changes view's two columns: four more variants, each with a
+  default, bounds and a storage key beside the sidebar's and the dock's, so
+  Reset layout and the boot restore hear about them for free. The message's
+  divider sets a *cap* rather than a height — a one-line message never fills
+  it — and `Divider::travel` is the one place that says which way each one
+  grows; a divider added to the enum and not to that match drags sideways.
+  The fifth, where old meets new in a side-by-side diff, is in *permille*
+  of the text width, because half is the right default at every pane width
+  and pixels cannot say "half": `drag_from` carries how many units a pixel
+  of travel is worth (1.0 for the pixel ones), the diff's grip measures the
+  grid on grab to set it, and `split::grab` is the one entry both kinds of
+  handle go through.
+- **A diff is read once, in `rusty_git::diff`, and laid out two ways.** git
+  speaks unified text and nothing else; side by side is a reading of it —
+  removed and added runs paired index for index, the longer run overhanging,
+  `\ No newline at end of file` on the side of the line it is about — and the
+  pure reader is under tests that pin Fork's exact shape. The hunk carries
+  both readings (`rows` and `lines`), because rebuilding git's order from the
+  paired rows puts a note after the additions it preceded. The view only
+  decides what a row looks like; the toggle is remembered.
+- **The right-click menu is local to the thing under the pointer**: a commit
+  offers copy hash, a branch from here, a detached checkout, cherry-pick and
+  revert; a file offers open and copy path. Every write in it is the same
+  dock command a button would run, and the panel's own `contextmenu` handler
+  swallows the browser's menu everywhere else.
+- **Amend fills the box with HEAD's whole message** before anything is typed,
+  because `--amend -m` with only a summary would silently cut an essay down
+  to its first line; an amend with the box empty is `--no-edit`. A stash is a
+  commit, so clicking one opens it below the list through the same `git show
+  -m --first-parent` the History pane uses — that *is* the working tree it
+  holds — and switching views drops the selection, since the pane would
+  otherwise describe something no longer listed.
 - **A commit message is one argument however many lines it has.** The dock's
   line runner splits on whitespace, which would tear a message at its first
   space; `run_args_at_root_then` takes an argument vector and hands it to the
@@ -393,7 +430,10 @@ box; *Stashes*. The rail carries fetch, pull, push and a new branch.
   drawn by the row it leaves and `overflow: visible` lets it reach the row it
   arrives at. A lane a commit *opens* for a second parent has no line arriving
   from above, and the layout must not emit one — it did, and every merge grew
-  a stray tail.
+  a stray tail. The SVG is `relative z-10`, because the next row's hover or
+  selection fill is painted after it and covered the part of the line that
+  had crossed into that row — the graph looked cut at whichever row the
+  pointer was on.
 - **Lane colours are fixed hex, the board sheet's exemption applied again**:
   a commit graph is the same colours in every client that draws one, and a
   lane that changed colour with the theme would read as a different branch.
@@ -681,8 +721,8 @@ usty`) holds `location.toml`
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
 - Theme, divider positions, the editor's text zoom, the interface scale, the
-  pin map's collapsed state and the locale *cache* are localStorage, and that
-  is all that is. They all go through `state::local_get` / `local_set` /
+  pin map's collapsed state, the Git panel's diff layout (one column or side
+  by side) and the locale *cache* are localStorage, and that is all that is. They all go through `state::local_get` / `local_set` /
   `local_take` — one door, so the list above is a grep and not a claim.
   **Audit that claim when you add one** — it had already drifted twice. The
   assistant profile failed the rule (a second window boots the same frontend,

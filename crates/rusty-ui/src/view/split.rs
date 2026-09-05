@@ -18,21 +18,21 @@ pub fn install(state: AppState) {
         let Some(divider) = state.layout.dragging.get_untracked() else {
             return;
         };
-        let (from_pointer, from_size) = state.layout.drag_from.get_untracked();
+        let (from_pointer, from_size, per_px) = state.layout.drag_from.get_untracked();
         let (min, max) = divider.bounds();
         // Delta from where the grab started, not absolute window geometry.
         // "Height is the distance to the bottom of the window" ignored the
         // status bar and the dock's own tab strip — 59 pixels between them —
         // so the divider ran that far from the pointer for the whole drag.
-        let travel = match divider {
-            Divider::Tree | Divider::DebugStack => event.client_x() as f64 - from_pointer,
-            // Anchored to the bottom, so dragging up grows it.
-            Divider::Dock => from_pointer - event.client_y() as f64,
-        };
+        let travel = divider.travel(
+            from_pointer,
+            event.client_x() as f64,
+            event.client_y() as f64,
+        );
         state
             .layout
             .size_signal(divider)
-            .set((from_size + travel).clamp(min, max));
+            .set((from_size + travel * per_px).clamp(min, max));
     });
 
     let up_handle = window_event_listener(ev::mouseup, move |_| {
@@ -51,11 +51,21 @@ pub fn install(state: AppState) {
     std::mem::forget(up_handle);
 }
 
+/// Start a drag: the pointer now, the divider's size now, and how many of
+/// the size's units one pixel of travel is worth (1.0 for a divider sized
+/// in pixels). Every handle calls this — the one below and the diff's own
+/// centre line — and the window listeners do the rest.
+pub fn grab(state: AppState, divider: Divider, pointer: f64, per_px: f64) {
+    let size = state.layout.size_signal(divider).get_untracked();
+    state.layout.drag_from.set((pointer, size, per_px));
+    state.layout.dragging.set(Some(divider));
+}
+
 /// The grab strip between two regions.
 #[component]
 pub fn Handle(divider: Divider) -> impl IntoView {
     let state = AppState::expect();
-    let vertical = matches!(divider, Divider::Tree | Divider::DebugStack);
+    let vertical = divider.vertical();
 
     let geometry = if vertical {
         "w-px cursor-col-resize before:-left-[3px] before:top-0 before:h-full before:w-[7px]"
@@ -76,9 +86,7 @@ pub fn Handle(divider: Divider) -> impl IntoView {
                 } else {
                     event.client_y() as f64
                 };
-                let size = state.layout.size_signal(divider).get_untracked();
-                state.layout.drag_from.set((pointer, size));
-                state.layout.dragging.set(Some(divider));
+                grab(state, divider, pointer, 1.0);
             }
             class=move || {
                 let active = state.layout.dragging.get() == Some(divider);

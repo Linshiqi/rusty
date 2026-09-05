@@ -43,6 +43,10 @@ pub enum Icon {
     Pull,
     Push,
     Fetch,
+    /// Three lines: a diff read as one column.
+    Rows,
+    /// A box split down the middle: a diff read side by side.
+    Columns,
 }
 
 impl Icon {
@@ -114,6 +118,8 @@ impl Icon {
             Icon::Pull => "M10 4v9.5M6.5 10l3.5 3.5 3.5-3.5M4.5 16.5h11",
             Icon::Push => "M10 16V6.5M6.5 10 10 6.5 13.5 10M4.5 3.5h11",
             Icon::Fetch => "M10 4v9M7 10l3 3 3-3M4.5 4v12M15.5 4v12",
+            Icon::Rows => "M4 6h12M4 10h12M4 14h12",
+            Icon::Columns => "M4 4.5h12v11H4zM10 4.5v11",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

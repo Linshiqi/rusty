@@ -21,7 +21,7 @@ use rusty_git::{Branch, CommitDetail, History, Stash, Status};
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::AppState,
+    state::{AppState, remember_split},
 };
 
 /// The log for the chosen branch, or for every branch.
@@ -36,9 +36,11 @@ pub fn load_history(state: AppState) {
     #[derive(serde::Serialize)]
     struct Args {
         rev: Option<String>,
+        limit: usize,
     }
     let args = Args {
         rev: state.git.rev.get_untracked(),
+        limit: state.git.limit.get_untracked(),
     };
     spawn_local(async move {
         match ipc::call::<_, History>(cmd::git::HISTORY, &args).await {
@@ -117,6 +119,20 @@ pub fn load_git(state: AppState) {
 pub fn show_rev(state: AppState, rev: Option<String>) {
     state.git.rev.set(rev);
     load_history(state);
+}
+
+/// Ask for older commits: twice as many as now. The backend caps it.
+pub fn show_more(state: AppState) {
+    let limit = state.git.limit.get_untracked();
+    state.git.limit.set((limit * 2).min(10_000));
+    load_history(state);
+}
+
+/// Side by side or one column, for every diff the panel shows — and
+/// remembered, so the choice outlives the window.
+pub fn set_split(state: AppState, on: bool) {
+    state.git.split.set(on);
+    remember_split(on);
 }
 
 /// Open a commit: its message, its files, their patches.
@@ -208,24 +224,93 @@ fn after_git(state: AppState) {
     refresh_tree(state);
 }
 
-/// Commit what is staged, with the message being written. The message is
-/// one argument however many lines it has — through the argument-vector
-/// runner, never the line splitter.
+/// Commit what is staged, with the message being written — or amend the
+/// last commit with it. The message is one argument however many lines it
+/// has: through the argument-vector runner, never the line splitter.
+///
+/// Only an amend may go without a message; it then keeps the one it has
+/// (`--no-edit`) rather than opening an editor nobody can see.
 pub fn commit(state: AppState) {
     let message = state.git.message.get_untracked();
+    let amend = state.git.amend.get_untracked();
+    let mut args = vec!["commit".to_string()];
+    if amend {
+        args.push("--amend".to_string());
+    }
     if message.trim().is_empty() {
+        if !amend {
+            return;
+        }
+        args.push("--no-edit".to_string());
+    } else {
+        args.push("-m".to_string());
+        args.push(message);
+    }
+    run_args_at_root_then(state, "git", args, move |code| {
+        if code == Some(0) {
+            state.git.message.set(String::new());
+            state.git.amend.set(false);
+        }
+        after_git(state);
+    });
+}
+
+/// Turn amending on or off. Turning it on over an empty box fills the box
+/// with HEAD's whole message — the one the amend replaces — because `-m`
+/// with only a summary typed would silently cut an essay down to its first
+/// line. A message already being written is left alone.
+pub fn amend_toggle(state: AppState, on: bool) {
+    state.git.amend.set(on);
+    if !on || !state.git.message.with_untracked(|m| m.trim().is_empty()) {
         return;
     }
+    #[derive(serde::Serialize)]
+    struct Args {
+        id: String,
+    }
+    let args = Args { id: "HEAD".into() };
+    track(
+        state,
+        async move { ipc::call::<_, CommitDetail>(cmd::git::COMMIT, &args).await },
+        move |detail| {
+            // Still amending, and nothing typed meanwhile.
+            if state.git.amend.get_untracked()
+                && state.git.message.with_untracked(|m| m.trim().is_empty())
+            {
+                state.git.message.set(detail.body);
+            }
+        },
+    );
+}
+
+/// Check a commit out by hash — a detached HEAD, said so in the dock.
+pub fn checkout_commit(state: AppState, id: String) {
     run_args_at_root_then(
         state,
         "git",
-        vec!["commit".to_string(), "-m".to_string(), message],
-        move |code| {
-            if code == Some(0) {
-                state.git.message.set(String::new());
-            }
-            after_git(state);
-        },
+        vec!["checkout".to_string(), "--detach".to_string(), id],
+        move |_| after_git(state),
+    );
+}
+
+/// Apply one commit's change on top of the current branch.
+pub fn cherry_pick(state: AppState, id: String) {
+    run_args_at_root_then(
+        state,
+        "git",
+        vec!["cherry-pick".to_string(), id],
+        move |_| after_git(state),
+    );
+}
+
+/// A new commit undoing an old one. `--no-edit` takes git's own message —
+/// an editor would open on a terminal nobody is watching.
+pub fn revert_commit(state: AppState, id: String) {
+    run_args_at_root_then(
+        state,
+        "git",
+        vec!["revert".to_string(), "--no-edit".to_string(), id],
+        move |_| after_git(state),
     );
 }
 
@@ -271,7 +356,13 @@ fn stash_command(state: AppState, verb: &'static str, index: u32) {
             verb.to_string(),
             format!("stash@{{{index}}}"),
         ],
-        move |_| after_git(state),
+        move |_| {
+            // A popped or dropped stash may be the one opened below the
+            // list, and `stash@{0}` now names a different one — or nothing.
+            state.git.selected.set(None);
+            state.git.detail.set(None);
+            after_git(state);
+        },
     );
 }
 
@@ -299,6 +390,7 @@ pub fn branch_create(state: AppState, name: String, from: Option<String>) {
         args.push(from);
     }
     state.git.new_branch.set(None);
+    state.git.branch_from.set(None);
     run_args_at_root_then(state, "git", args, move |_| {
         state.git.rev.set(None);
         after_git(state);

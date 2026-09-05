@@ -19,12 +19,20 @@ use crate::{
 
 type Answer<T> = Result<T, CommandError>;
 
-/// The log for `rev`, or every branch when `rev` is `None`, laid out.
+/// The log for `rev`, or every branch when `rev` is `None`, laid out. The
+/// newest `limit` commits — the panel's default, doubled each time the user
+/// asks for older ones, and capped here so a runaway caller cannot ask for a
+/// hundred thousand rows of SVG.
 #[tauri::command]
-pub async fn git_history(rev: Option<String>, state: State<'_, AppState>) -> Answer<History> {
+pub async fn git_history(
+    rev: Option<String>,
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Answer<History> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let limit = limit.unwrap_or(rusty_git::repo::LIMIT).clamp(1, 10_000);
     Ok(blocking("git log", move || {
-        rusty_git::repo::history(&root, rev.as_deref(), rusty_git::repo::LIMIT)
+        rusty_git::repo::history(&root, rev.as_deref(), limit)
     })
     .await??)
 }

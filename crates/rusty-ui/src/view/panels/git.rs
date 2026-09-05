@@ -5,8 +5,9 @@
 //! opened below with its files and each file's patch. **Changes**: the working
 //! tree in two lists — what the next commit would carry and what it would not
 //! — each file's diff, and the commit box. **Stashes**: what has been put
-//! aside, with the three things one can do to a stash. The rail carries
-//! fetch, pull, push and a new branch.
+//! aside, with the three things one can do to a stash and, opened below, what
+//! each one holds. The rail carries fetch, pull, push and a new branch; a
+//! right-click on a commit or a file offers what is local to it.
 //!
 //! Every write is a dock command (see `controller::git`), so the exact `git`
 //! line and its answer are readable. Only staging is quiet.
@@ -18,21 +19,37 @@
 //! `overflow: visible` — because each row knows only where its lines go,
 //! and the row beneath draws none of the line arriving at it.
 //!
+//! **A diff is read once and laid out two ways.** `rusty_git::diff` turns
+//! git's unified text into numbered rows — side by side, or one column in
+//! git's own order — and this file only decides what a row looks like. The
+//! toggle between the two is remembered.
+//!
+//! **Every boundary somebody would want to move, moves.** The log against
+//! the opened commit, the message against the files, the files against the
+//! patch, and the Changes view's two columns are `split::Handle`s over
+//! `Divider`s, remembered like the sidebar's and the dock's.
+//!
 //! The lane colours are fixed hex, like the board sheet's: a commit graph is
 //! the same colours in every editor that draws one, and a lane that changed
 //! colour with the theme would look like a different branch.
 
 use leptos::{ev, prelude::*};
+use wasm_bindgen::JsCast;
 
-use rusty_git::{ChangeKind, GraphRow, RefKind, StatusEntry};
+use rusty_git::diff::{Cell, CellKind, Hunk};
+use rusty_git::{Branch, ChangeKind, GraphRow, RefKind, StatusEntry};
 
 use rusty_i18n::t;
 
 use crate::view::icon::{Icon, IconView};
+use crate::view::split;
 use crate::{
     controller, format,
-    state::{AppState, GitMode},
-    view::components::{Button, ButtonKind, Empty, Pill, Tone, register_toolbar},
+    state::{AppState, Divider, GitMenu, GitMode, GitTarget},
+    view::components::{
+        Button, ButtonKind, ContextMenu, Empty, MenuItem, MenuSeparator, Pill, Tone,
+        copy_to_clipboard, register_toolbar,
+    },
 };
 
 /// Fork's palette, near enough: distinct at 2px, legible on both themes.
@@ -71,6 +88,7 @@ pub fn GitPanel() -> impl IntoView {
                 <IconView icon=Icon::Push size=15 />
             </button>
             {rail_button(t!("git.new-branch"), Icon::Plus, move |_| {
+                state.git.branch_from.set(None);
                 state.git.new_branch.set(Some(String::new()));
             })}
         }
@@ -94,6 +112,9 @@ pub fn GitPanel() -> impl IntoView {
             state.git.diff.set(None);
             state.git.diff_for.set(None);
             state.git.new_branch.set(None);
+            state.git.branch_from.set(None);
+            state.git.amend.set(false);
+            state.git.menu.set(None);
             if root.is_some() {
                 controller::load_git(state);
             }
@@ -112,15 +133,21 @@ pub fn GitPanel() -> impl IntoView {
             return view! { <Empty title=t!("git.unavailable-title") detail=why /> }.into_any();
         }
         view! {
-            <div class="flex min-h-0 flex-1 flex-col">
+            // The browser's own menu is never the answer here: rows offer
+            // theirs, and everywhere else a right-click does nothing.
+            <div
+                class="flex min-h-0 flex-1 flex-col"
+                on:contextmenu=move |event: ev::MouseEvent| event.prevent_default()
+            >
                 <Branches />
                 <Modes />
                 {move || match state.git.mode.get() {
                     GitMode::History => view! { <Log /> <Detail /> }.into_any(),
                     GitMode::Changes => view! { <Changes /> }.into_any(),
-                    GitMode::Stashes => view! { <Stashes /> }.into_any(),
+                    GitMode::Stashes => view! { <Stashes /> <Detail /> }.into_any(),
                 }}
             </div>
+            <GitContextMenu />
         }
         .into_any()
     }
@@ -147,50 +174,71 @@ fn rail_button(title: String, icon: Icon, on_click: impl Fn(ev::MouseEvent) + 's
 #[component]
 fn Branches() -> impl IntoView {
     let state = AppState::expect();
+    // Where the branch menu opens while it is open: just under the picker.
+    let picker = RwSignal::new(None::<(f64, f64)>);
+    // One row of the menu. Copy, because the local and the remote list both
+    // map through it.
+    let item = move |branch: Branch| {
+        let name = branch.name.clone();
+        let label = if branch.current {
+            format!("● {}", branch.name)
+        } else {
+            branch.name.clone()
+        };
+        let tip: String = branch.tip.chars().take(7).collect();
+        view! {
+            <MenuItem
+                label=label
+                shortcut=tip
+                on_select=Callback::new(move |_| {
+                    controller::show_rev(state, Some(name.clone()));
+                    picker.set(None);
+                })
+            />
+        }
+    };
     view! {
         <div class="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-2">
-            {move || {
-                let all_on = state.git.rev.get().is_none();
-                view! {
-                    <button
-                        type="button"
-                        on:click=move |_| controller::show_rev(state, None)
-                        class=chip_class(all_on, false)
-                    >
-                        {t!("git.all")}
-                    </button>
+            // A picker, not a row of chips: a repository with thirty branches
+            // is ordinary, and thirty chips are a paragraph nobody reads.
+            <button
+                type="button"
+                title=t!("git.pick-branch")
+                class="flex h-[26px] items-center gap-1.5 rounded-full bg-sunken px-2.5 font-mono text-footnote text-label ring-1 ring-line hover:ring-line-strong"
+                on:click=move |event: ev::MouseEvent| {
+                    let under = event
+                        .current_target()
+                        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                        .map(|el| {
+                            let rect = el.get_bounding_client_rect();
+                            (rect.left(), rect.bottom() + 4.0)
+                        })
+                        .unwrap_or((f64::from(event.client_x()), f64::from(event.client_y())));
+                    picker.set(Some(under));
                 }
-            }}
+            >
+                <IconView icon=Icon::Branch size=13 />
+                <span>{move || state.git.rev.get().unwrap_or_else(|| t!("git.all"))}</span>
+                <IconView icon=Icon::Chevron size=11 />
+            </button>
             {move || {
-                let rev = state.git.rev.get();
-                state
-                    .git.branches
-                    .get()
-                    .into_iter()
-                    .map(|branch| {
-                        let selected = rev.as_deref() == Some(branch.name.as_str());
-                        let name = branch.name.clone();
-                        let pick = name.clone();
-                        let title = if branch.current {
-                            t!("git.current")
-                        } else {
-                            branch.tip.clone()
-                        };
-                        let class = chip_class(selected, branch.remote);
-                        let current = branch.current;
-                        view! {
-                            <button
-                                type="button"
-                                title=title
-                                on:click=move |_| controller::show_rev(state, Some(pick.clone()))
-                                class=class
-                            >
-                                {current.then(|| view! { <span class="mr-1 text-patina">"●"</span> })}
-                                {name}
-                            </button>
-                        }
-                    })
-                    .collect_view()
+                // Where HEAD is, when the log is not filtered to it: the
+                // picker says what is shown, this says what is checked out.
+                let head = state
+                    .git
+                    .branches
+                    .with(|list| list.iter().find(|b| b.current).map(|b| b.name.clone()))?;
+                (state.git.rev.get().as_deref() != Some(head.as_str())).then(|| {
+                    view! {
+                        <span
+                            class="flex items-center gap-1 font-mono text-footnote text-label-3"
+                            title=t!("git.current")
+                        >
+                            <span class="text-patina">"●"</span>
+                            {head}
+                        </span>
+                    }
+                })
             }}
             {move || {
                 // Checkout and delete, for the selected branch when it is local
@@ -218,11 +266,18 @@ fn Branches() -> impl IntoView {
             }}
             {move || {
                 let draft = state.git.new_branch.get()?;
+                // From the commit the field was opened on, else the branch
+                // selected in the strip, else HEAD.
+                let from = state.git.branch_from.get();
+                let placeholder = match &from {
+                    Some(id) => id.chars().take(7).collect::<String>(),
+                    None => t!("git.new-branch-placeholder"),
+                };
                 Some(view! {
                     <input
                         type="text"
                         autofocus
-                        placeholder=t!("git.new-branch-placeholder")
+                        placeholder=placeholder
                         prop:value=draft
                         class="h-[26px] w-[26rem] max-w-full rounded-full bg-sunken px-3 font-mono text-footnote outline-none ring-1 ring-rust placeholder:text-label-3"
                         on:input=move |event| {
@@ -231,34 +286,55 @@ fn Branches() -> impl IntoView {
                         on:keydown=move |event: ev::KeyboardEvent| {
                             if event.key() == "Enter" {
                                 let name = state.git.new_branch.get_untracked().unwrap_or_default();
-                                controller::branch_create(state, name, state.git.rev.get_untracked());
+                                let from = state
+                                    .git
+                                    .branch_from
+                                    .get_untracked()
+                                    .or_else(|| state.git.rev.get_untracked());
+                                controller::branch_create(state, name, from);
                             } else if event.key() == "Escape" {
                                 state.git.new_branch.set(None);
+                                state.git.branch_from.set(None);
                             }
                         }
                     />
                 })
             }}
         </div>
-    }
-}
-
-fn chip_class(selected: bool, remote: bool) -> String {
-    let base = "rounded-full px-2 py-0.5 font-mono text-footnote transition-colors";
-    let ink = if remote {
-        "text-label-4"
-    } else {
-        "text-label-2"
-    };
-    if selected {
-        format!("{base} {ink} bg-sunken ring-1 ring-rust")
-    } else {
-        format!("{base} {ink} ring-1 ring-line hover:bg-sunken hover:text-label")
+        {move || {
+            let (x, y) = picker.get()?;
+            let close = Callback::new(move |_| picker.set(None));
+            let (local, remote): (Vec<Branch>, Vec<Branch>) = state
+                .git
+                .branches
+                .get()
+                .into_iter()
+                .partition(|b| !b.remote);
+            Some(view! {
+                <ContextMenu x=x y=y on_close=close>
+                    <div class="max-h-[60vh] min-w-[16rem] overflow-y-auto">
+                        <MenuItem
+                            label=t!("git.all")
+                            on_select=Callback::new(move |_| {
+                                controller::show_rev(state, None);
+                                picker.set(None);
+                            })
+                        />
+                        <MenuSeparator />
+                        {local.into_iter().map(item).collect_view()}
+                        {(!remote.is_empty()).then(|| view! { <MenuSeparator /> })}
+                        {remote.into_iter().map(item).collect_view()}
+                    </div>
+                </ContextMenu>
+            })
+        }}
     }
 }
 
 /// History, Changes, Stashes — with the counts that say whether the second
-/// two are worth a look.
+/// two are worth a look. Switching drops the opened commit: History and
+/// Stashes share the pane below, and a stash's files under the log — or a
+/// commit's under the stashes — would be about something no longer listed.
 #[component]
 fn Modes() -> impl IntoView {
     let state = AppState::expect();
@@ -267,7 +343,14 @@ fn Modes() -> impl IntoView {
         view! {
             <button
                 type="button"
-                on:click=move |_| state.git.mode.set(mode)
+                on:click=move |_| {
+                    if state.git.mode.get_untracked() != mode {
+                        state.git.selected.set(None);
+                        state.git.detail.set(None);
+                        state.git.file.set(None);
+                        state.git.mode.set(mode);
+                    }
+                }
                 class=move || {
                     if on.get() {
                         "border-b-2 border-rust px-3 py-1.5 text-callout text-label"
@@ -308,7 +391,8 @@ fn Modes() -> impl IntoView {
     }
 }
 
-/// The log: graph, decorations, subject, author, when.
+/// The log: graph, decorations, subject, author, when — and, when there is
+/// more, a way to ask for it.
 #[component]
 fn Log() -> impl IntoView {
     let state = AppState::expect();
@@ -323,6 +407,7 @@ fn Log() -> impl IntoView {
                 };
                 let lanes = history.lanes;
                 let selected = state.git.selected.get();
+                let shown = history.rows.len();
                 view! {
                     <div class="flex flex-col">
                         {history
@@ -337,9 +422,16 @@ fn Log() -> impl IntoView {
                             .truncated
                             .then(|| {
                                 view! {
-                                    <p class="px-4 py-2 text-footnote text-label-4">
-                                        {t!("git.truncated", count = rusty_git::LIMIT)}
-                                    </p>
+                                    <div class="flex items-center gap-3 px-4 py-2 text-footnote text-label-4">
+                                        <span>{t!("git.truncated", count = shown)}</span>
+                                        <button
+                                            type="button"
+                                            class="text-rust hover:underline"
+                                            on:click=move |_| controller::show_more(state)
+                                        >
+                                            {t!("git.show-more")}
+                                        </button>
+                                    </div>
                                 }
                             })}
                     </div>
@@ -354,6 +446,7 @@ fn Log() -> impl IntoView {
 fn Row(row: GraphRow, lanes: u32, picked: bool) -> impl IntoView {
     let state = AppState::expect();
     let id = row.commit.id.clone();
+    let menu_id = row.commit.id.clone();
     let class = if picked {
         "flex cursor-pointer items-center gap-2 bg-selection pr-3"
     } else {
@@ -369,6 +462,15 @@ fn Row(row: GraphRow, lanes: u32, picked: bool) -> impl IntoView {
             class=class
             style=format!("height: {ROW_PX}px")
             on:click=move |_| controller::select_commit(state, id.clone())
+            on:contextmenu=move |event: ev::MouseEvent| {
+                event.prevent_default();
+                event.stop_propagation();
+                state.git.menu.set(Some(GitMenu {
+                    x: event.client_x() as f64,
+                    y: event.client_y() as f64,
+                    target: GitTarget::Commit { id: menu_id.clone() },
+                }));
+            }
         >
             {cell}
             <div class="flex min-w-0 flex-1 items-center gap-1.5">
@@ -425,7 +527,10 @@ fn graph_cell(row: &GraphRow, lanes: u32) -> AnyView {
     let dot = colour(row.lane);
     view! {
         <svg
-            class="shrink-0 overflow-visible"
+            // Above the row backgrounds: a row's lines run into the next row,
+            // and that row's hover or selection fill painted over them, so
+            // the graph looked cut at whichever row the pointer was on.
+            class="relative z-10 shrink-0 overflow-visible"
             width=width
             height=ROW_PX
             viewBox=format!("0 0 {width} {ROW_PX}")
@@ -438,32 +543,244 @@ fn graph_cell(row: &GraphRow, lanes: u32) -> AnyView {
     .into_any()
 }
 
-/// A unified diff, coloured by line.
-fn diff_view(text: &str) -> AnyView {
+// ─── diffs ───────────────────────────────────────────────────────────────────
+
+/// One file's difference: a header naming the file and offering the two
+/// layouts, then the rows. Reads the layout signal, so the closure that
+/// calls this re-renders when the toggle is pressed.
+fn diff_pane(state: AppState, path: String, text: &str) -> AnyView {
+    let hunks = rusty_git::diff::hunks(text);
+    let split = state.git.split.get();
+    let body = if hunks.is_empty() {
+        // Nothing to lay out — a binary file, or a file with no hunks. Whatever
+        // git said is shown as it is, muted, rather than an empty pane.
+        view! {
+            <pre class="m-0 px-3 py-2 font-mono text-footnote text-label-4 whitespace-pre-wrap">
+                {text.trim().to_string()}
+            </pre>
+        }
+        .into_any()
+    } else if split {
+        split_rows(state, &hunks)
+    } else {
+        unified_rows(&hunks)
+    };
     view! {
-        <pre class="m-0 min-w-0 flex-1 overflow-auto px-3 py-1 font-mono text-footnote leading-relaxed whitespace-pre select-text">
-            {text
-                .lines()
-                .map(|line| {
-                    let ink = if line.starts_with("+++") || line.starts_with("---") {
-                        "text-label-4"
-                    } else if line.starts_with('+') {
-                        "text-patina"
-                    } else if line.starts_with('-') {
-                        "text-crimson"
-                    } else if line.starts_with("@@") {
-                        "text-slate"
-                    } else if line.starts_with("diff ") || line.starts_with("index ") {
-                        "text-label-4"
-                    } else {
-                        "text-label-2"
-                    };
-                    view! { <span class=ink>{format!("{line}\n")}</span> }
-                })
-                .collect_view()}
-        </pre>
+        <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1">
+                <span class="min-w-0 flex-1 truncate font-mono text-footnote text-label-2 select-text">
+                    {path}
+                </span>
+                {layout_button(state, false, Icon::Rows, t!("git.unified"))}
+                {layout_button(state, true, Icon::Columns, t!("git.split"))}
+            </div>
+            <div class="min-h-0 min-w-0 flex-1 overflow-auto font-mono text-footnote leading-relaxed select-text">
+                {body}
+            </div>
+        </div>
     }
     .into_any()
+}
+
+/// One of the two layout buttons; the one in force is filled.
+fn layout_button(state: AppState, split: bool, icon: Icon, title: String) -> AnyView {
+    let on = state.git.split.get() == split;
+    let class = if on {
+        "grid size-6 place-items-center rounded-[5px] bg-sunken text-label"
+    } else {
+        "grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-sunken hover:text-label"
+    };
+    view! {
+        <button
+            type="button"
+            title=title
+            class=class
+            on:click=move |_| controller::set_split(state, split)
+        >
+            <IconView icon=icon size=13 />
+        </button>
+    }
+    .into_any()
+}
+
+/// Side by side: old on the left, new on the right, each with its numbers.
+/// One grid for the whole file, so the gutters line up across hunks and a
+/// row is one row on both sides however either wraps.
+///
+/// The text columns are `minmax(0, …fr)`, never a bare `1fr`: a `1fr` track
+/// is at least as wide as its longest line, so one long README paragraph
+/// grew the left half to the whole pane and pushed the right half past the
+/// horizontal scrollbar — a side-by-side view that looked exactly like the
+/// one-column view. Long lines wrap instead, as GitHub's split view does,
+/// and because both sides share a grid row they stay aligned when they do.
+///
+/// Where old meets new is a divider (`Divider::GitSplit`), in permille of
+/// the text width. The grip measures the grid on grab so a pixel of travel
+/// becomes the right fraction, and `split::grab` hands the rest to the same
+/// window listeners every other divider uses.
+fn split_rows(state: AppState, hunks: &[Hunk]) -> AnyView {
+    let grid = NodeRef::<leptos::html::Div>::new();
+    let columns = move || {
+        let left = state.layout.git_split.get();
+        format!(
+            "grid-template-columns: 3.5rem minmax(0, {left}fr) 3.5rem minmax(0, {}fr)",
+            1000.0 - left
+        )
+    };
+    let grip_left = move || {
+        format!(
+            "left: calc(3.5rem + (100% - 7rem) * {})",
+            state.layout.git_split.get() / 1000.0
+        )
+    };
+    let grip_class = move || {
+        let base = "pointer-events-auto relative w-px cursor-col-resize transition-colors \
+                    before:absolute before:-left-[3px] before:top-0 before:h-full \
+                    before:w-[7px] before:content-['']";
+        if state.layout.dragging.get() == Some(Divider::GitSplit) {
+            format!("{base} bg-rust")
+        } else {
+            format!("{base} bg-line hover:bg-rust")
+        }
+    };
+    let on_grab = move |event: ev::MouseEvent| {
+        event.prevent_default();
+        // Pixels into permille of the text: the grid less its two gutters,
+        // the first number cell being one gutter's width.
+        let per_px = grid
+            .get_untracked()
+            .map(|el| {
+                let gutter = el
+                    .query_selector("span")
+                    .ok()
+                    .flatten()
+                    .map(|cell| f64::from(cell.client_width()))
+                    .unwrap_or(56.0);
+                let text = (f64::from(el.client_width()) - 2.0 * gutter).max(1.0);
+                1000.0 / text
+            })
+            .unwrap_or(1.0);
+        split::grab(
+            state,
+            Divider::GitSplit,
+            f64::from(event.client_x()),
+            per_px,
+        );
+    };
+    view! {
+        <div class="relative grid" style=columns node_ref=grid>
+            {hunks
+                .iter()
+                .map(|hunk| {
+                    view! {
+                        <div class="col-span-4 bg-sunken px-3 py-0.5 text-slate">{hunk.header.clone()}</div>
+                        {hunk
+                            .rows
+                            .iter()
+                            .map(|row| view! { {side(row.left.as_ref())} {side(row.right.as_ref())} })
+                            .collect_view()}
+                    }
+                })
+                .collect_view()}
+            // Out of the grid's flow: an absolutely positioned child takes no
+            // cell, so the line can run the full height at the split.
+            <div class="pointer-events-none absolute inset-y-0 z-10 flex" style=grip_left>
+                <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    class=grip_class
+                    on:mousedown=on_grab
+                />
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// One side of a two-column row: its number and its text — or two blank
+/// cells where the other side has a line with nothing to face.
+fn side(cell: Option<&Cell>) -> AnyView {
+    let Some(cell) = cell else {
+        return view! {
+            <span class="bg-sunken" />
+            <span class="bg-sunken" />
+        }
+        .into_any();
+    };
+    let tint = tint(cell.kind);
+    let number = cell.number.map(|n| n.to_string()).unwrap_or_default();
+    view! {
+        <span class=format!("px-2 text-right text-label-4 tnum select-none {tint}")>{number}</span>
+        <span class=format!("min-w-0 px-2 break-words whitespace-pre-wrap {tint} {}", ink(cell.kind))>
+            {shown(&cell.text)}
+        </span>
+    }
+    .into_any()
+}
+
+/// One column, in git's own order, with the old and new numbers beside it.
+fn unified_rows(hunks: &[Hunk]) -> AnyView {
+    view! {
+        <div class="grid grid-cols-[3.5rem_3.5rem_minmax(0,1fr)]">
+            {hunks
+                .iter()
+                .map(|hunk| {
+                    view! {
+                        <div class="col-span-3 bg-sunken px-3 py-0.5 text-slate">{hunk.header.clone()}</div>
+                        {hunk
+                            .lines
+                            .iter()
+                            .map(|line| {
+                                let tint = tint(line.kind);
+                                let sign = match line.kind {
+                                    CellKind::Added => "+",
+                                    CellKind::Removed => "-",
+                                    CellKind::Context | CellKind::Note => " ",
+                                };
+                                let old = line.old.map(|n| n.to_string()).unwrap_or_default();
+                                let new = line.new.map(|n| n.to_string()).unwrap_or_default();
+                                view! {
+                                    <span class=format!("px-2 text-right text-label-4 tnum select-none {tint}")>{old}</span>
+                                    <span class=format!("px-2 text-right text-label-4 tnum select-none {tint}")>{new}</span>
+                                    <span class=format!("min-w-0 px-2 break-words whitespace-pre-wrap {tint} {}", ink(line.kind))>
+                                        {format!("{sign} {}", shown(&line.text))}
+                                    </span>
+                                }
+                            })
+                            .collect_view()}
+                    }
+                })
+                .collect_view()}
+        </div>
+    }
+    .into_any()
+}
+
+/// The theme's own tinted fills, so a changed line reads the same way a
+/// changed badge does.
+fn tint(kind: CellKind) -> &'static str {
+    match kind {
+        CellKind::Added => "bg-patina-fill",
+        CellKind::Removed => "bg-crimson-fill",
+        CellKind::Context | CellKind::Note => "",
+    }
+}
+
+fn ink(kind: CellKind) -> &'static str {
+    match kind {
+        CellKind::Note => "text-label-4 italic",
+        CellKind::Added | CellKind::Removed => "text-label",
+        CellKind::Context => "text-label-2",
+    }
+}
+
+/// An empty line still has a height.
+fn shown(text: &str) -> String {
+    if text.is_empty() {
+        " ".to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 /// The letter and colour a change wears in a file list.
@@ -487,7 +804,24 @@ fn change_glyph(
     }
 }
 
-/// The opened commit: message, files, one file's patch.
+/// Open a right-click menu about a path — a file in a commit or in the
+/// working tree.
+fn path_menu(state: AppState, event: &ev::MouseEvent, path: &str) {
+    event.prevent_default();
+    event.stop_propagation();
+    state.git.menu.set(Some(GitMenu {
+        x: event.client_x() as f64,
+        y: event.client_y() as f64,
+        target: GitTarget::Path {
+            path: path.to_string(),
+        },
+    }));
+}
+
+// ─── the opened commit ───────────────────────────────────────────────────────
+
+/// The opened commit (or stash): message, files, one file's patch — under
+/// the log or the stash list, behind a divider, with two more inside.
 #[component]
 fn Detail() -> impl IntoView {
     let state = AppState::expect();
@@ -512,15 +846,28 @@ fn Detail() -> impl IntoView {
             .and_then(|path| files.iter().find(|f| f.path == path))
             .map(|f| f.patch.clone())
             .unwrap_or_default();
+        let diff = match chosen.clone() {
+            Some(path) => diff_pane(state, path, &patch),
+            None => view! {
+                <p class="px-4 py-3 text-footnote text-label-4">{t!("git.pick-change")}</p>
+            }
+            .into_any(),
+        };
         Some(
             view! {
-                // Half the panel at most, and *everything* inside it bounded
-                // and scrolling on its own. A commit message is a paragraph
-                // or two — or, as this project's are, an essay — and a header
-                // that took the message's natural height pushed the pane past
-                // its cap and painted straight over the dock below.
-                <div class="flex h-[48%] min-h-0 shrink-0 flex-col overflow-hidden border-t border-line">
-                    <div class="max-h-[45%] shrink-0 overflow-y-auto border-b border-line px-4 py-2">
+                <split::Handle divider=Divider::GitDetail />
+                // Never more than most of the panel, whatever the divider was
+                // dragged to, and *everything* inside it bounded and scrolling
+                // on its own: a header that took an essay-length message's
+                // natural height once pushed this pane straight over the dock.
+                <div
+                    class="flex max-h-[80%] min-h-0 shrink-0 flex-col overflow-hidden"
+                    style=move || format!("height: {}px", state.layout.git_detail_height.get())
+                >
+                    <div
+                        class="shrink-0 overflow-y-auto px-4 py-2"
+                        style=move || format!("max-height: {}px", state.layout.git_message_height.get())
+                    >
                         <div class="flex items-center gap-2 text-footnote text-label-3">
                             <span class="font-mono text-label-2 select-text">{commit.short.clone()}</span>
                             <span>{commit.author.clone()}</span>
@@ -528,8 +875,12 @@ fn Detail() -> impl IntoView {
                         </div>
                         <p class="mt-1 text-body whitespace-pre-wrap select-text">{detail.body.clone()}</p>
                     </div>
+                    <split::Handle divider=Divider::GitMessage />
                     <div class="flex min-h-0 flex-1">
-                        <div class="w-[38%] shrink-0 overflow-y-auto border-r border-line py-1">
+                        <div
+                            class="shrink-0 overflow-y-auto py-1"
+                            style=move || format!("width: {}px", state.layout.git_files_width.get())
+                        >
                             {if files.is_empty() {
                                 view! {
                                     <p class="px-3 py-1 text-footnote text-label-4">{t!("git.no-files")}</p>
@@ -541,6 +892,8 @@ fn Detail() -> impl IntoView {
                                     .map(|file| {
                                         let path = file.path.clone();
                                         let pick = path.clone();
+                                        let open = path.clone();
+                                        let menu = path.clone();
                                         let on = chosen.as_deref() == Some(path.as_str());
                                         let (glyph, ink) = change_glyph(Some(file.kind), false, false);
                                         let counts = match (file.added, file.removed) {
@@ -557,6 +910,8 @@ fn Detail() -> impl IntoView {
                                                 type="button"
                                                 class=class
                                                 on:click=move |_| state.git.file.set(Some(pick.clone()))
+                                                on:dblclick=move |_| controller::open_file(state, open.clone())
+                                                on:contextmenu=move |event: ev::MouseEvent| path_menu(state, &event, &menu)
                                             >
                                                 <span class=format!("w-3 shrink-0 {ink}")>{glyph}</span>
                                                 <span class="min-w-0 flex-1 truncate text-label-2">{path}</span>
@@ -568,7 +923,8 @@ fn Detail() -> impl IntoView {
                                     .into_any()
                             }}
                         </div>
-                        {diff_view(&patch)}
+                        <split::Handle divider=Divider::GitFiles />
+                        {diff}
                     </div>
                 </div>
             }
@@ -576,6 +932,8 @@ fn Detail() -> impl IntoView {
         )
     }
 }
+
+// ─── the working tree ────────────────────────────────────────────────────────
 
 /// The working tree: staged and not, one file's diff, and the commit box.
 #[component]
@@ -618,7 +976,10 @@ fn Changes() -> impl IntoView {
                 .into_any()
             }}
             <div class="flex min-h-0 flex-1">
-                <div class="flex min-h-0 w-[38%] max-w-[36rem] min-w-[18rem] shrink-0 flex-col border-r border-line">
+                <div
+                    class="flex min-h-0 shrink-0 flex-col"
+                    style=move || format!("width: {}px", state.layout.git_changes_width.get())
+                >
                     <div class="min-h-0 flex-1 overflow-y-auto py-1">
                         {move || {
                             let Some(status) = state.git.status.get() else {
@@ -651,13 +1012,17 @@ fn Changes() -> impl IntoView {
                     </div>
                     <CommitBox />
                 </div>
+                <split::Handle divider=Divider::GitChanges />
                 <div class="flex min-h-0 min-w-0 flex-1">
-                    {move || match state.git.diff.get() {
-                        Some(text) => diff_view(&text),
-                        None => view! {
-                            <p class="px-4 py-3 text-footnote text-label-4">{t!("git.pick-change")}</p>
+                    {move || {
+                        let path = state.git.diff_for.get().map(|(path, _)| path);
+                        match (path, state.git.diff.get()) {
+                            (Some(path), Some(text)) => diff_pane(state, path, &text),
+                            _ => view! {
+                                <p class="px-4 py-3 text-footnote text-label-4">{t!("git.pick-change")}</p>
+                            }
+                                .into_any(),
                         }
-                            .into_any(),
                     }}
                 </div>
             </div>
@@ -712,6 +1077,8 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                 };
                 let path = entry.path.clone();
                 let show = path.clone();
+                let open = path.clone();
+                let menu = path.clone();
                 let toggle = path.clone();
                 let untracked = entry.untracked;
                 let on = chosen.as_ref().is_some_and(|(p, s)| *p == path && *s == staged);
@@ -722,12 +1089,16 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                 };
                 let title = row_title.clone();
                 view! {
-                    <div class=class>
+                    <div
+                        class=class
+                        on:contextmenu=move |event: ev::MouseEvent| path_menu(state, &event, &menu)
+                    >
                         <span class=format!("w-3 shrink-0 {ink}") title=hint>{glyph}</span>
                         <button
                             type="button"
                             class="min-w-0 flex-1 truncate text-left text-label-2"
                             on:click=move |_| controller::load_diff(state, show.clone(), staged, untracked)
+                            on:dblclick=move |_| controller::open_file(state, open.clone())
                         >
                             {path}
                         </button>
@@ -748,7 +1119,7 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
 }
 
 /// The message and the button. Ctrl+Enter commits, as every git client's
-/// message box does.
+/// message box does; a checkbox turns the commit into an amend.
 #[component]
 fn CommitBox() -> impl IntoView {
     let state = AppState::expect();
@@ -759,8 +1130,11 @@ fn CommitBox() -> impl IntoView {
                 .unwrap_or(0)
         })
     });
+    // An amend may go without a message (it keeps the one it has) and
+    // without anything staged (it only rewords); a commit may do neither.
     let blocked = Signal::derive(move || {
-        staged_count.get() == 0 || state.git.message.with(|m| m.trim().is_empty())
+        !state.git.amend.get()
+            && (staged_count.get() == 0 || state.git.message.with(|m| m.trim().is_empty()))
     });
     view! {
         <div class="shrink-0 border-t border-line px-4 py-3">
@@ -778,23 +1152,39 @@ fn CommitBox() -> impl IntoView {
                 }
             />
             <div class="mt-2 flex items-center gap-3">
-                <Button
-                    label=t!("git.commit")
-                    kind=ButtonKind::Primary
-                    disabled=blocked
-                    on_click=Callback::new(move |_| controller::commit(state))
-                />
                 {move || {
-                    (staged_count.get() == 0).then(|| {
-                        view! { <span class="text-footnote text-label-4">{t!("git.nothing-staged")}</span> }
-                    })
+                    let label = if state.git.amend.get() {
+                        t!("git.amend-button")
+                    } else {
+                        t!("git.commit")
+                    };
+                    view! {
+                        <Button
+                            label=label
+                            kind=ButtonKind::Primary
+                            disabled=blocked
+                            on_click=Callback::new(move |_| controller::commit(state))
+                        />
+                    }
                 }}
+                <label class="flex items-center gap-1.5 text-footnote text-label-3 select-none">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || state.git.amend.get()
+                        on:change=move |event| controller::amend_toggle(state, event_target_checked(&event))
+                    />
+                    {t!("git.amend")}
+                </label>
             </div>
         </div>
     }
 }
 
-/// What has been put aside, and the three things one can do to each.
+// ─── stashes ─────────────────────────────────────────────────────────────────
+
+/// What has been put aside, and the three things one can do to each. A
+/// stash clicked opens below like a commit — it is one, and `git show` on
+/// `stash@{n}` against its first parent is exactly the working tree it holds.
 #[component]
 fn Stashes() -> impl IntoView {
     let state = AppState::expect();
@@ -829,28 +1219,45 @@ fn Stashes() -> impl IntoView {
                         }
                         .into_any();
                     }
+                    let selected = state.git.selected.get();
                     stashes
                         .into_iter()
                         .map(|stash| {
                             let when = format::since(stash.time);
+                            let name = format!("stash@{{{}}}", stash.index);
+                            let on = selected.as_deref() == Some(name.as_str());
+                            let class = if on {
+                                "flex cursor-pointer items-center gap-3 bg-selection px-4 py-1.5"
+                            } else {
+                                "flex cursor-pointer items-center gap-3 px-4 py-1.5 hover:bg-sunken"
+                            };
                             let (apply, pop, drop) = (stash.index, stash.index, stash.index);
                             view! {
-                                <div class="flex items-center gap-3 px-4 py-1.5 hover:bg-sunken">
+                                <div
+                                    class=class
+                                    on:click=move |_| controller::select_commit(state, name.clone())
+                                >
                                     <span class="shrink-0 font-mono text-footnote text-label-3">{stash.label}</span>
                                     <span class="min-w-0 flex-1 truncate text-body">{stash.message}</span>
                                     <span class="shrink-0 text-footnote text-label-4">{when}</span>
-                                    <Button
-                                        label=t!("git.apply")
-                                        on_click=Callback::new(move |_| controller::stash_apply(state, apply))
-                                    />
-                                    <Button
-                                        label=t!("git.pop")
-                                        on_click=Callback::new(move |_| controller::stash_pop(state, pop))
-                                    />
-                                    <Button
-                                        label=t!("git.drop")
-                                        on_click=Callback::new(move |_| controller::stash_drop(state, drop))
-                                    />
+                                    // The buttons act on the stash without also opening it.
+                                    <div
+                                        class="flex items-center gap-2"
+                                        on:click=move |event: ev::MouseEvent| event.stop_propagation()
+                                    >
+                                        <Button
+                                            label=t!("git.apply")
+                                            on_click=Callback::new(move |_| controller::stash_apply(state, apply))
+                                        />
+                                        <Button
+                                            label=t!("git.pop")
+                                            on_click=Callback::new(move |_| controller::stash_pop(state, pop))
+                                        />
+                                        <Button
+                                            label=t!("git.drop")
+                                            on_click=Callback::new(move |_| controller::stash_drop(state, drop))
+                                        />
+                                    </div>
                                 </div>
                             }
                         })
@@ -859,5 +1266,91 @@ fn Stashes() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+// ─── the right-click menu ────────────────────────────────────────────────────
+
+/// What a right-click on a commit or a file offers. Local to the thing under
+/// the pointer, as a context menu should be; every write in it is the same
+/// visible dock command a button would run.
+#[component]
+fn GitContextMenu() -> impl IntoView {
+    let state = AppState::expect();
+    move || {
+        let menu = state.git.menu.get()?;
+        let close = Callback::new(move |_| state.git.menu.set(None));
+        let items = match menu.target {
+            GitTarget::Commit { id } => {
+                let (copy, branch, checkout, pick, revert) =
+                    (id.clone(), id.clone(), id.clone(), id.clone(), id);
+                view! {
+                    <MenuItem
+                        label=t!("git.copy-hash")
+                        on_select=Callback::new(move |_| {
+                            copy_to_clipboard(&copy);
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuSeparator />
+                    <MenuItem
+                        label=t!("git.branch-here")
+                        on_select=Callback::new(move |_| {
+                            state.git.branch_from.set(Some(branch.clone()));
+                            state.git.new_branch.set(Some(String::new()));
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuItem
+                        label=t!("git.checkout-commit")
+                        on_select=Callback::new(move |_| {
+                            controller::checkout_commit(state, checkout.clone());
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuSeparator />
+                    <MenuItem
+                        label=t!("git.cherry-pick")
+                        on_select=Callback::new(move |_| {
+                            controller::cherry_pick(state, pick.clone());
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuItem
+                        label=t!("git.revert")
+                        on_select=Callback::new(move |_| {
+                            controller::revert_commit(state, revert.clone());
+                            state.git.menu.set(None);
+                        })
+                    />
+                }
+                .into_any()
+            }
+            GitTarget::Path { path } => {
+                let (open, copy) = (path.clone(), path);
+                view! {
+                    <MenuItem
+                        label=t!("git.open-file")
+                        on_select=Callback::new(move |_| {
+                            controller::open_file(state, open.clone());
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuItem
+                        label=t!("git.copy-path")
+                        on_select=Callback::new(move |_| {
+                            copy_to_clipboard(&copy);
+                            state.git.menu.set(None);
+                        })
+                    />
+                }
+                .into_any()
+            }
+        };
+        Some(view! {
+            <ContextMenu x=menu.x y=menu.y on_close=close>
+                {items}
+            </ContextMenu>
+        })
     }
 }

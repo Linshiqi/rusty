@@ -13,6 +13,7 @@
 //! invocation with a machine-readable format. The user's own git, with the
 //! user's own config, credentials and hooks, is the honest thing to drive.
 
+pub mod diff;
 pub mod graph;
 pub mod model;
 #[cfg(feature = "backend")]

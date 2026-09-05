@@ -9,6 +9,41 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+The Git panel, rounded off from a day of using it beside Fork.
+
+**Diffs side by side.** Every diff the panel shows — a commit's file, a
+working-tree change, what a stash holds — can be read as two columns, old on
+the left and new on the right, or as one column in git's own order; both
+carry line numbers, and the choice is remembered. A file with nothing to lay
+out (a binary) shows what git said instead of an empty pane.
+
+**The boundaries move.** The log against the opened commit, the message
+against its files, the files against the patch, the two columns of the
+Changes view, and the line between old and new in a side-by-side diff are
+draggable dividers, remembered like the sidebar's and the dock's, and reset
+with them by View ▸ Reset layout.
+
+**Right-click.** A commit offers copy hash, a new branch from here, a
+detached checkout, cherry-pick and revert; a file offers open in editor and
+copy path. Double-clicking a file opens it. Every write runs as the same
+visible `git` command a button would.
+
+**Branches are a picker.** One button names the branch the history is
+filtered to and opens a menu of them all — local, then remote, the
+checked-out one marked — in place of a row of chips that a repository with
+thirty branches turned into a paragraph.
+
+**And the rest.** Amend, as a checkbox by the commit button — turning it on
+fills the box with the last commit's whole message, so a reworded summary
+cannot silently lose the paragraphs under it. A stash opens below its list
+when clicked, files and patches like a commit. When the log is cut off at
+its newest four hundred commits, a link asks for older ones. The graph's
+lines no longer look cut at the row under the pointer, and the commit box
+lost the sentence beside its button that said what the disabled button
+already said.
+
 ## v0.5.0
 
 The repository joins the workbench: a Git panel with Fork as the reference,

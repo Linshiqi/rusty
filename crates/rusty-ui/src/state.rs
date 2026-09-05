@@ -279,10 +279,66 @@ pub enum Divider {
     /// which side needs the room depends entirely on what you are looking at,
     /// so neither split can be the right one for everybody.
     DebugStack,
+    /// Between the Git log and the commit opened below it. Vertical drag,
+    /// anchored to the bottom like the dock: up grows the commit.
+    GitDetail,
+    /// The cap on the opened commit's message. Vertical drag anchored to the
+    /// top, so dragging down shows more of an essay-length message; a short
+    /// one never fills the cap, which is why it is a cap and not a height.
+    GitMessage,
+    /// Between the opened commit's files and the chosen file's patch.
+    GitFiles,
+    /// Between the Changes view's file column and its diff.
+    GitChanges,
+    /// The line between old and new in a side-by-side diff. Sized in
+    /// permille of the text width rather than in pixels, because half is
+    /// the right default at every pane width and pixels cannot say "half";
+    /// the handle converts its travel with the width it measures on grab.
+    GitSplit,
 }
 
 impl Divider {
-    pub const ALL: [Divider; 3] = [Divider::Tree, Divider::Dock, Divider::DebugStack];
+    pub const ALL: [Divider; 8] = [
+        Divider::Tree,
+        Divider::Dock,
+        Divider::DebugStack,
+        Divider::GitDetail,
+        Divider::GitMessage,
+        Divider::GitFiles,
+        Divider::GitChanges,
+        Divider::GitSplit,
+    ];
+
+    /// Whether the line is vertical — a column split, dragged left and right.
+    pub fn vertical(self) -> bool {
+        matches!(
+            self,
+            Divider::Tree
+                | Divider::DebugStack
+                | Divider::GitFiles
+                | Divider::GitChanges
+                | Divider::GitSplit
+        )
+    }
+
+    /// How far a drag that started at `from_pointer` has moved the divider
+    /// now that the pointer is at (`x`, `y`) — positive in the direction that
+    /// grows the region the divider sizes. Spelled here, once, because the
+    /// drag listener and the handle must agree on which axis a divider lives
+    /// on, and a divider added to one and not the other drags sideways.
+    pub fn travel(self, from_pointer: f64, x: f64, y: f64) -> f64 {
+        match self {
+            Divider::Tree
+            | Divider::DebugStack
+            | Divider::GitFiles
+            | Divider::GitChanges
+            | Divider::GitSplit => x - from_pointer,
+            // Anchored to the bottom, so dragging up grows it.
+            Divider::Dock | Divider::GitDetail => from_pointer - y,
+            // Anchored to the top, so dragging down grows it.
+            Divider::GitMessage => y - from_pointer,
+        }
+    }
 
     /// Where a divider sits before anyone has dragged it, in pixels.
     ///
@@ -294,6 +350,12 @@ impl Divider {
             Divider::Tree => 240.0,
             Divider::Dock => 196.0,
             Divider::DebugStack => 420.0,
+            Divider::GitDetail => 340.0,
+            Divider::GitMessage => 140.0,
+            Divider::GitFiles => 380.0,
+            Divider::GitChanges => 380.0,
+            // Permille: half and half.
+            Divider::GitSplit => 500.0,
         }
     }
 
@@ -305,6 +367,12 @@ impl Divider {
             Divider::Tree => (160.0, 440.0),
             Divider::Dock => (80.0, 600.0),
             Divider::DebugStack => (140.0, 900.0),
+            Divider::GitDetail => (120.0, 1400.0),
+            Divider::GitMessage => (40.0, 1000.0),
+            Divider::GitFiles => (160.0, 1200.0),
+            Divider::GitChanges => (220.0, 1200.0),
+            // Neither side narrower than a seventh of the text.
+            Divider::GitSplit => (150.0, 850.0),
         }
     }
 
@@ -313,6 +381,11 @@ impl Divider {
             Divider::Tree => "rusty.layout.tree",
             Divider::Dock => "rusty.layout.dock",
             Divider::DebugStack => "rusty.layout.debug",
+            Divider::GitDetail => "rusty.layout.git-detail",
+            Divider::GitMessage => "rusty.layout.git-message",
+            Divider::GitFiles => "rusty.layout.git-files",
+            Divider::GitChanges => "rusty.layout.git-changes",
+            Divider::GitSplit => "rusty.layout.git-split",
         }
     }
 }
@@ -746,6 +819,48 @@ pub struct Git {
     pub stash_note: RwSignal<String>,
     /// The name of a branch being created, while the field is open.
     pub new_branch: RwSignal<Option<String>>,
+    /// What that field creates from when it was opened on a commit rather
+    /// than on the strip: the commit's hash. `None` means the selected
+    /// branch, or HEAD.
+    pub branch_from: RwSignal<Option<String>>,
+    /// Side by side rather than one column, for every diff the panel shows.
+    /// Remembered in this window (localStorage): it is a way of reading, not
+    /// a fact about the project, and re-choosing it every launch is the
+    /// friction that makes a toggle feel broken.
+    pub split: RwSignal<bool>,
+    /// How many commits the log asks for. "Show older commits" doubles it.
+    pub limit: RwSignal<usize>,
+    /// Whether the next commit amends the last one instead.
+    pub amend: RwSignal<bool>,
+    /// The right-click menu while it is open: where, and what it is about.
+    pub menu: RwSignal<Option<GitMenu>>,
+}
+
+/// A right-click in the Git panel: the pointer, and what was under it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GitMenu {
+    pub x: f64,
+    pub y: f64,
+    pub target: GitTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitTarget {
+    /// A commit, by full hash — or a stash by its `stash@{n}` name.
+    Commit { id: String },
+    /// A path in the working tree or in a commit, relative to the root.
+    Path { path: String },
+}
+
+const SPLIT_KEY: &str = "rusty.git.split";
+
+/// Side by side unless this window was told otherwise.
+fn stored_split() -> bool {
+    local_get(SPLIT_KEY).is_none_or(|v| v != "unified")
+}
+
+pub fn remember_split(on: bool) {
+    local_set(SPLIT_KEY, if on { "split" } else { "unified" });
 }
 
 /// The Git panel's three views.
@@ -927,14 +1042,23 @@ pub struct Layout {
     pub dock_height: RwSignal<f64>,
     /// How much of the Debug tab the call stack gets.
     pub debug_width: RwSignal<f64>,
+    /// The Git panel's four splits: the opened commit's height, the cap on
+    /// its message, its file column, and the Changes view's file column.
+    pub git_detail_height: RwSignal<f64>,
+    pub git_message_height: RwSignal<f64>,
+    pub git_files_width: RwSignal<f64>,
+    pub git_changes_width: RwSignal<f64>,
+    /// Where old meets new in a side-by-side diff, in permille of the text.
+    pub git_split: RwSignal<f64>,
     /// Which divider is being dragged, if any. Held centrally so the window
     /// listeners are set up once rather than per handle.
     pub dragging: RwSignal<Option<Divider>>,
-    /// Where the grab started: pointer coordinate and the size at that moment.
-    /// Dragging moves relative to this — absolute window arithmetic has to
-    /// know about every bar between the divider and the window edge, and got
-    /// it wrong by exactly their sum.
-    pub drag_from: RwSignal<(f64, f64)>,
+    /// Where the grab started: pointer coordinate, the size at that moment,
+    /// and how many of the size's units one pixel of travel is worth — 1.0
+    /// for every divider sized in pixels. Dragging moves relative to this —
+    /// absolute window arithmetic has to know about every bar between the
+    /// divider and the window edge, and got it wrong by exactly their sum.
+    pub drag_from: RwSignal<(f64, f64, f64)>,
     /// The bottom dock. Open by default: a build or flash that writes into a
     /// hidden drawer is a build whose failure the user finds out about later.
     pub dock_open: RwSignal<bool>,
@@ -958,6 +1082,11 @@ impl Layout {
             Divider::Tree => self.tree_width,
             Divider::Dock => self.dock_height,
             Divider::DebugStack => self.debug_width,
+            Divider::GitDetail => self.git_detail_height,
+            Divider::GitMessage => self.git_message_height,
+            Divider::GitFiles => self.git_files_width,
+            Divider::GitChanges => self.git_changes_width,
+            Divider::GitSplit => self.git_split,
         }
     }
 }
@@ -1135,6 +1264,11 @@ impl AppState {
                 message: RwSignal::new(String::new()),
                 stash_note: RwSignal::new(String::new()),
                 new_branch: RwSignal::new(None),
+                branch_from: RwSignal::new(None),
+                split: RwSignal::new(stored_split()),
+                limit: RwSignal::new(rusty_git::LIMIT),
+                amend: RwSignal::new(false),
+                menu: RwSignal::new(None),
             },
             search: Search {
                 query: RwSignal::new(String::new()),
@@ -1188,6 +1322,26 @@ impl AppState {
             },
             layout: Layout {
                 tree_width: RwSignal::new(stored_size(Divider::Tree, Divider::Tree.default_size())),
+                git_detail_height: RwSignal::new(stored_size(
+                    Divider::GitDetail,
+                    Divider::GitDetail.default_size(),
+                )),
+                git_message_height: RwSignal::new(stored_size(
+                    Divider::GitMessage,
+                    Divider::GitMessage.default_size(),
+                )),
+                git_files_width: RwSignal::new(stored_size(
+                    Divider::GitFiles,
+                    Divider::GitFiles.default_size(),
+                )),
+                git_changes_width: RwSignal::new(stored_size(
+                    Divider::GitChanges,
+                    Divider::GitChanges.default_size(),
+                )),
+                git_split: RwSignal::new(stored_size(
+                    Divider::GitSplit,
+                    Divider::GitSplit.default_size(),
+                )),
                 dock_height: RwSignal::new(stored_size(
                     Divider::Dock,
                     Divider::Dock.default_size(),
@@ -1197,7 +1351,7 @@ impl AppState {
                     Divider::DebugStack.default_size(),
                 )),
                 dragging: RwSignal::new(None),
-                drag_from: RwSignal::new((0.0, 0.0)),
+                drag_from: RwSignal::new((0.0, 0.0, 1.0)),
                 dock_open: RwSignal::new(true),
                 dock_tab: RwSignal::new(DockTab::Problems),
                 toolbar: RwSignal::new(None),
