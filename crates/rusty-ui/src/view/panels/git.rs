@@ -742,7 +742,10 @@ fn split_rows(state: AppState, hunks: &[Hunk]) -> AnyView {
         );
     };
     view! {
-        <div class="relative grid" style=columns node_ref=grid>
+        // At least the pane's height, so the centre line runs the whole way
+        // down even when the diff is a few rows — a line that stops at the
+        // last row leaves the two halves reading as one pane below it.
+        <div class="relative grid min-h-full" style=columns node_ref=grid>
             {hunks
                 .iter()
                 .map(|hunk| {

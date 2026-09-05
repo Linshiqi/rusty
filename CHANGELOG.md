@@ -9,6 +9,19 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed.**
+
+- Opening a Markdown file with an HTML block in it — a `<figure>` around an
+  image, as a book chapter has — froze the window. The page view's reader
+  never consumed the block's closing event and spun on it for ever, on the
+  thread everything else runs on. Block-level HTML is shown as the markup it
+  is, like inline HTML already was, and the reader now always moves past an
+  event it does not know. A whole real book is under a timed test.
+- The line between old and new in a side-by-side diff runs the full height
+  of the pane, not just as far as the last row.
+
 ## v0.6.1
 
 **Fixed.** An essay-length commit message painted over the files and the

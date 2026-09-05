@@ -1348,6 +1348,18 @@ usty`) holds `location.toml`
   `Origin` header or the socket is refused 403), enable `Runtime`/`Log`, and
   reload — the first exception names the component, and every one after it is
   that one's corpse.
+- **A reader loop that peeks and does not consume must consume *something*
+  on every path, or it is a freeze waiting for the right file.** The
+  Markdown block reader broke on an `End` it was not waiting for — the
+  closer of an HTML block, a construct it did not list — and looped there
+  for ever; the page view runs that reader on every render, on the only
+  thread there is, so opening a chapter with a `<figure>` froze the whole
+  window with no error anywhere. Two defences now: every construct
+  `pulldown-cmark` can emit for the enabled options is handled, *and* the
+  loop eats an event it made no progress on. The second is the one that
+  holds when the first drifts. `RUSTY_MD_CORPUS=<dir>` runs the reader and
+  syntect over a real book under a time bound; without it the test skips and
+  says so.
 - **A `set_timeout` closure outlives the component that made it.** The
   editor's hover grace period reads `hover_gen`/`hover_cell`/`on_card` 300ms
   later; close the tab or switch projects inside that window and those

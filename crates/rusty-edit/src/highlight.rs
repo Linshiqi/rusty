@@ -280,6 +280,37 @@ fn token_for(scope: Scope) -> Option<Token> {
 mod tests {
     use super::*;
 
+    /// A whole real book, when `RUSTY_MD_CORPUS` names its `src/`: every
+    /// chapter highlights in well under a second. Markdown grammars have
+    /// pathological inputs — a long line of pipes, a run of asterisks — and
+    /// a window that opens a chapter and stops answering is what one looks
+    /// like from the outside. Skipped, and said so, without a corpus.
+    #[test]
+    fn a_book_corpus_highlights_in_bounded_time() {
+        let Ok(dir) = std::env::var("RUSTY_MD_CORPUS") else {
+            eprintln!("skipping: RUSTY_MD_CORPUS is not set");
+            return;
+        };
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        for entry in std::fs::read_dir(&dir).expect("the corpus directory") {
+            let path = entry.expect("an entry").path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a readable chapter");
+            let start = std::time::Instant::now();
+            let (out, _, _) = lines(&syntaxes, &path.to_string_lossy(), &text);
+            let took = start.elapsed();
+            eprintln!(
+                "{}: {} lines, {} bytes, {took:?}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                out.len(),
+                text.len()
+            );
+            assert!(took.as_secs() < 2, "{} took {took:?}", path.display());
+        }
+    }
+
     /// A header in a firmware project is C. syntect gives `.h` to
     /// Objective-C, whose grammar colours `struct` and `#define` wrongly —
     /// which reads as a broken highlighter, not as a misfiled grammar.

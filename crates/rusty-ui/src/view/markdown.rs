@@ -100,6 +100,7 @@ fn opens_a_block(event: &Event<'_>) -> bool {
                     | Tag::BlockQuote(_)
                     | Tag::List(_)
                     | Tag::Table(_)
+                    | Tag::HtmlBlock
             )
     )
 }
@@ -124,6 +125,14 @@ fn blocks_until(events: &mut Events<'_>, end: Option<TagEnd>) -> Vec<Node> {
             let text = inlines_while_inside(events);
             if !text.is_empty() {
                 out.push(Node::Para(text));
+            } else {
+                // Nothing was read, so nothing advanced: the event under the
+                // cursor is a closer that is not ours — a block this reader
+                // does not know, ending at the top level where no `end` is
+                // awaited. Left there, this loop spins for ever, and a page
+                // view that spins is a window that stops answering: a book
+                // chapter with a `<figure>` block did exactly that. Eat it.
+                events.next();
             }
             continue;
         }
@@ -168,6 +177,27 @@ fn blocks_until(events: &mut Events<'_>, end: Option<TagEnd>) -> Vec<Node> {
                     events,
                     Some(TagEnd::BlockQuote(None)),
                 )));
+            }
+            // Raw HTML at block level — a `<figure>` in a book chapter — is
+            // shown as the markup it is, like inline HTML is, rather than
+            // injected into this window or dropped. Before this arm existed
+            // the block's closer was never consumed and the reader looped.
+            Event::Start(Tag::HtmlBlock) => {
+                let mut text = String::new();
+                for event in events.by_ref() {
+                    match event {
+                        Event::Html(chunk) | Event::Text(chunk) => text.push_str(&chunk),
+                        Event::End(TagEnd::HtmlBlock) => break,
+                        _ => {}
+                    }
+                }
+                let text = text.trim_end().to_string();
+                if !text.is_empty() {
+                    out.push(Node::Code {
+                        lang: Some("html".to_string()),
+                        text,
+                    });
+                }
             }
             Event::Start(Tag::List(start)) => out.push(list(events, start)),
             Event::Start(Tag::Table(_)) => out.push(table(events)),
@@ -493,6 +523,57 @@ fn span(span: Inline) -> AnyView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shape that froze the window: a book chapter with a `<figure>`
+    /// block between two paragraphs. Its closer was never consumed and the
+    /// block reader looped for ever on it — and the page view runs the reader
+    /// on every render, so the freeze was the whole window's.
+    #[test]
+    fn an_html_block_is_shown_as_markup_and_the_reader_moves_past_it() {
+        let nodes = parse(
+            "Text before.\n\n<figure>\n<img src=\"figures/fig.svg\" alt=\"wiring\">\n\
+             <figcaption>Figure 1</figcaption>\n</figure>\n\nText after.\n",
+        );
+        assert_eq!(nodes.len(), 3, "{nodes:?}");
+        assert_eq!(nodes[0], Node::Para(vec![text("Text before.")]));
+        match &nodes[1] {
+            Node::Code { lang, text } => {
+                assert_eq!(lang.as_deref(), Some("html"));
+                assert!(text.starts_with("<figure>"), "{text}");
+                assert!(text.contains("<figcaption>Figure 1</figcaption>"));
+            }
+            other => panic!("the figure should be shown as markup, got {other:?}"),
+        }
+        assert_eq!(nodes[2], Node::Para(vec![text("Text after.")]));
+    }
+
+    /// A whole real book, when `RUSTY_MD_CORPUS` names its `src/`: every
+    /// chapter parses in well under a second, since the page view runs this
+    /// on the draft at every render. Skipped, and said so, without a corpus.
+    #[test]
+    fn a_book_corpus_parses_in_bounded_time() {
+        let Ok(dir) = std::env::var("RUSTY_MD_CORPUS") else {
+            eprintln!("skipping: RUSTY_MD_CORPUS is not set");
+            return;
+        };
+        for entry in std::fs::read_dir(&dir).expect("the corpus directory") {
+            let path = entry.expect("an entry").path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a readable chapter");
+            let start = std::time::Instant::now();
+            let nodes = parse(&source);
+            let took = start.elapsed();
+            eprintln!(
+                "{}: {} blocks, {} bytes, {took:?}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                nodes.len(),
+                source.len()
+            );
+            assert!(took.as_millis() < 500, "{} took {took:?}", path.display());
+        }
+    }
 
     fn text(s: &str) -> Inline {
         Inline::Text(s.to_string())
