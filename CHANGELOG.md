@@ -9,10 +9,10 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.5.2
 
 Three things a first run on a fresh Windows machine, behind a busy proxy,
-turned up.
+turned up — and one more from a day of reading diffs side by side.
 
 **Downloads resume.** A tool archive that stopped part-way — the RISC-V C
 toolchain is 420 MB, and a slow link through a proxy gets a fixed time per
