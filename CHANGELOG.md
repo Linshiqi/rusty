@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.5.1
 
 The Git panel, rounded off from a day of using it beside Fork.
 

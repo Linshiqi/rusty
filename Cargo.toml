@@ -7,7 +7,7 @@ members = ["crates/rusty-core", "crates/rusty-cli", "crates/rusty-ai", "crates/r
 exclude = ["crates/rusty-core/tests/fixtures"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.88"
 # Not MIT/Apache: this is source you may read, run and change, but not sell.
