@@ -9,6 +9,15 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.1
+
+**Fixed.** An essay-length commit message painted over the files and the
+patch below it. v0.6.0 moved the pane's buttons into a row beside the message
+and, in doing so, capped the row instead of the message: a flex child takes
+its content's height, not the clamped container's, so the text ran past the
+cap. The message block scrolls itself again, with the buttons on its first
+row.
+
 ## v0.6.0
 
 More of the repository, and two things a fresh machine tripped on.

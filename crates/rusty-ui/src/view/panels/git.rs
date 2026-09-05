@@ -985,38 +985,45 @@ fn Detail(#[prop(default = false)] standalone: bool) -> impl IntoView {
                 // The three regions wear three grounds — message, files, patch
                 // — so the eye finds the boundaries without reading for them.
                 <div class=frame style=height>
+                    // The message block scrolls *itself*: it is the element
+                    // the cap is on. A version that capped this box and put the
+                    // scrolling on a child inside a flex row let the child take
+                    // its content height — a flex item's cross size is the
+                    // line's, not the clamped container's — and an essay-length
+                    // message painted straight over the files and the patch
+                    // below. The buttons sit in the first row, so they are at
+                    // hand until the message is scrolled.
                     <div
-                        class="flex shrink-0 items-start gap-2 bg-sunken px-4 py-2"
+                        class="shrink-0 overflow-y-auto bg-sunken px-4 py-2"
                         style=move || format!("max-height: {}px", state.layout.git_message_height.get())
                     >
-                        <div class="min-h-0 min-w-0 flex-1 overflow-y-auto">
-                            <div class="flex items-center gap-2 text-footnote text-label-3">
-                                <span class="font-mono text-label-2 select-text">{commit.short.clone()}</span>
-                                <span>{commit.author.clone()}</span>
-                                <span class="text-label-4">{when}</span>
-                            </div>
-                            <p class="mt-1 text-body whitespace-pre-wrap select-text">{detail.body.clone()}</p>
+                        <div class="flex items-center gap-2 text-footnote text-label-3">
+                            <span class="font-mono text-label-2 select-text">{commit.short.clone()}</span>
+                            <span>{commit.author.clone()}</span>
+                            <span class="text-label-4">{when}</span>
+                            <span class="flex-1" />
+                            {(!standalone).then(|| view! {
+                                <div class="flex shrink-0 items-center gap-0.5">
+                                    <button
+                                        type="button"
+                                        title=t!("git.detail-window")
+                                        class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
+                                        on:click=move |_| controller::open_commit_window(state, target.clone())
+                                    >
+                                        <IconView icon=Icon::External size=13 />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        title=t!("git.detail-hide")
+                                        class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
+                                        on:click=move |_| controller::toggle_detail(state)
+                                    >
+                                        <IconView icon=Icon::Close size=13 />
+                                    </button>
+                                </div>
+                            })}
                         </div>
-                        {(!standalone).then(|| view! {
-                            <div class="flex shrink-0 items-center gap-0.5">
-                                <button
-                                    type="button"
-                                    title=t!("git.detail-window")
-                                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
-                                    on:click=move |_| controller::open_commit_window(state, target.clone())
-                                >
-                                    <IconView icon=Icon::External size=13 />
-                                </button>
-                                <button
-                                    type="button"
-                                    title=t!("git.detail-hide")
-                                    class="grid size-6 place-items-center rounded-[5px] text-label-3 hover:bg-raised hover:text-label"
-                                    on:click=move |_| controller::toggle_detail(state)
-                                >
-                                    <IconView icon=Icon::Close size=13 />
-                                </button>
-                            </div>
-                        })}
+                        <p class="mt-1 text-body whitespace-pre-wrap select-text">{detail.body.clone()}</p>
                     </div>
                     <split::Handle divider=Divider::GitMessage />
                     <div class="flex min-h-0 flex-1">
