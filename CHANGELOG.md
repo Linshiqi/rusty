@@ -9,10 +9,13 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.5.0
 
-**A Git panel, with Fork as the reference.** Three views behind one strip of
-branches.
+The repository joins the workbench: a Git panel with Fork as the reference,
+so the history, the working tree and the branches are read and moved without
+leaving for a second window.
+
+**Three views behind one strip of branches.**
 
 *History* is the log as a graph — lanes for branches, merges bending back in,
 branch and tag labels on the commits that carry them — beside the commit
