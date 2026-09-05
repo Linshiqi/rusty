@@ -545,6 +545,7 @@ move = "Move…"
 move-note = "Moving it copies everything to the new folder and leaves the originals until you delete them. Tools installed by cargo are in ~/.cargo/bin and stay there — that path is cargo's, not rusty's."
 [tool]
 rustup = "Manages Rust toolchains and targets"
+msvc = "The Windows linker (link.exe) — every `cargo install` and every host build needs it"
 espup = "Installs the Xtensa toolchain; only needed for ESP32 / S2 / S3"
 espflash = "Flashes and monitors over USB serial — the usual path with no debug probe"
 probe-rs = "Flashes and debugs through a JTAG/SWD probe, and decodes defmt over RTT"
@@ -788,6 +789,7 @@ espup = "Installs the Xtensa compiler this chip needs. Nothing upstream ships on
 
 [setup.manual]
 rustup = "Rust itself is not installed. Everything else here rides on it, so install rustup first — https://rustup.rs — and rusty can do the rest."
+msvc = "The Windows C++ build tools are not installed, so nothing `cargo install` compiles can be linked. Install Build Tools for Visual Studio with the “Desktop development with C++” workload — https://visualstudio.microsoft.com/visual-cpp-build-tools/ — then rusty can do the rest."
 [simulate]
 planning = "Working out the plan…"
 no-duty = "— no duty reported"

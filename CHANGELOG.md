@@ -11,6 +11,30 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+Three things a first run on a fresh Windows machine, behind a busy proxy,
+turned up.
+
+**Downloads resume.** A tool archive that stopped part-way — the RISC-V C
+toolchain is 420 MB, and a slow link through a proxy gets a fixed time per
+attempt — used to start over from zero on the next route, and the next, and
+never finish. What has arrived now stays on disk, the next attempt asks the
+server for the rest, and a route that was delivering is asked again before
+the ladder moves on.
+
+**`espup install` names its version.** espup's own "latest" lookup asks
+GitHub's API, which refuses unauthenticated calls once the shared address
+behind a proxy has used its hourly quota — a 403 that read as espup being
+broken. The setup and the Toolchain panel now install a pinned Xtensa Rust
+release, fetched from GitHub's release downloads, which have no such quota;
+`espup update` moves a machine forward later.
+
+**The Windows linker is checked first.** An `-msvc` Rust links through
+Visual Studio's `link.exe`, and without the C++ build tools every `cargo
+install` compiled for a minute and died with "linker `link.exe` not found".
+The Toolchain panel and the environment check now look for it the way rustc
+does, and a machine without it is told that one thing — with the link —
+before anything else is offered.
+
 **Fixed.** The hunk header of a side-by-side diff is drawn once on each side,
 as Fork draws it, instead of once across both — the single header crossed
 the line between old and new.

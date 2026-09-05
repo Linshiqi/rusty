@@ -380,10 +380,38 @@ fn codelldb_download_into(tools: &Path) -> Result<ToolDownload> {
     })
 }
 
+/// The Xtensa Rust release `espup install` is asked for by name.
+///
+/// espup's own default is "latest", which it learns from GitHub's API — and
+/// that API refuses unauthenticated calls once the shared address behind a
+/// proxy has spent its sixty an hour, with a 403 that reads as espup being
+/// broken. Seen on a fresh machine on the first run, which is the one run
+/// that has to work. The archives themselves come from github.com's release
+/// downloads, which have no such quota, so a named version installs where
+/// "latest" cannot. Pinned like QEMU and the debuggers are: bumped
+/// deliberately, and `espup update` moves a machine forward on its own.
+pub const XTENSA_RUST_VERSION: &str = "1.97.0.0";
+
+/// How many times a route that was delivering is asked for the rest before
+/// the ladder moves on. A link that dies every few minutes still finishes a
+/// large archive within this; one that dies at once hands over.
+const RESUMES_PER_ROUTE: u32 = 8;
+
 /// Fetch `urls` in order until one delivers, streaming progress through
 /// `progress`. In-process on rustls: the OS TLS stack (schannel) aborts on
 /// some CDNs with "server closed abruptly", and a spawned curl cannot be
 /// relied on to exist unbroken everywhere.
+///
+/// **A download resumes where it stopped.** Every attempt is bounded, and a
+/// slow link through a proxy carries a 400 MB archive only a piece at a
+/// time: the first version restarted from zero on every interruption, so a
+/// route that delivered 180 MB in its fifteen minutes and then hit the
+/// deadline was tried again from the beginning — on every route, for ever,
+/// each round downloading what the last one had. Now the bytes on disk
+/// stay, the next attempt asks for the rest (`Range`), and a route that was
+/// delivering is asked again before the ladder moves on. A server that
+/// answers a range request with the whole file starts the file over, since
+/// appending its answer would corrupt the archive.
 pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) -> Result<()> {
     use std::io::{Read, Write};
     use std::time::Duration;
@@ -397,15 +425,16 @@ pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) 
         // the next one gets its turn — a blackholed route must not hang the
         // panel at "downloading" forever.
         headers: Some(Duration::from_secs(30)),
-        // And nothing runs unbounded: a stalled body eventually dies.
+        // And no single attempt runs unbounded: a stalled body eventually
+        // dies, and what it delivered before stalling is kept.
         total: Duration::from_secs(15 * 60),
     };
     let write_failed = |error: std::io::Error| Error::Write {
         path: dest.display().to_string(),
         source: error,
     };
+    let megabytes = |bytes: u64| bytes as f64 / 1e6;
 
-    let mut last_error = String::new();
     let mut attempts: Vec<(String, Option<String>)> = Vec::new();
     for url in urls {
         for route in &routes {
@@ -413,67 +442,151 @@ pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) 
         }
     }
 
-    for (url, route) in attempts {
-        match &route {
-            Some(proxy) => progress(format!("downloading {url}\n  via {proxy}")),
-            None => progress(format!("downloading {url}\n  direct")),
+    // What a previous run left under this name is not trusted: another
+    // release's archive can share it, and a resumed mix of the two would
+    // unpack into nothing. Within this call, the file only ever grows.
+    std::fs::File::create(dest).map_err(write_failed)?;
+    let mut have: u64 = 0;
+    let mut expected: Option<u64> = None;
+    let mut last_error = String::new();
+    let mut index = 0;
+    let mut resumed_here = 0;
+
+    while let Some((url, route)) = attempts.get(index) {
+        let next_route = |index: &mut usize, resumed_here: &mut u32| {
+            *index += 1;
+            *resumed_here = 0;
+        };
+        if have == 0 {
+            match route {
+                Some(proxy) => progress(format!("downloading {url}\n  via {proxy}")),
+                None => progress(format!("downloading {url}\n  direct")),
+            }
         }
         let agent = net::agent(route.as_deref(), deadlines());
-        let response = match agent.get(&url).call() {
+        let mut request = agent.get(url);
+        if have > 0 {
+            request = request.header("Range", &format!("bytes={have}-"));
+        }
+        let response = match request.call() {
             Ok(response) => response,
+            // Our offset made no sense to this server — the file changed, or
+            // it never supported ranges. Start it over here rather than
+            // carrying the same doomed offset to every route.
+            Err(ureq::Error::StatusCode(416)) if have > 0 => {
+                progress("  the server refused the resume offset — starting over".to_string());
+                std::fs::File::create(dest).map_err(write_failed)?;
+                have = 0;
+                expected = None;
+                continue;
+            }
             Err(error) => {
                 let chain = net::error_chain(&error);
                 last_error = format!("{url}: {chain}");
                 progress(format!("  failed: {chain} — trying the next route"));
+                next_route(&mut index, &mut resumed_here);
                 continue;
             }
         };
-        let total = response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
-        match total {
-            Some(total) => progress(format!("  connected — {:.1} MB", total as f64 / 1e6)),
-            None => progress("  connected".to_string()),
-        }
+
+        let header = |name: &str| -> Option<String> {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        let length = header("content-length").and_then(|v| v.parse::<u64>().ok());
+        let range_total = header("content-range").and_then(|v| content_range_total(&v));
+        let mut file = match continuation(response.status().as_u16(), have, range_total, expected) {
+            Continuation::Append => {
+                progress(format!(
+                    "  resuming at {:.1} MB{}",
+                    megabytes(have),
+                    expected.map_or(String::new(), |t| format!(" of {:.1}", megabytes(t))),
+                ));
+                if expected.is_none() {
+                    expected = range_total;
+                }
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(dest)
+                    .map_err(write_failed)?
+            }
+            Continuation::Restart => {
+                if have > 0 {
+                    progress(
+                        "  the server sent the whole file instead of the rest — starting over"
+                            .to_string(),
+                    );
+                }
+                have = 0;
+                expected = length;
+                match expected {
+                    Some(total) => progress(format!("  connected — {:.1} MB", megabytes(total))),
+                    None => progress("  connected".to_string()),
+                }
+                std::fs::File::create(dest).map_err(write_failed)?
+            }
+            Continuation::Reject(why) => {
+                last_error = format!("{url}: {why}");
+                progress(format!("  {why} — trying the next route"));
+                next_route(&mut index, &mut resumed_here);
+                continue;
+            }
+        };
 
         let mut reader = response.into_body().into_reader();
-        let mut file = std::fs::File::create(dest).map_err(write_failed)?;
         let mut buffer = [0u8; 64 * 1024];
-        let mut done: u64 = 0;
-        let mut last_mark: u64 = 0;
-        let mut interrupted = false;
+        let before = have;
+        let mut last_mark = have;
+        let mut interrupted = None;
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
                     file.write_all(&buffer[..n]).map_err(write_failed)?;
-                    done += n as u64;
-                    if done - last_mark >= 4 * 1024 * 1024 {
-                        last_mark = done;
-                        match total {
+                    have += n as u64;
+                    if have - last_mark >= 4 * 1024 * 1024 {
+                        last_mark = have;
+                        match expected {
                             Some(total) => progress(format!(
                                 "  {:.1} / {:.1} MB",
-                                done as f64 / 1e6,
-                                total as f64 / 1e6,
+                                megabytes(have),
+                                megabytes(total),
                             )),
-                            None => progress(format!("  {:.1} MB", done as f64 / 1e6)),
+                            None => progress(format!("  {:.1} MB", megabytes(have))),
                         }
                     }
                 }
                 Err(error) => {
-                    last_error = format!("{url}: interrupted mid-body: {error}");
-                    progress(format!("  {last_error} — trying the next route"));
-                    interrupted = true;
+                    interrupted = Some(error.to_string());
                     break;
                 }
             }
         }
-        let complete = !interrupted && done > 0 && total.is_none_or(|total| done == total);
+        drop(file);
+
+        let complete =
+            interrupted.is_none() && have > 0 && expected.is_none_or(|total| have == total);
         if complete {
-            progress(format!("  done, {:.1} MB", done as f64 / 1e6));
+            progress(format!("  done, {:.1} MB", megabytes(have)));
             return Ok(());
+        }
+
+        let reason = interrupted.unwrap_or_else(|| "the connection closed early".to_string());
+        last_error = format!("{url}: interrupted mid-body: {reason}");
+        // A route that delivered something is asked for the rest — the
+        // ladder exists for routes that deliver nothing.
+        if have > before && expected.is_some() && resumed_here < RESUMES_PER_ROUTE {
+            resumed_here += 1;
+            progress(format!(
+                "  {last_error} — {:.1} MB kept, asking the same route for the rest",
+                megabytes(have),
+            ));
+        } else {
+            progress(format!("  {last_error} — trying the next route"));
+            next_route(&mut index, &mut resumed_here);
         }
     }
     Err(Error::Download {
@@ -481,9 +594,97 @@ pub fn download(urls: &[String], dest: &Path, mut progress: impl FnMut(String)) 
     })
 }
 
+/// What a response means for the bytes already on disk.
+#[derive(Debug, PartialEq, Eq)]
+enum Continuation {
+    /// `206` continuing the same file: write on after what is there.
+    Append,
+    /// A whole body, or a partial one for a file we know nothing about yet:
+    /// start the file over with it.
+    Restart,
+    /// Not a body worth writing.
+    Reject(String),
+}
+
+/// Decide from the status line and `Content-Range` whether a response can be
+/// appended to `have` bytes of a file expected to be `expected` long. Pure,
+/// so the cases a server can put us in are tests rather than surprises.
+fn continuation(
+    status: u16,
+    have: u64,
+    range_total: Option<u64>,
+    expected: Option<u64>,
+) -> Continuation {
+    match status {
+        206 if have > 0 => match (range_total, expected) {
+            // Continuing — but a different file than the one begun.
+            (Some(total), Some(known)) if total != known => Continuation::Restart,
+            _ => Continuation::Append,
+        },
+        // A partial answer to a request for the whole thing, or a whole
+        // answer to a request for the rest: either way what arrives is the
+        // file from its start.
+        200 | 206 => Continuation::Restart,
+        other if (200..300).contains(&other) => Continuation::Restart,
+        other => Continuation::Reject(format!("HTTP {other}")),
+    }
+}
+
+/// The complete length out of `Content-Range: bytes 200-999/1000`; `None`
+/// when the server does not know it (`/*`).
+fn content_range_total(header: &str) -> Option<u64> {
+    header
+        .trim()
+        .strip_prefix("bytes")
+        .and_then(|rest| rest.rsplit_once('/'))
+        .and_then(|(_, total)| total.trim().parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_partial_answer_continues_the_file_and_a_whole_one_starts_it_over() {
+        // The server continues the same file: append.
+        assert_eq!(
+            continuation(206, 1_000, Some(5_000), Some(5_000)),
+            Continuation::Append
+        );
+        // It continues, but says the file is a different length: start over.
+        assert_eq!(
+            continuation(206, 1_000, Some(6_000), Some(5_000)),
+            Continuation::Restart
+        );
+        // It ignored the range and sent everything: appending that would
+        // corrupt the archive.
+        assert_eq!(
+            continuation(200, 1_000, None, Some(5_000)),
+            Continuation::Restart
+        );
+        // Nothing on disk yet: any body is the file from its start.
+        assert_eq!(continuation(200, 0, None, None), Continuation::Restart);
+        assert_eq!(
+            continuation(206, 0, Some(5_000), None),
+            Continuation::Restart
+        );
+        assert_eq!(
+            continuation(304, 1_000, None, Some(5_000)),
+            Continuation::Reject("HTTP 304".into())
+        );
+    }
+
+    #[test]
+    fn the_content_range_total_is_read_and_an_unknown_one_is_none() {
+        assert_eq!(content_range_total("bytes 200-999/1000"), Some(1000));
+        assert_eq!(
+            content_range_total(" bytes 0-0/421600000 "),
+            Some(421_600_000)
+        );
+        assert_eq!(content_range_total("bytes */1000"), Some(1000));
+        assert_eq!(content_range_total("bytes 200-999/*"), None);
+        assert_eq!(content_range_total("garbage"), None);
+    }
 
     #[test]
     fn every_asset_is_offered_by_github_and_the_mirror() {

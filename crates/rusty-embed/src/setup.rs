@@ -82,18 +82,51 @@ pub fn plan(report: &ToolchainReport) -> Vec<SetupStep> {
         }];
     }
 
+    // Then the linker, alone, for the same reason: an `-msvc` rustc links
+    // through Visual Studio's, and without the C++ build tools every `cargo
+    // install` below compiles for a minute and dies with "linker `link.exe`
+    // not found" — on the first run, on the machine of somebody who has just
+    // installed Rust and has no idea what a linker is. The row exists only on
+    // hosts where it applies, so this arm is never reached elsewhere.
+    if let Some(missing) = missing_tool(&report.status, "msvc") {
+        return vec![SetupStep {
+            tool: "msvc".to_string(),
+            purpose: missing.purpose.clone(),
+            command: String::new(),
+            destination: Destination::Manual,
+            slow: false,
+            manual: Some(
+                "The Windows C++ build tools are not installed, so nothing `cargo install` \
+                 compiles can be linked. Install Build Tools for Visual Studio with the \
+                 \"Desktop development with C++\" workload — \
+                 https://visualstudio.microsoft.com/visual-cpp-build-tools/ — then rusty \
+                 can do the rest."
+                    .to_string(),
+            ),
+        }];
+    }
+
     let mut steps = Vec::new();
 
     // The Xtensa toolchain before the target it provides: `rustup target add
     // xtensa-…` against a machine with no `esp` toolchain fails, and fails
     // with a message about an unknown target rather than a missing espup.
+    // The command is the recipe table's, read off espup's own row, so the
+    // pinned toolchain version is spelled in one place.
     if report.needs_esp_toolchain && !report.status.has_esp_toolchain {
+        let command = report
+            .status
+            .tools
+            .iter()
+            .find(|t| t.name == "espup")
+            .map(|t| t.install_command.clone())
+            .unwrap_or_else(|| "cargo install espup --locked && espup install".to_string());
         steps.push(SetupStep {
             tool: "espup".to_string(),
             purpose: "Installs the Xtensa compiler this chip needs. Nothing \
                       upstream ships one — a stock rustc cannot emit Xtensa at all."
                 .to_string(),
-            command: "cargo install espup --locked && espup install".to_string(),
+            command,
             destination: Destination::RustupHome,
             // A gigabyte-class download. Saying so beforehand is the
             // difference between "slow" and "broken".
@@ -265,6 +298,43 @@ mod tests {
                 .is_some_and(|m| m.contains("rustup.rs"))
         );
         assert!(blocked(&r));
+    }
+
+    /// An `-msvc` host without the C++ build tools can install nothing:
+    /// every `cargo install` compiles and then fails to link. So, like a
+    /// missing rustup, it is the one item — and a link rather than a button.
+    #[test]
+    fn a_machine_without_the_linker_is_told_that_first() {
+        let r = report(vec![
+            tool("rustup", true, true),
+            tool("msvc", false, true),
+            tool("espflash", false, true),
+        ]);
+        let steps = plan(&r);
+        assert_eq!(steps.len(), 1, "{steps:?}");
+        assert_eq!(steps[0].tool, "msvc");
+        assert_eq!(steps[0].destination, Destination::Manual);
+        assert!(
+            steps[0]
+                .manual
+                .as_ref()
+                .is_some_and(|m| m.contains("visual-cpp-build-tools"))
+        );
+        assert!(blocked(&r));
+    }
+
+    /// The espup step runs what the recipe table says, pinned version and
+    /// all — spelled once, on espup's own row.
+    #[test]
+    fn the_espup_step_takes_its_command_from_the_tool_row() {
+        let mut espup = tool("espup", false, false);
+        espup.install_command =
+            "cargo install espup --locked && espup install --toolchain-version 9.9.9.9".into();
+        let mut r = report(vec![tool("rustup", true, true), espup]);
+        r.needs_esp_toolchain = true;
+        let steps = plan(&r);
+        assert_eq!(steps[0].tool, "espup");
+        assert!(steps[0].command.ends_with("--toolchain-version 9.9.9.9"));
     }
 
     #[test]

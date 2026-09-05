@@ -510,6 +510,27 @@ probe, the recipes, the archive downloads — and none of it ran unless asked.
   working machine is one people dismiss without reading, and then dismiss the
   time it mattered. Help ▸ "Check my environment…" is the way in when nothing
   interrupted.
+- **On an `-msvc` host the linker is checked before anything is offered.**
+  Without the C++ build tools every `cargo install` compiles for a minute and
+  dies with "linker `link.exe` not found". The `msvc` row finds `link.exe`
+  the way rustc does (`cc::windows_registry::find_tool`), so it cannot call
+  missing a linker rustc would use; it is not installable — a Visual Studio
+  installer is the user's decision — so, like rustup, it collapses the plan
+  to one item and a link.
+- **`espup install` names its version** (`install::XTENSA_RUST_VERSION`).
+  espup's own "latest" asks GitHub's API, which answers 403 once the shared
+  address behind a proxy has spent its sixty unauthenticated calls an hour —
+  seen on the first run, the one run that has to work. The archives come
+  from release downloads, which have no quota. The setup step reads the
+  command off espup's tool row, so the pin is spelled once.
+- **Downloads resume.** Each attempt is bounded (fifteen minutes), and a
+  slow link carries a 420 MB archive only a piece at a time; the first
+  version restarted from zero on every route and never finished. `download`
+  keeps what arrived, asks for the rest with `Range`, appends only to a
+  `206` continuing the same length (a `200` to a range request starts the
+  file over — appending it would corrupt the archive), and asks a route that
+  was delivering again before moving on. `continuation` is the pure decision,
+  under tests.
 
 ## The gutter, and one line height
 

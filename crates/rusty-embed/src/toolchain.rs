@@ -179,9 +179,16 @@ impl Recipe {
                 ),
                 step(
                     "espup",
-                    &["install"],
+                    &[
+                        "install",
+                        "--toolchain-version",
+                        crate::install::XTENSA_RUST_VERSION,
+                    ],
                     "downloads the esp toolchain (Xtensa rustc + gcc) — a gigabyte-class \
-                     download, so this step takes minutes",
+                     download, so this step takes minutes. The version is named because \
+                     espup's own \"latest\" lookup asks GitHub's API, which refuses \
+                     unauthenticated calls through a busy proxy; `espup update` moves \
+                     forward later",
                 ),
             ]),
         }
@@ -222,6 +229,24 @@ fn tool(name: &str) -> Option<&'static Tool> {
 /// tool under one rule and find it under another.
 pub fn on_path_pub(name: &str) -> Option<PathBuf> {
     tools::find(name)
+}
+
+/// Where the C++ build tools come from — the page, not an installer rusty
+/// could run: "Desktop development with C++" is a choice made in it.
+pub const MSVC_BUILD_TOOLS: &str = "https://visualstudio.microsoft.com/visual-cpp-build-tools/";
+
+/// Visual Studio's `link.exe` for this machine, found the way rustc finds it.
+/// `None` off Windows, and on a Windows without the C++ build tools.
+fn msvc_linker() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let target = format!("{}-pc-windows-msvc", std::env::consts::ARCH);
+        cc::windows_registry::find_tool(&target, "link.exe").map(|tool| tool.path().to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// The C compiler a project for this architecture needs, and how to get it.
@@ -379,6 +404,32 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         });
     }
 
+    // The linker, on the one host whose Rust does not bring its own. An
+    // `-msvc` rustc links through Visual Studio's `link.exe`, and without the
+    // C++ build tools every `cargo install` above dies with "linker
+    // `link.exe` not found" — after compiling for a minute, on the first
+    // run, on the machine of somebody who has just installed Rust and has no
+    // idea what a linker is. Found the way rustc finds it, through the same
+    // Visual Studio discovery the `cc` crate does, so this row cannot say
+    // "missing" about a linker rustc would use. Not installable by rusty: a
+    // Visual Studio installer is a decision for the user, so the row is a
+    // link — like rustup's.
+    if let Some(host) = status.toolchains.iter().find(|t| t.is_default)
+        && host.name.contains("-msvc")
+    {
+        status.tools.push(ToolStatus {
+            name: "msvc".to_string(),
+            purpose: "The Windows linker (link.exe) — every `cargo install` and every host \
+                      build needs it"
+                .to_string(),
+            version: None,
+            path: msvc_linker().map(|found| found.display().to_string()),
+            install_command: MSVC_BUILD_TOOLS.to_string(),
+            installable: false,
+            required: true,
+        });
+    }
+
     // The required target follows from chip + runtime; either being unknown
     // means there is nothing to check rather than something to complain about.
     let required_target = match (&chip, project.and_then(|p| p.runtime)) {
@@ -407,7 +458,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
                 ),
             )
             .arg("chip", &chip_name)
-            .fix("espup install"),
+            .fix(install_command("espup").unwrap_or_default()),
         );
     }
 
@@ -730,9 +781,12 @@ mod tests {
             Some("cargo install espflash --locked")
         );
         assert_eq!(
-            install_command("espup").as_deref(),
-            Some("cargo install espup --locked && espup install"),
-            "a two-step recipe shows both steps",
+            install_command("espup"),
+            Some(format!(
+                "cargo install espup --locked && espup install --toolchain-version {}",
+                crate::install::XTENSA_RUST_VERSION
+            )),
+            "a two-step recipe shows both steps, the second with the pinned version",
         );
         assert_eq!(
             install_command("rust-analyzer").as_deref(),

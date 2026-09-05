@@ -32,6 +32,12 @@ rustc-demangle = { version = "0.1.28", optional = true }
 # turn it off and lose only the board-name guess.
 serialport = { version = "4.9.0", optional = true }
 
+# Finding Visual Studio's `link.exe` the way rustc does, so the Toolchain
+# panel cannot call a linker missing that rustc would use. Already in the
+# tree through a dozen build scripts.
+[target.'cfg(windows)'.dependencies]
+cc = { version = "1.4", optional = true }
+
 [features]
 default = ["backend"]
 backend = [
@@ -40,6 +46,7 @@ backend = [
     "dep:object",
     "dep:rustc-demangle",
     "dep:serialport",
+    "dep:cc",
 ]
 
 [lints]

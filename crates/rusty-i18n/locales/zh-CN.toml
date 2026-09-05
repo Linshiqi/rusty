@@ -519,6 +519,7 @@ move = "迁移…"
 move-note = "迁移会把所有内容复制到新文件夹，原来的留在原处直到你删除。cargo 装的工具在 ~/.cargo/bin，不会动——那是 cargo 的路径，不是 rusty 的。"
 [tool]
 rustup = "管理 Rust 工具链和目标"
+msvc = "Windows 的链接器（link.exe）——每一次 `cargo install` 和每一次本机构建都要用到"
 espup = "安装 Xtensa 工具链；只有 ESP32 / S2 / S3 需要"
 espflash = "通过 USB 串口烧录和监视——没有调试器时走的就是这条路"
 probe-rs = "通过 JTAG/SWD 调试器烧录和调试，并解码 RTT 上的 defmt"
@@ -754,6 +755,7 @@ espup = "安装这颗芯片需要的 Xtensa 编译器。上游没有任何一份
 
 [setup.manual]
 rustup = "Rust 本身还没装。这里其他所有东西都建立在它之上，所以先装 rustup —— https://rustup.rs —— 剩下的 rusty 能自己来。"
+msvc = "Windows 的 C++ 生成工具还没装，`cargo install` 编出来的东西没有链接器可用。请安装 Visual Studio 生成工具并勾选“使用 C++ 的桌面开发”—— https://visualstudio.microsoft.com/visual-cpp-build-tools/ —— 剩下的 rusty 能自己来。"
 [simulate]
 planning = "正在生成仿真计划…"
 no-duty = "—— 未报告占空比"
