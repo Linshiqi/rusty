@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.7
 
 **Fixed.** The editor split follows one rule: "beside" is the right group,
 from either side. Open to the side and the split button move a file *into*
