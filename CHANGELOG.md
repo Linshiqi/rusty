@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.3
 
 **Changed.** The left rail only switches panels now. It had grown into one
 column of sixteen icons — panel switchers, the project's verbs, the
