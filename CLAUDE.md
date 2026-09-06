@@ -506,8 +506,16 @@ and a new branch.
   to its first line; an amend with the box empty is `--no-edit`. A stash is a
   commit, so clicking one opens it below the list through the same `git show
   -m --first-parent` the History pane uses — that *is* the working tree it
-  holds — and switching views drops the selection, since the pane would
-  otherwise describe something no longer listed.
+  holds — plus its **third parent** when it was saved with
+  `--include-untracked`: the untracked files live there, the first-parent
+  diff never reaches them, and a stash of one new file opened as "no files
+  changed" while `git stash list` plainly held it. `untracked_parent` knows
+  that parent by git's own subject (`untracked files on …`), so an octopus
+  merge is not mistaken for a stash. Switching views drops the selection,
+  since the pane would otherwise describe something no longer listed. And
+  the log runs with `--exclude=refs/stash` before `--all`: a stash's parents
+  are commits, and one `git stash` put three rows and two lanes that no
+  branch owns into the graph — stashes are read in their own view.
 - **A commit message is one argument however many lines it has.** The dock's
   line runner splits on whitespace, which would tear a message at its first
   space; `run_args_at_root_then` takes an argument vector and hands it to the

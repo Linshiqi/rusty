@@ -51,7 +51,16 @@ pub fn history(root: &Path, rev: Option<&str>, limit: usize) -> Result<History> 
     ];
     match rev {
         Some(rev) => args.push(rev.to_string()),
-        None => args.push("--all".to_string()),
+        // Every ref but the stash. `--all` reaches `refs/stash`, and a stash
+        // is a merge commit whose parents — `index on main: …`, `untracked
+        // files on main: …` — are commits too, so one `git stash` put three
+        // rows and two extra lanes into the graph that no branch owns. The
+        // Stashes view is where a stash is read; the history is for the
+        // branches. `--exclude` applies to the `--all` that follows it.
+        None => {
+            args.push("--exclude=refs/stash".to_string());
+            args.push("--all".to_string());
+        }
     }
     let text = run(root, &args)?;
     let mut commits = parse::log(&text);
@@ -100,38 +109,61 @@ pub fn commit(root: &Path, id: &str) -> Result<CommitDetail> {
     // `-m --first-parent` so a merge shows what it brought in against its
     // first parent, the way Fork does, rather than the empty combined diff
     // `git show` prints for a clean merge.
-    let statuses = parse::name_status(&run(
+    let mut statuses = show(root, id, "--name-status")?;
+    let mut stats = show(root, id, "--numstat")?;
+    let mut patches = show(root, id, "-p")?;
+    // A stash saved with `--include-untracked` keeps those files in a third
+    // parent, which the first-parent diff never reaches: a stash of one new
+    // file opened as "no files changed" while `git stash list` plainly held
+    // it. That parent is a root commit, so showing it lists every file it
+    // holds as added — which is what they are, to the stash.
+    if let Some(untracked) = untracked_parent(root, id) {
+        statuses.push_str(&show(root, &untracked, "--name-status")?);
+        stats.push_str(&show(root, &untracked, "--numstat")?);
+        patches.push_str(&show(root, &untracked, "-p")?);
+    }
+    Ok(CommitDetail {
+        commit,
+        body,
+        files: parse::files(
+            parse::name_status(&statuses),
+            parse::numstat(&stats),
+            parse::split_patch(&patches),
+        ),
+    })
+}
+
+/// One reading of a commit's diff against its first parent: `--name-status`,
+/// `--numstat` or `-p`. The text ends in a newline, so two readings
+/// concatenate into one the parsers read as a single list.
+fn show(root: &Path, id: &str, what: &str) -> Result<String> {
+    let text = run(
         root,
         &[
             "show",
-            "--name-status",
+            what,
             "--format=",
-            "-m",
-            "--first-parent",
-            id,
-        ],
-    )?);
-    let stats = parse::numstat(&run(
-        root,
-        &["show", "--numstat", "--format=", "-m", "--first-parent", id],
-    )?);
-    let patches = parse::split_patch(&run(
-        root,
-        &[
-            "show",
-            "--format=",
-            "-p",
             "-m",
             "--first-parent",
             "--no-color",
             id,
         ],
-    )?);
-    Ok(CommitDetail {
-        commit,
-        body,
-        files: parse::files(statuses, stats, patches),
-    })
+    )?;
+    if text.is_empty() || text.ends_with('\n') {
+        Ok(text)
+    } else {
+        Ok(format!("{text}\n"))
+    }
+}
+
+/// The parent holding a stash's untracked files, when `id` is a stash saved
+/// with `--include-untracked`. git makes that a third parent whose subject is
+/// `untracked files on <branch>: …`; an octopus merge has a third parent too
+/// and no such subject, and is shown as the merge it is.
+fn untracked_parent(root: &Path, id: &str) -> Option<String> {
+    let third = format!("{id}^3");
+    let subject = run(root, &["log", "-1", "--format=%s", &third]).ok()?;
+    subject.starts_with("untracked files on ").then_some(third)
 }
 
 /// Every branch, local and remote-tracking, current one marked.
@@ -384,6 +416,68 @@ mod tests {
             "against its first parent, the merge brought in b.txt",
         );
         assert!(detail.files[0].patch.contains("+two"));
+    }
+
+    /// A stash saved with `--include-untracked` keeps the new files in a
+    /// third parent. The detail has to reach them — a stash of one new file
+    /// opened as "no files changed" — and the history must not draw the
+    /// stash's own commits as rows and lanes of the graph.
+    #[test]
+    fn a_stash_of_an_untracked_file_shows_the_file_and_stays_out_of_the_history() {
+        let Some(dir) = repository() else {
+            eprintln!("skipping: git is not available on this machine");
+            return;
+        };
+        std::fs::write(dir.path().join("new.txt"), "fresh\n").unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\nmore\nagain\n").unwrap();
+        let stashed = Command::new("git")
+            .args(["stash", "push", "--include-untracked", "-m", "wip"])
+            .current_dir(dir.path())
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("git runs");
+        assert!(stashed.status.success(), "{stashed:?}");
+
+        let stashes = stashes(dir.path()).expect("stash list");
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].label, "stash@{0}");
+
+        let detail = commit(dir.path(), &stashes[0].label).expect("the stash opens");
+        let mut paths: Vec<&str> = detail.files.iter().map(|f| f.path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            vec!["a.txt", "new.txt"],
+            "the tracked change and the untracked file, both",
+        );
+        let new = detail
+            .files
+            .iter()
+            .find(|f| f.path == "new.txt")
+            .expect("the untracked file");
+        assert_eq!(new.kind, crate::model::ChangeKind::Added);
+        assert!(
+            new.patch.contains("+fresh"),
+            "with its patch: {}",
+            new.patch
+        );
+
+        let history = history(dir.path(), None, LIMIT).expect("history");
+        assert_eq!(
+            history.rows.len(),
+            4,
+            "the branches' commits and nothing of the stash's"
+        );
+        assert!(history.rows.iter().all(|row| {
+            let summary = row.commit.summary.as_str();
+            !summary.starts_with("On main")
+                && !summary.starts_with("index on")
+                && !summary.starts_with("untracked files on")
+        }));
+        assert_eq!(history.lanes, 2, "the stash added no lane");
     }
 
     #[test]

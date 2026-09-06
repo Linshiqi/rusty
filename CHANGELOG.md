@@ -9,6 +9,16 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed — a stash of an untracked file opened as "no files changed".** The
+files a stash saves with `--include-untracked` live in a third parent commit
+that the stash's own diff never reaches; the Stashes view now lists them,
+as added, with their patches. And the history no longer shows a stash's
+internal commits — `index on main`, `untracked files on main` — as rows and
+lanes of their own: stashes are read in the Stashes view, the history is
+for the branches.
+
 ## v0.6.9
 
 **Fixed — completion that offered nothing.** rust-analyzer sends completion
