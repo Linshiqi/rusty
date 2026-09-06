@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.8
 
 **Fixed — two Git menu items that did nothing.** "Discard changes…" (and
 "Delete file…" for an untracked one) never asked and never ran: the
