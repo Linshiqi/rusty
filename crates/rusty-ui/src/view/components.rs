@@ -331,16 +331,23 @@ pub fn ContextMenu(x: f64, y: f64, on_close: Callback<()>, children: Children) -
 }
 
 /// One row of a context menu.
+///
+/// `selected` marks the row that is in force — a filter, a mode — the way a
+/// menu ticks the checked item, without a glyph column every other menu
+/// would have to carry.
 #[component]
 pub fn MenuItem(
     #[prop(into)] label: String,
     #[prop(optional, into)] shortcut: Option<String>,
     #[prop(optional)] danger: bool,
     #[prop(optional)] disabled: bool,
+    #[prop(optional)] selected: bool,
     on_select: Callback<()>,
 ) -> impl IntoView {
     let tone = if danger {
         "text-crimson"
+    } else if selected {
+        "bg-sunken text-label"
     } else {
         "text-label-2"
     };

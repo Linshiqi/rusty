@@ -9,6 +9,24 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed.**
+
+- On a fresh machine, the first build of an ESP32 (Xtensa) project after the
+  setup sheet had installed espup died with `linker xtensa-esp32-elf-gcc not
+  found`. espup makes its linker reachable by writing the user's environment
+  for *new* processes, and rusty was already running. rusty now reads the
+  environment espup exports and hands it to every build it starts, so the
+  first build works without restarting rusty or the shell.
+- A short side-by-side diff was drawn double-spaced: the grid that keeps the
+  centre line running the full height of the pane also stretched its rows to
+  fill it. Rows keep their own height now.
+- The Git panel's branch picker shows the checked-out branch itself, marked,
+  instead of "All branches" with the branch repeated beside it. A branch the
+  history is filtered to shows in its place, and the menu highlights the
+  choice in force.
+
 ## v0.6.3
 
 **Changed.** The left rail only switches panels now. It had grown into one

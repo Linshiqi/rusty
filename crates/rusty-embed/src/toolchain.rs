@@ -225,8 +225,10 @@ fn tool(name: &str) -> Option<&'static Tool> {
 
 /// Where a binary rusty drives is on this machine, by the one ladder in
 /// [`crate::tools`] — the data directory's `tools/`, then cargo's bin, then
-/// PATH. The same lookup the tool probe uses, so a caller cannot check for a
-/// tool under one rule and find it under another.
+/// PATH, then the directories espup exports. The same lookup the tool probe
+/// uses, so a caller cannot check for a tool under one rule and find it under
+/// another — and the same directories a child's PATH carries, so a cross
+/// compiler reported present here is one the build will find.
 pub fn on_path_pub(name: &str) -> Option<PathBuf> {
     tools::find(name)
 }

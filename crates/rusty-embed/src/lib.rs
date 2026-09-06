@@ -47,6 +47,8 @@ pub mod device;
 #[cfg(feature = "backend")]
 mod error;
 #[cfg(feature = "backend")]
+mod esp_env;
+#[cfg(feature = "backend")]
 pub mod firmware;
 #[cfg(feature = "backend")]
 pub mod flash;

@@ -166,10 +166,15 @@ fn Branches() -> impl IntoView {
             branch.name.clone()
         };
         let tip: String = branch.tip.chars().take(7).collect();
+        // The filter in force is the highlighted row, so opening the menu
+        // says what the button's label alone cannot: whether the history is
+        // every branch or this one.
+        let selected = state.git.rev.get().as_deref() == Some(branch.name.as_str());
         view! {
             <MenuItem
                 label=label
                 shortcut=tip
+                selected=selected
                 on_select=Callback::new(move |_| {
                     controller::show_rev(state, Some(name.clone()));
                     picker.set(None);
@@ -198,28 +203,31 @@ fn Branches() -> impl IntoView {
                 }
             >
                 <IconView icon=Icon::Branch size=13 />
-                <span>{move || state.git.rev.get().unwrap_or_else(|| t!("git.all"))}</span>
+                // The checked-out branch, marked — unless the log is filtered
+                // to another one, which then stands here unmarked. One label
+                // for both facts: it used to read "All branches" with the
+                // checked-out branch repeated beside the button, and the
+                // repeat was clutter. The menu shows which filter is in force.
+                {move || {
+                    let head = state
+                        .git
+                        .branches
+                        .with(|list| list.iter().find(|b| b.current).map(|b| b.name.clone()));
+                    match (state.git.rev.get(), head) {
+                        (Some(rev), Some(head)) if rev != head => {
+                            view! { <span>{rev}</span> }.into_any()
+                        }
+                        (Some(rev), None) => view! { <span>{rev}</span> }.into_any(),
+                        (_, Some(head)) => view! {
+                            <span class="text-patina" title=t!("git.current")>"●"</span>
+                            <span>{head}</span>
+                        }
+                            .into_any(),
+                        (None, None) => view! { <span>{t!("git.all")}</span> }.into_any(),
+                    }
+                }}
                 <IconView icon=Icon::Chevron size=11 />
             </button>
-            {move || {
-                // Where HEAD is, when the log is not filtered to it: the
-                // picker says what is shown, this says what is checked out.
-                let head = state
-                    .git
-                    .branches
-                    .with(|list| list.iter().find(|b| b.current).map(|b| b.name.clone()))?;
-                (state.git.rev.get().as_deref() != Some(head.as_str())).then(|| {
-                    view! {
-                        <span
-                            class="flex items-center gap-1 font-mono text-footnote text-label-3"
-                            title=t!("git.current")
-                        >
-                            <span class="text-patina">"●"</span>
-                            {head}
-                        </span>
-                    }
-                })
-            }}
             {move || {
                 // Checkout and delete, for the selected branch when it is local
                 // and not already checked out. A remote branch is not checked
@@ -325,6 +333,7 @@ fn Branches() -> impl IntoView {
                     <div class="max-h-[60vh] min-w-[16rem] overflow-y-auto">
                         <MenuItem
                             label=t!("git.all")
+                            selected=state.git.rev.get().is_none()
                             on_select=Callback::new(move |_| {
                                 controller::show_rev(state, None);
                                 picker.set(None);
@@ -744,8 +753,12 @@ fn split_rows(state: AppState, hunks: &[Hunk]) -> AnyView {
     view! {
         // At least the pane's height, so the centre line runs the whole way
         // down even when the diff is a few rows — a line that stops at the
-        // last row leaves the two halves reading as one pane below it.
-        <div class="relative grid min-h-full" style=columns node_ref=grid>
+        // last row leaves the two halves reading as one pane below it. And
+        // `content-start`, because a grid taller than its rows stretches
+        // them to fill it (`align-content: normal` is `stretch` in a grid):
+        // v0.6.2 shipped short diffs double-spaced, an empty line under
+        // every line, and the height came from exactly this rule.
+        <div class="relative grid min-h-full content-start" style=columns node_ref=grid>
             {hunks
                 .iter()
                 .map(|hunk| {

@@ -17,6 +17,10 @@
 //!    espflash and friends. Usually on PATH too — but not in a window opened
 //!    before rustup ran, which is exactly the first-run machine.
 //! 3. PATH.
+//! 4. The directories espup exports (`esp_env.rs`): the Xtensa GCC and clang
+//!    it installed under the `esp` toolchain. Last, because that is where
+//!    `process::command` puts them on a child's PATH — so "is the linker
+//!    there" is answered here exactly as the build will answer it.
 //!
 //! Three finders used to each have their own order and two of them disagreed:
 //! QEMU was PATH first and gdb was the data directory first, and espflash's
@@ -47,6 +51,15 @@ pub(crate) fn exe(name: &str) -> String {
 /// machine has none.
 pub(crate) fn find(name: &str) -> Option<PathBuf> {
     find_in(name, data_tools_dir().as_deref())
+        .or_else(|| in_dirs(name, &crate::esp_env::esp_env().path_dirs))
+}
+
+/// The first of `dirs` holding the binary.
+fn in_dirs(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let file = exe(name);
+    dirs.iter()
+        .map(|dir| dir.join(&file))
+        .find(|candidate| candidate.is_file())
 }
 
 /// [`find`] with the data directory's `tools/` given rather than resolved, so

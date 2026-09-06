@@ -44,29 +44,52 @@ use crate::{
 ///   list` answers for the wrong toolchain. The project's own pin must decide.
 /// - **No console window** on Windows. Without it every probe blinks a black
 ///   rectangle over the UI, and the toolchain panel probes six tools on open.
-/// - **Rusty's tool directories on PATH**, appended. `cc` invokes the cross
-///   compiler *by name*, so a toolchain rusty unpacked into its own directory
-///   is one `cargo build` cannot find however correctly the panel reports it.
-///   Appended rather than prepended: a compiler the user put on PATH themselves
-///   is the one they meant. (Which binary *rusty* runs is the other question,
-///   and `tools::find` answers it the other way round — see there.)
+/// - **Rusty's tool directories, and espup's, on PATH**, appended. `cc`
+///   invokes the cross compiler *by name*, so a toolchain rusty unpacked into
+///   its own directory is one `cargo build` cannot find however correctly the
+///   panel reports it. And the Xtensa linker espup installs is reachable only
+///   through an environment espup writes for *new* processes (`esp_env.rs`):
+///   rusty, already running when its setup sheet ran espup, never had it, and
+///   the first `cargo build` on a fresh machine died with `linker
+///   xtensa-esp32-elf-gcc not found`. Appended rather than prepended: a
+///   compiler the user put on PATH themselves is the one they meant. (Which
+///   binary *rusty* runs is the other question, and `tools::find` answers it
+///   the other way round — see there.)
+/// - **`LIBCLANG_PATH`** from espup's environment when the user's has none:
+///   bindgen needs it for `esp-idf-sys`, and espup set it for shells that were
+///   not this process.
 pub fn command(program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);
     command.env_remove("RUSTUP_TOOLCHAIN");
 
-    let bins = crate::tools::tool_bin_dirs();
-    if !bins.is_empty()
-        && let Some(existing) = std::env::var_os("PATH")
+    let esp = crate::esp_env::esp_env();
+    let mut extra = crate::tools::tool_bin_dirs();
+    extra.extend(esp.path_dirs);
+    if let Some(existing) = std::env::var_os("PATH")
+        && let Some(joined) = child_path(&existing, extra)
     {
-        let mut paths: Vec<PathBuf> = std::env::split_paths(&existing).collect();
-        paths.extend(bins);
-        if let Ok(joined) = std::env::join_paths(paths) {
-            command.env("PATH", joined);
-        }
+        command.env("PATH", joined);
+    }
+    if std::env::var_os("LIBCLANG_PATH").is_none()
+        && let Some(libclang) = esp.libclang
+    {
+        command.env("LIBCLANG_PATH", libclang);
     }
 
     no_console_window(&mut command);
     command
+}
+
+/// A child's PATH: the parent's, then every directory in `extra` it does not
+/// already carry, in order. Appended, not prepended — see [`command`].
+fn child_path(existing: &OsStr, extra: Vec<PathBuf>) -> Option<std::ffi::OsString> {
+    let mut paths: Vec<PathBuf> = std::env::split_paths(existing).collect();
+    for dir in extra {
+        if !paths.contains(&dir) {
+            paths.push(dir);
+        }
+    }
+    std::env::join_paths(paths).ok()
 }
 
 /// Keep a child process from flashing a console window.
@@ -361,6 +384,27 @@ mod tests {
 
         assert_eq!(parse_level("Hello, world!"), None);
         assert_eq!(parse_level(""), None);
+    }
+
+    /// The directories a child gets are appended, once each: a directory the
+    /// parent's PATH already names is not repeated, and one it lacks lands
+    /// after everything the user chose.
+    #[test]
+    fn a_childs_path_appends_what_the_parent_lacks_and_nothing_twice() {
+        let user = [PathBuf::from("/usr/bin"), PathBuf::from("/opt/mine/bin")];
+        let existing = std::env::join_paths(user.iter()).unwrap();
+        let child = child_path(
+            &existing,
+            vec![PathBuf::from("/opt/mine/bin"), PathBuf::from("/esp/bin")],
+        )
+        .unwrap();
+        let expected = std::env::join_paths([
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/opt/mine/bin"),
+            PathBuf::from("/esp/bin"),
+        ])
+        .unwrap();
+        assert_eq!(child, expected);
     }
 
     #[test]

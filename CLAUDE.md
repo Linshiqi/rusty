@@ -343,10 +343,12 @@ positioned in a coordinate system that is not the document's.
 ## The Git panel
 
 The repository, with Fork as the reference for what it should look like.
-Three views (`state::GitMode`) behind one branch picker — a button naming
-the branch the log is filtered to, opening a menu of them all, because a
-repository with thirty branches is ordinary and thirty chips are a paragraph
-nobody reads: *History* — a graph
+Three views (`state::GitMode`) behind one branch picker — a button showing
+the checked-out branch, marked, or the branch the log is filtered to when
+that is another one, opening a menu of them all with the filter in force
+highlighted (a repository with thirty branches is ordinary and thirty chips
+are a paragraph nobody reads; and the checked-out branch used to be repeated
+beside the button, which read as clutter): *History* — a graph
 of lanes beside the commits, labels on the commits that carry branches and
 tags, a commit opened below with its files and each file's patch; *Changes*
 — the working tree as staged and unstaged lists, a file's diff, the commit
@@ -550,6 +552,18 @@ probe, the recipes, the archive downloads — and none of it ran unless asked.
   file over — appending it would corrupt the archive), and asks a route that
   was delivering again before moving on. `continuation` is the pure decision,
   under tests.
+- **espup's environment does not reach a running rusty.** `espup install`
+  puts the Xtensa linker under the `esp` toolchain and then writes the user's
+  PATH into the registry on Windows, or `~/export-esp.sh` elsewhere — for
+  *new* processes. rusty ran espup from its setup sheet and was already
+  running, so the `cargo build` it spawned next died with `linker
+  xtensa-esp32-elf-gcc not found`, on a machine the sheet had just called
+  ready. `esp_env.rs` reads espup's export file (its own statement of what
+  it installed), falls back to the layout under `RUSTUP_HOME`, and
+  `process::command` appends what exists to every child's PATH and sets
+  `LIBCLANG_PATH` when the user has none. The user's environment is never
+  written; `tools::find` consults the same directories so the panel cannot
+  report absent what the build would find.
 
 ## The gutter, and one line height
 
