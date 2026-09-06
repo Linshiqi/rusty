@@ -71,7 +71,7 @@ pub(super) fn DebugTab() -> impl IntoView {
                                     on:click=move |_| {
                                         controller::debug_frame(state, level);
                                         if let Some((file, line)) = jump.clone() {
-                                            controller::open_at(state, file, line, 0);
+                                            controller::open_at(state.focused(), file, line, 0);
                                         }
                                     }
                                     class=move || {

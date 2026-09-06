@@ -46,11 +46,30 @@ pub fn FilesPanel() -> impl IntoView {
             .into_any();
         }
 
+        // The editor area holds one group, or two side by side with a grip
+        // between them; the tree folds away on the switcher's second click.
+        let area: NodeRef<html::Div> = NodeRef::new();
         view! {
             <div class="flex min-h-0 flex-1">
-                <Tree />
-                <crate::view::split::Handle divider=crate::state::Divider::Tree />
-                <Editor />
+                {move || {
+                    (!state.layout.tree_hidden.get()).then(|| {
+                        view! {
+                            <Tree />
+                            <crate::view::split::Handle divider=crate::state::Divider::Tree />
+                        }
+                    })
+                }}
+                <div class="flex min-h-0 min-w-0 flex-1" node_ref=area>
+                    <EditorGroup which=crate::state::Group::First />
+                    {move || {
+                        state.layout.split.get().then(|| {
+                            view! {
+                                <SplitGrip area=area />
+                                <EditorGroup which=crate::state::Group::Second />
+                            }
+                        })
+                    }}
+                </div>
             </div>
         }
         .into_any()
@@ -231,8 +250,8 @@ fn Tree() -> impl IntoView {
                     );
                 }
 
-                let (open_path, copy_path, search_path) =
-                    (path.clone(), path.clone(), path.clone());
+                let (open_path, copy_path, search_path, beside_path) =
+                    (path.clone(), path.clone(), path.clone(), path.clone());
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
@@ -251,11 +270,24 @@ fn Tree() -> impl IntoView {
                                                 }
                                             });
                                     } else {
-                                        controller::open_file(state, open_path.clone());
+                                        controller::open_file(state.focused(), open_path.clone());
                                     }
                                     tree_menu.set(None);
                                 })
                             />
+                            {(!is_dir)
+                                .then(|| {
+                                    let beside = beside_path.clone();
+                                    view! {
+                                        <MenuItem
+                                            label=t!("context.tree-open-beside")
+                                            on_select=Callback::new(move |_| {
+                                                controller::open_beside(state.focused(), beside.clone());
+                                                tree_menu.set(None);
+                                            })
+                                        />
+                                    }
+                                })}
                             <MenuItem
                                 label=t!("context.tree-search-scope")
                                 on_select=Callback::new(move |_| {
@@ -383,7 +415,8 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                             }
                         });
                     } else {
-                        controller::open_file(state, path.clone());
+                        // Into the group the user is in, not always the first.
+                        controller::open_file(state.focused(), path.clone());
                     }
                 }
             };

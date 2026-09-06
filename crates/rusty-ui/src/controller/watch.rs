@@ -90,6 +90,13 @@ fn absorb(state: AppState, changes: FileChanges) {
 /// notice it: the watcher is debounced, and a failure to start it is silence
 /// by design. A project-wide replace calls this for each file it changed.
 pub fn follow(state: AppState, path: String) {
+    // Each group answers for its own strip; a file is in one of them.
+    for group in state.open_groups() {
+        follow_in(group, path.clone());
+    }
+}
+
+fn follow_in(state: AppState, path: String) {
     let active = state.active_path_now();
 
     if active.as_deref() == Some(path.as_str()) {

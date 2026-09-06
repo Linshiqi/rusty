@@ -410,7 +410,7 @@ fn row(hit: SearchHit) -> impl IntoView {
         <button
             type="button"
             on:click=move |_| {
-                controller::open_at(state, path.clone(), hit.line, hit.col)
+                controller::open_at(state.focused(), path.clone(), hit.line, hit.col)
             }
             class="flex w-full items-baseline gap-2 rounded-[5px] py-[2px] pr-2 pl-6 text-left font-mono text-footnote text-label-2 hover:bg-sunken"
         >

@@ -102,6 +102,25 @@ pub fn defaults() -> Vec<Binding> {
             default: "Ctrl+,".into(),
             action: Action::OpenSettings,
         },
+        // VS Code's three, so hands that know them need not learn ours.
+        Binding {
+            id: "quick.open".into(),
+            label: t!("bind.quick-open"),
+            default: "Ctrl+P".into(),
+            action: Action::QuickOpen,
+        },
+        Binding {
+            id: "tree.toggle".into(),
+            label: t!("bind.toggle-tree"),
+            default: "Ctrl+B".into(),
+            action: Action::ToggleTree,
+        },
+        Binding {
+            id: "editor.split".into(),
+            label: t!("bind.split"),
+            default: "Ctrl+\\".into(),
+            action: Action::SplitEditor,
+        },
     ]);
     out
 }

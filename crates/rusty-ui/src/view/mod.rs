@@ -23,6 +23,7 @@ pub mod palette;
 pub mod panels;
 pub mod pinmap;
 pub mod plot;
+mod quick;
 mod run;
 pub mod settings;
 mod setup;
@@ -201,6 +202,7 @@ pub fn App() -> impl IntoView {
             <div class="relative flex min-h-0 flex-1">
 
                 <palette::Palette open=palette_open chrome=chrome />
+                <quick::QuickOpen />
                 // The environment check. Anchored to the working area like
                 // every other overlay, so it cannot cover the title bar and
                 // leave a window with no way out.
@@ -428,6 +430,8 @@ fn Sidebar() -> impl IntoView {
                                             title=move || {
                                                 if disabled.get() {
                                                     t!("panel.needs-project", panel = title)
+                                                } else if id == "files" && selected.get() {
+                                                    t!("panel.files-toggle")
                                                 } else {
                                                     title.clone()
                                                 }
@@ -435,8 +439,17 @@ fn Sidebar() -> impl IntoView {
                                             on:click=move |_| {
                                                 let SettingsOpen(settings) =
                                                     expect_context::<SettingsOpen>();
+                                                let already = !settings.get_untracked()
+                                                    && state.layout.panel.get_untracked() == id;
                                                 settings.set(false);
                                                 state.layout.panel.set(id.to_string());
+                                                // A second click on the switcher you are on
+                                                // folds the file tree away, as VS Code's
+                                                // activity bar folds its sidebar. Files is
+                                                // the one panel with a list to fold.
+                                                if already && id == "files" {
+                                                    controller::toggle_tree(state);
+                                                }
                                             }
                                             class=move || {
                                                 let base = "grid size-8 place-items-center rounded-[6px] \

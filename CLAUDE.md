@@ -340,6 +340,45 @@ positioned in a coordinate system that is not the document's.
   persisted**: restoring yesterday's folds onto a file somebody else has since
   edited collapses the wrong lines.
 
+## Two editor groups
+
+Side by side, VS Code's everyday split, and no more than two. The editor was
+written for one group — every component, controller and effect reads
+`state.editor` — and the second group did not need a second editor.
+
+- **A group is an `AppState` with `editor` and `find` swapped.** `AppState`
+  is a bundle of `Copy` signal handles, so `state.group(Second)` is a copy
+  pointing at the second group's signals with everything else shared, and
+  `EditorGroup` (`view/panels/files/editor.rs`) provides it as the context of
+  its subtree. `AppState::expect()` below it answers with that state, and
+  every controller called from there works on that group without knowing
+  there are two. What is *not* below — the tree, the finder, a search hit,
+  the palette's Back — asks `state.focused()`, which follows the pointer and
+  the focus (`layout.focus`).
+- **Shared handles stay shared.** `Editor::beside` copies the tree, the
+  expanded folders, the text zoom, the Vim switch, the source-view choice and
+  the stale list from the first group; only what is open and how it is being
+  edited is fresh. Separate copies would be a zoom that took on one side only.
+- **One group per file.** Two drafts of one path would overwrite each other
+  on save, so `open_file` fronts a path the other group holds and focus
+  follows; "Open to the side" and the strip's split button *move* a file
+  (`transplant`: draft, caret, history and all). `is_dirty` and `follow`
+  look at both groups because of this rule, not in spite of it.
+- **The split never shows an empty pane.** `settle_groups` closes a second
+  group that lost its last file, and a first group that lost its last file
+  takes the second's files — so the layout is never "nothing on the left,
+  the work on the right". The split button wants a second tab to leave
+  behind for the same reason.
+- **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
+  split comes back with them; the divider between the groups is
+  `Divider::EditorSplit`, in permille like the diff's.
+- **The title bar's centre is the file finder.** The project's name is drawn
+  as a search box, VS Code's command centre; a click or Ctrl+P opens
+  `view/quick.rs`, whose candidates are the tree the Files panel already
+  holds, flattened — no second walk to keep in step with the first. Ranking
+  is pure and under tests. Ctrl+P, Ctrl+B (fold the tree) and Ctrl+\
+  (split) are VS Code's chords, so hands that know them need not learn ours.
+
 ## The Git panel
 
 The repository, with Fork as the reference for what it should look like.
@@ -790,8 +829,9 @@ usty`) holds `location.toml`
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
 - Theme, divider positions, the editor's text zoom, the interface scale, the
-  pin map's collapsed state, the Git panel's diff layout (one column or side
-  by side) and the locale *cache* are localStorage, and that is all that is. They all go through `state::local_get` / `local_set` /
+  pin map's collapsed state, the file tree's fold, the Git panel's diff
+  layout (one column or side by side) and the locale *cache* are
+  localStorage, and that is all that is. They all go through `state::local_get` / `local_set` /
   `local_take` — one door, so the list above is a grep and not a claim.
   **Audit that claim when you add one** — it had already drifted twice. The
   assistant profile failed the rule (a second window boots the same frontend,

@@ -203,6 +203,19 @@ pub fn open_file(state: AppState, path: String) {
         activate_tab(state, path);
         return;
     }
+    // One group per file. A path the other group holds is fronted there and
+    // focus follows — rather than a second draft of the same file that a
+    // save from either side would silently overwrite the other with.
+    let other = state.other();
+    if other
+        .editor
+        .tabs
+        .with_untracked(|tabs| tabs.iter().any(|t| t == &path))
+    {
+        state.layout.focus.set(other.group);
+        open_file(other, path);
+        return;
+    }
 
     let args = Args { path };
     track(
@@ -406,13 +419,151 @@ pub fn close_tab(state: AppState, path: String) {
         clear_editor_transients(state);
         let fronted = next.is_some_and(|n| front_parked(state, &n));
         if !fronted {
-            state.editor.document.set(None);
-            state.editor.draft.set(String::new());
-            state.editor.echo_text.set(String::new());
-            state.editor.highlighted.set(Vec::new());
-            state.editor.history.set(EditHistory::default());
+            clear_screen(state);
         }
     }
+    settle_groups(state);
+}
+
+/// Nothing on screen: the state a group is in before its first file and
+/// after its last.
+fn clear_screen(state: AppState) {
+    state.editor.document.set(None);
+    state.editor.draft.set(String::new());
+    state.editor.echo_text.set(String::new());
+    state.editor.highlighted.set(Vec::new());
+    state.editor.history.set(EditHistory::default());
+}
+
+// ─── two groups ─────────────────────────────────────────────────────────────────
+
+/// Open a file in the group beside this one — VS Code's "Open to the Side" —
+/// splitting the editor if it is not split yet. A file this group already
+/// holds moves across rather than opening twice: one group per file.
+pub fn open_beside(state: AppState, path: String) {
+    state.layout.split.set(true);
+    let target = state.other();
+    if state
+        .editor
+        .tabs
+        .with_untracked(|tabs| tabs.iter().any(|t| t == &path))
+    {
+        transplant(state, target, &path);
+    } else {
+        state.layout.focus.set(target.group);
+        open_file(target, path);
+    }
+}
+
+/// The tab strip's split button and Ctrl+\: this group's file moves to the
+/// group beside it. Wants a second tab to leave behind — a group whose only
+/// file moved across is an empty pane, not a comparison.
+pub fn split_active(state: AppState) {
+    let Some(path) = state.active_path_now() else {
+        return;
+    };
+    if state.editor.tabs.with_untracked(|tabs| tabs.len() < 2) {
+        return;
+    }
+    open_beside(state, path);
+}
+
+/// Carry an open file from one group to the other with its draft, caret and
+/// history. The strip it leaves shows its neighbour, as a close would.
+fn transplant(from: AppState, to: AppState, path: &str) {
+    let was_active = from.active_path_now().as_deref() == Some(path);
+    let next = neighbour_after_close(&from.editor.tabs.get_untracked(), path);
+    if was_active {
+        park_active(from);
+    }
+    let mut entry = None;
+    from.editor.parked.update(|list| {
+        if let Some(at) = list.iter().position(|e| e.document.path == path) {
+            entry = Some(list.remove(at));
+        }
+    });
+    from.editor.tabs.update(|tabs| tabs.retain(|t| t != path));
+    if was_active {
+        clear_editor_transients(from);
+        if !next.is_some_and(|n| front_parked(from, &n)) {
+            clear_screen(from);
+        }
+    }
+    to.layout.focus.set(to.group);
+    match entry {
+        Some(entry) => {
+            to.editor.tabs.update(|tabs| {
+                if !tabs.iter().any(|t| t == path) {
+                    tabs.push(path.to_string());
+                }
+            });
+            to.editor.parked.update(|list| {
+                list.retain(|e| e.document.path != path);
+                list.push(entry);
+            });
+            activate_tab(to, path.to_string());
+        }
+        // Listed but never loaded — a tab restored from last session and not
+        // clicked since. Nothing to carry; the other side reads it fresh.
+        None => open_file(to, path.to_string()),
+    }
+    settle_groups(from);
+}
+
+/// After a group lost a file. A second group with nothing left closes; a
+/// first group with nothing left while the second has files takes them, so
+/// the split never shows an empty pane on the left with the work on the
+/// right, and never outlives having two things to compare.
+fn settle_groups(state: AppState) {
+    if !state.layout.split.get_untracked() {
+        return;
+    }
+    let first = state.group(crate::state::Group::First);
+    let second = state.group(crate::state::Group::Second);
+    if second.editor.tabs.with_untracked(Vec::is_empty) {
+        state.layout.split.set(false);
+        state.layout.focus.set(crate::state::Group::First);
+    } else if first.editor.tabs.with_untracked(Vec::is_empty) {
+        let active = second.active_path_now();
+        park_active(second);
+        first.editor.tabs.set(second.editor.tabs.get_untracked());
+        first
+            .editor
+            .parked
+            .set(second.editor.parked.get_untracked());
+        second.editor.tabs.set(Vec::new());
+        second.editor.parked.set(Vec::new());
+        clear_editor_transients(second);
+        clear_screen(second);
+        state.layout.split.set(false);
+        state.layout.focus.set(crate::state::Group::First);
+        if let Some(active) = active
+            && !front_parked(first, &active)
+        {
+            open_file(first, active);
+        }
+    }
+}
+
+/// Forget everything a group holds: the project is changing under it.
+pub fn reset_group(state: AppState) {
+    state.editor.tabs.set(Vec::new());
+    state.editor.parked.set(Vec::new());
+    clear_editor_transients(state);
+    clear_screen(state);
+    state.editor.reveal.set(None);
+    state.find.open.set(false);
+    state.find.replace_open.set(false);
+    state.find.query.set(String::new());
+    state.find.index.set(0);
+}
+
+/// Fold the file tree away or bring it back: the Files switcher's second
+/// click, Ctrl+B and the View menu.
+pub fn toggle_tree(state: AppState) {
+    let hidden = !state.layout.tree_hidden.get_untracked();
+    state.layout.tree_hidden.set(hidden);
+    crate::state::remember_tree_hidden(hidden);
 }
 
 /// Which tab takes the screen when this one closes: the one after it, else

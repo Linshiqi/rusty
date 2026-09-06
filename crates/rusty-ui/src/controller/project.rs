@@ -19,7 +19,7 @@ use rusty_i18n::t;
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, EditHistory},
+    state::AppState,
 };
 
 pub fn load_catalog(state: AppState) {
@@ -138,30 +138,27 @@ fn project_opened(state: AppState, result: OpenResult) {
             // against this project's chip and report plausible nonsense.
             state.project.selected_firmware.set(None);
             state.project.memory.set(None);
-            state.editor.document.set(None);
-            state.editor.draft.set(String::new());
-            state.editor.tabs.set(Vec::new());
-            state.editor.parked.set(Vec::new());
-            state.editor.history.set(EditHistory::default());
-            state.editor.completion.set(None);
-            state.editor.signature.set(None);
+            // Both groups, and the split itself: a second group still
+            // showing the last project's file beside this project's tree is
+            // exactly the wrong-window mistake the rest of this block exists
+            // to prevent.
+            for group in [
+                state.group(crate::state::Group::First),
+                state.group(crate::state::Group::Second),
+            ] {
+                reset_group(group);
+            }
+            state.layout.split.set(false);
+            state.layout.focus.set(crate::state::Group::First);
             state.search.query.set(String::new());
             state.search.results.set(None);
             state.search.word.set(false);
-            state.find.open.set(false);
-            state.find.replace_open.set(false);
-            state.find.query.set(String::new());
-            state.find.index.set(0);
             state.search.regex.set(false);
             state.search.include.set(String::new());
             state.search.exclude.set(String::new());
             state.editor.tree.set(Vec::new());
             state.editor.expanded.set(Vec::new());
-            state.editor.highlighted.set(Vec::new());
-            state.editor.echo_text.set(String::new());
             state.lsp.diagnostics.set(std::collections::HashMap::new());
-            state.editor.hover.set(None);
-            state.editor.reveal.set(None);
             // The selection names a member of the *previous* workspace, so
             // keeping it would ask the backend to resolve features for a package
             // that is not there.

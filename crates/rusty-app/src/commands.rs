@@ -335,11 +335,19 @@ pub async fn record_tabs(
     root: String,
     tabs: Vec<String>,
     active: Option<String>,
+    second: Vec<String>,
+    second_active: Option<String>,
     state: State<'_, AppState>,
 ) -> Answer<()> {
     state
         .with_workbench("saving the tab strip", move || {
-            storage::record_tabs(&root, tabs, active)
+            storage::record_tabs(rusty_embed::ProjectTabs {
+                root,
+                tabs,
+                active,
+                second,
+                second_active,
+            })
         })
         .await
 }

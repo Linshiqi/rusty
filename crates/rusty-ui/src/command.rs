@@ -45,6 +45,12 @@ pub enum Action {
     ToggleDock,
     ShowDock(DockTab),
     OpenPalette,
+    /// The file finder: type part of a name, Enter opens it.
+    QuickOpen,
+    /// Fold the Files panel's tree away, or bring it back.
+    ToggleTree,
+    /// Move the focused group's file to the group beside it.
+    SplitEditor,
     OpenSettings,
     /// The environment check, on purpose rather than because it interrupted.
     CheckEnvironment,
@@ -196,6 +202,21 @@ pub fn all(state: AppState) -> Vec<Command> {
         chord(Action::NavForward),
     ));
     out.push(view(Action::ToggleVim, &t!("menu.view.vim"), None));
+    out.push(view(
+        Action::QuickOpen,
+        &t!("menu.view.quick-open"),
+        chord(Action::QuickOpen),
+    ));
+    out.push(view(
+        Action::ToggleTree,
+        &t!("menu.view.toggle-tree"),
+        chord(Action::ToggleTree),
+    ));
+    out.push(view(
+        Action::SplitEditor,
+        &t!("menu.view.split"),
+        chord(Action::SplitEditor),
+    ));
 
     for theme in Theme::ALL {
         out.push(Command {
@@ -324,6 +345,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             &t!("menu.view.palette"),
             chord(Action::OpenPalette),
         ),
+        project_entry(
+            Action::QuickOpen,
+            &t!("menu.view.quick-open"),
+            chord(Action::QuickOpen),
+        ),
         Item::Separator,
         Item::Submenu {
             label: t!("menu.view.appearance"),
@@ -367,6 +393,17 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         ),
         Item::Separator,
         entry(Action::ToggleVim, &t!("menu.view.vim"), None),
+        Item::Separator,
+        project_entry(
+            Action::ToggleTree,
+            &t!("menu.view.toggle-tree"),
+            chord(Action::ToggleTree),
+        ),
+        project_entry(
+            Action::SplitEditor,
+            &t!("menu.view.split"),
+            chord(Action::SplitEditor),
+        ),
         Item::Separator,
     ];
     for panel in panels::all().into_iter().filter(|p| !p.hidden) {
@@ -645,13 +682,22 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::ToggleDock => state.layout.dock_open.update(|open| *open = !*open),
         Action::ShowDock(tab) => state.show_dock(tab),
         Action::OpenPalette => chrome.palette_open.set(true),
+        Action::QuickOpen => {
+            if state.has_project_now() {
+                state.layout.quick_open.set(true);
+            }
+        }
+        Action::ToggleTree => controller::toggle_tree(state),
+        Action::SplitEditor => controller::split_active(state.focused()),
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
         Action::ToggleComment => editor_key("/", false),
         Action::Rename => editor_chord("F2", false, false),
-        Action::NavBack => controller::nav_back(state),
-        Action::NavForward => controller::nav_forward(state),
+        // The group the user is in: a jump list belongs to an editor, and
+        // there are two.
+        Action::NavBack => controller::nav_back(state.focused()),
+        Action::NavForward => controller::nav_forward(state.focused()),
         Action::ToggleVim => {
             let on = !state.editor.vim_on.get_untracked();
             controller::set_vim(state, on);

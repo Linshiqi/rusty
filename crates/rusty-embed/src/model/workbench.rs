@@ -37,6 +37,12 @@ pub struct ProjectTabs {
     pub tabs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
+    /// The second editor group's strip and its file, when the editor was
+    /// split. Absent from files written before there were two groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub second: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_active: Option<String>,
 }
 
 /// Where rusty keeps its data, for the settings screen to show.

@@ -222,10 +222,13 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
     match event {
         LspEvent::Ready {} => {
             state.lsp.status.set(LspStatus::Ready);
-            // A file opened before the server came up was never announced.
-            if let Some(path) = state.active_path_now() {
-                lsp_open_doc(path.clone(), state.editor.draft.get_untracked());
-                request_semantic(state, path);
+            // A file opened before the server came up was never announced —
+            // in either group.
+            for group in state.open_groups() {
+                if let Some(path) = group.active_path_now() {
+                    lsp_open_doc(path.clone(), group.editor.draft.get_untracked());
+                    request_semantic(group, path);
+                }
             }
         }
         LspEvent::Unavailable { message, install } => {

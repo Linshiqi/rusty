@@ -9,6 +9,22 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Added.**
+
+- Two editors side by side. Right-click a file in the tree or a tab and
+  choose "Open to the side", or press the split button at the end of the tab
+  strip (Ctrl+\) to move the current file into a second group. Each group
+  has its own tabs and find bar; a file lives in one group at a time, and
+  the second group closes when its last tab does. The layout, both strips
+  included, comes back when the project is reopened.
+- A file finder in the title bar. The project's name is now a search box:
+  click it or press Ctrl+P, type part of a file name, Enter opens it in the
+  group you are in and Ctrl+Enter opens it beside.
+- The file list folds away: click the Files switcher again, press Ctrl+B, or
+  use View ▸ Show or hide the file list. Remembered across sessions.
+
 ## v0.6.4
 
 **Fixed.**

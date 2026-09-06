@@ -129,7 +129,7 @@ fn Body(report: PinReport) -> impl IntoView {
                                         <button
                                             type="button"
                                             on:click=move |_| {
-                                                controller::open_at(state, file.clone(), line, 0)
+                                                controller::open_at(state.focused(), file.clone(), line, 0)
                                             }
                                             class="block w-full text-left font-mono text-caption text-crimson hover:underline"
                                         >
@@ -204,7 +204,7 @@ fn Column(pins: Vec<PinInfo>) -> impl IntoView {
                             disabled=jump.is_none()
                             on:click=move |_| {
                                 if let Some(claim) = &jump {
-                                    controller::open_at(state, claim.file.clone(), claim.line, 0);
+                                    controller::open_at(state.focused(), claim.file.clone(), claim.line, 0);
                                 }
                             }
                             class=format!(

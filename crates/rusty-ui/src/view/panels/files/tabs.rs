@@ -26,7 +26,8 @@ pub(super) fn TabStrip() -> impl IntoView {
         return ().into_any();
     }
     view! {
-        <div class="flex flex-none items-stretch overflow-x-auto border-b border-line bg-sidebar">
+        <div class="flex flex-none items-stretch border-b border-line bg-sidebar">
+            <div class="flex min-w-0 flex-1 items-stretch overflow-x-auto">
             {move || {
                 let active = state.active_path()
                     .unwrap_or_default();
@@ -150,12 +151,34 @@ pub(super) fn TabStrip() -> impl IntoView {
                     })
                     .collect_view()
             }}
+            </div>
+            // Split, at the strip's end where VS Code keeps it. Disabled with
+            // one tab: moving a group's only file across leaves an empty pane.
+            {move || {
+                let enough = state.editor.tabs.with(|tabs| tabs.len() >= 2);
+                view! {
+                    <button
+                        type="button"
+                        title=if enough { t!("files.split") } else { t!("files.split-needs-two") }
+                        disabled=!enough
+                        on:click=move |_| controller::split_active(state)
+                        class="grid w-8 shrink-0 place-items-center border-l border-line text-label-3 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                    >
+                        <IconView icon=Icon::Columns size=14 />
+                    </button>
+                }
+            }}
 
             {move || {
                 let (x, y, path) = menu.get()?;
                 let close = Callback::new(move |_| menu.set(None));
-                let (this, others, copy, float) =
-                    (path.clone(), path.clone(), path.clone(), path.clone());
+                let (this, others, copy, float, beside) = (
+                    path.clone(),
+                    path.clone(),
+                    path.clone(),
+                    path.clone(),
+                    path.clone(),
+                );
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
@@ -164,6 +187,13 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 shortcut="Ctrl+W"
                                 on_select=Callback::new(move |_| {
                                     controller::close_tab(state, this.clone());
+                                    menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label=t!("context.tab-open-beside")
+                                on_select=Callback::new(move |_| {
+                                    controller::open_beside(state, beside.clone());
                                     menu.set(None);
                                 })
                             />

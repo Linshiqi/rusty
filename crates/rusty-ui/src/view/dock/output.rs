@@ -203,7 +203,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                                                             class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-rust"
                                                             on:click=move |_| {
                                                                 controller::open_at(
-                                                                    state,
+                                                                    state.focused(),
                                                                     path.clone(),
                                                                     line.saturating_sub(1),
                                                                     col.saturating_sub(1),

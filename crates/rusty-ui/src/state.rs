@@ -295,10 +295,13 @@ pub enum Divider {
     /// the right default at every pane width and pixels cannot say "half";
     /// the handle converts its travel with the width it measures on grab.
     GitSplit,
+    /// Where two editor groups meet, in permille of the editor area for the
+    /// same reason as `GitSplit`: half is the right default at every width.
+    EditorSplit,
 }
 
 impl Divider {
-    pub const ALL: [Divider; 8] = [
+    pub const ALL: [Divider; 9] = [
         Divider::Tree,
         Divider::Dock,
         Divider::DebugStack,
@@ -307,6 +310,7 @@ impl Divider {
         Divider::GitFiles,
         Divider::GitChanges,
         Divider::GitSplit,
+        Divider::EditorSplit,
     ];
 
     /// Whether the line is vertical — a column split, dragged left and right.
@@ -318,6 +322,7 @@ impl Divider {
                 | Divider::GitFiles
                 | Divider::GitChanges
                 | Divider::GitSplit
+                | Divider::EditorSplit
         )
     }
 
@@ -332,7 +337,8 @@ impl Divider {
             | Divider::DebugStack
             | Divider::GitFiles
             | Divider::GitChanges
-            | Divider::GitSplit => x - from_pointer,
+            | Divider::GitSplit
+            | Divider::EditorSplit => x - from_pointer,
             // Anchored to the bottom, so dragging up grows it.
             Divider::Dock | Divider::GitDetail => from_pointer - y,
             // Anchored to the top, so dragging down grows it.
@@ -355,7 +361,7 @@ impl Divider {
             Divider::GitFiles => 380.0,
             Divider::GitChanges => 380.0,
             // Permille: half and half.
-            Divider::GitSplit => 500.0,
+            Divider::GitSplit | Divider::EditorSplit => 500.0,
         }
     }
 
@@ -373,6 +379,9 @@ impl Divider {
             Divider::GitChanges => (220.0, 1200.0),
             // Neither side narrower than a seventh of the text.
             Divider::GitSplit => (150.0, 850.0),
+            // Neither group narrower than a fifth of the area: a group that
+            // thin shows a gutter and no code.
+            Divider::EditorSplit => (200.0, 800.0),
         }
     }
 
@@ -386,6 +395,7 @@ impl Divider {
             Divider::GitFiles => "rusty.layout.git-files",
             Divider::GitChanges => "rusty.layout.git-changes",
             Divider::GitSplit => "rusty.layout.git-split",
+            Divider::EditorSplit => "rusty.layout.editor-split",
         }
     }
 }
@@ -537,9 +547,17 @@ pub struct AppState {
     pub device: Device,
     pub wizard: Wizard,
     pub ai: Assistant,
+    /// The editor group this value addresses, and its find bar. The shell
+    /// provides the state for the first group; the second group's subtree
+    /// provides [`AppState::group`] of itself, so `AppState::expect()` inside
+    /// it — and every controller called from there — works on that group
+    /// without knowing there are two. See [`Group`].
     pub editor: Editor,
     pub setup: Setup,
     pub find: Find,
+    pub group: Group,
+    /// Both groups' handles, so any state value can reach the other group.
+    pub groups: Groups,
     pub search: Search,
     pub lsp: Lsp,
     pub sim: Sim,
@@ -742,6 +760,93 @@ pub struct Editor {
     pub vim: RwSignal<crate::vim::Vim>,
 }
 
+impl Editor {
+    /// A group with nothing open.
+    fn fresh() -> Self {
+        Editor {
+            tree: RwSignal::new(Vec::new()),
+            document: RwSignal::new(None),
+            draft: RwSignal::new(String::new()),
+            highlighted: RwSignal::new(Vec::new()),
+            echo_text: RwSignal::new(String::new()),
+            pulse_gen: RwSignal::new(0),
+            hover: RwSignal::new(None),
+            completion: RwSignal::new(None),
+            signature: RwSignal::new(None),
+            actions: RwSignal::new(None),
+            semantic: RwSignal::new(None),
+            tabs: RwSignal::new(Vec::new()),
+            parked: RwSignal::new(Vec::new()),
+            history: RwSignal::new(EditHistory::default()),
+            nav: RwSignal::new(NavHistory::default()),
+            rename: RwSignal::new(None),
+            reveal: RwSignal::new(None),
+            expanded: RwSignal::new(Vec::new()),
+            source_view: RwSignal::new(Vec::new()),
+            folds: RwSignal::new(rusty_edit::Folded::default()),
+            stale: RwSignal::new(Vec::new()),
+            watch_session: RwSignal::new(0),
+            zoom: RwSignal::new(stored_zoom()),
+            vim_on: RwSignal::new(false),
+            vim: RwSignal::new(crate::vim::Vim::default()),
+        }
+    }
+
+    /// A second group beside this one.
+    ///
+    /// The file tree, the expanded folders, the text zoom, the Vim switch,
+    /// the per-file source-view choice and the stale-file list are the
+    /// *project's*, not a group's, so the two groups share those handles —
+    /// separate copies would be a zoom that only took on one side and a tab
+    /// stale in one strip and not the other. Everything about what is open
+    /// and how it is being edited is this group's own.
+    fn beside(&self) -> Self {
+        Editor {
+            tree: self.tree,
+            expanded: self.expanded,
+            zoom: self.zoom,
+            vim_on: self.vim_on,
+            source_view: self.source_view,
+            stale: self.stale,
+            watch_session: self.watch_session,
+            ..Self::fresh()
+        }
+    }
+}
+
+/// Which editor group a state value addresses. Two at most: VS Code's
+/// everyday split, and the point past which a comparison becomes a tiling
+/// window manager.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Group {
+    #[default]
+    First,
+    Second,
+}
+
+impl Group {
+    pub fn other(self) -> Group {
+        match self {
+            Group::First => Group::Second,
+            Group::Second => Group::First,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Group::First => 0,
+            Group::Second => 1,
+        }
+    }
+}
+
+/// Both groups' handles, in `AppState` so any state value can reach either.
+#[derive(Clone, Copy)]
+pub struct Groups {
+    pub editors: [Editor; 2],
+    pub finds: [Find; 2],
+}
+
 /// The first-run environment check, and the install queue it drives.
 ///
 /// Separate from the Toolchain panel's own state on purpose: that panel
@@ -784,6 +889,21 @@ pub struct Find {
     pub replace: RwSignal<String>,
     /// Which match is current, clamped to the match count at use.
     pub index: RwSignal<usize>,
+}
+
+impl Find {
+    /// A closed bar with nothing typed. One per editor group: a find bar open
+    /// on one side must not open on the other.
+    fn fresh() -> Self {
+        Find {
+            open: RwSignal::new(false),
+            replace_open: RwSignal::new(false),
+            query: RwSignal::new(String::new()),
+            case: RwSignal::new(false),
+            replace: RwSignal::new(String::new()),
+            index: RwSignal::new(0),
+        }
+    }
 }
 
 /// The repository's history, as the Git panel shows it.
@@ -907,6 +1027,17 @@ pub enum GitTarget {
     Commit { id: String },
     /// A path in the working tree or in a commit, relative to the root.
     Path { path: String },
+}
+
+const TREE_HIDDEN_KEY: &str = "rusty.layout.tree-hidden";
+
+/// Whether the file tree was folded away last time.
+fn stored_tree_hidden() -> bool {
+    local_get(TREE_HIDDEN_KEY).is_some_and(|v| v == "hidden")
+}
+
+pub fn remember_tree_hidden(hidden: bool) {
+    local_set(TREE_HIDDEN_KEY, if hidden { "hidden" } else { "shown" });
 }
 
 const SPLIT_KEY: &str = "rusty.git.split";
@@ -1123,6 +1254,18 @@ pub struct Layout {
     pub panel: RwSignal<String>,
     /// Whole-interface scale, browser-zoom style. 1.0 is native.
     pub zoom: RwSignal<f64>,
+    /// Two editor groups side by side, and which one the user last worked
+    /// in — where a file opened from the tree, the finder or a search hit
+    /// lands.
+    pub split: RwSignal<bool>,
+    pub focus: RwSignal<Group>,
+    /// Where the two groups meet, in permille of the editor area's width.
+    pub editor_split: RwSignal<f64>,
+    /// The file tree folded away: a second click on the Files switcher, or
+    /// Ctrl+B. Remembered across sessions, like the pin map's fold.
+    pub tree_hidden: RwSignal<bool>,
+    /// The file finder (Ctrl+P) is up.
+    pub quick_open: RwSignal<bool>,
 }
 
 impl Layout {
@@ -1139,6 +1282,7 @@ impl Layout {
             Divider::GitFiles => self.git_files_width,
             Divider::GitChanges => self.git_changes_width,
             Divider::GitSplit => self.git_split,
+            Divider::EditorSplit => self.editor_split,
         }
     }
 }
@@ -1211,7 +1355,14 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let first = Editor::fresh();
+        let editors = [first, first.beside()];
+        let finds = [Find::fresh(), Find::fresh()];
         Self {
+            group: Group::First,
+            groups: Groups { editors, finds },
+            editor: editors[0],
+            find: finds[0],
             project: Project {
                 detected: RwSignal::new(None),
                 workspace: RwSignal::new(None),
@@ -1255,33 +1406,6 @@ impl AppState {
                 key_stored: RwSignal::new(false),
                 open: RwSignal::new(false),
             },
-            editor: Editor {
-                tree: RwSignal::new(Vec::new()),
-                document: RwSignal::new(None),
-                draft: RwSignal::new(String::new()),
-                highlighted: RwSignal::new(Vec::new()),
-                echo_text: RwSignal::new(String::new()),
-                pulse_gen: RwSignal::new(0),
-                hover: RwSignal::new(None),
-                completion: RwSignal::new(None),
-                signature: RwSignal::new(None),
-                actions: RwSignal::new(None),
-                semantic: RwSignal::new(None),
-                tabs: RwSignal::new(Vec::new()),
-                parked: RwSignal::new(Vec::new()),
-                history: RwSignal::new(EditHistory::default()),
-                nav: RwSignal::new(NavHistory::default()),
-                rename: RwSignal::new(None),
-                reveal: RwSignal::new(None),
-                expanded: RwSignal::new(Vec::new()),
-                source_view: RwSignal::new(Vec::new()),
-                folds: RwSignal::new(rusty_edit::Folded::default()),
-                stale: RwSignal::new(Vec::new()),
-                watch_session: RwSignal::new(0),
-                zoom: RwSignal::new(stored_zoom()),
-                vim_on: RwSignal::new(false),
-                vim: RwSignal::new(crate::vim::Vim::default()),
-            },
             setup: Setup {
                 open: RwSignal::new(false),
                 steps: RwSignal::new(Vec::new()),
@@ -1290,14 +1414,6 @@ impl AppState {
                 failed: RwSignal::new(Vec::new()),
                 checked: RwSignal::new(false),
                 data_dir: RwSignal::new(None),
-            },
-            find: Find {
-                open: RwSignal::new(false),
-                replace_open: RwSignal::new(false),
-                query: RwSignal::new(String::new()),
-                case: RwSignal::new(false),
-                replace: RwSignal::new(String::new()),
-                index: RwSignal::new(0),
             },
             git: Git {
                 history: RwSignal::new(None),
@@ -1412,6 +1528,14 @@ impl AppState {
                 dock_tab: RwSignal::new(DockTab::Problems),
                 panel: RwSignal::new("files".to_string()),
                 zoom: RwSignal::new(stored_ui_zoom()),
+                split: RwSignal::new(false),
+                focus: RwSignal::new(Group::First),
+                editor_split: RwSignal::new(stored_size(
+                    Divider::EditorSplit,
+                    Divider::EditorSplit.default_size(),
+                )),
+                tree_hidden: RwSignal::new(stored_tree_hidden()),
+                quick_open: RwSignal::new(false),
             },
             dock: Dock {
                 lines: RwSignal::new(Vec::new()),
@@ -1504,22 +1628,26 @@ impl AppState {
     /// dirty — its draft is the disk's text by construction, and treating it
     /// as unsaved would put a dot on every dependency you glanced at.
     pub fn is_dirty(&self, path: &str) -> bool {
-        let active = self.editor.document.with(|doc| {
-            doc.as_ref().is_some_and(|doc| {
-                doc.path == path
-                    && !doc.read_only
-                    && self.editor.draft.with(|draft| draft != &doc.text)
-            })
-        });
-        active
-            || self.editor.parked.with(|parked| {
-                parked
-                    .iter()
-                    .find(|editor| editor.document.path == path)
-                    .is_some_and(|editor| {
-                        !editor.document.read_only && editor.draft != editor.document.text
-                    })
-            })
+        // Both groups, whichever this value addresses: a file is open in one
+        // of them at most, and a draft anywhere is what protects the disk.
+        self.groups.editors.iter().any(|editor| {
+            let active = editor.document.with(|doc| {
+                doc.as_ref().is_some_and(|doc| {
+                    doc.path == path
+                        && !doc.read_only
+                        && editor.draft.with(|draft| draft != &doc.text)
+                })
+            });
+            active
+                || editor.parked.with(|parked| {
+                    parked
+                        .iter()
+                        .find(|editor| editor.document.path == path)
+                        .is_some_and(|editor| {
+                            !editor.document.read_only && editor.draft != editor.document.text
+                        })
+                })
+        })
     }
 
     /// Every open editor with unsaved changes, project-relative.
@@ -1528,12 +1656,49 @@ impl AppState {
     /// screen and still looks authoritative, so replacing underneath it means
     /// the next Ctrl+S quietly puts the old text back.
     pub fn dirty_paths(&self) -> Vec<String> {
-        self.editor
-            .tabs
-            .get_untracked()
-            .into_iter()
+        self.groups
+            .editors
+            .iter()
+            .flat_map(|editor| editor.tabs.get_untracked())
             .filter(|path| self.is_dirty(path))
             .collect()
+    }
+
+    /// This state addressing `which` group: `editor` and `find` are that
+    /// group's, everything else is shared. `AppState` is a bundle of `Copy`
+    /// handles, so this costs nothing — and it is what lets every controller
+    /// written for one editor serve two. The second group's subtree provides
+    /// this as its context; a controller reached from outside either group
+    /// asks [`AppState::focused`] which one the user meant.
+    pub fn group(self, which: Group) -> AppState {
+        AppState {
+            editor: self.groups.editors[which.index()],
+            find: self.groups.finds[which.index()],
+            group: which,
+            ..self
+        }
+    }
+
+    /// The group beside this one.
+    pub fn other(self) -> AppState {
+        self.group(self.group.other())
+    }
+
+    /// The group the user last worked in — where a file opened from the
+    /// tree, the finder or a search hit lands. Untracked: a controller's
+    /// question, asked at the moment of the click.
+    pub fn focused(self) -> AppState {
+        self.group(self.layout.focus.get_untracked())
+    }
+
+    /// Every group on screen, the first first. Untracked, for the watcher and
+    /// the language server, which have to tell both about the disk.
+    pub fn open_groups(self) -> Vec<AppState> {
+        if self.layout.split.get_untracked() {
+            vec![self.group(Group::First), self.group(Group::Second)]
+        } else {
+            vec![self.group(Group::First)]
+        }
     }
 
     /// Every problem, from both sources, worst first.

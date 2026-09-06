@@ -155,7 +155,7 @@ fn attach_session<A: serde::Serialize + 'static>(
                 if arrived {
                     stopped_at.set(Some(frame.address.clone()));
                     if let (Some(file), Some(line)) = (frame.file.clone(), frame.line) {
-                        open_at(state, file, line, 0);
+                        open_at(state.focused(), file, line, 0);
                     }
                 }
             }

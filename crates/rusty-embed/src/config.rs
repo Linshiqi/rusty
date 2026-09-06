@@ -211,22 +211,15 @@ pub struct WorkbenchState {
 const TABS_KEPT: usize = 40;
 
 /// Remember a project's open editors, replacing whatever that project had.
-pub fn record_tabs(root: &str, tabs: Vec<String>, active: Option<String>) {
-    let _ = update(|state| push_tabs(&mut state.open_tabs, root, tabs, active));
+pub fn record_tabs(tabs: ProjectTabs) {
+    let _ = update(|state| push_tabs(&mut state.open_tabs, tabs));
 }
 
 /// The list discipline, separate from storage so it is testable — the same
 /// shape `push_recent` has, and for the same reason.
-fn push_tabs(list: &mut Vec<ProjectTabs>, root: &str, tabs: Vec<String>, active: Option<String>) {
-    list.retain(|known| !same_dir(Path::new(&known.root), Path::new(root)));
-    list.insert(
-        0,
-        ProjectTabs {
-            root: root.to_string(),
-            tabs,
-            active,
-        },
-    );
+fn push_tabs(list: &mut Vec<ProjectTabs>, tabs: ProjectTabs) {
+    list.retain(|known| !same_dir(Path::new(&known.root), Path::new(&tabs.root)));
+    list.insert(0, tabs);
     list.truncate(TABS_KEPT);
 }
 
@@ -301,6 +294,10 @@ mod file {
         pub tabs: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub active: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub second: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub second_active: Option<String>,
     }
 
     impl From<Workbench> for super::WorkbenchState {
@@ -328,6 +325,8 @@ mod file {
                         root: t.root,
                         tabs: t.tabs,
                         active: t.active,
+                        second: t.second,
+                        second_active: t.second_active,
                     })
                     .collect(),
             }
@@ -359,6 +358,8 @@ mod file {
                         root: t.root.clone(),
                         tabs: t.tabs.clone(),
                         active: t.active.clone(),
+                        second: t.second.clone(),
+                        second_active: t.second_active.clone(),
                     })
                     .collect(),
             }
@@ -650,6 +651,10 @@ mod tests {
                 root: "E:/work/blinky".into(),
                 tabs: vec!["src/main.rs".into()],
                 active: Some("src/main.rs".into()),
+                // Off their defaults, or the round trip proves nothing about
+                // the fields it leaves alone.
+                second: vec!["src/lib.rs".into()],
+                second_active: Some("src/lib.rs".into()),
             }],
         };
         save_workbench_at(&path, &state).unwrap();
@@ -673,23 +678,20 @@ mod tests {
 
     #[test]
     fn tabs_are_kept_per_directory_and_the_list_is_capped() {
+        let strip = |root: &str, file: &str| ProjectTabs {
+            root: root.into(),
+            tabs: vec![file.into()],
+            active: None,
+            second: Vec::new(),
+            second_active: None,
+        };
         let mut list = Vec::new();
-        push_tabs(
-            &mut list,
-            "E:/work/blinky",
-            vec!["src/main.rs".into()],
-            None,
-        );
+        push_tabs(&mut list, strip("E:/work/blinky", "src/main.rs"));
 
         // The trap the WebView copy fell into: it keyed on the path as typed,
         // so opening the same project by another spelling silently had no
         // tabs. `recent_projects` learned this already; this shares the fix.
-        push_tabs(
-            &mut list,
-            "E:\\work\\blinky",
-            vec!["src/lib.rs".into()],
-            None,
-        );
+        push_tabs(&mut list, strip("E:\\work\\blinky", "src/lib.rs"));
         assert_eq!(list.len(), 1, "a different spelling is the same project");
         assert_eq!(
             list[0].tabs,
@@ -698,7 +700,7 @@ mod tests {
         );
 
         for n in 0..TABS_KEPT + 5 {
-            push_tabs(&mut list, &format!("E:/p{n}"), vec!["a.rs".into()], None);
+            push_tabs(&mut list, strip(&format!("E:/p{n}"), "a.rs"));
         }
         assert_eq!(
             list.len(),

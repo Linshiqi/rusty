@@ -38,15 +38,26 @@ pub fn remember_tabs(state: AppState) {
     else {
         return;
     };
-    let active = state.active_path_now();
-    let tabs = state.editor.tabs.get_untracked();
+    // Both groups, whichever one's strip changed: the file holds the whole
+    // layout, and a record from one side alone would drop the other's tabs.
+    let first = state.group(crate::state::Group::First);
+    let second = state.group(crate::state::Group::Second);
     #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         root: String,
         tabs: Vec<String>,
         active: Option<String>,
+        second: Vec<String>,
+        second_active: Option<String>,
     }
-    let args = Args { root, tabs, active };
+    let args = Args {
+        root,
+        tabs: first.editor.tabs.get_untracked(),
+        active: first.active_path_now(),
+        second: second.editor.tabs.get_untracked(),
+        second_active: second.active_path_now(),
+    };
     // Fire and forget: a tab strip that failed to save is not worth a banner
     // over the edit the user was making when it happened.
     spawn_local(async move {
@@ -83,11 +94,16 @@ pub fn restore_tabs(state: AppState, root: &str) {
                 .ok()
                 .flatten();
 
-        let (tabs, active) = match (stored, carried) {
+        let (tabs, active, second, second_active) = match (stored, carried) {
             // The file wins where it has an answer: it is the one that
             // survives a reinstall, and a stale WebView copy would undo the
             // last session every time.
-            (Some(stored), _) => (stored.tabs, stored.active),
+            (Some(stored), _) => (
+                stored.tabs,
+                stored.active,
+                stored.second,
+                stored.second_active,
+            ),
             (None, Some(old)) => (
                 old["tabs"]
                     .as_array()
@@ -99,6 +115,8 @@ pub fn restore_tabs(state: AppState, root: &str) {
                     })
                     .unwrap_or_default(),
                 old["active"].as_str().map(str::to_string),
+                Vec::new(),
+                None,
             ),
             (None, None) => return,
         };
@@ -119,6 +137,20 @@ pub fn restore_tabs(state: AppState, root: &str) {
         let active = active.filter(|path| tabs.iter().any(|t| t == path));
         if let Some(active) = active.or_else(|| tabs.first().cloned()) {
             open_file(state, active);
+        }
+        // The second group, when there was one: its strip, its file, and the
+        // split itself. Focus stays with the first, as a fresh window's does.
+        if !second.is_empty() {
+            let group = state.group(crate::state::Group::Second);
+            state.layout.split.set(true);
+            group.editor.tabs.set(second.clone());
+            let shown = second_active
+                .filter(|path| second.iter().any(|t| t == path))
+                .or_else(|| second.first().cloned());
+            if let Some(shown) = shown {
+                open_file(group, shown);
+            }
+            state.layout.focus.set(crate::state::Group::First);
         }
     });
 }

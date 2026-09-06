@@ -62,8 +62,11 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
                                         }
                                     }
                                     class=move || {
+                                        // `nowrap`: with the search box in the middle, a
+                                        // narrow window squeezes the menus, and a menu
+                                        // title broken over two lines reads as damage.
                                         let base = "rounded-[4px] px-2 py-[3px] text-callout \
-                                                    transition-colors";
+                                                    whitespace-nowrap transition-colors";
                                         if is_open.get() {
                                             format!("{base} bg-sunken text-label")
                                         } else {
@@ -94,8 +97,10 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
             <span data-tauri-drag-region class="flex-1 self-stretch" />
 
             // The open project, centred the way an editor centres the document
-            // it is showing. It is the answer to "what am I looking at", which
-            // is worth a glance and never worth a click.
+            // it is showing — drawn as a search box, VS Code's command centre.
+            // It still answers "what am I looking at" at a glance, and a click
+            // (or Ctrl+P) opens the file finder under it: the project's name
+            // is the box's placeholder, which is how VS Code's reads too.
             {move || {
                 state
                     .project.detected
@@ -108,18 +113,39 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
                             .next()
                             .unwrap_or(&project.root)
                             .to_string();
+                        let chord = crate::view::palette::effective(state)
+                            .into_iter()
+                            .find(|(binding, _)| binding.action == command::Action::QuickOpen)
+                            .map(|(_, chord)| chord);
                         view! {
-                            <div class="pointer-events-none flex min-w-0 items-center gap-2 text-footnote">
+                            <button
+                                type="button"
+                                title=t!("menu.view.quick-open")
+                                on:click=move |_| state.layout.quick_open.set(true)
+                                class="flex h-[26px] w-[min(38vw,440px)] min-w-0 items-center gap-2 rounded-[6px] bg-sunken px-2.5 text-footnote ring-1 ring-line transition-colors hover:ring-line-strong"
+                            >
+                                <span class="text-label-3">
+                                    <crate::view::icon::IconView icon=crate::view::icon::Icon::Search size=13 />
+                                </span>
                                 <span class="truncate text-label-2">{name}</span>
                                 {chip
                                     .map(|chip| {
                                         view! {
-                                            <span class="rounded-full bg-sunken px-1.5 font-mono text-label-3">
+                                            <span class="rounded-full bg-raised px-1.5 font-mono text-label-3">
                                                 {chip}
                                             </span>
                                         }
                                     })}
-                            </div>
+                                <span class="flex-1" />
+                                {chord
+                                    .map(|chord| {
+                                        view! {
+                                            <kbd class="shrink-0 rounded-[4px] bg-raised px-1 font-mono text-caption text-label-4">
+                                                {chord}
+                                            </kbd>
+                                        }
+                                    })}
+                            </button>
                         }
                     })
             }}

@@ -94,7 +94,7 @@ pub(super) fn ProblemsTab() -> impl IntoView {
                             <MenuItem
                                 label=t!("context.problems-open")
                                 on_select=Callback::new(move |_| {
-                                    controller::open_at(state, path.clone(), line, col);
+                                    controller::open_at(state.focused(), path.clone(), line, col);
                                     menu.set(None);
                                 })
                             />
@@ -146,7 +146,7 @@ fn DiagnosticRow(
                 // open_at, not open_file: the row names a line, and landing at
                 // the top of the file makes the click look broken — which is
                 // exactly what it did before the editor had tabs.
-                controller::open_at(state, open_path.clone(), line, col);
+                controller::open_at(state.focused(), open_path.clone(), line, col);
             }
             on:contextmenu=move |event: leptos::ev::MouseEvent| {
                 event.prevent_default();

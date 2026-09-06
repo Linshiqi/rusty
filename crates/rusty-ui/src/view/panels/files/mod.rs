@@ -31,6 +31,7 @@ mod tabs;
 mod tree;
 
 pub(crate) use editor::Editor;
+use editor::{EditorGroup, SplitGrip};
 pub use tree::FilesPanel;
 
 // Reached from most of these modules; declared once here, where every child's
