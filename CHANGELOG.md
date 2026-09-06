@@ -43,8 +43,18 @@ pull-up button; the emulator's pin is driven to the level the wiring means.
 - Parts can be renamed in the properties panel. A name you type survives
   rewiring; the editor's own labels (`GPIO26`) keep following the pin.
 - Ctrl+D duplicates the selected part.
-- LEDs have a lens highlight, a pressed button sinks, and the potentiometer
-  shows a knob that turns with its slider.
+- LEDs are drawn as LEDs — dome, flange, legs — and glow when lit; the RGB
+  LED is the same dome in its mixed colour; the seven-segment digit sits in
+  a dark bezel. A pressed button sinks, and the potentiometer shows a knob
+  that turns with its slider.
+- Wires can be pulled from the chip's side too: drag a devkit pin onto a
+  part's gold stub. The stub that will take it lights up under the pointer.
+- Rubber-band selection: drag on the empty sheet to select several parts,
+  Shift+click to add or remove one, Ctrl+A for all. A selection moves
+  together and Delete removes it together; the properties panel says how
+  many are selected. Panning moved to the middle button or Ctrl/Alt+drag.
+- The sheet redraws only the part that changed, so dragging on a crowded
+  board no longer stutters.
 
 ## v0.6.7
 

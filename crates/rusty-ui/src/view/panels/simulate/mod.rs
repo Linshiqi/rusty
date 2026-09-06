@@ -231,6 +231,19 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
     // cursor hovers, when it is one that accepts wires.
     let ghost = RwSignal::new(None::<(f64, f64)>);
     let hover_row = RwSignal::new(None::<usize>);
+    // A wire pulled from a chip pin: the part stub under the pointer, when
+    // one is within reach — the dot that lights up to take it.
+    let hover_stub = RwSignal::new(None::<(usize, usize)>);
+    // Every part in the selection: the one under the ring plus whatever a
+    // rubber band or a Shift-click added. `selected` stays the one the
+    // inspector describes and the keys act on when the group is one part.
+    let marked = RwSignal::new(Vec::<usize>::new());
+    // Where each other marked part stood when a group drag began, with its
+    // routes' first-leg axes, so every frame is start plus one displacement
+    // rather than an accumulation of snapped deltas.
+    let group_start = RwSignal::new(Vec::<GroupStart>::new());
+    // The rubber band's moving corner while a box drag is in flight.
+    let box_to = RwSignal::new(None::<(f64, f64)>);
     let view = RwSignal::new((0.0f64, 0.0f64, 1.0f64));
     let canvas: NodeRef<leptos::html::Div> = NodeRef::new();
 
@@ -347,6 +360,22 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
         parts.update(|list| edit::remove(list, index));
         selected.set(None);
         selected_wire.set(None);
+        // Every index above the removed part has shifted; the cheapest
+        // correct answer is that nothing is marked any more.
+        marked.set(Vec::new());
+        dirty.set(true);
+    };
+    // Every marked part at once — Delete on a rubber-band selection.
+    let remove_marked = move || {
+        let group = marked.get_untracked();
+        if group.is_empty() {
+            return;
+        }
+        checkpoint();
+        parts.update(|list| edit::remove_many(list, &group));
+        selected.set(None);
+        selected_wire.set(None);
+        marked.set(Vec::new());
         dirty.set(true);
     };
     let duplicate_part = move |index: usize| {
@@ -362,6 +391,8 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
     let delete_selection = move || {
         if let Some((part, slot)) = selected_wire.get_untracked() {
             disconnect(part, slot);
+        } else if marked.with_untracked(|m| m.len() > 1) {
+            remove_marked();
         } else if let Some(index) = selected.get_untracked() {
             remove_part(index);
         }
@@ -392,6 +423,9 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 guides.set((None, None));
                                 selected_wire.set(None);
                                 selected.set(None);
+                                hover_stub.set(None);
+                                box_to.set(None);
+                                marked.set(Vec::new());
                             }
                             "r" | "R" | " " if !event.ctrl_key() => {
                                 if let Some(index) = selected.get_untracked() {
@@ -427,6 +461,12 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                     };
                                     nudge(dx, dy);
                                 }
+                            }
+                            _ if event.ctrl_key()
+                                && event.key().eq_ignore_ascii_case("a") => {
+                                event.prevent_default();
+                                marked.set((0..parts.with_untracked(Vec::len)).collect());
+                                selected_wire.set(None);
                             }
                             _ if event.ctrl_key()
                                 && event.key().eq_ignore_ascii_case("d") => {
@@ -521,15 +561,33 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 || node.node_name() == "rect")
                         {
                             let _ = element.focus();
-                            let (tx, ty, _) = view.get_untracked();
-                            drag.set(Some(Drag::Pan {
-                                start_tx: tx,
-                                start_ty: ty,
-                                px: f64::from(event.client_x()),
-                                py: f64::from(event.client_y()),
-                            }));
                             selected.set(None);
                             selected_wire.set(None);
+                            // A plain drag on the sheet draws the rubber band,
+                            // as in KiCad and every drawing tool; panning is
+                            // the middle button, or Ctrl/Alt with the left —
+                            // the modifier every map has taught.
+                            if event.ctrl_key() || event.alt_key() {
+                                let (tx, ty, _) = view.get_untracked();
+                                drag.set(Some(Drag::Pan {
+                                    start_tx: tx,
+                                    start_ty: ty,
+                                    px: f64::from(event.client_x()),
+                                    py: f64::from(event.client_y()),
+                                }));
+                                return;
+                            }
+                            // Shift keeps what is marked and lets the band add
+                            // to it; a plain press starts the selection over.
+                            if !event.shift_key() {
+                                marked.set(Vec::new());
+                            }
+                            let world = to_world(
+                                f64::from(event.client_x()),
+                                f64::from(event.client_y()),
+                            );
+                            box_to.set(None);
+                            drag.set(Some(Drag::Box { start: world }));
                         }
                     }
                     on:pointermove=move |event: ev::PointerEvent| {
@@ -557,7 +615,11 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 });
                             }
                             Drag::Part {
-                                index, dx, dy, axes, ..
+                                index,
+                                dx,
+                                dy,
+                                axes,
+                                from,
                             } => {
                                 let step = grid.get_untracked();
                                 let mut x = snap_to(world.0 - dx, step);
@@ -619,6 +681,14 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                         }
                                     }
                                 });
+                                // The rest of the group follows by the same
+                                // displacement, each from where it stood.
+                                if !group_start.with_untracked(Vec::is_empty) {
+                                    let group = group_start.get_untracked();
+                                    parts.update(|list| {
+                                        edit::translate(list, &group, x - from.0, y - from.1);
+                                    });
+                                }
                                 dirty.set(true);
                             }
                             Drag::Kit { dx, dy, .. } => {
@@ -635,6 +705,18 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 let row = row_under(kit_pos.get_untracked(), drawn.len(), world)
                                     .filter(|r| drawn.get(*r).is_some_and(|r| r.1.is_some()));
                                 hover_row.set(row);
+                            }
+                            Drag::WireFromPin { .. } => {
+                                ghost.set(Some(world));
+                                // Generous, and in sheet units so it does not
+                                // shrink as the view zooms out: a stub is a
+                                // 9px dot and the hand has a wire to mind.
+                                hover_stub.set(
+                                    parts.with_untracked(|list| stub_under(list, world, 14.0)),
+                                );
+                            }
+                            Drag::Box { .. } => {
+                                box_to.set(Some(world));
                             }
                             Drag::Segment {
                                 part,
@@ -709,16 +791,72 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                         // grab target.
                         if let Some(Drag::Part { index, .. }) = drag.get_untracked() {
                             let kit = kit_pos.get_untracked();
+                            let drawn = rows.get_untracked();
+                            let mut moved: Vec<usize> = group_start
+                                .get_untracked()
+                                .iter()
+                                .map(|(i, _, _)| *i)
+                                .collect();
+                            moved.push(index);
                             parts.update(|list| {
-                                if let Some(p) = list.get_mut(index) {
-                                    for slot in 0..p.kind.wires() {
-                                        if p.waypoints[slot].is_empty() {
-                                            continue;
+                                for index in moved {
+                                    if let Some(p) = list.get_mut(index) {
+                                        for slot in 0..p.kind.wires() {
+                                            if p.waypoints[slot].is_empty() {
+                                                continue;
+                                            }
+                                            retidy(p, slot, kit, &drawn);
                                         }
-                                        retidy(p, slot, kit, &rows.get_untracked());
                                     }
                                 }
                             });
+                            group_start.set(Vec::new());
+                        }
+                        // The band closes over everything it touched. A press
+                        // that never moved — a click on the sheet — marks
+                        // nothing, which is the deselect it always was.
+                        if let Some(Drag::Box { start }) = drag.get_untracked() {
+                            if let Some(to) = box_to.get_untracked()
+                                && ((to.0 - start.0).abs() > 2.0 || (to.1 - start.1).abs() > 2.0)
+                            {
+                                let hits =
+                                    parts.with_untracked(|list| parts_in_box(list, start, to));
+                                marked.update(|m| {
+                                    for hit in hits {
+                                        if !m.contains(&hit) {
+                                            m.push(hit);
+                                        }
+                                    }
+                                });
+                                selected.set(marked.with_untracked(|m| m.first().copied()));
+                            }
+                            box_to.set(None);
+                        }
+                        // A wire pulled from a chip pin lands on a stub: the
+                        // same assignment as the other direction, so the two
+                        // gestures cannot disagree about what wiring means.
+                        if let Some(Drag::WireFromPin { row }) = drag.get_untracked() {
+                            if let Some((part, slot)) = hover_stub.get_untracked()
+                                && let Some(gpio) = rows.get_untracked().get(row).and_then(|r| r.1)
+                            {
+                                checkpoint();
+                                parts.update(|list| {
+                                    if let Some(p) = list.get_mut(part) {
+                                        p.pins[slot] = gpio;
+                                        p.waypoints[slot].clear();
+                                        if p.kind.wires() == 1
+                                            && edit::is_auto_label(&p.kind, &p.label)
+                                        {
+                                            p.label = single_pin_label(&p.kind, gpio);
+                                        }
+                                    }
+                                });
+                                selected.set(Some(part));
+                                marked.set(vec![part]);
+                                selected_wire.set(Some((part, slot)));
+                                dirty.set(true);
+                            }
+                            hover_stub.set(None);
                         }
                         if let Some(Drag::Wire { part, slot }) = drag.get_untracked() {
                             // Landing on a GPIO row wires the pin; anywhere
@@ -746,12 +884,17 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                         }
                         ghost.set(None);
                         hover_row.set(None);
+                        hover_stub.set(None);
+                        box_to.set(None);
                         drag.set(None);
                     }
                     on:pointerleave=move |_| {
                         guides.set((None, None));
                         ghost.set(None);
                         hover_row.set(None);
+                        hover_stub.set(None);
+                        box_to.set(None);
+                        group_start.set(Vec::new());
                         drag.set(None);
                     }
                     class="relative min-w-0 flex-1 overflow-hidden bg-[#101216] outline-none"
@@ -947,8 +1090,29 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                     "#5a5142"
                                                 };
                                                 let r = if hot { 5.0 } else { 3.2 };
+                                                // A press on a wireable pin starts
+                                                // a wire from the chip's side — and
+                                                // must not start the devkit's drag.
+                                                let wireable = gpio.is_some();
                                                 view! {
-                                                    <circle cx=cx cy=y r=r fill=fill />
+                                                    <circle
+                                                        cx=cx
+                                                        cy=y
+                                                        r=r
+                                                        fill=fill
+                                                        style=if wireable { "cursor: crosshair" } else { "" }
+                                                        on:pointerdown=move |event: ev::PointerEvent| {
+                                                            if !wireable || event.button() != 0 {
+                                                                return;
+                                                            }
+                                                            event.prevent_default();
+                                                            event.stop_propagation();
+                                                            selected.set(None);
+                                                            selected_wire.set(None);
+                                                            hover_row.set(Some(row));
+                                                            drag.set(Some(Drag::WireFromPin { row }));
+                                                        }
+                                                    />
                                                     <text
                                                         x=if left { 18.0 } else { KIT_W - 18.0 }
                                                         y=y + 3
@@ -972,87 +1136,93 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                             }
                         }}
 
-                        {move || {
-                            parts
-                                .get()
-                                .iter()
-                                .enumerate()
-                                .map(|(index, part)| {
-                                    let x = part.x;
-                                    let y = part.y;
-                                    let rot = part.rot;
-                                    let flip = part.flip;
-                                    // Mirroring the body mirrors its writing
-                                    // too; readouts and the label undo
-                                    // whatever the body did, the rule that
-                                    // keeps a turned part readable.
-                                    let readable = match (rot == 180, flip) {
+                        // One view per part, keyed by index, and every field
+                        // a view reads comes through its own memo — so a drag
+                        // frame touches one part's `style` and nothing else.
+                        // This used to rebuild every part's DOM on every
+                        // pointer move: fine with three parts, a stutter with
+                        // thirty, and the reason a hover on one stub could
+                        // not be cheap.
+                        <For
+                            each=move || 0..parts.with(Vec::len)
+                            key=|index| *index
+                            children=move |index: usize| {
+                                let this = Memo::new(move |_| {
+                                    parts.with(|list| list.get(index).cloned())
+                                });
+                                let kind = Memo::new(move |_| {
+                                    this.with(|p| p.as_ref().map(|p| p.kind.clone()))
+                                });
+                                let pins = Memo::new(move |_| {
+                                    this.with(|p| p.as_ref().map_or([UNWIRED; 7], |p| p.pins))
+                                });
+                                let place = Memo::new(move |_| {
+                                    this.with(|p| p.as_ref().map(|p| (p.x, p.y, p.rot, p.flip)))
+                                });
+                                let label = Memo::new(move |_| {
+                                    this.with(|p| {
+                                        p.as_ref().map(|p| p.label.clone()).unwrap_or_default()
+                                    })
+                                });
+                                let active_low = Memo::new(move |_| {
+                                    this.with(|p| p.as_ref().is_some_and(|p| p.active_low))
+                                });
+                                let pin = move |slot: usize| pins.get()[slot];
+                                // Mirroring the body mirrors its writing too;
+                                // readouts and the label undo whatever the
+                                // body did, the rule that keeps a turned part
+                                // readable.
+                                let readable = move || {
+                                    let (_, _, rot, flip) =
+                                        place.get().unwrap_or((0.0, 0.0, 0, false));
+                                    match (rot == 180, flip) {
                                         (true, true) => "transform: rotate(180deg) scaleX(-1)",
                                         (true, false) => "transform: rotate(180deg)",
                                         (false, true) => "transform: scaleX(-1)",
                                         (false, false) => "",
-                                    };
-                                    let width = part.kind.width();
-                                    let height = part.kind.height();
-                                    let label = part.label.clone();
-                                    let kind = part.kind.clone();
-                                    let grab_kind = part.kind.clone();
-                                    let pins = part.pins;
-                                    let wires = part.kind.wires();
-                                    let is_selected =
-                                        Signal::derive(move || selected.get() == Some(index));
-                                    let level = move |pin: u8| {
-                                        state
-                                            .sim.gpio
-                                            .with(|gpio| {
-                                                gpio.get(&pin).copied().unwrap_or(false)
-                                            })
-                                    };
-                                    // `None` means the firmware has never reported
-                                    // a duty for this pin, which is not the
-                                    // same as reporting zero -- see the field's
-                                    // own note. A motor draws the difference.
-                                    let duty = move |pin: u8| {
-                                        state.sim.pwm.with(|pwm| pwm.get(&pin).copied())
-                                    };
-                                    // What the firmware set, read through the
-                                    // part's wiring: a lamp wired active-low
-                                    // is lit when its pin is low, and a
-                                    // pull-up button is pressed when its pin
-                                    // is low. Drawing the level itself was the
-                                    // confident wrong answer for both.
-                                    let active_low = part.active_low;
-                                    let lit = move |pin: u8| level(pin) != active_low;
+                                    }
+                                };
+                                let is_selected =
+                                    Signal::derive(move || selected.get() == Some(index));
+                                let is_marked =
+                                    Signal::derive(move || marked.with(|m| m.contains(&index)));
+                                let level = move |pin: u8| {
+                                    state
+                                        .sim
+                                        .gpio
+                                        .with(|gpio| gpio.get(&pin).copied().unwrap_or(false))
+                                };
+                                // `None` means the firmware has never reported
+                                // a duty for this pin, which is not the same
+                                // as reporting zero — see the field's own
+                                // note. A motor draws the difference.
+                                let duty = move |pin: u8| {
+                                    state.sim.pwm.with(|pwm| pwm.get(&pin).copied())
+                                };
+                                // What the firmware set, read through the
+                                // part's wiring: a lamp wired active-low is
+                                // lit when its pin is low, and a pull-up
+                                // button is pressed when its pin is low.
+                                // Drawing the level itself was the confident
+                                // wrong answer for both.
+                                let lit = move |slot: usize| level(pin(slot)) != active_low.get();
 
-                                    let face = match kind.clone() {
-                                        PartKind::Led { color } => view! {
-                                            // A dome, not a disc: the highlight
-                                            // is what reads as glass at 16px.
-                                            <span class="relative size-4 shrink-0">
-                                                <span class=move || {
-                                                    format!(
-                                                        "absolute inset-0 rounded-full transition-all duration-150 {}",
-                                                        lamp_classes(&color, lit(pins[0])),
-                                                    )
-                                                } />
-                                                <span class="absolute top-[3px] left-[4px] h-[4px] w-[6px] rounded-full bg-white/35" />
-                                            </span>
+                                // The face follows the kind and only the kind;
+                                // what it shows follows the pins and the
+                                // firmware through the closures inside it.
+                                let face = move || {
+                                    let Some(kind) = kind.get() else {
+                                        return ().into_any();
+                                    };
+                                    match kind {
+                                        PartKind::Led { color } => {
+                                            let (on, off) = lamp_colors(&color);
+                                            lamp_dome(move || if lit(0) { on } else { off }, move || lit(0))
                                         }
-                                            .into_any(),
-                                        PartKind::Rgb => view! {
-                                            <span class="relative size-4 shrink-0">
-                                                <span
-                                                    class="absolute inset-0 rounded-full transition-all duration-150"
-                                                    style=move || rgb_style(
-                                                        lit(pins[0]),
-                                                        lit(pins[1]),
-                                                        lit(pins[2]),
-                                                    )
-                                                />
-                                                <span class="absolute top-[3px] left-[4px] h-[4px] w-[6px] rounded-full bg-white/35" />
-                                            </span>
-                                        }
-                                            .into_any(),
+                                        PartKind::Rgb => lamp_dome(
+                                            move || rgb_color(lit(0), lit(1), lit(2)),
+                                            move || lit(0) || lit(1) || lit(2),
+                                        ),
                                         PartKind::Seven => view! {
                                             // A digit mounted upside-down
                                             // still reads upright — KiCad
@@ -1062,15 +1232,13 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                 width="26"
                                                 height="42"
                                                 viewBox="0 0 26 42"
+                                                class="shrink-0"
                                                 style=readable
                                             >
+                                                <rect x="0" y="0" width="26" height="42" rx="3" fill="#1a1114" />
                                                 {
                                                     let seg = move |slot: usize| {
-                                                        if lit(pins[slot]) {
-                                                            "#ff5c5c"
-                                                        } else {
-                                                            "#3a2323"
-                                                        }
+                                                        if lit(slot) { "#ff5c5c" } else { "#3a2323" }
                                                     };
                                                     view! {
                                                         <rect x="6" y="2" width="14" height="4" rx="2" fill=move || seg(0) />
@@ -1107,13 +1275,13 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             // lows would call it COAST and stop
                                             // a motor that has nowhere to say
                                             // otherwise.
-                                            let bridged = pins[1] != UNWIRED
-                                                || pins[2] != UNWIRED;
+                                            let bridged =
+                                                move || pin(1) != UNWIRED || pin(2) != UNWIRED;
                                             let drive = move || {
-                                                if bridged {
+                                                if bridged() {
                                                     rusty_embed::Drive::from_inputs(
-                                                        level(pins[1]),
-                                                        level(pins[2]),
+                                                        level(pin(1)),
+                                                        level(pin(2)),
                                                     )
                                                 } else {
                                                     rusty_embed::Drive::Forward
@@ -1125,7 +1293,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             // and the direction stops being
                                             // legible, which is the one thing
                                             // this drawing is for.
-                                            let spin = move || match duty(pins[0]) {
+                                            let spin = move || match duty(pin(0)) {
                                                 Some(d) if d > 0.01 && drive().turns() => {
                                                     let seconds = (0.25 / d).clamp(0.25, 4.0);
                                                     let way = match drive() {
@@ -1141,13 +1309,13 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                 // reasons the readout spells out.
                                                 _ => "animation: none".to_string(),
                                             };
-                                            let readout = move || match duty(pins[0]) {
+                                            let readout = move || match duty(pin(0)) {
                                                 None => t!("simulate.no-duty"),
                                                 Some(d) => {
                                                     format!("{:.0}% {}", d * 100.0, drive().label())
                                                 }
                                             };
-                                            let tone = move || match duty(pins[0]) {
+                                            let tone = move || match duty(pin(0)) {
                                                 // Never reported: the same grey
                                                 // every other "rusty does not
                                                 // know" reads in.
@@ -1184,9 +1352,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                 state
                                                     .sim
                                                     .analog
-                                                    .with(|a| {
-                                                        a.get(&pins[0]).copied().unwrap_or(0)
-                                                    })
+                                                    .with(|a| a.get(&pin(0)).copied().unwrap_or(0))
                                             };
                                             view! {
                                                 <span class="flex items-center gap-2">
@@ -1195,22 +1361,14 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                         min="0"
                                                         max="4095"
                                                         prop:value=move || held().to_string()
-                                                        on:pointerdown=move |
-                                                            event: ev::PointerEvent|
-                                                        {
+                                                        on:pointerdown=move |event: ev::PointerEvent| {
                                                             event.stop_propagation();
                                                         }
                                                         on:input=move |event: ev::Event| {
-                                                            if let Ok(value) = event_target_value(
-                                                                    &event,
-                                                                )
-                                                                .parse::<u16>()
+                                                            if let Ok(value) =
+                                                                event_target_value(&event).parse::<u16>()
                                                             {
-                                                                controller::sim_analog(
-                                                                    state,
-                                                                    pins[0],
-                                                                    value,
-                                                                );
+                                                                controller::sim_analog(state, pin(0), value);
                                                             }
                                                         }
                                                         class="w-[68px] accent-[#4aa8ff]"
@@ -1256,9 +1414,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                                 event_target_value(&event).parse::<u8>()
                                                             {
                                                                 turned.set(value);
-                                                                controller::sim_pot(
-                                                                    state, pins[0], value,
-                                                                );
+                                                                controller::sim_pot(state, pin(0), value);
                                                             }
                                                         }
                                                         class="w-[56px] accent-[#c9a227]"
@@ -1275,232 +1431,265 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             // ever looked like anything.
                                             let held = RwSignal::new(false);
                                             view! {
-                                            <span
-                                                on:pointerdown=move |event: ev::PointerEvent| {
-                                                    event.stop_propagation();
-                                                    held.set(true);
-                                                    if running.get_untracked() {
-                                                        controller::sim_press(
-                                                            state, pins[0], true,
-                                                        );
+                                                <span
+                                                    on:pointerdown=move |event: ev::PointerEvent| {
+                                                        event.stop_propagation();
+                                                        held.set(true);
+                                                        if running.get_untracked() {
+                                                            controller::sim_press(state, pin(0), true);
+                                                        }
                                                     }
-                                                }
-                                                on:pointerup=move |_| {
-                                                    held.set(false);
-                                                    if running.get_untracked() {
-                                                        controller::sim_press(
-                                                            state, pins[0], false,
-                                                        );
-                                                    }
-                                                }
-                                                on:pointerleave=move |_| {
-                                                    if held.get_untracked() {
+                                                    on:pointerup=move |_| {
                                                         held.set(false);
                                                         if running.get_untracked() {
-                                                            controller::sim_press(
-                                                                state, pins[0], false,
-                                                            );
+                                                            controller::sim_press(state, pin(0), false);
                                                         }
                                                     }
-                                                }
-                                                class=move || {
-                                                    let pressed = held.get()
-                                                        || (running.get() && lit(pins[0]));
-                                                    // The cap sinks as well as
-                                                    // colouring: a tactile switch
-                                                    // moves, and the eye reads the
-                                                    // movement before the colour.
-                                                    format!(
-                                                        "grid size-5 shrink-0 cursor-pointer place-items-center rounded-[5px] ring-1 ring-[#5a626e] transition-transform duration-75 {}",
-                                                        if pressed {
-                                                            "bg-rust scale-90"
-                                                        } else {
-                                                            "bg-[#3a404a]"
-                                                        },
-                                                    )
-                                                }
-                                            >
-                                                <span class="size-2 rounded-full bg-[#9aa3b0]" />
-                                            </span>
+                                                    on:pointerleave=move |_| {
+                                                        if held.get_untracked() {
+                                                            held.set(false);
+                                                            if running.get_untracked() {
+                                                                controller::sim_press(state, pin(0), false);
+                                                            }
+                                                        }
+                                                    }
+                                                    class=move || {
+                                                        let pressed =
+                                                            held.get() || (running.get() && lit(0));
+                                                        // The cap sinks as well as
+                                                        // colouring: a tactile switch
+                                                        // moves, and the eye reads the
+                                                        // movement before the colour.
+                                                        format!(
+                                                            "grid size-5 shrink-0 cursor-pointer place-items-center rounded-[5px] ring-1 ring-[#5a626e] transition-transform duration-75 {}",
+                                                            if pressed {
+                                                                "bg-rust scale-90"
+                                                            } else {
+                                                                "bg-[#3a404a]"
+                                                            },
+                                                        )
+                                                    }
+                                                >
+                                                    <span class="size-2 rounded-full bg-[#9aa3b0]" />
+                                                </span>
+                                            }
+                                                .into_any()
                                         }
-                                            .into_any()
-                                        }
-                                    };
+                                    }
+                                };
 
-                                    view! {
-                                        <div
-                                            on:contextmenu=move |event: ev::MouseEvent| {
-                                                event.prevent_default();
-                                                event.stop_propagation();
-                                                selected.set(Some(index));
-                                                selected_wire.set(None);
-                                                menu.set(Some((
-                                                    f64::from(event.client_x()),
-                                                    f64::from(event.client_y()),
-                                                    MenuTarget::Part(index),
-                                                )));
-                                            }
-                                            on:pointerdown=move |event: ev::PointerEvent| {
-                                                if event.button() != 0 {
-                                                    return;
+                                // The gold dots wires pull out of — and, on a
+                                // part with more than one, the name beside
+                                // each, as KiCad names its pins: which dot is
+                                // `b` has to be readable before the wire lands.
+                                let stubs = move || {
+                                    let Some(kind) = kind.get() else {
+                                        return ().into_any();
+                                    };
+                                    let wires = kind.wires();
+                                    (0..wires)
+                                        .map(|slot| {
+                                            // Centre the 9px dot exactly on the
+                                            // wire's anchor: same constants as
+                                            // stub_point, so the dot and the wire
+                                            // cannot disagree again.
+                                            let top = STUB_OFFSET - 4.5 + slot as f64 * SLOT_PITCH;
+                                            let name = (wires > 1).then(|| {
+                                                let name = stub_names(&kind)[slot];
+                                                view! {
+                                                    <span
+                                                        class="pointer-events-none absolute font-mono text-[7px] leading-none text-[#98a1ae]"
+                                                        style=move || {
+                                                            format!("right: 8px; top: {}px; {}", top + 1.0, readable())
+                                                        }
+                                                    >
+                                                        {name}
+                                                    </span>
                                                 }
-                                                event.prevent_default();
-                                                event.stop_propagation();
-                                                selected.set(Some(index));
-                                                selected_wire.set(None);
-                                                if matches!(grab_kind, PartKind::Button)
-                                                    && running.get_untracked()
-                                                {
-                                                    return;
-                                                }
-                                                checkpoint();
-                                                let world = to_world(
-                                                    f64::from(event.client_x()),
-                                                    f64::from(event.client_y()),
-                                                );
-                                                // Judge each route's first-leg
-                                                // axis now, once: judged live it
-                                                // would flip as the part crosses
-                                                // its own bend.
-                                                let mut axes = [None; 7];
-                                                if let Some(part) =
-                                                    parts.get_untracked().get(index)
-                                                {
-                                                    let wired = part.kind.wires();
-                                                    for (slot, axis) in
-                                                        axes.iter_mut().enumerate().take(wired)
-                                                    {
-                                                        if let Some(first) =
-                                                            part.waypoints[slot].first()
-                                                        {
-                                                            *axis = first_leg_axis(
-                                                                stub_point(part, slot),
-                                                                *first,
-                                                            );
+                                            });
+                                            view! {
+                                                {name}
+                                                <span
+                                                    title=move || {
+                                                        if pin(slot) == UNWIRED {
+                                                            t!("simulate.stub-unwired")
+                                                        } else {
+                                                            t!("simulate.stub-wired")
                                                         }
                                                     }
+                                                    on:pointerdown=move |event: ev::PointerEvent| {
+                                                        event.prevent_default();
+                                                        event.stop_propagation();
+                                                        selected.set(Some(index));
+                                                        selected_wire.set(None);
+                                                        drag.set(Some(Drag::Wire { part: index, slot }));
+                                                    }
+                                                    class=move || {
+                                                        // Lit up while a wire pulled from
+                                                        // a chip pin hovers over it: the
+                                                        // one dot that will take it.
+                                                        let target = hover_stub.get() == Some((index, slot));
+                                                        let unwired = pin(slot) == UNWIRED;
+                                                        format!(
+                                                            "absolute size-[9px] cursor-crosshair rounded-full ring-1 ring-[#101216] transition-transform {}",
+                                                            if target {
+                                                                "scale-150 bg-[#ffd75c]"
+                                                            } else if unwired {
+                                                                "animate-pulse bg-[#e0a838]"
+                                                            } else {
+                                                                "bg-[#c9a227]"
+                                                            },
+                                                        )
+                                                    }
+                                                    style=format!("right: -4.5px; top: {top}px")
+                                                />
+                                            }
+                                        })
+                                        .collect_view()
+                                        .into_any()
+                                };
+
+                                view! {
+                                    <div
+                                        on:contextmenu=move |event: ev::MouseEvent| {
+                                            event.prevent_default();
+                                            event.stop_propagation();
+                                            selected.set(Some(index));
+                                            selected_wire.set(None);
+                                            if !marked.with_untracked(|m| m.contains(&index)) {
+                                                marked.set(vec![index]);
+                                            }
+                                            menu.set(Some((
+                                                f64::from(event.client_x()),
+                                                f64::from(event.client_y()),
+                                                MenuTarget::Part(index),
+                                            )));
+                                        }
+                                        on:pointerdown=move |event: ev::PointerEvent| {
+                                            if event.button() != 0 {
+                                                return;
+                                            }
+                                            event.prevent_default();
+                                            event.stop_propagation();
+                                            selected_wire.set(None);
+                                            // Shift adds this part to the selection
+                                            // or takes it out — KiCad's modifier. A
+                                            // plain press selects it alone, unless it
+                                            // is already one of several, in which
+                                            // case the whole group is what moves.
+                                            if event.shift_key() {
+                                                marked.update(|m| {
+                                                    match m.iter().position(|i| *i == index) {
+                                                        Some(at) => {
+                                                            m.remove(at);
+                                                        }
+                                                        None => m.push(index),
+                                                    }
+                                                });
+                                                selected.set(Some(index));
+                                                return;
+                                            }
+                                            selected.set(Some(index));
+                                            if !marked.with_untracked(|m| m.contains(&index)) {
+                                                marked.set(vec![index]);
+                                            }
+                                            if matches!(kind.get_untracked(), Some(PartKind::Button))
+                                                && running.get_untracked()
+                                            {
+                                                return;
+                                            }
+                                            checkpoint();
+                                            let world = to_world(
+                                                f64::from(event.client_x()),
+                                                f64::from(event.client_y()),
+                                            );
+                                            let (x, y, _, _) = place.get_untracked().unwrap_or_default();
+                                            // Judge each route's first-leg axis now,
+                                            // once: judged live it would flip as the
+                                            // part crosses its own bend.
+                                            let axes = parts
+                                                .with_untracked(|list| list.get(index).map(first_leg_axes))
+                                                .unwrap_or([None; 7]);
+                                            // The rest of the group starts where it
+                                            // stands; every frame moves it by the
+                                            // grabbed part's displacement.
+                                            group_start.set(parts.with_untracked(|list| {
+                                                marked.with_untracked(|m| {
+                                                    m.iter()
+                                                        .filter(|i| **i != index)
+                                                        .filter_map(|i| {
+                                                            list.get(*i).map(|p| {
+                                                                (*i, (p.x, p.y), first_leg_axes(p))
+                                                            })
+                                                        })
+                                                        .collect()
+                                                })
+                                            }));
+                                            drag.set(Some(Drag::Part {
+                                                index,
+                                                dx: world.0 - x,
+                                                dy: world.1 - y,
+                                                axes,
+                                                from: (x, y),
+                                            }));
+                                        }
+                                        class=move || {
+                                            let ring = if is_selected.get() {
+                                                "ring-2 ring-rust"
+                                            } else if is_marked.get() {
+                                                "ring-2 ring-rust/60"
+                                            } else {
+                                                "ring-1 ring-[#515a68]"
+                                            };
+                                            // Lifted while it moves: a shadow and
+                                            // the grabbing cursor say the part is
+                                            // in the hand; the dashed footprint
+                                            // drawn below says where it came from.
+                                            let lifted = match drag.get() {
+                                                Some(Drag::Part { index: moving, .. }) => {
+                                                    moving == index
+                                                        || group_start
+                                                            .with(|g| g.iter().any(|(i, _, _)| *i == index))
                                                 }
-                                                drag.set(Some(Drag::Part {
-                                                    index,
-                                                    dx: world.0 - x,
-                                                    dy: world.1 - y,
-                                                    axes,
-                                                    from: (x, y),
-                                                }));
-                                            }
-                                            class=move || {
-                                                let ring = if is_selected.get() {
-                                                    "ring-2 ring-rust"
-                                                } else {
-                                                    "ring-1 ring-[#515a68]"
-                                                };
-                                                // Lifted while it moves: a shadow
-                                                // and the grabbing cursor say the
-                                                // part is in the hand; the dashed
-                                                // footprint drawn below says where
-                                                // it came from.
-                                                let lifted = matches!(
-                                                    drag.get(),
-                                                    Some(Drag::Part { index: moving, .. }) if moving == index
-                                                );
-                                                let lift = if lifted {
-                                                    "z-20 cursor-grabbing opacity-90 shadow-[0_12px_28px_rgba(0,0,0,0.55)]"
-                                                } else {
-                                                    "cursor-grab"
-                                                };
-                                                format!(
-                                                    "absolute flex items-center gap-1.5 rounded-[8px] bg-[#2c313a] px-1.5 py-1 select-none {ring} {lift}",
-                                                )
-                                            }
-                                            style=format!(
+                                                _ => false,
+                                            };
+                                            let lift = if lifted {
+                                                "z-20 cursor-grabbing opacity-90 shadow-[0_12px_28px_rgba(0,0,0,0.55)]"
+                                            } else {
+                                                "cursor-grab"
+                                            };
+                                            format!(
+                                                "absolute flex items-center gap-1.5 rounded-[8px] bg-[#2c313a] px-1.5 py-1 select-none {ring} {lift}",
+                                            )
+                                        }
+                                        style=move || {
+                                            let (x, y, rot, flip) = place.get().unwrap_or_default();
+                                            let (width, height) = kind
+                                                .get()
+                                                .map(|k| (k.width(), k.height()))
+                                                .unwrap_or_default();
+                                            format!(
                                                 "left: {x}px; top: {y}px; width: {width}px; \
-                                                 height: {height}px; \
-                                                 transform: rotate({rot}deg){}",
+                                                 height: {height}px; transform: rotate({rot}deg){}",
                                                 if flip { " scaleX(-1)" } else { "" },
                                             )
+                                        }
+                                    >
+                                        {face}
+                                        // The label counter-rotates with the
+                                        // readouts: the body turns, the writing
+                                        // stays readable.
+                                        <span
+                                            class="min-w-0 flex-1 truncate font-mono text-caption text-[#d7dce3]"
+                                            style=readable
                                         >
-                                            {face}
-                                            // The label counter-rotates with
-                                            // the readouts: the body turns,
-                                            // the writing stays readable.
-                                            <span
-                                                class="min-w-0 flex-1 truncate font-mono text-caption text-[#d7dce3]"
-                                                style=readable
-                                            >
-                                                {label}
-                                            </span>
-                                            // pin stubs: the gold dots wires
-                                            // pull out of
-                                            {(wires > 0)
-                                                .then(|| {
-                                                    (0..wires)
-                                                        .map(|slot| {
-                                                            let unwired =
-                                                                pins[slot] == UNWIRED;
-                                                            // Centre the 9px dot exactly on
-                                                            // the wire's anchor: same constants
-                                                            // as stub_point, so the dot and the
-                                                            // wire cannot disagree again.
-                                                            let top = STUB_OFFSET - 4.5
-                                                                + slot as f64 * SLOT_PITCH;
-                                                            // Named, on a part with more
-                                                            // than one: which dot is `b`
-                                                            // has to be readable before
-                                                            // the wire lands, as KiCad
-                                                            // names its pins.
-                                                            let name = (wires > 1).then(|| {
-                                                                let name = stub_names(&kind)[slot];
-                                                                view! {
-                                                                    <span
-                                                                        class="pointer-events-none absolute font-mono text-[7px] leading-none text-[#98a1ae]"
-                                                                        style=format!(
-                                                                            "right: 8px; top: {}px; {readable}",
-                                                                            top + 1.0,
-                                                                        )
-                                                                    >
-                                                                        {name}
-                                                                    </span>
-                                                                }
-                                                            });
-                                                            view! {
-                                                                {name}
-                                                                <span
-                                                                    title=if unwired {
-                                                                        t!("simulate.stub-unwired")
-                                                                    } else {
-                                                                        t!("simulate.stub-wired")
-                                                                    }
-                                                                    on:pointerdown=move |event: ev::PointerEvent| {
-                                                                        event.prevent_default();
-                                                                        event.stop_propagation();
-                                                                        selected.set(Some(index));
-                                                                        selected_wire.set(None);
-                                                                        drag.set(Some(Drag::Wire {
-                                                                            part: index,
-                                                                            slot,
-                                                                        }));
-                                                                    }
-                                                                    class=format!(
-                                                                        "absolute size-[9px] cursor-crosshair rounded-full ring-1 ring-[#101216] {}",
-                                                                        if unwired {
-                                                                            "bg-[#e0a838] animate-pulse"
-                                                                        } else {
-                                                                            "bg-[#c9a227]"
-                                                                        },
-                                                                    )
-                                                                    style=format!(
-                                                                        "right: -4.5px; top: {top}px",
-                                                                    )
-                                                                />
-                                                            }
-                                                        })
-                                                        .collect_view()
-                                                })}
-                                        </div>
-                                    }
-                                })
-                                .collect_view()
-                        }}
+                                            {move || label.get()}
+                                        </span>
+                                        {stubs}
+                                    </div>
+                                }
+                            }
+                        />
 
                         // The footprint a moving part left behind — KiCad's
                         // ghost. Drawn only once the part has actually moved,
@@ -1837,11 +2026,17 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 // ── the ghost while pulling a new wire ──────
                                 {move || {
                                     let target = ghost.get()?;
-                                    let Some(Drag::Wire { part, slot }) = drag.get() else {
-                                        return None;
+                                    // From a stub towards the chip, or from a
+                                    // chip pin towards a stub: one dashed line,
+                                    // anchored at the end the hand holds still.
+                                    let from = match drag.get()? {
+                                        Drag::Wire { part, slot } => parts
+                                            .with(|list| list.get(part).map(|p| stub_point(p, slot)))?,
+                                        Drag::WireFromPin { row } => {
+                                            row_point(kit_pos.get(), rows.get().len(), row)
+                                        }
+                                        _ => return None,
                                     };
-                                    let from = parts
-                                        .with(|list| list.get(part).map(|p| stub_point(p, slot)))?;
                                     Some(view! {
                                         <line
                                             x1=from.0
@@ -1851,6 +2046,28 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             stroke="#e0a838"
                                             stroke-width="1.8"
                                             stroke-dasharray="5 4"
+                                            style="pointer-events: none"
+                                        />
+                                    })
+                                }}
+
+                                // ── the rubber band ─────────────────────────
+                                {move || {
+                                    let Some(Drag::Box { start }) = drag.get() else {
+                                        return None;
+                                    };
+                                    let to = box_to.get()?;
+                                    Some(view! {
+                                        <rect
+                                            x=start.0.min(to.0)
+                                            y=start.1.min(to.1)
+                                            width=(start.0 - to.0).abs()
+                                            height=(start.1 - to.1).abs()
+                                            fill="#e0a838"
+                                            fill-opacity="0.08"
+                                            stroke="#e0a838"
+                                            stroke-width="1"
+                                            stroke-dasharray="4 3"
                                             style="pointer-events: none"
                                         />
                                     })
@@ -2007,6 +2224,16 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             menu.set(None);
                                         })
                                     />
+                                    <MenuItem
+                                        label=t!("simulate.select-all")
+                                        shortcut="Ctrl+A"
+                                        disabled=parts.with_untracked(Vec::is_empty)
+                                        on_select=Callback::new(move |_| {
+                                            marked.set((0..parts.with_untracked(Vec::len)).collect());
+                                            selected_wire.set(None);
+                                            menu.set(None);
+                                        })
+                                    />
                                     <MenuSeparator />
                                     {state
                                         .sim.plan
@@ -2088,6 +2315,31 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                         class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
                                     >
                                         {t!("simulate.disconnect-del")}
+                                    </button>
+                                </div>
+                            }
+                                .into_any();
+                        }
+                        // Several parts under the band: how many, and what
+                        // the keys do to them. The single-part inspector below
+                        // would describe one of them and invite an edit that
+                        // applied to that one alone.
+                        let count = marked.with(Vec::len);
+                        if count > 1 {
+                            return view! {
+                                <div class="flex flex-col gap-2 p-3">
+                                    <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                                        {t!("simulate.selected-count", count = count)}
+                                    </span>
+                                    <p class="text-caption leading-snug text-label-4">
+                                        {t!("simulate.group-hint")}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        on:click=move |_| remove_marked()
+                                        class="rounded-[6px] px-2 py-1 text-footnote text-crimson ring-1 ring-line hover:bg-sunken"
+                                    >
+                                        {t!("simulate.remove-selected")}
                                     </button>
                                 </div>
                             }
@@ -2271,4 +2523,36 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
             </div>
         </div>
     }
+}
+
+/// A 5 mm LED as a schematic draws it — dome, flange, two legs — in place of
+/// the coloured disc that read as a status dot. The lens takes the colour the
+/// closures give it and glows when lit: the glow is what reads as "on" from
+/// across the room, the way the part itself does. `color` answers the lit or
+/// the dark shade; `lit` decides the glow and the highlight's strength.
+fn lamp_dome(
+    color: impl Fn() -> &'static str + Copy + Send + Sync + 'static,
+    lit: impl Fn() -> bool + Copy + Send + Sync + 'static,
+) -> AnyView {
+    let glow = move || {
+        if lit() {
+            format!(
+                "filter: drop-shadow(0 0 4px {0}) drop-shadow(0 0 9px {0})",
+                color()
+            )
+        } else {
+            String::new()
+        }
+    };
+    let sheen = move || if lit() { "0.55" } else { "0.16" };
+    view! {
+        <svg width="16" height="20" viewBox="0 0 16 20" class="shrink-0 overflow-visible">
+            <line x1="5.5" y1="14.5" x2="5.5" y2="20" stroke="#8a929e" stroke-width="1.2" />
+            <line x1="10.5" y1="14.5" x2="10.5" y2="20" stroke="#8a929e" stroke-width="1.2" />
+            <rect x="1" y="12" width="14" height="3" rx="1" fill=color fill-opacity="0.8" />
+            <path d="M2.5 12.5V6.5A5.5 5.5 0 0 1 13.5 6.5V12.5Z" fill=color style=glow />
+            <ellipse cx="6" cy="5.5" rx="1.5" ry="2.6" fill="#ffffff" fill-opacity=sheen />
+        </svg>
+    }
+    .into_any()
 }

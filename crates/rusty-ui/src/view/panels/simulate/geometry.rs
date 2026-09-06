@@ -345,50 +345,40 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
     board
 }
 
-/// Colour classes for a single-hue lamp.
-pub(super) fn lamp_classes(color: &str, lit: bool) -> &'static str {
-    match (color, lit) {
-        ("green", true) => "bg-[#3ddc84] shadow-[0_0_12px_3px_rgba(61,220,132,0.55)]",
-        ("green", false) => "bg-[#1d4a2f]",
-        ("blue", true) => "bg-[#4aa8ff] shadow-[0_0_12px_3px_rgba(74,168,255,0.55)]",
-        ("blue", false) => "bg-[#1d3350]",
-        ("red", true) => "bg-[#ff5c5c] shadow-[0_0_12px_3px_rgba(255,92,92,0.55)]",
-        ("red", false) => "bg-[#4a1d1d]",
-        ("yellow", true) => "bg-[#ffd75c] shadow-[0_0_12px_3px_rgba(255,215,92,0.5)]",
-        ("yellow", false) => "bg-[#4a3f1d]",
-        (_, true) => "bg-label shadow-[0_0_12px_3px_rgba(255,255,255,0.4)]",
-        (_, false) => "bg-line-strong",
+/// The lens colours of a single-hue lamp: lit, then dark. Hex rather than
+/// classes because the lens is SVG now, and the board sheet is exempt from
+/// theme tokens anyway (CLAUDE.md, "The board sheet is dark in both themes").
+pub(super) fn lamp_colors(color: &str) -> (&'static str, &'static str) {
+    match color {
+        "green" => ("#3ddc84", "#1d4a2f"),
+        "blue" => ("#4aa8ff", "#1d3350"),
+        "red" => ("#ff5c5c", "#4a1d1d"),
+        "yellow" => ("#ffd75c", "#4a3f1d"),
+        _ => ("#f4f4f4", "#3a3f48"),
     }
 }
 
-/// Additive mix for the RGB lens, from three channel levels.
-pub(super) fn rgb_style(r: bool, g: bool, b: bool) -> &'static str {
+/// Additive mix of the RGB lens from three channel levels; dark when none
+/// is on.
+pub(super) fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
     match (r, g, b) {
-        (false, false, false) => "background: #2a2d33",
-        (true, false, false) => {
-            "background: #ff5c5c; box-shadow: 0 0 12px 3px rgba(255,92,92,0.55)"
-        }
-        (false, true, false) => {
-            "background: #3ddc84; box-shadow: 0 0 12px 3px rgba(61,220,132,0.55)"
-        }
-        (false, false, true) => {
-            "background: #4aa8ff; box-shadow: 0 0 12px 3px rgba(74,168,255,0.55)"
-        }
-        (true, true, false) => {
-            "background: #ffd75c; box-shadow: 0 0 12px 3px rgba(255,215,92,0.55)"
-        }
-        (true, false, true) => {
-            "background: #d97cff; box-shadow: 0 0 12px 3px rgba(217,124,255,0.55)"
-        }
-        (false, true, true) => {
-            "background: #5ce8e8; box-shadow: 0 0 12px 3px rgba(92,232,232,0.55)"
-        }
-        (true, true, true) => "background: #f4f4f4; box-shadow: 0 0 12px 3px rgba(255,255,255,0.5)",
+        (false, false, false) => "#2a2d33",
+        (true, false, false) => "#ff5c5c",
+        (false, true, false) => "#3ddc84",
+        (false, false, true) => "#4aa8ff",
+        (true, true, false) => "#ffd75c",
+        (true, false, true) => "#d97cff",
+        (false, true, true) => "#5ce8e8",
+        (true, true, true) => "#f4f4f4",
     }
 }
 
 /// One editor state the undo stack holds: every part plus the kit position.
 pub(super) type Snapshot = (Vec<EditPart>, (f64, f64));
+
+/// One member of a group being dragged: its index, where it stood when the
+/// drag began, and its routes' first-leg axes (see [`follow_first_bend`]).
+pub(super) type GroupStart = (usize, (f64, f64), [Option<bool>; 7]);
 
 /// What the pointer is currently moving.
 #[derive(Clone, Copy, PartialEq)]
@@ -436,6 +426,18 @@ pub(super) enum Drag {
         grab: f64,
         /// The segment's own position along that axis when it began.
         base: f64,
+    },
+    /// The rubber band: a left-drag that began on the empty sheet. `start`
+    /// is the press point in world coordinates; the other corner follows
+    /// the pointer, and on release everything the band touches is marked.
+    Box {
+        start: (f64, f64),
+    },
+    /// Pulling a wire out of a chip pin towards a part's stub — the reverse
+    /// of [`Drag::Wire`], for a hand that starts at the devkit. The drop
+    /// target is the stub under the pointer ([`stub_under`]).
+    WireFromPin {
+        row: usize,
     },
 }
 
@@ -753,6 +755,63 @@ pub(super) fn follow_first_bend(stub: (f64, f64), axis: Option<bool>, first: &mu
         Some(false) => first.0 = stub.0,
         None => {}
     }
+}
+
+/// Every route's first-leg axis for one part, judged as a drag begins —
+/// the argument [`follow_first_bend`] wants on every frame after. Slots the
+/// part does not wire, and routes with no planted bend, are `None`.
+pub(super) fn first_leg_axes(part: &EditPart) -> [Option<bool>; 7] {
+    let mut axes = [None; 7];
+    for (slot, axis) in axes.iter_mut().enumerate().take(part.kind.wires()) {
+        if let Some(first) = part.waypoints[slot].first() {
+            *axis = first_leg_axis(stub_point(part, slot), *first);
+        }
+    }
+    axes
+}
+
+/// The part stub within `radius` of `point`, nearest first: `(part, slot)`.
+/// The drop target for a wire pulled from a chip pin — the mirror of
+/// [`row_under`], which finds the pin for a wire pulled from a stub. Nothing
+/// when nothing is in reach, rather than the nearest: a wire that landed on
+/// a stub forty pixels from the pointer would be a connection nobody made.
+pub(super) fn stub_under(
+    parts: &[EditPart],
+    point: (f64, f64),
+    radius: f64,
+) -> Option<(usize, usize)> {
+    let mut best: Option<((usize, usize), f64)> = None;
+    for (index, part) in parts.iter().enumerate() {
+        for slot in 0..part.kind.wires() {
+            let (sx, sy) = stub_point(part, slot);
+            let distance = (sx - point.0).hypot(sy - point.1);
+            if distance <= radius && best.is_none_or(|(_, nearest)| distance < nearest) {
+                best = Some(((index, slot), distance));
+            }
+        }
+    }
+    best.map(|(hit, _)| hit)
+}
+
+/// Every part whose body touches the rectangle between two corners, in
+/// sheet order — the rubber-band selection. Touching rather than enclosed:
+/// the parts are small and the intent of a band that clips a corner is
+/// never "not that one", while a band that had to swallow whole bodies
+/// asks for a bigger gesture than the sheet has room for. The corners may
+/// come in either order, since the band is drawn from wherever the press
+/// was.
+pub(super) fn parts_in_box(parts: &[EditPart], a: (f64, f64), b: (f64, f64)) -> Vec<usize> {
+    let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
+    let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
+    parts
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| {
+            let (w, h) = (part.kind.width(), part.kind.height());
+            part.x <= x1 && part.x + w >= x0 && part.y <= y1 && part.y + h >= y0
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// The name beside each stub of a part with more than one — KiCad's pin
@@ -1155,5 +1214,59 @@ mod tests {
                 assert_eq!(py % SNAP, 0.0, "row {row} y on grid");
             }
         }
+    }
+
+    #[test]
+    fn a_wire_from_a_pin_lands_on_the_stub_within_reach_and_nowhere_else() {
+        let parts = vec![led(100.0, 100.0, 26), led(100.0, 200.0, UNWIRED)];
+        let stub = stub_point(&parts[0], 0);
+        assert_eq!(stub_under(&parts, stub, 10.0), Some((0, 0)), "dead on");
+        assert_eq!(
+            stub_under(&parts, (stub.0 + 6.0, stub.1 - 5.0), 10.0),
+            Some((0, 0)),
+            "a little off, still within the radius"
+        );
+        assert_eq!(
+            stub_under(&parts, (stub.0 + 40.0, stub.1), 10.0),
+            None,
+            "out of reach of every stub is nothing, not the nearest"
+        );
+        let other = stub_point(&parts[1], 0);
+        assert_eq!(
+            stub_under(&parts, (other.0 + 3.0, other.1 + 3.0), 10.0),
+            Some((1, 0)),
+            "the second part's stub is its own target"
+        );
+    }
+
+    #[test]
+    fn the_rubber_band_takes_every_part_it_touches_from_either_corner() {
+        let parts = vec![led(0.0, 0.0, 26), led(300.0, 0.0, 27), led(0.0, 300.0, 25)];
+        assert_eq!(
+            parts_in_box(&parts, (60.0, 20.0), (-10.0, -10.0)),
+            vec![0],
+            "drawn upwards and leftwards, clipping one corner"
+        );
+        assert_eq!(
+            parts_in_box(&parts, (-5.0, -5.0), (420.0, 10.0)),
+            vec![0, 1],
+            "a band across the top row, and not the part below it"
+        );
+        assert!(
+            parts_in_box(&parts, (150.0, 150.0), (200.0, 200.0)).is_empty(),
+            "empty sheet, empty selection"
+        );
+    }
+
+    #[test]
+    fn first_leg_axes_are_read_off_the_planted_bends_and_nothing_else() {
+        let mut part = led(100.0, 100.0, 26);
+        let stub = stub_point(&part, 0);
+        part.waypoints[0] = vec![(stub.0 + 40.0, stub.1)];
+        assert_eq!(first_leg_axes(&part)[0], Some(true), "level with the stub");
+        part.waypoints[0] = vec![(stub.0, stub.1 + 40.0)];
+        assert_eq!(first_leg_axes(&part)[0], Some(false), "straight below it");
+        part.waypoints[0].clear();
+        assert_eq!(first_leg_axes(&part), [None; 7], "no bend, no axis");
     }
 }

@@ -10,7 +10,10 @@
 //! signals, calls these, and sets `dirty` — so a command is one line there and
 //! its behaviour is pinned here.
 
-use super::geometry::{EditPart, PartKind, Snapshot, UNWIRED, single_pin_label};
+use super::geometry::{
+    EditPart, GroupStart, PartKind, Snapshot, UNWIRED, follow_first_bend, single_pin_label,
+    stub_point,
+};
 
 /// How many steps of undo the editor keeps.
 ///
@@ -169,6 +172,42 @@ pub(super) fn disconnect(list: &mut [EditPart], index: usize, slot: usize) {
 pub(super) fn remove(list: &mut Vec<EditPart>, index: usize) {
     if index < list.len() {
         list.remove(index);
+    }
+}
+
+/// Remove several parts at once — the Delete key on a rubber-band selection.
+/// Highest index first, because each removal shifts everything after it;
+/// named twice is removed once; past the end is ignored.
+pub(super) fn remove_many(list: &mut Vec<EditPart>, indices: &[usize]) {
+    let mut order: Vec<usize> = indices.to_vec();
+    order.sort_unstable();
+    order.dedup();
+    for index in order.into_iter().rev() {
+        remove(list, index);
+    }
+}
+
+/// Move a group by one displacement from where each part stood when the
+/// drag began: `(index, (x, y), first-leg axes)` per part, as the component
+/// snapshots them at the press. From the start rather than by deltas, so a
+/// snapped frame cannot accumulate into drift. Bends stay on the sheet, as
+/// for a single dragged part, and each route's first bend slides along its
+/// own axis for the same reason (see `follow_first_bend`).
+pub(super) fn translate(list: &mut [EditPart], start: &[GroupStart], dx: f64, dy: f64) {
+    for (index, (x, y), axes) in start {
+        let Some(part) = list.get_mut(*index) else {
+            continue;
+        };
+        part.x = x + dx;
+        part.y = y + dy;
+        let stubs: Vec<(f64, f64)> = (0..part.kind.wires())
+            .map(|slot| stub_point(part, slot))
+            .collect();
+        for (slot, stub) in stubs.into_iter().enumerate() {
+            if let Some(first) = part.waypoints[slot].first_mut() {
+                follow_first_bend(stub, axes[slot], first);
+            }
+        }
     }
 }
 
@@ -417,5 +456,49 @@ mod tests {
         let part_right = list[0].x + list[0].kind.width();
         assert!(max.0 >= part_right, "and no body may fall outside");
         assert!(max.1 >= 340.0);
+    }
+
+    #[test]
+    fn a_group_moves_by_one_displacement_from_where_each_stood() {
+        let mut list = sheet();
+        add(&mut list, PartKind::Button, "", 60.0, 200.0);
+        let start = vec![
+            (
+                0,
+                (list[0].x, list[0].y),
+                [Some(true), None, None, None, None, None, None],
+            ),
+            (1, (list[1].x, list[1].y), [None; 7]),
+        ];
+        translate(&mut list, &start, 40.0, -16.0);
+        assert_eq!((list[0].x, list[0].y), (100.0, 24.0));
+        assert_eq!((list[1].x, list[1].y), (100.0, 184.0));
+        // The displacement is from the start, not cumulative: a second frame
+        // with the same numbers lands in the same place.
+        translate(&mut list, &start, 40.0, -16.0);
+        assert_eq!((list[0].x, list[0].y), (100.0, 24.0));
+        // The LED's planted bend slid along its horizontal first leg to stay
+        // level with the stub, exactly as a single dragged part's does.
+        let stub = stub_point(&list[0], 0);
+        assert_eq!(
+            list[0].waypoints[0][0].1, stub.1,
+            "the bend followed the stub's height"
+        );
+        assert_eq!(list[0].waypoints[0][0].0, 120.0, "and kept its own x");
+    }
+
+    #[test]
+    fn removing_several_takes_each_named_part_once_whatever_the_order() {
+        let mut list = sheet();
+        add(&mut list, PartKind::Button, "", 60.0, 200.0);
+        add(&mut list, PartKind::Pot, "", 60.0, 300.0);
+        // Named low-to-high and with a duplicate: removing from the front
+        // first would shift the later index onto the wrong part.
+        remove_many(&mut list, &[0, 2, 0]);
+        assert_eq!(list.len(), 1);
+        assert!(matches!(list[0].kind, PartKind::Button));
+        // An index past the end is ignored rather than a panic.
+        remove_many(&mut list, &[7]);
+        assert_eq!(list.len(), 1);
     }
 }

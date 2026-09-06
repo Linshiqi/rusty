@@ -1329,6 +1329,34 @@ usty`) holds `location.toml`
   wires to a seven-segment cross on the way in. `flip` mirrors: near edge,
   same order. Both transforms mirror the part's *writing* too, so readouts
   and labels carry the inverse (`readable` in `simulate/mod.rs`).
+- **Each part on the sheet is its own keyed view.** The parts were one
+  closure rebuilding every part's DOM on every change to the list — on
+  every pointer-move frame of a drag, that is — and a hover on one stub cost
+  a re-render of thirty. `<For>` keyed by index, and every field a view
+  reads comes through its own memo (`this`, `kind`, `pins`, `place`,
+  `label`, `active_low`), so a frame touches one part's `style`. The face
+  follows the kind and nothing else; what it shows follows the pins and the
+  firmware through closures inside it.
+- **Both ends of a wire are a place to start it.** A stub drags to a chip
+  pin (`Drag::Wire`) and a chip pin drags to a stub (`Drag::WireFromPin`);
+  both land through the same assignment in `pointerup`, because two
+  gestures that agreed about what wiring means only in prose would drift.
+  `stub_under` is `row_under`'s mirror, in sheet units so the reach does
+  not shrink with the zoom, and answers nothing when nothing is in reach —
+  a wire that landed on a stub forty pixels from the pointer would be a
+  connection nobody made.
+- **Selection is a set, and the left button on empty sheet draws it.** A
+  plain drag on the background is the rubber band (`Drag::Box`,
+  `parts_in_box`, touching rather than enclosed); panning is the middle
+  button or Ctrl/Alt with the left, as in every map. Shift-click adds or
+  removes one, Ctrl+A takes all. `marked` is the set and `selected` stays
+  the one the inspector describes; the inspector shows a count and the
+  group's verbs when the set is more than one. A group drag snapshots where
+  every other member stood at the press (`group_start`) and `edit::translate`
+  moves each by the grabbed part's displacement *from the start*, so a
+  snapped frame cannot accumulate into drift; each member's first bend
+  slides along its own axis exactly as a single part's does. Any removal
+  clears the set, because every index above the removed part has shifted.
 - **Wire bends belong to the sheet, not to the part — KiCad semantics.**
   Dragging a part stretches only the stub-to-first-bend segment; every bend
   the user placed stays put, and the orthogonal pass grows the elbow the
