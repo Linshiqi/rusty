@@ -96,58 +96,39 @@ pub fn MenuBar(chrome: Chrome) -> impl IntoView {
 
             <span data-tauri-drag-region class="flex-1 self-stretch" />
 
-            // The open project, centred the way an editor centres the document
-            // it is showing — drawn as a search box, VS Code's command centre.
-            // It still answers "what am I looking at" at a glance, and a click
-            // (or Ctrl+P) opens the file finder under it: the project's name
-            // is the box's placeholder, which is how VS Code's reads too.
+            // The file finder's box, centred where an editor centres the
+            // document it is showing — VS Code's command centre. A click (or
+            // Ctrl+P) opens the finder under it. It reads as a search box and
+            // nothing else: the project's name and chip sat in it as a
+            // placeholder for one release and said nothing anybody needed
+            // there — the status bar already names the chip.
             {move || {
-                state
-                    .project.detected
-                    .get()
-                    .map(|project| {
-                        let chip = project.chip.clone();
-                        let name = project
-                            .root
-                            .rsplit(['/', '\\'])
-                            .next()
-                            .unwrap_or(&project.root)
-                            .to_string();
-                        let chord = crate::view::palette::effective(state)
-                            .into_iter()
-                            .find(|(binding, _)| binding.action == command::Action::QuickOpen)
-                            .map(|(_, chord)| chord);
-                        view! {
-                            <button
-                                type="button"
-                                title=t!("menu.view.quick-open")
-                                on:click=move |_| state.layout.quick_open.set(true)
-                                class="flex h-[26px] w-[min(38vw,440px)] min-w-0 items-center gap-2 rounded-[6px] bg-sunken px-2.5 text-footnote ring-1 ring-line transition-colors hover:ring-line-strong"
-                            >
-                                <span class="text-label-3">
-                                    <crate::view::icon::IconView icon=crate::view::icon::Icon::Search size=13 />
-                                </span>
-                                <span class="truncate text-label-2">{name}</span>
-                                {chip
-                                    .map(|chip| {
-                                        view! {
-                                            <span class="rounded-full bg-raised px-1.5 font-mono text-label-3">
-                                                {chip}
-                                            </span>
-                                        }
-                                    })}
-                                <span class="flex-1" />
-                                {chord
-                                    .map(|chord| {
-                                        view! {
-                                            <kbd class="shrink-0 rounded-[4px] bg-raised px-1 font-mono text-caption text-label-4">
-                                                {chord}
-                                            </kbd>
-                                        }
-                                    })}
-                            </button>
-                        }
-                    })
+                state.has_project().then(|| {
+                    let chord = crate::view::palette::effective(state)
+                        .into_iter()
+                        .find(|(binding, _)| binding.action == command::Action::QuickOpen)
+                        .map(|(_, chord)| chord);
+                    view! {
+                        <button
+                            type="button"
+                            title=t!("menu.view.quick-open")
+                            on:click=move |_| state.layout.quick_open.set(true)
+                            class="flex h-[26px] w-[min(38vw,440px)] min-w-0 items-center gap-2 rounded-[6px] bg-sunken px-2.5 text-footnote text-label-3 ring-1 ring-line transition-colors hover:ring-line-strong hover:text-label-2"
+                        >
+                            <crate::view::icon::IconView icon=crate::view::icon::Icon::Search size=13 />
+                            <span class="truncate">{t!("quick.placeholder")}</span>
+                            <span class="flex-1" />
+                            {chord
+                                .map(|chord| {
+                                    view! {
+                                        <kbd class="shrink-0 rounded-[4px] bg-raised px-1 font-mono text-caption text-label-4">
+                                            {chord}
+                                        </kbd>
+                                    }
+                                })}
+                        </button>
+                    }
+                })
             }}
             // What you do with it, one reach from its name.
             <crate::view::run::RunControls />

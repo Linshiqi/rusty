@@ -372,12 +372,15 @@ written for one group — every component, controller and effect reads
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them; the divider between the groups is
   `Divider::EditorSplit`, in permille like the diff's.
-- **The title bar's centre is the file finder.** The project's name is drawn
-  as a search box, VS Code's command centre; a click or Ctrl+P opens
-  `view/quick.rs`, whose candidates are the tree the Files panel already
-  holds, flattened — no second walk to keep in step with the first. Ranking
-  is pure and under tests. Ctrl+P, Ctrl+B (fold the tree) and Ctrl+\
-  (split) are VS Code's chords, so hands that know them need not learn ours.
+- **The title bar's centre is the file finder.** A search box, VS Code's
+  command centre, that reads as a search box and nothing else — the
+  project's name and chip sat in it as a placeholder for one release and
+  said nothing anybody needed there; the status bar names the chip. A click
+  or Ctrl+P opens `view/quick.rs`, whose candidates are the tree the Files
+  panel already holds, flattened — no second walk to keep in step with the
+  first. Ranking is pure and under tests. Ctrl+P, Ctrl+B (fold the tree)
+  and Ctrl+\ (split) are VS Code's chords, so hands that know them need not
+  learn ours.
 
 ## The Git panel
 

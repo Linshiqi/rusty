@@ -9,6 +9,11 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Changed.** The title bar's search box no longer shows the project's name
+and chip as its placeholder; it reads as a search box.
+
 ## v0.6.5
 
 **Added.**
