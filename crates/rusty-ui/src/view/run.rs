@@ -1,4 +1,5 @@
-//! The project's verbs, in the title bar.
+//! The project's verbs, in the title bar — and the file finder's icon, which
+//! is the other thing a title bar's centre holds here.
 //!
 //! Build, Run, Debug and Flash used to sit in the left rail, registered by
 //! whichever panel was on screen. So Run was in one place on the Files panel,
@@ -57,7 +58,18 @@ pub fn RunControls() -> impl IntoView {
         state.has_project().then(|| {
             view! {
                 <div class="flex items-center gap-0.5">
-                    <span class="mx-2 h-4 w-px bg-line" />
+                    // The file finder, as an icon beside the verbs. Ctrl+P is
+                    // the other way in; a search box here was a second field
+                    // in front of the finder's own.
+                    <button
+                        type="button"
+                        title=t!("menu.view.quick-open")
+                        on:click=move |_| state.layout.quick_open.set(true)
+                        class=format!("{BUTTON} text-label-2 hover:text-label")
+                    >
+                        <IconView icon=Icon::Search size=15 />
+                    </button>
+                    <span class="mx-1.5 h-4 w-px bg-line" />
                     <button
                         type="button"
                         title=t!("toolbar.build")

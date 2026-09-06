@@ -244,6 +244,21 @@ fn ensure_repository(root: &Path) -> Result<()> {
     }
 }
 
+/// Who commits would be signed as. `git config --get` exits 1 for a key that
+/// is not set, which here is an answer rather than a failure.
+pub fn identity(root: &Path) -> Result<crate::model::GitIdentity> {
+    ensure_repository(root)?;
+    let get = |key: &str| -> Result<Option<String>> {
+        let value = run_allowing(root, &["config", "--get", key], &[0, 1])?;
+        let value = value.trim();
+        Ok((!value.is_empty()).then(|| value.to_string()))
+    };
+    Ok(crate::model::GitIdentity {
+        name: get("user.name")?,
+        email: get("user.email")?,
+    })
+}
+
 /// One `git` invocation, its stdout as text.
 fn run<S: AsRef<str>>(root: &Path, args: &[S]) -> Result<String> {
     run_allowing(root, args, &[0])

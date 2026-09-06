@@ -971,6 +971,9 @@ pub struct Git {
     /// `Some(target)` when this window was booted with `?gitdiff=<target>`:
     /// a window showing one commit and nothing else.
     pub window_target: RwSignal<Option<String>>,
+    /// Who git would sign a commit as; `None` until asked. Incomplete, and
+    /// the commit box shows a form instead of letting git refuse.
+    pub identity: RwSignal<Option<rusty_git::GitIdentity>>,
 }
 
 /// What the clone dialog holds while it is open.
@@ -1441,6 +1444,7 @@ impl AppState {
                 images: RwSignal::new(None),
                 detail_hidden: RwSignal::new(false),
                 window_target: RwSignal::new(query_param("gitdiff")),
+                identity: RwSignal::new(None),
             },
             search: Search {
                 query: RwSignal::new(String::new()),

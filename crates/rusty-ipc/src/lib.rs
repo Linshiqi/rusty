@@ -243,4 +243,7 @@ pub mod git {
     pub const CLONE: &str = "git_clone";
     /// A commit in a window of its own, as Fork tears one off.
     pub const WINDOW: &str = "open_git_window";
+    /// `user.name` and `user.email` as git resolves them — asked before a
+    /// commit, so "Author identity unknown" is a form and not a dock error.
+    pub const IDENTITY: &str = "git_identity";
 }

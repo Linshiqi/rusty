@@ -14,7 +14,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_git::{Branch, ChangeKind, CommitDetail, History, Stash, Status};
+use rusty_git::{Branch, ChangeKind, CommitDetail, GitIdentity, History, Stash, Status};
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -113,6 +113,47 @@ pub fn load_git(state: AppState) {
     load_branches(state);
     load_status(state);
     load_stashes(state);
+    load_identity(state);
+}
+
+/// Who a commit would be signed as. Read with the rest of the panel and
+/// again after every write, since the identity form is one of the writes.
+pub fn load_identity(state: AppState) {
+    if !state.has_project_now() {
+        return;
+    }
+    spawn_local(async move {
+        if let Ok(identity) = ipc::call::<_, GitIdentity>(cmd::git::IDENTITY, &()).await {
+            state.git.identity.set(Some(identity));
+        }
+    });
+}
+
+/// `git config user.name` and `user.email` — for every repository unless
+/// `local`, the two scopes git's own hint offers. Two dock commands, the
+/// second after the first succeeds, then the identity is read back so the
+/// form goes away on git's word rather than on ours.
+pub fn set_identity(state: AppState, name: String, email: String, local: bool) {
+    let scope = move || {
+        if local {
+            Vec::new()
+        } else {
+            vec!["--global".to_string()]
+        }
+    };
+    let mut for_name = vec!["config".to_string()];
+    for_name.extend(scope());
+    for_name.extend(["user.name".to_string(), name]);
+    let mut for_email = vec!["config".to_string()];
+    for_email.extend(scope());
+    for_email.extend(["user.email".to_string(), email]);
+    run_args_at_root_then(state, "git", for_name, move |code| {
+        if code != Some(0) {
+            load_identity(state);
+            return;
+        }
+        run_args_at_root_then(state, "git", for_email, move |_| load_identity(state));
+    });
 }
 
 /// Show one branch's history, or every branch's when `rev` is `None`.
@@ -431,6 +472,15 @@ fn after_git(state: AppState) {
 /// Only an amend may go without a message; it then keeps the one it has
 /// (`--no-edit`) rather than opening an editor nobody can see.
 pub fn commit(state: AppState) {
+    // No author, no commit: git would refuse with "Author identity unknown",
+    // and the form the box shows in that state is the answer to it.
+    if state
+        .git
+        .identity
+        .with_untracked(|id| id.as_ref().is_some_and(|id| !id.complete()))
+    {
+        return;
+    }
     let message = state.git.message.get_untracked();
     let amend = state.git.amend.get_untracked();
     let mut args = vec!["commit".to_string()];

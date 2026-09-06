@@ -11,8 +11,16 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
-**Changed.** The title bar's search box no longer shows the project's name
-and chip as its placeholder; it reads as a search box.
+**Changed.** The title bar's centre holds a search icon and the project's
+verbs, nothing else. The search box that carried the project's name went: it
+read as a second search field in front of the finder's own. The icon,
+Ctrl+P and View ▸ Go to file… open the finder.
+
+**Added.** The commit box asks who you are when git does not know. With no
+`user.name` or `user.email` configured, `git commit` refused with "Author
+identity unknown" in the dock; the Changes view now shows a name and email
+form in its place, saves them with `git config --global` (or for this
+repository only), and enables Commit once git confirms them.
 
 ## v0.6.5
 

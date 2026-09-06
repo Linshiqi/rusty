@@ -372,14 +372,15 @@ written for one group — every component, controller and effect reads
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them; the divider between the groups is
   `Divider::EditorSplit`, in permille like the diff's.
-- **The title bar's centre is the file finder.** A search box, VS Code's
-  command centre, that reads as a search box and nothing else — the
-  project's name and chip sat in it as a placeholder for one release and
-  said nothing anybody needed there; the status bar names the chip. A click
-  or Ctrl+P opens `view/quick.rs`, whose candidates are the tree the Files
-  panel already holds, flattened — no second walk to keep in step with the
-  first. Ranking is pure and under tests. Ctrl+P, Ctrl+B (fold the tree)
-  and Ctrl+\ (split) are VS Code's chords, so hands that know them need not
+- **The title bar's centre holds the finder's icon and the project's verbs,
+  and nothing else.** A command-centre search box was tried there for one
+  release and read as a second search field in front of the finder's own,
+  and the project's name it carried as a placeholder said nothing anybody
+  needed — the status bar names the chip. The icon, Ctrl+P and View ▸ Go to
+  file open `view/quick.rs`, whose candidates are the tree the Files panel
+  already holds, flattened — no second walk to keep in step with the first.
+  Ranking is pure and under tests. Ctrl+P, Ctrl+B (fold the tree) and
+  Ctrl+\ (split) are VS Code's chords, so hands that know them need not
   learn ours.
 
 ## The Git panel
@@ -440,6 +441,13 @@ and a new branch.
   revert; a file offers open and copy path. Every write in it is the same
   dock command a button would run, and the panel's own `contextmenu` handler
   swallows the browser's menu everywhere else.
+- **A commit asks who you are before git refuses.** `git_identity` reads
+  `user.name` and `user.email` as `git config --get` resolves them (exit 1
+  is "unset", an answer); when either is missing the commit box shows a
+  name-and-email form and disables Commit, and Save runs `git config
+  --global` — or local, git's own two offers — as dock commands, then reads
+  the identity back. Found on a fresh machine as "Author identity unknown"
+  in the dock after the button, which is the wrong place to learn it.
 - **Amend fills the box with HEAD's whole message** before anything is typed,
   because `--amend -m` with only a summary would silently cut an essay down
   to its first line; an amend with the box empty is `--no-edit`. A stash is a
@@ -763,10 +771,10 @@ the debugger's transport, git's fetch/pull/push — and read as one 46px column
 of sixteen icons at one weight, with Run in a different place on every panel
 and the transport pushing it down the column when a session began. Four kinds
 of button, four homes now. The **project's verbs** (Build, Run/Stop, Debug,
-Flash) sit in the title bar beside the project's name (`view/run.rs`), where
-Xcode and CLion put them: one position on every panel, in a row the window
-already spends, and Run switches to the board itself so nothing is far from
-anything. The **debugger's transport** floats over the working area while a
+Flash) sit in the title bar's centre with the file finder's icon
+(`view/run.rs`), where Xcode and CLion put them: one position on every
+panel, in a row the window already spends, and Run switches to the board
+itself so nothing is far from anything. The **debugger's transport** floats over the working area while a
 session is live (`view/transport.rs`) — VS Code's debug toolbar, an overlay so
 its arrival moves nothing, and one copy where there were two. A **panel's own
 actions** sit at the right of the row that names the panel — the Files

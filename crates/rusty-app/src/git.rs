@@ -11,7 +11,7 @@
 
 use base64::Engine;
 use rusty_embed::{CommandPlan, LogLine, process};
-use rusty_git::{Branch, CommitDetail, History, Stash, Status};
+use rusty_git::{Branch, CommitDetail, GitIdentity, History, Stash, Status};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -59,6 +59,14 @@ pub async fn git_branches(state: State<'_, AppState>) -> Answer<Vec<Branch>> {
 pub async fn git_status(state: State<'_, AppState>) -> Answer<Status> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     Ok(blocking("git status", move || rusty_git::repo::status(&root)).await??)
+}
+
+/// Who a commit would be signed as, so the panel can ask before `git commit`
+/// refuses with "Author identity unknown".
+#[tauri::command]
+pub async fn git_identity(state: State<'_, AppState>) -> Answer<GitIdentity> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("git config", move || rusty_git::repo::identity(&root)).await??)
 }
 
 /// Every stash, newest first.

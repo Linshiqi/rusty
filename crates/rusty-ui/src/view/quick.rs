@@ -1,4 +1,4 @@
-//! The file finder — the title bar's search box, and Ctrl+P.
+//! The file finder — the title bar's search icon, and Ctrl+P.
 //!
 //! VS Code's "Go to File": type part of a name, the list narrows, Enter
 //! opens the pick in the group the user is in and Ctrl+Enter opens it
@@ -128,10 +128,10 @@ pub fn QuickOpen() -> impl IntoView {
 
     view! {
         <Show when=move || open.get()>
-            // Dropped from the title bar's box rather than centred like the
-            // palette: it is that box, opened.
+            // Dropped from the top, as VS Code's quick open is, rather than
+            // centred like the palette.
             <div
-                class="absolute inset-0 z-30 flex justify-center bg-black/25 pt-1"
+                class="absolute inset-0 z-30 flex justify-center bg-black/25 pt-2"
                 on:click=move |_| open.set(false)
             >
                 <div

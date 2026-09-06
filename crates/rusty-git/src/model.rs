@@ -175,6 +175,25 @@ pub struct Stash {
     pub time: u64,
 }
 
+/// Who git would sign a commit as: `user.name` and `user.email` as `git
+/// config` resolves them in the repository — local over global over system.
+/// Either absent and `git commit` refuses with "Author identity unknown",
+/// which is the one refusal worth asking about *before* the button.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentity {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+impl GitIdentity {
+    /// Whether a commit would carry an author.
+    pub fn complete(&self) -> bool {
+        let set = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+        set(&self.name) && set(&self.email)
+    }
+}
+
 /// Whether a path names an image the panel shows as pictures — old beside
 /// new — rather than as a patch git can only call binary.
 pub fn is_image_path(path: &str) -> bool {
@@ -203,6 +222,21 @@ pub fn image_mime(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod image_tests {
     use super::*;
+
+    /// Both halves, and neither may be blank: git treats an empty
+    /// `user.email` exactly as it treats a missing one.
+    #[test]
+    fn an_identity_is_complete_only_with_a_non_blank_name_and_email() {
+        let id = |name: Option<&str>, email: Option<&str>| GitIdentity {
+            name: name.map(str::to_string),
+            email: email.map(str::to_string),
+        };
+        assert!(id(Some("Lin"), Some("lin@example.com")).complete());
+        assert!(!id(None, Some("lin@example.com")).complete());
+        assert!(!id(Some("Lin"), None).complete());
+        assert!(!id(Some("  "), Some("lin@example.com")).complete());
+        assert!(!GitIdentity::default().complete());
+    }
 
     #[test]
     fn images_are_told_by_extension_case_blind_and_nothing_else_is_one() {

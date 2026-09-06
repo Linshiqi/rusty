@@ -1304,11 +1304,78 @@ fn CommitBox() -> impl IntoView {
     // An amend may go without a message (it keeps the one it has) and
     // without anything staged (it only rewords); a commit may do neither.
     let blocked = Signal::derive(move || {
-        !state.git.amend.get()
-            && (staged_count.get() == 0 || state.git.message.with(|m| m.trim().is_empty()))
+        let no_author = state
+            .git
+            .identity
+            .with(|id| id.as_ref().is_some_and(|id| !id.complete()));
+        no_author
+            || (!state.git.amend.get()
+                && (staged_count.get() == 0 || state.git.message.with(|m| m.trim().is_empty())))
     });
     view! {
         <div class="shrink-0 border-t border-line bg-sunken px-4 py-3">
+            // Git's identity, asked for here rather than discovered as
+            // "Author identity unknown" in the dock after the button. Shown
+            // only once git has said which of the two is missing, prefilled
+            // with whatever is set, and saved the way git's own hint says:
+            // `git config --global`, or for this repository alone.
+            {move || {
+                let identity = state.git.identity.get()?;
+                if identity.complete() {
+                    return None;
+                }
+                let name = RwSignal::new(identity.name.clone().unwrap_or_default());
+                let email = RwSignal::new(identity.email.clone().unwrap_or_default());
+                let local = RwSignal::new(false);
+                let ready = Signal::derive(move || {
+                    !name.with(|n| n.trim().is_empty()) && !email.with(|e| e.trim().is_empty())
+                });
+                Some(view! {
+                    <div class="mb-3 rounded-[8px] bg-amber-fill px-3 py-2.5">
+                        <p class="text-callout font-medium">{t!("git.identity-title")}</p>
+                        <p class="mt-0.5 text-footnote text-label-2">{t!("git.identity-detail")}</p>
+                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                            <input
+                                type="text"
+                                placeholder=t!("git.identity-name")
+                                class="h-[28px] min-w-[10rem] flex-1 rounded-[6px] bg-sunken px-2.5 text-footnote outline-none ring-1 ring-line focus:ring-rust placeholder:text-label-3"
+                                prop:value=move || name.get()
+                                on:input=move |event| name.set(event_target_value(&event))
+                            />
+                            <input
+                                type="email"
+                                placeholder=t!("git.identity-email")
+                                class="h-[28px] min-w-[12rem] flex-1 rounded-[6px] bg-sunken px-2.5 text-footnote outline-none ring-1 ring-line focus:ring-rust placeholder:text-label-3"
+                                prop:value=move || email.get()
+                                on:input=move |event| email.set(event_target_value(&event))
+                            />
+                        </div>
+                        <div class="mt-2 flex items-center gap-3">
+                            <Button
+                                label=t!("git.identity-save")
+                                kind=ButtonKind::Primary
+                                disabled=Signal::derive(move || !ready.get())
+                                on_click=Callback::new(move |_| {
+                                    controller::set_identity(
+                                        state,
+                                        name.get_untracked(),
+                                        email.get_untracked(),
+                                        local.get_untracked(),
+                                    )
+                                })
+                            />
+                            <label class="flex items-center gap-1.5 text-footnote text-label-3 select-none">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=move || local.get()
+                                    on:change=move |event| local.set(event_target_checked(&event))
+                                />
+                                {t!("git.identity-local")}
+                            </label>
+                        </div>
+                    </div>
+                })
+            }}
             <textarea
                 rows="3"
                 placeholder=t!("git.commit-placeholder")
