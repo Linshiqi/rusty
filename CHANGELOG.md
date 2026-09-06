@@ -11,6 +11,13 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Fixed.** The editor split follows one rule: "beside" is the right group,
+from either side. Open to the side and the split button move a file *into*
+the right group and never out of it, so the right group no longer vanishes
+when one of its files is sent "to the side"; it closes only when its last
+tab is closed. The split button and Open to the side appear only in the left
+group's strip, since there is nothing further right of the right group.
+
 **Added.** The Changes view's right-click menu on a file has Fork's items:
 Stage or Unstage, Discard changes… (it asks first, and says whether the file
 goes back to what is staged or to the last commit; an untracked file is

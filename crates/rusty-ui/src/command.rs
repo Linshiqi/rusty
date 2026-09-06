@@ -688,7 +688,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             }
         }
         Action::ToggleTree => controller::toggle_tree(state),
-        Action::SplitEditor => controller::split_active(state.focused()),
+        Action::SplitEditor => controller::split_active(state),
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),

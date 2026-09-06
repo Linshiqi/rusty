@@ -363,7 +363,17 @@ written for one group — every component, controller and effect reads
   on save, so `open_file` fronts a path the other group holds and focus
   follows; "Open to the side" and the strip's split button *move* a file
   (`transplant`: draft, caret, history and all). `is_dirty` and `follow`
-  look at both groups because of this rule, not in spite of it.
+  look at both groups because of this rule, not in spite of it. VS Code
+  would open a second copy; the same file in two groups needs a document
+  model shared between them, which this editor does not have yet.
+- **"Beside" is the right group, from either side.** The first version sent
+  a file to *the other* group: from the right group that moved it left, and
+  when it was the right group's last file the right group vanished under
+  the click. Files move into the right group and never out of it; the right
+  group closes only when its last tab does; the split button and "Open to
+  the side" appear only in the left strip, because there is nothing further
+  right of the right group. Ctrl+\ acts on the left group whichever has
+  focus, for the same reason.
 - **The split never shows an empty pane.** `settle_groups` closes a second
   group that lost its last file, and a first group that lost its last file
   takes the second's files — so the layout is never "nothing on the left,

@@ -437,35 +437,50 @@ fn clear_screen(state: AppState) {
 
 // ─── two groups ─────────────────────────────────────────────────────────────────
 
-/// Open a file in the group beside this one — VS Code's "Open to the Side" —
-/// splitting the editor if it is not split yet. A file this group already
-/// holds moves across rather than opening twice: one group per file.
+/// Open a file in the right-hand group — VS Code's "Open to the Side" —
+/// splitting the editor if it is not split yet.
+///
+/// "Beside" is the right group from *either* side. With two groups there is
+/// nothing further right, and the first version sent a file to "the other
+/// group": from the right group that moved it left, and when it was the
+/// right group's last file the right group vanished under the click — read,
+/// correctly, as the split closing for no reason. Files move into the right
+/// group and never out of it; the right group closes only when its last tab
+/// does. A file the left group holds moves across rather than opening
+/// twice (one group per file); one the right group holds is fronted there.
 pub fn open_beside(state: AppState, path: String) {
+    let first = state.group(crate::state::Group::First);
+    let second = state.group(crate::state::Group::Second);
     state.layout.split.set(true);
-    let target = state.other();
-    if state
+    if first
         .editor
         .tabs
         .with_untracked(|tabs| tabs.iter().any(|t| t == &path))
     {
-        transplant(state, target, &path);
+        transplant(first, second, &path);
     } else {
-        state.layout.focus.set(target.group);
-        open_file(target, path);
+        // Already on the right, or open nowhere yet: either way `open_file`
+        // on the right group does the right thing.
+        state.layout.focus.set(second.group);
+        open_file(second, path);
     }
 }
 
-/// The tab strip's split button and Ctrl+\: this group's file moves to the
-/// group beside it. Wants a second tab to leave behind — a group whose only
-/// file moved across is an empty pane, not a comparison.
+/// The left strip's split button and Ctrl+\: the left group's file moves to
+/// the right group, opening it if need be. Only the left group has the
+/// button — there is nothing further right of the right group — and it
+/// wants a second tab to leave behind: a left pane emptied by its only file
+/// moving across would close again at once, and the click would look like
+/// nothing happened.
 pub fn split_active(state: AppState) {
-    let Some(path) = state.active_path_now() else {
+    let first = state.group(crate::state::Group::First);
+    let Some(path) = first.active_path_now() else {
         return;
     };
-    if state.editor.tabs.with_untracked(|tabs| tabs.len() < 2) {
+    if first.editor.tabs.with_untracked(|tabs| tabs.len() < 2) {
         return;
     }
-    open_beside(state, path);
+    open_beside(first, path);
 }
 
 /// Carry an open file from one group to the other with its draft, caret and

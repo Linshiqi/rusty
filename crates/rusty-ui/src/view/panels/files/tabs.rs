@@ -152,22 +152,28 @@ pub(super) fn TabStrip() -> impl IntoView {
                     .collect_view()
             }}
             </div>
-            // Split, at the strip's end where VS Code keeps it. Disabled with
-            // one tab: moving a group's only file across leaves an empty pane.
-            {move || {
-                let enough = state.editor.tabs.with(|tabs| tabs.len() >= 2);
+            // Split, at the strip's end where VS Code keeps it — on the left
+            // group only, since there is nothing further right of the right
+            // group. Disabled with one tab: moving a group's only file across
+            // leaves an empty pane.
+            {(state.group == crate::state::Group::First).then(|| {
                 view! {
-                    <button
-                        type="button"
-                        title=if enough { t!("files.split") } else { t!("files.split-needs-two") }
-                        disabled=!enough
-                        on:click=move |_| controller::split_active(state)
-                        class="grid w-8 shrink-0 place-items-center border-l border-line text-label-3 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
-                    >
-                        <IconView icon=Icon::Columns size=14 />
-                    </button>
+                    {move || {
+                        let enough = state.editor.tabs.with(|tabs| tabs.len() >= 2);
+                        view! {
+                            <button
+                                type="button"
+                                title=if enough { t!("files.split") } else { t!("files.split-needs-two") }
+                                disabled=!enough
+                                on:click=move |_| controller::split_active(state)
+                                class="grid w-8 shrink-0 place-items-center border-l border-line text-label-3 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
+                            >
+                                <IconView icon=Icon::Columns size=14 />
+                            </button>
+                        }
+                    }}
                 }
-            }}
+            })}
 
             {move || {
                 let (x, y, path) = menu.get()?;
@@ -190,13 +196,20 @@ pub(super) fn TabStrip() -> impl IntoView {
                                     menu.set(None);
                                 })
                             />
-                            <MenuItem
-                                label=t!("context.tab-open-beside")
-                                on_select=Callback::new(move |_| {
-                                    controller::open_beside(state, beside.clone());
-                                    menu.set(None);
-                                })
-                            />
+                            // Left group only: "beside" is the right group, and
+                            // a tab already there has nowhere further to go.
+                            {(state.group == crate::state::Group::First).then(|| {
+                                let beside = beside.clone();
+                                view! {
+                                    <MenuItem
+                                        label=t!("context.tab-open-beside")
+                                        on_select=Callback::new(move |_| {
+                                            controller::open_beside(state, beside.clone());
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                            })}
                             <MenuItem
                                 label=t!("context.tab-new-window")
                                 on_select=Callback::new(move |_| {
