@@ -149,13 +149,40 @@ pub(super) fn caret_line_col(
     Some((line, col))
 }
 
-/// The caret's byte offset into the *screen* text.
+/// The selection as byte offsets into the *document*, start before end.
 ///
-/// Not the draft: `selectionStart` is an index into what the textarea holds,
-/// and while anything is folded that is shorter than the document.
-pub(super) fn caret_byte(area: &web_sys::HtmlTextAreaElement, state: AppState) -> usize {
-    let units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
-    byte_of_utf16(&screen(state), units)
+/// `selectionStart` indexes the screen text, and while anything is folded a
+/// byte counted there lands somewhere else in the draft — which is where
+/// every keystroke edit is computed. Rows map through the fold table and
+/// columns are the same on both, so the conversion is exact; with nothing
+/// folded it is the identity, which is what makes it safe to put under
+/// every Enter, Tab and bracket typed.
+pub(super) fn doc_selection(
+    area: &web_sys::HtmlTextAreaElement,
+    state: AppState,
+) -> (usize, usize) {
+    let screen = screen(state);
+    let draft = state.editor.draft.get_untracked();
+    let map = |units: usize| -> usize {
+        let byte = byte_of_utf16(&screen, units);
+        let before = &screen[..byte.min(screen.len())];
+        let row = before.matches('\n').count() as u32;
+        let line_start = before.rfind('\n').map(|at| at + 1).unwrap_or(0);
+        let col = before[line_start..].chars().count();
+        let line = line_of_row(state, row) as usize;
+        let mut offset = 0;
+        for (index, text) in draft.split('\n').enumerate() {
+            if index == line {
+                let within: usize = text.chars().take(col).map(char::len_utf8).sum();
+                return offset + within;
+            }
+            offset += text.len() + 1;
+        }
+        draft.len()
+    };
+    let start = map(area.selection_start().ok().flatten().unwrap_or(0) as usize);
+    let end = map(area.selection_end().ok().flatten().unwrap_or(0) as usize);
+    (start.min(end), start.max(end))
 }
 
 /// selectionStart counts UTF-16 units — it is a JS string index. Treating it

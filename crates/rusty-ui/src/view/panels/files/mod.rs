@@ -25,6 +25,7 @@ mod folding;
 mod highlight;
 mod lens;
 mod modal;
+mod pairs;
 mod rename;
 mod surface;
 mod tabs;

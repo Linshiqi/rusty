@@ -340,6 +340,43 @@ positioned in a coordinate system that is not the document's.
   persisted**: restoring yesterday's folds onto a file somebody else has since
   edited collapses the wrong lines.
 
+## Bracket pairs, and what a keystroke asks the server
+
+- **Four rules, pure and tested, in `view/panels/files/pairs.rs`.** An opener
+  brings its closer with the caret between; a closer typed against its twin
+  steps over it; Enter between `{|}` puts the caret on an indented line with
+  the closer below; a closer on a blank line takes its opener's indentation
+  (the matching opener, found by depth, not the nearest); Backspace inside
+  an empty pair removes both; an opener typed over a selection wraps it.
+  Single quotes are left alone — `'a` is a lifetime. A `"` inside an
+  unterminated string closes it, and after a word it is a typo being
+  corrected, except after `r` and `b`. Every rule returns an `Edit` in
+  document bytes that `apply_edit` puts through the same record / echo /
+  `set_buffer` path as any other write, so undo, the echo and the folds
+  cannot disagree with it. Vim's insert mode passes every key but Escape, so
+  the rules hold there too.
+- **A prevented key never reaches the input event.** The completion and
+  signature triggers lived in `on:input`; a `(` that opened a pair without
+  asking for the signature would have taken a feature away by adding one.
+  `typed_triggers` is the one place the character behind the caret is
+  judged, and both paths call it.
+- **The caret is a screen position; edits are document edits.**
+  `selectionStart` indexes the folded text. `doc_selection` maps it through
+  the fold table and is the identity with nothing folded; Enter, Tab and
+  every pair go through it. Before, a fold above the caret put the newline
+  at the wrong byte of the draft.
+- **The popup owns its keys only while it shows rows.** `visible_items` is
+  the one filter, shared by the view, the accept and the key handler.
+  `Some` alone was the test, and a popup narrowed to nothing was invisible
+  yet still ate Enter and Tab, so a line ending in `v.xyz` could not be
+  broken.
+- **rust-analyzer's item order is arrival order; its ranking is `sortText`.**
+  Taking the first hundred *unsorted* shipped a hundred arbitrary slice
+  methods for `v.` and dropped `len`; typing `le` then narrowed the popup to
+  nothing — an editor with no completion, reported in exactly those words,
+  while every request and reply was correct. `convert::completion_items`
+  sorts first and caps at 400.
+
 ## Two editor groups
 
 Side by side, VS Code's everyday split, and no more than two. The editor was

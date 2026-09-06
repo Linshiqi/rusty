@@ -197,71 +197,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                 keep_caret_in_view(&element, state, scroller);
             }
 
-            // Completion triggers, judged by the character behind the caret.
-            if !is_rust {
-                return;
-            }
-            let Some(element) = area.get_untracked() else {
-                return;
-            };
-            // The caret is a position in the screen text; the server wants
-            // one in the document. Identical while nothing is folded.
-            let Some((row, col)) = caret_line_col(&element, &screen_now) else {
-                return;
-            };
-            let line = line_of_row(state, row);
-            let line_text = new.split('\n').nth(line as usize).unwrap_or_default();
-            let before: Vec<char> = line_text.chars().take(col as usize).collect();
-            let last = before.last().copied();
-
-            let popup_open = state.editor.completion.with_untracked(Option::is_some);
-            match last {
-                // `foo.` and `foo::` are the moments completion answers a
-                // question the typist actually has.
-                Some('.') => {
-                    controller::request_completion(state, path.clone(), line, col, col);
-                }
-                Some(':') if before.len() >= 2 && before[before.len() - 2] == ':' => {
-                    controller::request_completion(state, path.clone(), line, col, col);
-                }
-                // Inside a word. Once the popup is open the filter narrows it
-                // reactively off the draft, so there is nothing to do — but
-                // *opening* it was the gap: only `.` and `::` ever did, so
-                // typing an identifier offered nothing at all, which reads as
-                // an editor with no completion rather than one with a
-                // deliberate trigger.
-                //
-                // On the second character, not the first: rust-analyzer
-                // answers a one-letter prefix with the entire visible scope,
-                // which is a thousand rows to draw and filter for a question
-                // nobody has asked yet. One request per word, not per key —
-                // after this the popup is open and this arm does nothing.
-                Some(c) if c.is_alphanumeric() || c == '_' => {
-                    let word = before
-                        .iter()
-                        .rev()
-                        .take_while(|c| c.is_alphanumeric() || **c == '_')
-                        .count();
-                    if !popup_open && word == 2 {
-                        let start = col - word as u32;
-                        controller::request_completion(state, path.clone(), line, col, start);
-                    }
-                }
-                // Anything else ends the word the popup was about.
-                _ => {
-                    if popup_open {
-                        state.editor.completion.set(None);
-                    }
-                }
-            }
-
-            // The signature card follows the parentheses.
-            match last {
-                Some('(') | Some(',') => {
-                    controller::request_signature(state, path.clone(), line, col);
-                }
-                Some(')') => state.editor.signature.set(None),
-                _ => {}
+            if let Some(element) = area.get_untracked() {
+                typed_triggers(state, &path, is_rust, &element);
             }
         }
     };
@@ -1054,8 +991,22 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 }
                                 return;
                             }
-                            // The popup owns its keys while it is up.
-                            if state.editor.completion.with_untracked(Option::is_some) {
+                            // The popup owns its keys while it *shows*
+                            // something. `Some` alone was the test, and a
+                            // popup narrowed to nothing — `v.xyz` — was
+                            // invisible yet still ate Enter and Tab.
+                            let popup_shows = state.editor.completion.with_untracked(|popup| {
+                                popup.as_ref().is_some_and(|popup| {
+                                    !visible_items(popup, &state.editor.draft.get_untracked())
+                                        .is_empty()
+                                })
+                            });
+                            if !popup_shows
+                                && state.editor.completion.with_untracked(Option::is_some)
+                            {
+                                state.editor.completion.set(None);
+                            }
+                            if popup_shows {
                                 match event.key().as_str() {
                                     "ArrowDown" => {
                                         event.prevent_default();
@@ -1198,15 +1149,72 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 format_and_save(state, area);
                                 return;
                             }
+                            if read_only {
+                                return;
+                            }
                             if event.key() == "Enter" {
                                 event.prevent_default();
                                 if let Some(element) = area.get_untracked() {
-                                    let caret = caret_byte(&element, state);
-                                    let insert =
-                                        newline_indent(&state.editor.draft.get_untracked(), caret);
-                                    insert_at_caret(&element, state, &insert);
+                                    let (from, to) = doc_selection(&element, state);
+                                    // A selection is replaced by the newline,
+                                    // as the browser would have done.
+                                    let edit = if from < to {
+                                        pairs::Edit {
+                                            range: (from, to),
+                                            text: "\n".to_string(),
+                                            caret: from + 1,
+                                            select: None,
+                                        }
+                                    } else {
+                                        pairs::on_enter(&state.editor.draft.get_untracked(), from)
+                                    };
+                                    apply_edit(&element, state, &edit);
+                                    keep_caret_in_view(&element, state, scroller);
                                 }
                                 return;
+                            }
+                            // Bracket pairs — the four things every editor
+                            // does that a textarea does not: an opener brings
+                            // its closer, a closer typed against one steps
+                            // over it, a closer on a blank line takes its
+                            // opener's indentation, and Backspace inside an
+                            // empty pair removes both. The rules are `pairs`,
+                            // pure and tested; this applies what they return
+                            // and then asks the server what the input event
+                            // would have — that event never fires for a key
+                            // that was prevented, and a `(` that opened a pair
+                            // without asking for the signature would be a
+                            // feature taken away by adding one.
+                            if !event.ctrl_key() && !event.alt_key() && !event.meta_key() {
+                                let key = event.key();
+                                let mut chars = key.chars();
+                                if let (Some(ch), None) = (chars.next(), chars.next())
+                                    && let Some(element) = area.get_untracked()
+                                {
+                                    let (from, to) = doc_selection(&element, state);
+                                    let draft = state.editor.draft.get_untracked();
+                                    if let Some(edit) = pairs::on_type(&draft, from, to, ch) {
+                                        event.prevent_default();
+                                        apply_edit(&element, state, &edit);
+                                        typed_triggers(state, &path, is_rust, &element);
+                                        return;
+                                    }
+                                }
+                                if key == "Backspace"
+                                    && let Some(element) = area.get_untracked()
+                                {
+                                    let (from, to) = doc_selection(&element, state);
+                                    if from == to
+                                        && let Some(edit) = pairs::on_backspace(
+                                            &state.editor.draft.get_untracked(),
+                                            from,
+                                        )
+                                    {
+                                        event.prevent_default();
+                                        apply_edit(&element, state, &edit);
+                                        return;
+                                    }
+                                }
                             }
                             // A text area would move focus on Tab. In an editor
                             // that is never what was meant.
@@ -1526,21 +1534,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 return ().into_any();
                             }
                             let draft = state.editor.draft.get();
-                            let word = typed_word(&draft, popup.line, popup.word_start);
-                            let shown: Vec<(usize, CompletionItem)> = popup
-                                .items
-                                .iter()
-                                .filter(|item| {
-                                    word.is_empty()
-                                        || item
-                                            .label
-                                            .to_lowercase()
-                                            .starts_with(&word.to_lowercase())
-                                })
-                                .take(50)
-                                .cloned()
-                                .enumerate()
-                                .collect();
+                            let shown: Vec<(usize, CompletionItem)> = visible_items(&popup, &draft);
                             if shown.is_empty() {
                                 return ().into_any();
                             }
@@ -1608,5 +1602,84 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             </div>
         </div>
         </div>
+    }
+}
+
+/// What a typed character asks the server for, judged by the character now
+/// behind the caret: `.` and `::` open completion, the second letter of a
+/// word opens it, `(` and `,` ask for the signature, `)` drops it, and any
+/// other character ends the word the popup was about.
+///
+/// Shared by the input event and by the keys the editor types on the
+/// browser's behalf — a bracket pair, a step over a closer — which never
+/// reach the input event because they were `preventDefault`ed.
+fn typed_triggers(
+    state: AppState,
+    path: &str,
+    is_rust: bool,
+    element: &web_sys::HtmlTextAreaElement,
+) {
+    if !is_rust {
+        return;
+    }
+    // The caret is a position in the screen text; the server wants one in
+    // the document. Identical while nothing is folded.
+    let screen_now = screen(state);
+    let Some((row, col)) = caret_line_col(element, &screen_now) else {
+        return;
+    };
+    let line = line_of_row(state, row);
+    let draft = state.editor.draft.get_untracked();
+    let line_text = draft.split('\n').nth(line as usize).unwrap_or_default();
+    let before: Vec<char> = line_text.chars().take(col as usize).collect();
+    let last = before.last().copied();
+
+    let popup_open = state.editor.completion.with_untracked(Option::is_some);
+    match last {
+        // `foo.` and `foo::` are the moments completion answers a question
+        // the typist actually has.
+        Some('.') => {
+            controller::request_completion(state, path.to_string(), line, col, col);
+        }
+        Some(':') if before.len() >= 2 && before[before.len() - 2] == ':' => {
+            controller::request_completion(state, path.to_string(), line, col, col);
+        }
+        // Inside a word. Once the popup is open the filter narrows it
+        // reactively off the draft, so there is nothing to do — but *opening*
+        // it was the gap: only `.` and `::` ever did, so typing an identifier
+        // offered nothing at all, which reads as an editor with no completion
+        // rather than one with a deliberate trigger.
+        //
+        // On the second character, not the first: rust-analyzer answers a
+        // one-letter prefix with the entire visible scope, which is a
+        // thousand rows to draw and filter for a question nobody has asked
+        // yet. One request per word, not per key — after this the popup is
+        // open and this arm does nothing.
+        Some(c) if c.is_alphanumeric() || c == '_' => {
+            let word = before
+                .iter()
+                .rev()
+                .take_while(|c| c.is_alphanumeric() || **c == '_')
+                .count();
+            if !popup_open && word == 2 {
+                let start = col - word as u32;
+                controller::request_completion(state, path.to_string(), line, col, start);
+            }
+        }
+        // Anything else ends the word the popup was about.
+        _ => {
+            if popup_open {
+                state.editor.completion.set(None);
+            }
+        }
+    }
+
+    // The signature card follows the parentheses.
+    match last {
+        Some('(') | Some(',') => {
+            controller::request_signature(state, path.to_string(), line, col);
+        }
+        Some(')') => state.editor.signature.set(None),
+        _ => {}
     }
 }

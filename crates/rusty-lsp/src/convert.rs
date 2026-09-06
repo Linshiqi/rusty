@@ -50,6 +50,12 @@ pub(crate) fn edit_range(text: &str, range: &Value, encoding: Encoding) -> Optio
     })
 }
 
+/// How many completion items cross the bridge, after sorting. The popup
+/// shows nine and filters the rest as the word grows; four hundred is far
+/// past what any prefix narrows to, and keeps a `use`-everything reply of
+/// thousands from being serialised twice per keystroke.
+const MAX_COMPLETIONS: usize = 400;
+
 /// A `textDocument/completion` reply. It is `CompletionItem[]` or a
 /// `CompletionList`; both hold items.
 pub(crate) fn completion_items(
@@ -61,12 +67,24 @@ pub(crate) fn completion_items(
         .get("items")
         .and_then(Value::as_array)
         .or_else(|| result.as_array());
-    // A hundred is more than any popup shows and keeps a `use`-everything
-    // completion reply from shipping megabytes over the bridge.
+    // The server's order is not a ranking. rust-analyzer sends its items in
+    // whatever order it found them and puts the relevance into `sortText`,
+    // which the client is expected to sort by — VS Code does. Taking the
+    // first hundred *unsorted* shipped a hundred arbitrary slice methods for
+    // `v.` and left `len` and `push` behind, so the popup read as noise and
+    // typing `le` narrowed it to nothing: an editor with no completion.
+    // Sorted first, then capped generously — a few hundred items is tens of
+    // kilobytes, and a `use`-everything reply of thousands is what the cap
+    // is for.
+    let mut items: Vec<&Value> = items.into_iter().flatten().collect();
+    items.sort_by_cached_key(|item| {
+        let label = item["label"].as_str().unwrap_or_default();
+        let sort = item["sortText"].as_str().unwrap_or(label);
+        (sort.to_string(), label.to_string())
+    });
     items
         .into_iter()
-        .flatten()
-        .take(100)
+        .take(MAX_COMPLETIONS)
         .map(|item| {
             let label = item["label"].as_str().unwrap_or_default().to_string();
             let edit = item["textEdit"].as_object();
@@ -593,6 +611,31 @@ mod tests {
         assert_eq!(items[0].insert, "frobnicate()");
         let range = items[0].edit.expect("a range");
         assert_eq!((range.start_col, range.end_col), (8, 11));
+    }
+
+    /// rust-analyzer's order is arrival order; its ranking is `sortText`.
+    /// The best items have to survive the cap, so sorting comes before it —
+    /// unsorted, `v.` shipped a hundred arbitrary slice methods and dropped
+    /// `len`.
+    #[test]
+    fn completions_are_ranked_by_sort_text_before_the_cap_applies() {
+        let mut items: Vec<serde_json::Value> = (0..(MAX_COMPLETIONS + 50))
+            .map(|n| json!({ "label": format!("method_{n:04}"), "sortText": "ffffffff" }))
+            .collect();
+        // Arrives last, ranks first.
+        items.push(json!({ "label": "len", "sortText": "00000000" }));
+        // Same rank as the crowd: the label decides, alphabetically.
+        items.push(json!({ "label": "aaa", "sortText": "ffffffff" }));
+        let reply = json!({ "items": items });
+        let got = completion_items(&reply, "", Encoding::Utf8);
+        assert_eq!(got.len(), MAX_COMPLETIONS);
+        assert_eq!(got[0].label, "len");
+        assert_eq!(got[1].label, "aaa");
+        assert_eq!(got[2].label, "method_0000");
+        // An item without sortText ranks by its label.
+        let bare = json!({ "items": [{ "label": "zeta" }, { "label": "alpha" }] });
+        let got = completion_items(&bare, "", Encoding::Utf8);
+        assert_eq!(got[0].label, "alpha");
     }
 
     /// An edit for another file makes the whole action multi-file, and a

@@ -9,6 +9,21 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed — completion that offered nothing.** rust-analyzer sends completion
+items in the order it found them and puts the ranking in a separate field;
+rusty kept the first hundred unsorted, so `v.` showed a hundred arbitrary
+methods and typing `le` narrowed them to nothing — and a popup narrowed to
+nothing still swallowed Enter and Tab. Items are ranked first now, more of
+them are kept, and a popup with nothing to show gets out of the way.
+
+**Added — bracket pairs.** Typing `{`, `(`, `[` or `"` brings the closer and
+puts the caret between; typing the closer against one steps over it; Enter
+between `{}` gives the three-line block with the caret indented; a `}` on a
+blank line lines up with its `{`; Backspace inside an empty pair removes
+both; an opener typed over a selection wraps it. In Vim's insert mode too.
+
 ## v0.6.8
 
 **Fixed — two Git menu items that did nothing.** "Discard changes…" (and

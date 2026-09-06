@@ -88,14 +88,8 @@ pub(super) fn accept_completion(
     };
     let draft = state.editor.draft.get_untracked();
     let word = typed_word(&draft, popup.line, popup.word_start);
-    let shown: Vec<&CompletionItem> = popup
-        .items
-        .iter()
-        .filter(|item| {
-            word.is_empty() || item.label.to_lowercase().starts_with(&word.to_lowercase())
-        })
-        .collect();
-    let Some(item) = shown.get(index.min(shown.len().saturating_sub(1))).copied() else {
+    let shown = visible_items(&popup, &draft);
+    let Some((_, item)) = shown.get(index.min(shown.len().saturating_sub(1))) else {
         return;
     };
 
@@ -144,59 +138,66 @@ pub(super) fn within(range: &rusty_lsp::EditRange, line: u32, col: u32) -> bool 
     true
 }
 
-/// Put `insert` at the caret and leave the caret after it.
-pub(super) fn insert_at_caret(area: &web_sys::HtmlTextAreaElement, state: AppState, insert: &str) {
-    record_edit(state);
-    let start_units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
-    let end_units = area.selection_end().ok().flatten().unwrap_or(0) as usize;
-    let mut text = state.editor.draft.get_untracked();
-    let start = byte_of_utf16(&text, start_units);
-    let end = byte_of_utf16(&text, end_units).max(start);
+/// The rows the popup shows for the word typed so far, in the server's
+/// ranking, each with its index into that list.
+///
+/// The one filter, shared by the view that draws the rows, the accept that
+/// splices the chosen one and the key handler that decides whether the popup
+/// is still up. It was three copies, and the third — `Some` alone — was the
+/// bug: a popup narrowed to nothing was invisible yet still ate Enter and
+/// Tab, so a line ending in `v.xyz` could not be broken.
+pub(super) fn visible_items(
+    popup: &crate::state::CompletionPopup,
+    draft: &str,
+) -> Vec<(usize, CompletionItem)> {
+    let word = typed_word(draft, popup.line, popup.word_start).to_lowercase();
+    popup
+        .items
+        .iter()
+        .filter(|item| word.is_empty() || item.label.to_lowercase().starts_with(&word))
+        .take(50)
+        .cloned()
+        .enumerate()
+        .collect()
+}
 
-    text.replace_range(start..end, insert);
+/// Apply one replacement to the document and place the caret — the path
+/// every keystroke the editor types on the browser's behalf goes through:
+/// Enter, Tab, a bracket pair, a step over a closer. Offsets are document
+/// bytes, as [`doc_selection`] reports them, so the edit is right while
+/// something is folded too; `set_buffer` then unfolds, which is what lets
+/// the caret be placed on the same text the edit was computed against.
+pub(super) fn apply_edit(area: &web_sys::HtmlTextAreaElement, state: AppState, edit: &pairs::Edit) {
+    record_edit(state);
+    let mut text = state.editor.draft.get_untracked();
+    let (from, to) = edit.range;
+    if from > to || to > text.len() || !text.is_char_boundary(from) || !text.is_char_boundary(to) {
+        return;
+    }
+    text.replace_range(from..to, &edit.text);
     echo_edit(state, &text);
     set_buffer(state, area, &text);
-    let at = start_units as u32 + utf16_len(insert);
-    let _ = area.set_selection_start(Some(at));
-    let _ = area.set_selection_end(Some(at));
+    let (start, end) = match edit.select {
+        Some((a, b)) => (a, b),
+        None => (edit.caret, edit.caret),
+    };
+    let _ = area.set_selection_start(Some(utf16_len(&text[..start.min(text.len())])));
+    let _ = area.set_selection_end(Some(utf16_len(&text[..end.min(text.len())])));
     controller::schedule_pulse(state);
 }
 
-/// What pressing Enter at `caret` should insert: a newline and the indentation
-/// the next line starts with.
-///
-/// The current line's leading whitespace, plus one level when the caret sits
-/// right after an opening bracket — the two rules that cover nearly every
-/// Enter press in Rust. Anything cleverer belongs to the language server.
-pub(super) fn newline_indent(text: &str, caret: usize) -> String {
-    let before = &text[..caret.min(text.len())];
-    let line_start = before.rfind('\n').map(|at| at + 1).unwrap_or(0);
-    let line = &before[line_start..];
-    let indent: String = line
-        .chars()
-        .take_while(|ch| *ch == ' ' || *ch == '\t')
-        .collect();
-
-    let deeper = matches!(line.trim_end().chars().last(), Some('{' | '(' | '['));
-    if deeper {
-        format!("\n{indent}    ")
-    } else {
-        format!("\n{indent}")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::newline_indent;
-
-    #[test]
-    fn enter_copies_the_indent_and_deepens_after_an_opener() {
-        let text = "fn main() {\n    let x = 1;\n";
-        // After the opening brace: one level deeper.
-        assert_eq!(newline_indent(text, 11), "\n    ");
-        // After the statement: same level.
-        assert_eq!(newline_indent(text, text.len()), "\n");
-        let nested = "    if x {\n";
-        assert_eq!(newline_indent(nested, nested.len() - 1), "\n        ");
-    }
+/// Put `insert` at the caret, replacing any selection, and leave the caret
+/// after it.
+pub(super) fn insert_at_caret(area: &web_sys::HtmlTextAreaElement, state: AppState, insert: &str) {
+    let (from, to) = doc_selection(area, state);
+    apply_edit(
+        area,
+        state,
+        &pairs::Edit {
+            range: (from, to),
+            text: insert.to_string(),
+            caret: from + insert.len(),
+            select: None,
+        },
+    );
 }
