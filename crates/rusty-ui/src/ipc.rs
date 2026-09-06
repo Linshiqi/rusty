@@ -40,6 +40,11 @@ extern "C" {
     /// The OS folder picker, from `tauri-plugin-dialog`.
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch, js_name = open)]
     async fn dialog_open(options: JsValue) -> Result<JsValue, JsValue>;
+
+    /// A native OK/Cancel question, from the same plugin. Resolves to the
+    /// answer as a boolean.
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch, js_name = confirm)]
+    async fn dialog_confirm(message: &str, options: JsValue) -> Result<JsValue, JsValue>;
 }
 
 /// Ask the OS for a project folder.
@@ -58,6 +63,40 @@ pub async fn pick_folder(title: &str) -> Answer<Option<String>> {
         .await
         .map_err(|e| IpcError::from_js(&e))?;
     Ok(selected.as_string())
+}
+
+/// Ask a yes/no question and wait for the answer. The one door to a
+/// confirmation dialog; nothing else calls `window.confirm`.
+///
+/// In a browser `window.confirm` blocks and answers a boolean. In the app it
+/// cannot be used at all: `tauri-plugin-dialog` overwrites that global with
+/// a shim that returns a *Promise* — read as a boolean by `web_sys`, always
+/// false — and the shim invokes `plugin:dialog|confirm`, a command the plugin
+/// no longer has (2.7 folded it into `message`), so it rejects even with
+/// every dialog permission granted. The Git panel's discard and the dirty
+/// tab's close both did nothing, silently, in the app and only there;
+/// `trunk serve` in a browser has the real `confirm` and passed every check.
+/// So the app asks through the plugin's own `dialog.confirm`, a native
+/// OK/Cancel box, which needs `dialog:allow-message` in the capability.
+///
+/// `false` on any failure — a refused permission, a missing window —
+/// because a destructive action is the one thing that must not proceed on a
+/// shrug; the failure is logged so it is not also invisible.
+pub async fn confirm(message: &str) -> bool {
+    if backend_available() {
+        let options = serde_wasm_bindgen::to_value(&serde_json::json!({ "kind": "warning" }))
+            .unwrap_or(JsValue::UNDEFINED);
+        return match dialog_confirm(message, options).await {
+            Ok(answer) => answer.as_bool().unwrap_or(false),
+            Err(e) => {
+                leptos::logging::warn!("the confirm dialog was refused: {e:?}; answering no");
+                false
+            }
+        };
+    }
+    web_sys::window()
+        .and_then(|window| window.confirm_with_message(message).ok())
+        .unwrap_or(false)
 }
 
 /// A failed command, as the backend describes it.

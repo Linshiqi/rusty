@@ -1092,7 +1092,7 @@ fn Detail(#[prop(default = false)] standalone: bool) -> impl IntoView {
                                                 type="button"
                                                 class=class
                                                 on:click=move |_| controller::show_commit_file(state, pick.clone())
-                                                on:dblclick=move |_| controller::open_file(state.focused(), open.clone())
+                                                on:dblclick=move |_| controller::open_from_git(state, open.clone())
                                                 on:contextmenu=move |event: ev::MouseEvent| path_menu(state, &event, &menu)
                                             >
                                                 <span class=format!("w-3 shrink-0 {ink}")>{glyph}</span>
@@ -1287,7 +1287,7 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                             type="button"
                             class="min-w-0 flex-1 truncate text-left text-label-2"
                             on:click=move |_| controller::load_diff(state, show.clone(), staged, untracked)
-                            on:dblclick=move |_| controller::open_file(state.focused(), open.clone())
+                            on:dblclick=move |_| controller::open_from_git(state, open.clone())
                         >
                             {path}
                         </button>
@@ -1588,7 +1588,7 @@ fn GitContextMenu() -> impl IntoView {
                     <MenuItem
                         label=t!("git.open-file")
                         on_select=Callback::new(move |_| {
-                            controller::open_file(state.focused(), open.clone());
+                            controller::open_from_git(state, open.clone());
                             state.git.menu.set(None);
                         })
                     />
@@ -1661,7 +1661,7 @@ fn GitContextMenu() -> impl IntoView {
                     <MenuItem
                         label=t!("git.open-file")
                         on_select=Callback::new(move |_| {
-                            controller::open_file(state.focused(), open.clone());
+                            controller::open_from_git(state, open.clone());
                             state.git.menu.set(None);
                         })
                     />

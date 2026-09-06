@@ -1257,6 +1257,22 @@ usty`) holds `location.toml`
   no error anywhere in the frontend, because the denial happens on the Rust
   side of the IPC. `allow-internal-toggle-maximize` is the matching permission
   for double-clicking the title bar.
+- **`window.confirm` does not exist in the app, and nothing says so.**
+  `tauri-plugin-dialog` overwrites `alert` and `confirm` with shims at
+  injection time; the `confirm` shim returns a *Promise* (so `web_sys`'s
+  `confirm_with_message` reads it as `false`, every time) and invokes
+  `plugin:dialog|confirm`, a command that no longer exists in 2.7 — it
+  rejects with "not allowed. Command not found" whatever the capability
+  grants. The Git panel's discard and the dirty tab's close both did nothing
+  in the app for a release while passing every check under `trunk serve`,
+  where a browser's real `confirm` answers. `ipc::confirm` is the one door:
+  the plugin's own `dialog.confirm` (needs `dialog:allow-message`, since
+  `allow-confirm` is now an alias for it) in the app, `window.confirm` in a
+  browser, and `mock.js` stubs `dialog.confirm` so the mock exercises the
+  same path. A flow whose only proof is a browser has not been proven for
+  the app — dialogs, clipboard, focus and anything else the WebView hosts
+  differently are the places to test in the app itself (the CDP recipe is in
+  the session memory).
 - **`createUpdaterArtifacts` needs `plugins.updater` to exist, and fails
   *after* the app has built.** Adding the signing secrets flips the release
   workflow onto `--config '{"bundle":{"createUpdaterArtifacts":true}}'`, and

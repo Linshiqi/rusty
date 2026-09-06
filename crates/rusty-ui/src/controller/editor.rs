@@ -393,17 +393,24 @@ pub fn close_tab(state: AppState, path: String) {
         })
     };
     if dirty {
-        let confirmed = web_sys::window()
-            .map(|w| {
-                w.confirm_with_message(&t!("misc.discard-confirm", path = path.to_string()))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        if !confirmed {
-            return;
-        }
+        // Asked through `ipc::confirm`, never `window.confirm` directly: in
+        // the app that global is the dialog plugin's async shim, and read as
+        // a boolean it is always "no" — a dirty tab that could not be closed.
+        let question = t!("misc.discard-confirm", path = path.clone());
+        spawn_local(async move {
+            if ipc::confirm(&question).await {
+                remove_tab(state, path);
+            }
+        });
+        return;
     }
+    remove_tab(state, path);
+}
 
+/// The close itself, once any question about unsaved work has been answered.
+fn remove_tab(state: AppState, path: String) {
+    let active = state.active_path_now();
+    let is_active = active.as_deref() == Some(path.as_str());
     let next = if is_active {
         neighbour_after_close(&state.editor.tabs.get_untracked(), &path)
     } else {

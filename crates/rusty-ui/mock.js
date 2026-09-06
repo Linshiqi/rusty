@@ -541,6 +541,8 @@
       },
     },
     event: { listen: () => Promise.resolve(() => {}) },
-    dialog: { open: () => Promise.resolve(null) },
+    // `confirm` is what the app has where a browser has `window.confirm`; the
+    // mock answers with the real one so a discard can be exercised here.
+    dialog: { open: () => Promise.resolve(null), confirm: (m) => Promise.resolve(window.confirm(m)) },
   };
 })();

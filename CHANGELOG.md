@@ -11,6 +11,16 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Fixed — two Git menu items that did nothing.** "Discard changes…" (and
+"Delete file…" for an untracked one) never asked and never ran: the
+confirmation went through `window.confirm`, which inside the app is a shim
+the dialog plugin installs — one that answers with a promise, read as "no",
+and calls a command the plugin no longer has. Closing a tab with unsaved
+changes was silently refused for the same reason. Both now ask through a
+native dialog. "Open in editor" did open the file, but behind the Git
+panel; it switches to the editor now, as does double-clicking a file in the
+Changes list or in a commit.
+
 The board editor, gone over for how it feels and what it claims.
 
 **Fixed — polarity.** Every lamp and button assumed active-high wiring: lit

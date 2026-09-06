@@ -473,12 +473,6 @@ pub fn discard(state: AppState, path: String, staged: bool, untracked: bool) {
     } else {
         t!("git.discard-unstaged-confirm", path = path.clone())
     };
-    let confirmed = web_sys::window()
-        .map(|w| w.confirm_with_message(&question).unwrap_or(false))
-        .unwrap_or(false);
-    if !confirmed {
-        return;
-    }
     let args: Vec<&str> = if untracked {
         vec!["clean", "-f", "--", &path]
     } else if staged {
@@ -493,9 +487,28 @@ pub fn discard(state: AppState, path: String, staged: bool, untracked: bool) {
     } else {
         vec!["restore", "--", &path]
     };
-    let args = args.into_iter().map(String::from).collect();
-    forget_diff_of(state, &path);
-    run_args_at_root_then(state, "git", args, move |_| after_git(state));
+    let args: Vec<String> = args.into_iter().map(String::from).collect();
+    // The answer arrives asynchronously in the app (a native dialog through
+    // the dialog plugin) and synchronously in a browser; `ipc::confirm`
+    // hides the difference. The first version read `window.confirm` as a
+    // boolean, which in the app is a Promise and therefore false: the menu
+    // item did nothing, with no error anywhere.
+    spawn_local(async move {
+        if !ipc::confirm(&question).await {
+            return;
+        }
+        forget_diff_of(state, &path);
+        run_args_at_root_then(state, "git", args, move |_| after_git(state));
+    });
+}
+
+/// Open a file named by the Git panel in the editor — and show the editor.
+/// The panel fills the working area, so a file opened behind it is a click
+/// that appears to do nothing; VS Code's SCM view brings the editor forward
+/// for the same reason.
+pub fn open_from_git(state: AppState, path: String) {
+    open_file(state.focused(), path);
+    state.layout.panel.set("files".to_string());
 }
 
 /// One file into a stash, index and tree both, untracked included — Fork's
