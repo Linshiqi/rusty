@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.10
 
 **Fixed — a stash of an untracked file opened as "no files changed".** The
 files a stash saves with `--include-untracked` live in a third parent commit
