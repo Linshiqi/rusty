@@ -168,9 +168,19 @@ pub async fn save_sim_trace(
 #[derive(Clone)]
 pub struct PinChannel {
     out: std::sync::Arc<std::sync::Mutex<Option<std::net::TcpStream>>>,
+    /// The buttons whose press pulls the pin *low* — the board file's
+    /// `active_low`, read once when the run started. A press on any other
+    /// button drives high. The console message says "pressed" either way;
+    /// this is where the wiring turns that into a level.
+    low_when_pressed: std::sync::Arc<std::collections::HashSet<u32>>,
 }
 
 impl PinChannel {
+    /// The level a press or release puts on this button's pin.
+    fn level_for(&self, pin: u32, pressed: u8) -> u8 {
+        pin_level(pressed, self.low_when_pressed.contains(&pin))
+    }
+
     /// Drive a pin from the host — a button press, reaching the firmware
     /// through `GPIO_IN` rather than through a message it had to be written
     /// to expect.
@@ -196,6 +206,19 @@ fn pin_line(pin: u32, level: u8) -> String {
     format!("{pin}={level}\n")
 }
 
+/// The pin level a button state means: pressed is high, unless the board
+/// says the button pulls low — the button to ground with a pull-up on the
+/// pin, which is the commonest wiring and what `Pull::Up` + `is_low()` reads.
+/// Before this, every press drove high, and firmware written for a pull-up
+/// button saw the emulator's button *release* when the user pressed it.
+fn pin_level(pressed: u8, active_low: bool) -> u8 {
+    if active_low {
+        u8::from(pressed == 0)
+    } else {
+        pressed
+    }
+}
+
 /// A port nothing else is on, learned by binding and letting go.
 ///
 /// QEMU listens and rusty connects — the arrangement the CI gate boots. The
@@ -216,11 +239,18 @@ fn free_port() -> Option<u16> {
 /// frontend already parses, and it is parsed in exactly one place. Reading
 /// this stream anywhere else would be the second reader that made telemetry
 /// work in the simulator and vanish on hardware.
-fn open_pin_channel(port: u16, feed: Channel<LogLine>) -> PinChannel {
+fn open_pin_channel(
+    port: u16,
+    feed: Channel<LogLine>,
+    low_when_pressed: std::collections::HashSet<u32>,
+) -> PinChannel {
     use std::io::{BufRead, BufReader};
 
     let out = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let handle = PinChannel { out: out.clone() };
+    let handle = PinChannel {
+        out: out.clone(),
+        low_when_pressed: std::sync::Arc::new(low_when_pressed),
+    };
 
     std::thread::spawn(move || {
         // QEMU has to get as far as opening its listening socket, which is
@@ -274,24 +304,25 @@ fn open_pin_channel(port: u16, feed: Channel<LogLine>) -> PinChannel {
 /// the GPIO model there is also a real pin to drive, and unmodified firmware
 /// reading `Input::is_high()` only sees that one. Sending only the second
 /// would break every example; sending only the first is the limitation this
-/// whole path exists to remove.
+/// whole path exists to remove. The message says *pressed*; the level the
+/// pin is driven to follows the button's wiring ([`pin_level`]).
 #[tauri::command]
 pub async fn sim_send(text: String, state: State<'_, AppState>) -> Result<(), CommandError> {
     if let Some(input) = state.session_input().await {
         input.send_line(&text);
     }
-    if let (Some(pins), Some((pin, level))) = (state.pins().await, button_press(&text)) {
-        pins.drive(pin, level);
+    if let (Some(pins), Some((pin, pressed))) = (state.pins().await, button_press(&text)) {
+        pins.drive(pin, pins.level_for(pin, pressed));
     }
     Ok(())
 }
 
-/// `B<pin>=<level>` — the board's button message, and nothing else.
+/// `B<pin>=<pressed>` — the board's button message, and nothing else.
 ///
 /// Deliberately not the potentiometer's `P34=128`: a GPIO carries one bit,
 /// and squeezing an analog value into it would put a pin somewhere between
 /// the two levels it can have. That needs the ADC modelled, which it is not.
-/// Any non-zero level is high, because the message is a level and not a
+/// Any non-zero value is pressed, because the message is a state and not a
 /// count.
 fn button_press(text: &str) -> Option<(u32, u8)> {
     let (pin, level) = text.trim().strip_prefix('B')?.split_once('=')?;
@@ -401,6 +432,21 @@ pub async fn run_simulation(
         }
         return Err(CommandError::new(lines.join("\n")));
     }
+    // Which buttons pull their pin low when pressed: the board file's word,
+    // read once here, so the pin channel drives the level the wiring means
+    // rather than the level the message happens to spell.
+    let low_when_pressed: std::collections::HashSet<u32> = plan
+        .board
+        .as_ref()
+        .map(|board| {
+            board
+                .buttons
+                .iter()
+                .filter(|button| button.active_low)
+                .map(|button| u32::from(button.pin))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // A debug run freezes the CPU at reset so breakpoints can be placed before
     // the first instruction. With no gdb to place them, that freeze is
@@ -500,7 +546,11 @@ pub async fn run_simulation(
         // firmware's own narration, which is where it has always been.
         if let Some(port) = pins_port {
             state
-                .set_pins(Some(open_pin_channel(port, on_line.clone())))
+                .set_pins(Some(open_pin_channel(
+                    port,
+                    on_line.clone(),
+                    low_when_pressed.clone(),
+                )))
                 .await;
         }
 
@@ -596,5 +646,20 @@ mod tests {
             Some("14=1\n".to_string()),
             "the console message and the pin line name the same pin at the same level",
         );
+    }
+
+    /// The board file's polarity is what turns "pressed" into a level. A
+    /// pull-up button pressed is *low*; before this every press drove high,
+    /// and firmware reading `is_low()` saw a release.
+    #[test]
+    fn a_pressed_button_drives_the_level_its_wiring_means() {
+        assert_eq!(pin_level(1, false), 1, "to 3V3: pressed is high");
+        assert_eq!(pin_level(0, false), 0);
+        assert_eq!(
+            pin_level(1, true),
+            0,
+            "to ground with a pull-up: pressed is low"
+        );
+        assert_eq!(pin_level(0, true), 1, "and released rests high");
     }
 }

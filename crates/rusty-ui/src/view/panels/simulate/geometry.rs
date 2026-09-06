@@ -97,6 +97,10 @@ pub(super) struct EditPart {
     pub(super) y: f64,
     /// User-drawn bends per wire slot; empty routes automatically.
     pub(super) waypoints: [Vec<(f64, f64)>; 7],
+    /// The part's polarity: a lamp that lights when its pin is low, a button
+    /// that pulls its pin low when pressed. Carried by the four kinds the wire
+    /// model gives it to; false and ignored on the rest.
+    pub(super) active_low: bool,
 }
 
 impl EditPart {
@@ -112,6 +116,7 @@ impl EditPart {
         label: &str,
         place: &Placement,
         fallback: (f64, f64),
+        active_low: bool,
     ) -> Self {
         EditPart {
             kind,
@@ -122,6 +127,7 @@ impl EditPart {
             waypoints: waypoints_of(&place.routes),
             rot: place.rot,
             flip: place.flip,
+            active_low,
         }
     }
 
@@ -178,6 +184,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             // Stacked down the left edge, so a hand-written file with several
             // LEDs and no positions does not pile them all in one spot.
             (60.0, 40.0 + index as f64 * 56.0),
+            led.active_low,
         ));
     }
     for button in &board.buttons {
@@ -187,6 +194,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &button.label,
             &button.place,
             (60.0, 180.0),
+            button.active_low,
         ));
     }
     for rgb in &board.rgbs {
@@ -196,6 +204,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &rgb.label,
             &rgb.place,
             (60.0, 240.0),
+            rgb.active_low,
         ));
     }
     for seven in &board.sevens {
@@ -205,6 +214,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &seven.label,
             &seven.place,
             (160.0, 60.0),
+            seven.active_low,
         ));
     }
     for display in &board.displays {
@@ -214,6 +224,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &display.label,
             &display.place,
             (160.0, 160.0),
+            false,
         ));
     }
     for analog in &board.analogs {
@@ -223,6 +234,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &analog.label,
             &analog.place,
             (60.0, 360.0),
+            false,
         ));
     }
     for motor in &board.motors {
@@ -232,6 +244,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &motor.label,
             &motor.place,
             (160.0, 300.0),
+            false,
         ));
     }
     for pot in &board.pots {
@@ -241,6 +254,7 @@ pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
             &pot.label,
             &pot.place,
             (60.0, 280.0),
+            false,
         ));
     }
     out
@@ -274,11 +288,13 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 pin: part.pins[0],
                 color: color.clone(),
                 label: part.label.clone(),
+                active_low: part.active_low,
                 place,
             }),
             PartKind::Button => board.buttons.push(rusty_embed::SimButton {
                 pin: part.pins[0],
                 label: part.label.clone(),
+                active_low: part.active_low,
                 place,
             }),
             PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
@@ -286,11 +302,13 @@ pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBo
                 g: part.pins[1],
                 b: part.pins[2],
                 label: part.label.clone(),
+                active_low: part.active_low,
                 place,
             }),
             PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
                 pins: part.pins,
                 label: part.label.clone(),
+                active_low: part.active_low,
                 place,
             }),
             PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
@@ -383,10 +401,15 @@ pub(super) enum Drag {
         /// — the first bend slides along it so the segment stays parallel
         /// to itself (see [`follow_first_bend`]).
         axes: [Option<bool>; 7],
+        /// Where the part stood when the drag began. The sheet keeps drawing
+        /// that footprint, dashed, until the drop — so a move reads as a
+        /// move and not as a part that jumped.
+        from: (f64, f64),
     },
     Kit {
         dx: f64,
         dy: f64,
+        from: (f64, f64),
     },
     /// Panning the sheet: screen-space start of view translation.
     Pan {
@@ -732,6 +755,19 @@ pub(super) fn follow_first_bend(stub: (f64, f64), axis: Option<bool>, first: &mu
     }
 }
 
+/// The name beside each stub of a part with more than one — KiCad's pin
+/// names, so the wire being pulled from the third dot is known to be `b`
+/// before it lands, and the properties panel says the same words.
+pub(super) fn stub_names(kind: &PartKind) -> &'static [&'static str] {
+    match kind {
+        PartKind::Rgb => &["R", "G", "B"],
+        PartKind::Seven => &["a", "b", "c", "d", "e", "f", "g"],
+        PartKind::Display => &["SDA", "SCL"],
+        PartKind::Motor => &["PWM", "IN1", "IN2"],
+        _ => &["pin"],
+    }
+}
+
 /// The label a single-pin part wears for its wiring state.
 pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
     let base = match kind {
@@ -803,6 +839,7 @@ mod tests {
             waypoints: Default::default(),
             rot: 0,
             flip: false,
+            active_low: false,
         }
     }
 
@@ -953,18 +990,35 @@ mod tests {
         let mut part = led(60.0, 40.0, 26);
         part.rot = 90;
         part.flip = true;
+        part.active_low = true;
         part.waypoints[0] = vec![(200.0, 54.0)];
         let board = board_of("esp32", (460.0, 40.0), &[part.clone()]);
 
         assert_eq!(board.leds.len(), 1);
         assert_eq!(board.leds[0].place.rot, 90);
         assert!(board.leds[0].place.flip, "a mirrored part reaches the wire");
+        assert!(board.leds[0].active_low, "and so does its polarity");
         assert_eq!(board.leds[0].place.routes, vec![vec![(200.0, 54.0)]]);
         assert_eq!(board.kit_x, Some(460.0));
 
         let back = parts_of(&board);
         assert_eq!(back.len(), 1);
         assert_eq!(back[0], part);
+    }
+
+    /// Every stub on a many-wired part has a name, and only those: the sheet
+    /// indexes the names by slot, and a name short by one is a panic on the
+    /// seventh segment.
+    #[test]
+    fn every_stub_of_a_many_wired_part_has_a_name() {
+        for kind in [
+            PartKind::Rgb,
+            PartKind::Seven,
+            PartKind::Display,
+            PartKind::Motor,
+        ] {
+            assert_eq!(stub_names(&kind).len(), kind.wires(), "{kind:?}");
+        }
     }
 
     #[test]
@@ -1006,6 +1060,7 @@ mod tests {
             waypoints: Default::default(),
             rot: 0,
             flip: false,
+            active_low: false,
         };
         assert_eq!(display.kind.wires(), 2);
         assert!(

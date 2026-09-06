@@ -214,8 +214,18 @@ color = "red"      # glow hue: green, blue, red, yellow
 ```
 
 A part defined this way appears in the library's Custom section and behaves
-as a lamp on the gpio report channel. Everything on the board rides two
-serial directions:
+as a lamp on the gpio report channel.
+
+Every lamp, RGB, seven-segment and button in `.rusty/sim.toml` takes an
+`active_low = true` key. On a lamp it means "lights when the pin is low" —
+the anode on 3V3 and the GPIO sinking, which is how most devkits wire their
+onboard LED; on a button it means "pressing pulls the pin low" — the button
+to ground with a pull-up, which is what `Pull::Up` + `is_low()` reads. The
+console message `B<pin>=1` still says *pressed*; the level the emulator's
+pin is driven to follows this key. Absent means active-high, which is what
+every file written before the key existed meant.
+
+Everything on the board rides two serial directions:
 
 | line | direction | meaning |
 |---|---|---|

@@ -1296,6 +1296,18 @@ usty`) holds `location.toml`
   `pointer-events: none`; only a wire's own grab handles opt back in with
   `pointer-events: stroke`, so a top layer spanning the sheet still lets
   presses through to parts and to the pan gesture.
+- **A lamp has a polarity, and so does a button, and the sheet says which.**
+  Every lamp and button was drawn active-high: lit when the pin was high,
+  pressed drove the pin high. Most devkits' onboard LEDs are active-low
+  (anode on 3V3, the GPIO sinks) and most buttons are to ground with a
+  pull-up (`Pull::Up` + `is_low()`), so the board showed the opposite of the
+  desk, and a pull-up button *released* in the emulator when the user
+  pressed it. `active_low` travels on the four wire types and in
+  `sim.toml`; the canvas reads a level through it (`lit`), the properties
+  panel has the checkbox, a new button starts active-low and says so in the
+  file, and the backend's pin channel turns "pressed" into the level the
+  board file means (`pin_level`). The console message `B<pin>=1` keeps
+  meaning *pressed*, because that is what the text-protocol firmware reads.
 - **Mirror, do not rotate, to face a part at the chip.** Rotating 180° does
   bring a part's stubs to the near edge — and reverses their order, so seven
   wires to a seven-segment cross on the way in. `flip` mirrors: near edge,

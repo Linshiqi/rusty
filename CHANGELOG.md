@@ -9,6 +9,33 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+The board editor, gone over for how it feels and what it claims.
+
+**Fixed — polarity.** Every lamp and button assumed active-high wiring: lit
+when the pin was high, pressed drove the pin high. Most devkits' onboard
+LEDs light when the pin is *low*, and most buttons are to ground with a
+pull-up, so the board could show the opposite of the desk — and a pull-up
+button *released* in the emulator when you pressed it. Each LED, RGB LED,
+seven-segment and button now has a polarity in its properties (and an
+`active_low = true` key in `.rusty/sim.toml`); a new button starts as a
+pull-up button; the emulator's pin is driven to the level the wiring means.
+
+**Added — on the sheet.**
+
+- A moving part is lifted (shadow, grabbing cursor) and leaves a dashed
+  footprint where it came from until you drop it; the devkit does the same.
+- Multi-pin parts name their stubs — R G B, a…g, SDA SCL, PWM IN1 IN2 — so
+  you know which dot you are wiring before the wire lands. The properties
+  panel uses the same names.
+- A wire brightens under the pointer.
+- Parts can be renamed in the properties panel. A name you type survives
+  rewiring; the editor's own labels (`GPIO26`) keep following the pin.
+- Ctrl+D duplicates the selected part.
+- LEDs have a lens highlight, a pressed button sinks, and the potentiometer
+  shows a knob that turns with its slider.
+
 ## v0.6.7
 
 **Fixed.** The editor split follows one rule: "beside" is the right group,

@@ -49,8 +49,15 @@ pub(super) fn new_label(kind: &PartKind, stub: &str) -> String {
 }
 
 /// Place a new part, returning its index — which is what the caller selects.
+///
+/// A new button pulls low when pressed — to ground with a pull-up, the
+/// wiring nearly every tutorial and devkit uses, and what `Pull::Up` +
+/// `is_low()` reads — and the file says so explicitly. Lamps start
+/// active-high, the plain GPIO → resistor → LED → ground. Either is one
+/// checkbox away in the properties panel.
 pub(super) fn add(list: &mut Vec<EditPart>, kind: PartKind, stub: &str, x: f64, y: f64) -> usize {
     let label = new_label(&kind, stub);
+    let active_low = matches!(kind, PartKind::Button);
     list.push(EditPart {
         kind,
         pins: [UNWIRED; 7],
@@ -60,8 +67,47 @@ pub(super) fn add(list: &mut Vec<EditPart>, kind: PartKind, stub: &str, x: f64, 
         waypoints: Default::default(),
         rot: 0,
         flip: false,
+        active_low,
     });
     list.len() - 1
+}
+
+/// Whether a label is one the editor wrote — `GPIO26`, `BTN —` — rather than
+/// one the user typed. Only the editor's own labels follow the wiring; a
+/// name somebody chose (`STATUS`, `ARM`) is kept through a rewire, the way
+/// KiCad keeps a reference the user set.
+pub(super) fn is_auto_label(kind: &PartKind, label: &str) -> bool {
+    if label == single_pin_label(kind, UNWIRED) {
+        return true;
+    }
+    let base = single_pin_label(kind, UNWIRED);
+    let base = base.trim_end_matches(" —");
+    label
+        .strip_prefix(base)
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Give a part the name the user typed. Blank is not a name: the editor's
+/// own label comes back, so a part is never nameless on the sheet.
+pub(super) fn rename(list: &mut [EditPart], index: usize, label: &str) {
+    if let Some(part) = list.get_mut(index) {
+        let label = label.trim();
+        part.label = if label.is_empty() {
+            match part.kind.wires() {
+                1 => single_pin_label(&part.kind, part.pins[0]),
+                _ => new_label(&part.kind, ""),
+            }
+        } else {
+            label.to_string()
+        };
+    }
+}
+
+/// Flip a part's polarity: a lamp that lights low, a button that pulls low.
+pub(super) fn set_active_low(list: &mut [EditPart], index: usize, on: bool) {
+    if let Some(part) = list.get_mut(index) {
+        part.active_low = on;
+    }
 }
 
 /// Turn a part a quarter turn clockwise.
@@ -115,7 +161,7 @@ pub(super) fn disconnect(list: &mut [EditPart], index: usize, slot: usize) {
     };
     part.pins[slot] = UNWIRED;
     part.waypoints[slot].clear();
-    if part.kind.wires() == 1 {
+    if part.kind.wires() == 1 && is_auto_label(&part.kind, &part.label) {
         part.label = single_pin_label(&part.kind, UNWIRED);
     }
 }
@@ -165,6 +211,70 @@ pub(super) fn bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The editor's labels follow the wiring; a typed name does not. The
+    /// test is about the rule, so it names both kinds of label for two kinds
+    /// of part rather than checking one string.
+    #[test]
+    fn only_the_editors_own_labels_count_as_automatic() {
+        let led = PartKind::Led {
+            color: "red".to_string(),
+        };
+        assert!(is_auto_label(&led, "GPIO26"));
+        assert!(is_auto_label(&led, "GPIO —"), "unwired is the editor's too");
+        assert!(!is_auto_label(&led, "STATUS"));
+        assert!(
+            !is_auto_label(&led, "GPIO26 arm"),
+            "a suffix makes it a name"
+        );
+        assert!(is_auto_label(&PartKind::Button, "BTN14"));
+        assert!(
+            !is_auto_label(&PartKind::Button, "GPIO14"),
+            "another kind's label"
+        );
+    }
+
+    /// A blank name is not a name: the editor's own comes back, so a part is
+    /// never nameless on the sheet.
+    #[test]
+    fn renaming_keeps_a_typed_name_and_refuses_a_blank_one() {
+        let mut list = sheet();
+        rename(&mut list, 0, "  STATUS  ");
+        assert_eq!(list[0].label, "STATUS");
+        rename(&mut list, 0, "   ");
+        assert_eq!(
+            list[0].label,
+            single_pin_label(&list[0].kind, list[0].pins[0]),
+            "blank falls back to the wiring label"
+        );
+        rename(&mut list, 7, "nothing here");
+    }
+
+    /// A new button pulls low when pressed — the pull-up wiring every
+    /// tutorial uses — and a new lamp lights high. Both are one checkbox
+    /// away, and the checkbox is what `set_active_low` is.
+    #[test]
+    fn a_new_button_is_active_low_and_a_new_lamp_is_not() {
+        let mut list = Vec::new();
+        let button = add(&mut list, PartKind::Button, "", 0.0, 0.0);
+        let lamp = add(
+            &mut list,
+            PartKind::Led {
+                color: "green".to_string(),
+            },
+            "",
+            0.0,
+            40.0,
+        );
+        assert!(list[button].active_low);
+        assert!(!list[lamp].active_low);
+        set_active_low(&mut list, lamp, true);
+        assert!(list[lamp].active_low);
+        assert!(
+            duplicate(&mut list, lamp).is_some_and(|copy| list[copy].active_low),
+            "a copy keeps the polarity: two lamps on one rail are wired alike",
+        );
+    }
 
     fn sheet() -> Vec<EditPart> {
         let mut list = Vec::new();

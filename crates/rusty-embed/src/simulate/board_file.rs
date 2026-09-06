@@ -63,6 +63,10 @@ struct Led {
     color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    /// `active_low = true`: lights when the pin is low. Absent is
+    /// active-high, which is what every file before the key meant.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
@@ -72,6 +76,9 @@ struct Button {
     pin: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    /// `active_low = true`: pressing pulls the pin low.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
@@ -83,6 +90,8 @@ struct Rgb {
     b: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
@@ -92,6 +101,8 @@ struct Seven {
     pins: [u8; 7],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
@@ -268,6 +279,7 @@ pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
                 label: led.label.unwrap_or_else(|| format!("GPIO{}", led.pin)),
                 color: led.color.unwrap_or_else(|| "green".to_string()),
                 pin: led.pin,
+                active_low: led.active_low,
                 place: led.place.into_model(),
             })
             .collect(),
@@ -277,6 +289,7 @@ pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
             .map(|b| SimButton {
                 label: b.label.unwrap_or_else(|| format!("BTN{}", b.pin)),
                 pin: b.pin,
+                active_low: b.active_low,
                 place: b.place.into_model(),
             })
             .collect(),
@@ -288,6 +301,7 @@ pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
                 r: rgb.r,
                 g: rgb.g,
                 b: rgb.b,
+                active_low: rgb.active_low,
                 place: rgb.place.into_model(),
             })
             .collect(),
@@ -297,6 +311,7 @@ pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
             .map(|seven| SimSeven {
                 label: seven.label.unwrap_or_else(|| "7SEG".to_string()),
                 pins: seven.pins,
+                active_low: seven.active_low,
                 place: seven.place.into_model(),
             })
             .collect(),
@@ -367,6 +382,7 @@ pub fn save(root: &Path, board: &SimBoard) -> Result<()> {
                 pin: led.pin,
                 color: Some(led.color.clone()),
                 label: Some(led.label.clone()),
+                active_low: led.active_low,
                 place: Place::from_model(&led.place),
             })
             .collect(),
@@ -376,6 +392,7 @@ pub fn save(root: &Path, board: &SimBoard) -> Result<()> {
             .map(|b| Button {
                 pin: b.pin,
                 label: Some(b.label.clone()),
+                active_low: b.active_low,
                 place: Place::from_model(&b.place),
             })
             .collect(),
@@ -387,6 +404,7 @@ pub fn save(root: &Path, board: &SimBoard) -> Result<()> {
                 g: rgb.g,
                 b: rgb.b,
                 label: Some(rgb.label.clone()),
+                active_low: rgb.active_low,
                 place: Place::from_model(&rgb.place),
             })
             .collect(),
@@ -396,6 +414,7 @@ pub fn save(root: &Path, board: &SimBoard) -> Result<()> {
             .map(|seven| Seven {
                 pins: seven.pins,
                 label: Some(seven.label.clone()),
+                active_low: seven.active_low,
                 place: Place::from_model(&seven.place),
             })
             .collect(),
@@ -488,15 +507,19 @@ mod tests {
             chip: "esp32".to_string(),
             kit_x: Some(420.0),
             kit_y: Some(30.0),
+            // Every polarity set, or the round trip would pass with a writer
+            // that never wrote the key — the blind spot `flip` sat in.
             leds: vec![SimLed {
                 pin: 26,
                 color: "green".to_string(),
                 label: "G".to_string(),
+                active_low: true,
                 place: place(40.0, 60.0, 90, true),
             }],
             buttons: vec![SimButton {
                 pin: 14,
                 label: "BTN14".to_string(),
+                active_low: true,
                 place: place(30.0, 120.0, 180, true),
             }],
             rgbs: vec![SimRgb {
@@ -504,11 +527,13 @@ mod tests {
                 g: 22,
                 b: 23,
                 label: "RGB".to_string(),
+                active_low: true,
                 place: place(80.0, 160.0, 270, true),
             }],
             sevens: vec![SimSeven {
                 pins: [1, 2, 3, 4, 5, 6, 7],
                 label: "7SEG".to_string(),
+                active_low: true,
                 place: place(200.0, 40.0, 270, true),
             }],
             displays: vec![

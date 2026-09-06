@@ -216,6 +216,8 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
     let dirty = RwSignal::new(false);
     let selected = RwSignal::new(None::<usize>);
     let selected_wire = RwSignal::new(None::<(usize, usize)>);
+    // The wire under the pointer, for the brightening that says "this one".
+    let hover_wire = RwSignal::new(None::<(usize, usize)>);
     // (client x, client y, what was clicked)
     let menu = RwSignal::new(None::<(f64, f64, MenuTarget)>);
     // Alignment guides shown while a part is being dragged into line with
@@ -427,6 +429,13 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 }
                             }
                             _ if event.ctrl_key()
+                                && event.key().eq_ignore_ascii_case("d") => {
+                                if let Some(index) = selected.get_untracked() {
+                                    event.prevent_default();
+                                    duplicate_part(index);
+                                }
+                            }
+                            _ if event.ctrl_key()
                                 && event.key().eq_ignore_ascii_case("z") => {
                                 event.prevent_default();
                                 if event.shift_key() { redo() } else { undo() }
@@ -547,7 +556,9 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                     *ty = start_ty + f64::from(event.client_y()) - py;
                                 });
                             }
-                            Drag::Part { index, dx, dy, axes } => {
+                            Drag::Part {
+                                index, dx, dy, axes, ..
+                            } => {
                                 let step = grid.get_untracked();
                                 let mut x = snap_to(world.0 - dx, step);
                                 let mut y = snap_to(world.1 - dy, step);
@@ -610,7 +621,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 });
                                 dirty.set(true);
                             }
-                            Drag::Kit { dx, dy } => {
+                            Drag::Kit { dx, dy, .. } => {
                                 let step = grid.get_untracked();
                                 kit_pos.set((
                                     snap_to(world.0 - dx, step),
@@ -720,7 +731,11 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                     if let Some(p) = list.get_mut(part) {
                                         p.pins[slot] = gpio;
                                         p.waypoints[slot].clear();
-                                        if p.kind.wires() == 1 {
+                                        // A name the user typed outlives a
+                                        // rewire; the editor's own follows it.
+                                        if p.kind.wires() == 1
+                                            && edit::is_auto_label(&p.kind, &p.label)
+                                        {
                                             p.label = single_pin_label(&p.kind, gpio);
                                         }
                                     }
@@ -904,6 +919,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                         drag.set(Some(Drag::Kit {
                                             dx: world.0 - kx,
                                             dy: world.1 - ky,
+                                            from: (kx, ky),
                                         }));
                                     }
                                     class="absolute cursor-grab"
@@ -999,26 +1015,42 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                     let duty = move |pin: u8| {
                                         state.sim.pwm.with(|pwm| pwm.get(&pin).copied())
                                     };
+                                    // What the firmware set, read through the
+                                    // part's wiring: a lamp wired active-low
+                                    // is lit when its pin is low, and a
+                                    // pull-up button is pressed when its pin
+                                    // is low. Drawing the level itself was the
+                                    // confident wrong answer for both.
+                                    let active_low = part.active_low;
+                                    let lit = move |pin: u8| level(pin) != active_low;
 
                                     let face = match kind.clone() {
                                         PartKind::Led { color } => view! {
-                                            <span class=move || {
-                                                format!(
-                                                    "size-4 shrink-0 rounded-full transition-all duration-150 {}",
-                                                    lamp_classes(&color, level(pins[0])),
-                                                )
-                                            } />
+                                            // A dome, not a disc: the highlight
+                                            // is what reads as glass at 16px.
+                                            <span class="relative size-4 shrink-0">
+                                                <span class=move || {
+                                                    format!(
+                                                        "absolute inset-0 rounded-full transition-all duration-150 {}",
+                                                        lamp_classes(&color, lit(pins[0])),
+                                                    )
+                                                } />
+                                                <span class="absolute top-[3px] left-[4px] h-[4px] w-[6px] rounded-full bg-white/35" />
+                                            </span>
                                         }
                                             .into_any(),
                                         PartKind::Rgb => view! {
-                                            <span
-                                                class="size-4 shrink-0 rounded-full transition-all duration-150"
-                                                style=move || rgb_style(
-                                                    level(pins[0]),
-                                                    level(pins[1]),
-                                                    level(pins[2]),
-                                                )
-                                            />
+                                            <span class="relative size-4 shrink-0">
+                                                <span
+                                                    class="absolute inset-0 rounded-full transition-all duration-150"
+                                                    style=move || rgb_style(
+                                                        lit(pins[0]),
+                                                        lit(pins[1]),
+                                                        lit(pins[2]),
+                                                    )
+                                                />
+                                                <span class="absolute top-[3px] left-[4px] h-[4px] w-[6px] rounded-full bg-white/35" />
+                                            </span>
                                         }
                                             .into_any(),
                                         PartKind::Seven => view! {
@@ -1034,7 +1066,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             >
                                                 {
                                                     let seg = move |slot: usize| {
-                                                        if level(pins[slot]) {
+                                                        if lit(pins[slot]) {
                                                             "#ff5c5c"
                                                         } else {
                                                             "#3a2323"
@@ -1190,28 +1222,51 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                             }
                                                 .into_any()
                                         }
-                                        PartKind::Pot => view! {
-                                            <input
-                                                type="range"
-                                                min="0"
-                                                max="255"
-                                                value="128"
-                                                on:pointerdown=move |event: ev::PointerEvent| {
-                                                    event.stop_propagation();
-                                                }
-                                                on:input=move |event: ev::Event| {
-                                                    if let Ok(value) =
-                                                        event_target_value(&event).parse::<u8>()
-                                                    {
-                                                        controller::sim_pot(
-                                                            state, pins[0], value,
-                                                        );
-                                                    }
-                                                }
-                                                class="w-[80px] accent-[#c9a227]"
-                                            />
+                                        PartKind::Pot => {
+                                            // The knob turns with the slider: a
+                                            // potentiometer is a shaft, and its
+                                            // angle is the reading at a glance.
+                                            let turned = RwSignal::new(128u8);
+                                            let angle = move || {
+                                                -135.0 + f64::from(turned.get()) / 255.0 * 270.0
+                                            };
+                                            view! {
+                                                <span class="flex items-center gap-1.5">
+                                                    <span class="relative grid size-5 shrink-0 place-items-center rounded-full bg-[#3a404a] ring-1 ring-[#5a626e]">
+                                                        <span
+                                                            class="absolute top-[3px] left-1/2 h-[7px] w-[2px] rounded-full bg-[#c9a227]"
+                                                            style=move || {
+                                                                format!(
+                                                                    "transform-origin: 1px 7px; transform: translateX(-1px) rotate({:.0}deg)",
+                                                                    angle(),
+                                                                )
+                                                            }
+                                                        />
+                                                    </span>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="255"
+                                                        value="128"
+                                                        on:pointerdown=move |event: ev::PointerEvent| {
+                                                            event.stop_propagation();
+                                                        }
+                                                        on:input=move |event: ev::Event| {
+                                                            if let Ok(value) =
+                                                                event_target_value(&event).parse::<u8>()
+                                                            {
+                                                                turned.set(value);
+                                                                controller::sim_pot(
+                                                                    state, pins[0], value,
+                                                                );
+                                                            }
+                                                        }
+                                                        class="w-[56px] accent-[#c9a227]"
+                                                    />
+                                                </span>
+                                            }
+                                                .into_any()
                                         }
-                                            .into_any(),
                                         PartKind::Button => {
                                             // The press the button itself
                                             // shows. A button is an input:
@@ -1250,11 +1305,15 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                 }
                                                 class=move || {
                                                     let pressed = held.get()
-                                                        || (running.get() && level(pins[0]));
+                                                        || (running.get() && lit(pins[0]));
+                                                    // The cap sinks as well as
+                                                    // colouring: a tactile switch
+                                                    // moves, and the eye reads the
+                                                    // movement before the colour.
                                                     format!(
-                                                        "grid size-5 shrink-0 cursor-pointer place-items-center rounded-[5px] ring-1 ring-[#5a626e] {}",
+                                                        "grid size-5 shrink-0 cursor-pointer place-items-center rounded-[5px] ring-1 ring-[#5a626e] transition-transform duration-75 {}",
                                                         if pressed {
-                                                            "bg-rust"
+                                                            "bg-rust scale-90"
                                                         } else {
                                                             "bg-[#3a404a]"
                                                         },
@@ -1326,6 +1385,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                     dx: world.0 - x,
                                                     dy: world.1 - y,
                                                     axes,
+                                                    from: (x, y),
                                                 }));
                                             }
                                             class=move || {
@@ -1334,8 +1394,22 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                 } else {
                                                     "ring-1 ring-[#515a68]"
                                                 };
+                                                // Lifted while it moves: a shadow
+                                                // and the grabbing cursor say the
+                                                // part is in the hand; the dashed
+                                                // footprint drawn below says where
+                                                // it came from.
+                                                let lifted = matches!(
+                                                    drag.get(),
+                                                    Some(Drag::Part { index: moving, .. }) if moving == index
+                                                );
+                                                let lift = if lifted {
+                                                    "z-20 cursor-grabbing opacity-90 shadow-[0_12px_28px_rgba(0,0,0,0.55)]"
+                                                } else {
+                                                    "cursor-grab"
+                                                };
                                                 format!(
-                                                    "absolute flex cursor-grab items-center gap-1.5 rounded-[8px] bg-[#2c313a] px-1.5 py-1 select-none {ring}",
+                                                    "absolute flex items-center gap-1.5 rounded-[8px] bg-[#2c313a] px-1.5 py-1 select-none {ring} {lift}",
                                                 )
                                             }
                                             style=format!(
@@ -1369,7 +1443,27 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                             // wire cannot disagree again.
                                                             let top = STUB_OFFSET - 4.5
                                                                 + slot as f64 * SLOT_PITCH;
+                                                            // Named, on a part with more
+                                                            // than one: which dot is `b`
+                                                            // has to be readable before
+                                                            // the wire lands, as KiCad
+                                                            // names its pins.
+                                                            let name = (wires > 1).then(|| {
+                                                                let name = stub_names(&kind)[slot];
+                                                                view! {
+                                                                    <span
+                                                                        class="pointer-events-none absolute font-mono text-[7px] leading-none text-[#98a1ae]"
+                                                                        style=format!(
+                                                                            "right: 8px; top: {}px; {readable}",
+                                                                            top + 1.0,
+                                                                        )
+                                                                    >
+                                                                        {name}
+                                                                    </span>
+                                                                }
+                                                            });
                                                             view! {
+                                                                {name}
                                                                 <span
                                                                     title=if unwired {
                                                                         t!("simulate.stub-unwired")
@@ -1408,6 +1502,52 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 .collect_view()
                         }}
 
+                        // The footprint a moving part left behind — KiCad's
+                        // ghost. Drawn only once the part has actually moved,
+                        // so a click that never becomes a drag flashes nothing.
+                        {move || {
+                            let (from, width, height, rot, flip, moved) = match drag.get()? {
+                                Drag::Part { index, from, .. } => {
+                                    let part = parts.with(|list| list.get(index).cloned())?;
+                                    let moved = (part.x, part.y) != from;
+                                    (
+                                        from,
+                                        part.kind.width(),
+                                        part.kind.height(),
+                                        part.rot,
+                                        part.flip,
+                                        moved,
+                                    )
+                                }
+                                Drag::Kit { from, .. } => {
+                                    let here = kit_pos.get();
+                                    (
+                                        from,
+                                        KIT_W,
+                                        kit_height(rows.get().len()),
+                                        0,
+                                        false,
+                                        here != from,
+                                    )
+                                }
+                                _ => return None,
+                            };
+                            moved.then(|| {
+                                view! {
+                                    <div
+                                        class="pointer-events-none absolute rounded-[8px] border-2 border-dashed border-[#e05d38]/60"
+                                        style=format!(
+                                            "left: {}px; top: {}px; width: {width}px; height: {height}px; \
+                                             transform: rotate({rot}deg){}",
+                                            from.0,
+                                            from.1,
+                                            if flip { " scaleX(-1)" } else { "" },
+                                        )
+                                    />
+                                }
+                            })
+                        }}
+
                         <svg
                             class="pointer-events-none absolute"
                             style="left: -2000px; top: -2000px"
@@ -1419,6 +1559,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                 {move || {
                                     let kit = kit_pos.get();
                                     let picked = selected_wire.get();
+                                    let hovered = hover_wire.get();
                                     parts
                                         .get()
                                         .iter()
@@ -1431,13 +1572,25 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                     let to = *points.last()?;
                                                     let is_picked =
                                                         picked == Some((part_index, slot));
+                                                    // Brightens under the pointer, so
+                                                    // the wire about to be grabbed is
+                                                    // the one that answers.
+                                                    let is_hovered =
+                                                        hovered == Some((part_index, slot));
                                                     let stroke = if is_picked {
                                                         "#e05d38"
+                                                    } else if is_hovered {
+                                                        "#b7c0cc"
                                                     } else {
                                                         "#7d8694"
                                                     };
-                                                    let width =
-                                                        if is_picked { "2.4" } else { "1.6" };
+                                                    let width = if is_picked {
+                                                        "2.4"
+                                                    } else if is_hovered {
+                                                        "2.0"
+                                                    } else {
+                                                        "1.6"
+                                                    };
                                                     let path = points
                                                         .iter()
                                                         .map(|(x, y)| format!("{x},{y}"))
@@ -1475,6 +1628,10 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                                     style=format!(
                                                                         "pointer-events: stroke; cursor: {cursor}",
                                                                     )
+                                                                    on:pointerenter=move |_| {
+                                                                        hover_wire.set(Some((part_index, slot)))
+                                                                    }
+                                                                    on:pointerleave=move |_| hover_wire.set(None)
                                                                     on:contextmenu=move |event: ev::MouseEvent| {
                                                                         event.prevent_default();
                                                                         event.stop_propagation();
@@ -1801,6 +1958,7 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                     />
                                     <MenuItem
                                         label=t!("simulate.duplicate")
+                                        shortcut="Ctrl+D"
                                         on_select=Callback::new(move |_| {
                                             duplicate_part(index);
                                             menu.set(None);
@@ -1973,17 +2131,28 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                         PartKind::Analog => t!("parts.analog"),
                                     }}
                                 </span>
+                                // The name on the sheet. The editor's own —
+                                // `GPIO26` — follows the wiring; one typed
+                                // here is kept through a rewire, as KiCad
+                                // keeps a reference the user set.
+                                <input
+                                    type="text"
+                                    title=t!("simulate.label-hint")
+                                    prop:value=part.label.clone()
+                                    on:change=move |event| {
+                                        checkpoint();
+                                        let text = event_target_value(&event);
+                                        parts.update(|list| edit::rename(list, index, &text));
+                                        dirty.set(true);
+                                    }
+                                    class="h-[26px] rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                />
                                 {(part.kind.wires() > 0)
                                     .then(|| {
-                                        let names: &[&str] = match part.kind {
-                                            PartKind::Rgb => &["r", "g", "b"],
-                                            PartKind::Seven => {
-                                                &["a", "b", "c", "d", "e", "f", "g"]
-                                            }
-                                            PartKind::Display => &["sda", "scl"],
-                                            PartKind::Motor => &["pwm", "in1", "in2"],
-                                            _ => &["pin"],
-                                        };
+                                        // The same names the stubs wear on the
+                                        // sheet, so the panel and the drawing
+                                        // cannot call one pin two things.
+                                        let names = stub_names(&part.kind);
                                         view! {
                                             <div class="flex flex-col gap-1">
                                                 {names
@@ -2004,6 +2173,44 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                     {t!("simulate.wire-hint")}
                                                 </p>
                                             </div>
+                                        }
+                                    })}
+                                // Polarity: the one fact about a lamp or a
+                                // button the sheet cannot see and the firmware
+                                // cannot be judged without. A devkit's onboard
+                                // LED is usually active-low; a button is
+                                // usually to ground with a pull-up.
+                                {matches!(
+                                    part.kind,
+                                    PartKind::Led { .. }
+                                        | PartKind::Rgb
+                                        | PartKind::Seven
+                                        | PartKind::Button
+                                )
+                                    .then(|| {
+                                        let is_button = matches!(part.kind, PartKind::Button);
+                                        let on = part.active_low;
+                                        view! {
+                                            <label class="flex items-start gap-1.5 text-footnote text-label-2 select-none">
+                                                <input
+                                                    type="checkbox"
+                                                    class="mt-0.5"
+                                                    prop:checked=on
+                                                    on:change=move |event| {
+                                                        checkpoint();
+                                                        let on = event_target_checked(&event);
+                                                        parts.update(|list| edit::set_active_low(list, index, on));
+                                                        dirty.set(true);
+                                                    }
+                                                />
+                                                <span>
+                                                    {if is_button {
+                                                        t!("simulate.active-low-button")
+                                                    } else {
+                                                        t!("simulate.active-low-lamp")
+                                                    }}
+                                                </span>
+                                            </label>
                                         }
                                     })}
                                 {matches!(part.kind, PartKind::Led { .. })

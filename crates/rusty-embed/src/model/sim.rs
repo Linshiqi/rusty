@@ -73,6 +73,12 @@ pub struct SimLed {
     /// `green`, `blue`, `red`, `yellow` — the stylesheet's palette names.
     pub color: String,
     pub label: String,
+    /// Lights when its pin is *low*: anode to 3V3 and the GPIO sinking — the
+    /// wiring most devkits' onboard LEDs use, and the one that makes a lamp
+    /// drawn active-high show the opposite of the board on the desk. Off
+    /// (active-high) unless the file says so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active_low: bool,
     #[serde(default)]
     pub place: Placement,
 }
@@ -84,6 +90,14 @@ pub struct SimLed {
 pub struct SimButton {
     pub pin: u8,
     pub label: String,
+    /// Pressing pulls the pin *low*: the button to ground with a pull-up on
+    /// the pin, the commonest wiring and what `Pull::Up` + `is_low()` reads.
+    /// The console message `B<pin>=1` still means "pressed"; this decides
+    /// the level the emulator's pin is driven to. Off (pressed drives high)
+    /// when absent — files written before this field existed drove high,
+    /// and keep doing so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active_low: bool,
     #[serde(default)]
     pub place: Placement,
 }
@@ -97,6 +111,11 @@ pub struct SimRgb {
     pub g: u8,
     pub b: u8,
     pub label: String,
+    /// Common anode: a channel lights when its pin is low. The commoner of
+    /// the two RGB packages, and the one a firmware writing `set_high()` to
+    /// turn a channel *off* is written for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active_low: bool,
     #[serde(default)]
     pub place: Placement,
 }
@@ -111,6 +130,9 @@ pub struct SimSeven {
     /// Segments a, b, c, d, e, f, g in order.
     pub pins: [u8; 7],
     pub label: String,
+    /// Common anode: a segment lights when its pin is low.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active_low: bool,
     #[serde(default)]
     pub place: Placement,
 }
