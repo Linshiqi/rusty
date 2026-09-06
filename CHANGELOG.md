@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.9
 
 **Fixed — completion that offered nothing.** rust-analyzer sends completion
 items in the order it found them and puts the ranking in a separate field;
