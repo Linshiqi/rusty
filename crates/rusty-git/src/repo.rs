@@ -480,6 +480,54 @@ mod tests {
         assert_eq!(history.lanes, 2, "the stash added no lane");
     }
 
+    /// The shape the report came in: a repository with one commit, a new
+    /// file in a directory git has never seen, stashed by path from the
+    /// Changes view (`stash push --include-untracked -- test/led.rs`). The
+    /// stash holds nothing tracked, so the first-parent diff is empty and
+    /// only the third parent has the file.
+    #[test]
+    fn a_stash_of_only_an_untracked_file_in_a_new_directory_lists_that_file() {
+        let Some(dir) = tempfile::tempdir().ok() else {
+            return;
+        };
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "t@x")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "t@x")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+        };
+        if git(&["init", "-q", "-b", "master"]).is_none() {
+            eprintln!("skipping: git is not available on this machine");
+            return;
+        }
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+        git(&["add", "Cargo.toml"]).expect("add");
+        git(&["commit", "-q", "-m", "init"]).expect("commit");
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        std::fs::write(dir.path().join("test/led.rs"), "fn led() {}\n").unwrap();
+        git(&["stash", "push", "--include-untracked", "--", "test/led.rs"]).expect("stash");
+
+        let detail = commit(dir.path(), "stash@{0}").expect("the stash opens");
+        assert_eq!(detail.files.len(), 1, "{:?}", detail.files);
+        assert_eq!(detail.files[0].path, "test/led.rs");
+        assert_eq!(detail.files[0].kind, crate::model::ChangeKind::Added);
+        assert!(detail.files[0].patch.contains("+fn led() {}"));
+
+        let history = history(dir.path(), None, LIMIT).expect("history");
+        assert_eq!(
+            history.rows.len(),
+            1,
+            "only `init`, none of the stash's rows"
+        );
+        assert_eq!(history.lanes, 1);
+    }
+
     #[test]
     fn a_directory_without_a_repository_says_so() {
         let dir = tempfile::tempdir().unwrap();
