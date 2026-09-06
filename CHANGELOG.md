@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.6
 
 **Changed.** The title bar's centre holds a search icon and the project's
 verbs, nothing else. The search box that carried the project's name went: it
