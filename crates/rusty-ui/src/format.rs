@@ -21,6 +21,21 @@ pub fn bytes(value: u64) -> String {
     }
 }
 
+/// A project-relative path joined onto the project's root, spelled the way
+/// the root is: a Windows root gets backslashes throughout, so what lands on
+/// the clipboard pastes into any Windows tool without a mixed path.
+pub fn full_path(root: &str, relative: &str) -> String {
+    let windows = root.contains('\\');
+    let separator = if windows { '\\' } else { '/' };
+    let relative = if windows {
+        relative.replace('/', "\\")
+    } else {
+        relative.to_string()
+    };
+    let root = root.trim_end_matches(['/', '\\']);
+    format!("{root}{separator}{relative}")
+}
+
 /// Bytes split into a number and its unit, for a [`Readout`](crate::view::components::Readout).
 ///
 /// The unit is set smaller and lighter there, which only works if it arrives
@@ -64,7 +79,20 @@ pub fn percent(fraction: f32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{bytes, bytes_parts};
+    use super::{bytes, bytes_parts, full_path};
+
+    /// The clipboard gets one spelling: the root's.
+    #[test]
+    fn a_full_path_follows_the_roots_separators() {
+        assert_eq!(
+            full_path("D:\\project\\my_fly", "src/bin/main.rs"),
+            "D:\\project\\my_fly\\src\\bin\\main.rs"
+        );
+        assert_eq!(
+            full_path("/home/me/my_fly/", "src/lib.rs"),
+            "/home/me/my_fly/src/lib.rs"
+        );
+    }
 
     #[test]
     fn bytes_switch_scale_at_binary_multiples() {

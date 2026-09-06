@@ -438,7 +438,13 @@ and a new branch.
   come apart.
 - **The right-click menu is local to the thing under the pointer**: a commit
   offers copy hash, a branch from here, a detached checkout, cherry-pick and
-  revert; a file offers open and copy path. Every write in it is the same
+  revert; a commit's file offers open and copy path; a file in the Changes
+  view offers Fork's list — stage or unstage, discard (asking first, in
+  words that say whether the file goes back to the index or to the last
+  commit; an untracked file is deleted, `clean -f` on that one path), stage
+  all, stash this file, copy path and full path. Which list it was clicked
+  in travels with the target (`GitTarget::Change`), because discard means
+  three different things across the two lists. Every write in it is the same
   dock command a button would run, and the panel's own `contextmenu` handler
   swallows the browser's menu everywhere else.
 - **A commit asks who you are before git refuses.** `git_identity` reads

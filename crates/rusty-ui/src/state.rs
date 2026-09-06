@@ -1028,8 +1028,17 @@ pub struct GitMenu {
 pub enum GitTarget {
     /// A commit, by full hash — or a stash by its `stash@{n}` name.
     Commit { id: String },
-    /// A path in the working tree or in a commit, relative to the root.
+    /// A path in a commit's file list, relative to the root: open it, copy
+    /// it, and nothing that writes.
     Path { path: String },
+    /// A path in one of the Changes view's two lists, with which list it was
+    /// clicked in — stage or unstage, discard and stash mean different
+    /// things on the two sides.
+    Change {
+        path: String,
+        staged: bool,
+        untracked: bool,
+    },
 }
 
 const TREE_HIDDEN_KEY: &str = "rusty.layout.tree-hidden";

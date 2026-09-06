@@ -918,6 +918,22 @@ fn path_menu(state: AppState, event: &ev::MouseEvent, path: &str) {
     }));
 }
 
+/// The same, for a file in the Changes view — which list it sits in decides
+/// what the menu offers and what discard means.
+fn change_menu(state: AppState, event: &ev::MouseEvent, path: &str, staged: bool, untracked: bool) {
+    event.prevent_default();
+    event.stop_propagation();
+    state.git.menu.set(Some(GitMenu {
+        x: event.client_x() as f64,
+        y: event.client_y() as f64,
+        target: GitTarget::Change {
+            path: path.to_string(),
+            staged,
+            untracked,
+        },
+    }));
+}
+
 // ─── the opened commit ───────────────────────────────────────────────────────
 
 /// The opened commit (or stash): message, files, one file's patch — under
@@ -1262,7 +1278,9 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                 view! {
                     <div
                         class=class
-                        on:contextmenu=move |event: ev::MouseEvent| path_menu(state, &event, &menu)
+                        on:contextmenu=move |event: ev::MouseEvent| {
+                            change_menu(state, &event, &menu, staged, untracked && !staged)
+                        }
                     >
                         <span class=format!("w-3 shrink-0 {ink}") title=hint>{glyph}</span>
                         <button
@@ -1578,6 +1596,119 @@ fn GitContextMenu() -> impl IntoView {
                         label=t!("git.copy-path")
                         on_select=Callback::new(move |_| {
                             copy_to_clipboard(&copy);
+                            state.git.menu.set(None);
+                        })
+                    />
+                }
+                .into_any()
+            }
+            // Fork's menu for a changed file, less what rusty has no view
+            // for (blame, history, an external diff): open; stage or
+            // unstage; discard, which asks first; stage all; stash this one
+            // file; the path both ways.
+            GitTarget::Change {
+                path,
+                staged,
+                untracked,
+            } => {
+                let (open, copy, full, discard, stash, toggle) = (
+                    path.clone(),
+                    path.clone(),
+                    path.clone(),
+                    path.clone(),
+                    path.clone(),
+                    path,
+                );
+                let root = state
+                    .project
+                    .detected
+                    .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
+                    .unwrap_or_default();
+                // The list this file is in, as the header's button sees it.
+                let all: Vec<String> = state.git.status.with_untracked(|s| {
+                    s.as_ref()
+                        .map(|s| {
+                            s.entries
+                                .iter()
+                                .filter(|e| {
+                                    if staged {
+                                        e.staged.is_some()
+                                    } else {
+                                        e.unstaged.is_some()
+                                    }
+                                })
+                                .map(|e| e.path.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                });
+                let stage_one = if staged {
+                    t!("git.unstage")
+                } else {
+                    t!("git.stage")
+                };
+                let stage_every = if staged {
+                    t!("git.unstage-all")
+                } else {
+                    t!("git.stage-all")
+                };
+                let discard_label = if untracked {
+                    t!("git.delete-untracked")
+                } else {
+                    t!("git.discard")
+                };
+                view! {
+                    <MenuItem
+                        label=t!("git.open-file")
+                        on_select=Callback::new(move |_| {
+                            controller::open_file(state.focused(), open.clone());
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuSeparator />
+                    <MenuItem
+                        label=stage_one
+                        on_select=Callback::new(move |_| {
+                            controller::stage(state, vec![toggle.clone()], !staged);
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuItem
+                        label=discard_label
+                        danger=true
+                        on_select=Callback::new(move |_| {
+                            controller::discard(state, discard.clone(), staged, untracked);
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuSeparator />
+                    <MenuItem
+                        label=stage_every
+                        on_select=Callback::new(move |_| {
+                            controller::stage(state, all.clone(), !staged);
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuSeparator />
+                    <MenuItem
+                        label=t!("git.stash-file")
+                        on_select=Callback::new(move |_| {
+                            controller::stash_file(state, stash.clone());
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuSeparator />
+                    <MenuItem
+                        label=t!("git.copy-path")
+                        on_select=Callback::new(move |_| {
+                            copy_to_clipboard(&copy);
+                            state.git.menu.set(None);
+                        })
+                    />
+                    <MenuItem
+                        label=t!("git.copy-full-path")
+                        on_select=Callback::new(move |_| {
+                            copy_to_clipboard(&format::full_path(&root, &full));
                             state.git.menu.set(None);
                         })
                     />

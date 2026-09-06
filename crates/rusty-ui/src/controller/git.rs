@@ -15,6 +15,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_git::{Branch, ChangeKind, CommitDetail, GitIdentity, History, Stash, Status};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -456,6 +457,70 @@ pub fn stage(state: AppState, paths: Vec<String>, on: bool) {
             }
         },
     );
+}
+
+/// Throw a file's changes away — the one write in this panel that cannot be
+/// undone, so it asks first, in words that say what happens to *this* file:
+/// from the unstaged list the tree goes back to the index; from the staged
+/// list the file goes back to the last commit in both; an untracked file has
+/// nothing to go back to and is deleted (`clean -f` on that one path, never
+/// `-d` or the tree). Fork's "Discard changes…".
+pub fn discard(state: AppState, path: String, staged: bool, untracked: bool) {
+    let question = if untracked {
+        t!("git.discard-untracked-confirm", path = path.clone())
+    } else if staged {
+        t!("git.discard-staged-confirm", path = path.clone())
+    } else {
+        t!("git.discard-unstaged-confirm", path = path.clone())
+    };
+    let confirmed = web_sys::window()
+        .map(|w| w.confirm_with_message(&question).unwrap_or(false))
+        .unwrap_or(false);
+    if !confirmed {
+        return;
+    }
+    let args: Vec<&str> = if untracked {
+        vec!["clean", "-f", "--", &path]
+    } else if staged {
+        vec![
+            "restore",
+            "--source=HEAD",
+            "--staged",
+            "--worktree",
+            "--",
+            &path,
+        ]
+    } else {
+        vec!["restore", "--", &path]
+    };
+    let args = args.into_iter().map(String::from).collect();
+    forget_diff_of(state, &path);
+    run_args_at_root_then(state, "git", args, move |_| after_git(state));
+}
+
+/// One file into a stash, index and tree both, untracked included — Fork's
+/// "Stash 1 File".
+pub fn stash_file(state: AppState, path: String) {
+    let args = ["stash", "push", "--include-untracked", "--", &path]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    forget_diff_of(state, &path);
+    run_args_at_root_then(state, "git", args, move |_| after_git(state));
+}
+
+/// The diff pane shows one path; if that path is about to stop being a
+/// change, the pane must not keep describing it.
+fn forget_diff_of(state: AppState, path: &str) {
+    if state
+        .git
+        .diff_for
+        .with_untracked(|d| d.as_ref().is_some_and(|(p, _)| p == path))
+    {
+        state.git.diff_for.set(None);
+        state.git.diff.set(None);
+        state.git.images.set(None);
+    }
 }
 
 /// After any command that changed the repository: read everything back, and

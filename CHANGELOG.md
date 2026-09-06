@@ -9,6 +9,13 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Added.** The Changes view's right-click menu on a file has Fork's items:
+Stage or Unstage, Discard changes… (it asks first, and says whether the file
+goes back to what is staged or to the last commit; an untracked file is
+deleted), Stage all, Stash this file…, and Copy full path.
+
 ## v0.6.6
 
 **Changed.** The title bar's centre holds a search icon and the project's
