@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.4
 
 **Fixed.**
 
