@@ -71,6 +71,8 @@ pub mod project;
 #[cfg(feature = "backend")]
 pub mod scaffold;
 #[cfg(feature = "backend")]
+pub mod schematic;
+#[cfg(feature = "backend")]
 pub mod serial;
 #[cfg(feature = "backend")]
 pub mod simulate;

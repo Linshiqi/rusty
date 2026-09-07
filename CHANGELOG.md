@@ -11,6 +11,15 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+- **Schematic symbols, the library first.** The board's parts are on their
+  way to being real schematic symbols with real pins, KiCad's way, and this
+  release carries the library under them: KiCad's `.kicad_sym` format read
+  and written, a built-in `Device` library (R, C, LED, SW_Push), a
+  project's own `.rusty/symbols/`, and LCSC (嘉立创) parts imported by
+  number from EasyEDA's component service. `rusty-cli symbol C2286` fetches
+  a part, reads it into a symbol and keeps it in the data directory's
+  `symbols/lcsc.kicad_sym`, a file KiCad can open too. The board editor
+  does not draw them yet.
 **Fixed — completion never offered anything that was not already imported.**
 Typing `Out` in a file without `use esp_hal::gpio::Output` offered nothing,
 and `Output::` nothing after it, because rust-analyzer only enables its

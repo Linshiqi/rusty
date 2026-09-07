@@ -27,6 +27,7 @@ mod project;
 mod registers;
 mod repo;
 mod sim;
+mod symbol;
 mod toolchain;
 mod wizard;
 mod workbench;
@@ -53,6 +54,7 @@ pub use sim::{
     Drive, Emulator, PartDef, Placement, SimAnalog, SimBoard, SimButton, SimDebug, SimDisplay,
     SimLed, SimMotor, SimPlan, SimPot, SimRgb, SimSeven, SimTool, UNWIRED_PIN,
 };
+pub use symbol::{Fill, Graphic, Pin, PinKind, Symbol};
 pub use toolchain::{ToolStatus, Toolchain, ToolchainReport, ToolchainStatus};
 pub use wizard::{Explanation, WizardChoice, WizardOption};
 pub use workbench::{AssistantChoice, ProjectTabs, RelocateReport, StorageLocation, UpdateStatus};

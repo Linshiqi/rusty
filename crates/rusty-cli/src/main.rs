@@ -107,6 +107,19 @@ enum Command {
         apply: bool,
     },
 
+    /// A schematic symbol for an LCSC part number, imported from EasyEDA and
+    /// kept in the data directory's symbol library for the board editor.
+    ///
+    /// The proof that a machine can reach the service, and what the symbol
+    /// came out as: every pin with its position, and every record the
+    /// reader had to skip.
+    Symbol {
+        /// The part's number on lcsc.com, e.g. C2286.
+        number: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Cargo dependency health: duplicates, direct vs transitive, build scripts.
     Deps {
         #[arg(default_value = ".")]
@@ -345,6 +358,17 @@ fn main() -> Result<()> {
             }
         }
 
+        Command::Symbol { number, json } => {
+            let imported = rusty_embed::schematic::easyeda::import(&number)?;
+            if json {
+                emit(&imported.symbol)?;
+            } else {
+                print_symbol(&imported.symbol);
+            }
+            for warning in &imported.warnings {
+                eprintln!("{warning}");
+            }
+        }
         Command::Features {
             package,
             path,
@@ -370,6 +394,32 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_symbol(symbol: &rusty_embed::Symbol) {
+    println!(
+        "{}  reference {}  value {}",
+        symbol.id(),
+        symbol.reference,
+        symbol.value
+    );
+    if let Some(description) = &symbol.description {
+        println!("  {description}");
+    }
+    for pin in &symbol.pins {
+        println!(
+            "  pin {:<4} {:<12} {:<14} at ({}, {}) mm, {} mm toward {}°{}",
+            pin.number,
+            pin.name,
+            format!("{:?}", pin.kind).to_lowercase(),
+            pin.at.0,
+            pin.at.1,
+            pin.length,
+            pin.angle,
+            if pin.hidden { "  (hidden)" } else { "" }
+        );
+    }
+    println!("  {} graphics", symbol.graphics.len());
 }
 
 fn emit<T: serde::Serialize>(value: &T) -> Result<()> {

@@ -83,6 +83,11 @@ cargo run -p rusty-embed --example flight_probe -- examples/rate-loop
 cargo run -p rusty-cli -- check .
 cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
+cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
+
+# What EasyEDA actually answers for a part, record by record, beside what
+# the reader made of it -- how tests/fixtures/easyeda/ was captured
+cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 ```
 
 ## Layout
@@ -90,7 +95,7 @@ cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder) |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is the symbol library — KiCad's `.kicad_sym` read and written, EasyEDA's answer for an LCSC part read — over `model/symbol.rs`, the drawing the frontend renders |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -1785,6 +1790,53 @@ usty`) holds `location.toml`
   rest only on Windows. Three crates, one class of bug, found one per push
   because `cargo test` stops at the first failing binary — the CI passes
   `--no-fail-fast` now so a run names them all.
+
+## Schematic symbols
+
+The board editor's parts are becoming schematic symbols — KiCad's drawing of
+a part with real pins, wired pin to pin — and `docs/schematic.md` is the
+design. What is in the tree so far is the library under them:
+`model::symbol` (the drawing, wasm-safe, what the frontend renders),
+`schematic::kicad_sym` (KiCad's `.kicad_sym` read and written),
+`schematic::easyeda` (an LCSC part number fetched from EasyEDA's component
+service and read into the same type), and `rusty-cli symbol C2286` as the
+headless proof.
+
+- **One `Symbol` for every source.** KiCad's coordinates — millimetres, y
+  up, origin at the anchor — and KiCad's pin convention: `at` is the
+  connection point and `angle` points from it *into* the body, 0 meaning
+  the body lies to the right. Every importer converts at its own edge; the
+  renderer flips y once. A pin is found by number and then by name, so
+  `D1.K` and `D1.2` both land.
+- **The library is three layers, later ones winning by `library:name`**:
+  the built-in `Device.kicad_sym` (R, C, LED, SW_Push in KiCad's own
+  shapes), the data directory's `symbols/` — where `lcsc.kicad_sym` holds
+  every imported part, one file KiCad itself can open — and the project's
+  `.rusty/symbols/`. A file that does not parse is named in `warnings` and
+  skipped; a cache file that no longer parses is moved to `.broken` before
+  the import writes, because a read that degrades to empty in front of a
+  read-modify-write is how a library of imports vanishes.
+- **Read, never trusted.** A node the S-expression reader does not know is
+  skipped; a pin without a number is refused with the symbol's name; a
+  derived symbol (`extends`) is skipped whole rather than half-read.
+  EasyEDA records the reader does not know go into `warnings` rather than
+  nowhere, and a part with no pins is refused — nothing could wire to it.
+- **EasyEDA's units are 10 mil, y down, and the pin line is written from
+  either end.** LCSC's own library writes `M 40 0 h -10` starting at the
+  connection point for one part and `M 20 20 h 10` ending at it for the
+  next; the body end is whichever end is not the dot, and the line's
+  direction is the angle. The rotation field stands in only when there is
+  no line, and its 0 means a pin sticking out to the *right* of its body —
+  KiCad's 180. `Value` (`10kΩ`, `100nF`) is the value and `name` is the
+  manufacturer's part number; a symbol without `Value` shows its name. All
+  of this was read off captured answers (`tests/fixtures/easyeda/`, four
+  parts every first circuit has), not the format's documentation — the
+  first reader, written from the documentation, would have put the
+  capacitor's pins on backwards. `examples/lcsc_probe.rs` captures another
+  and prints every record beside what was made of it.
+- **The fetch goes through `net`'s ladder**, both hosts (`easyeda.com`,
+  then `lceda.cn`), and the failure names the last route tried. It reached
+  the service from a machine where `curl` and Python could not.
 
 ## Meeting C
 
