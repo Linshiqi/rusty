@@ -534,6 +534,20 @@ pub async fn run_simulation(
                     "[rusty:pins] emulator — pin state read from the GPIO registers",
                 );
             }
+            // The stock build, and what that costs, said where the run is
+            // read. A blinky whose `toggle()` printed `false` for ever was
+            // the report: `is_set_high()` reads a register this emulator
+            // never stores, and nothing on screen said so.
+            if !has_model {
+                note(
+                    &on_line,
+                    "[rusty:pins] firmware — Espressif's stock QEMU: its GPIO write handler \
+                     is empty, so is_set_high()/is_high() read 0 in the emulator (real \
+                     hardware is fine) and the board shows only what the firmware prints. \
+                     The Simulate panel's Upgrade installs rusty's build, which models the \
+                     pins.",
+                );
+            }
         }
 
         let session = process::spawn(&step, Some(root.as_path()))?;

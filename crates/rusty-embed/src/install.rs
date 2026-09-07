@@ -96,25 +96,35 @@ fn prepare(plan: &ToolDownload) -> Result<()> {
 
 /// The unpack step for an archive already downloaded.
 ///
-/// `program` is the absolute Windows tar where one is needed: it is bsdtar,
-/// which reads zip, whereas a bare `tar` can resolve to MSYS GNU tar on PATH,
-/// which does not.
-fn extract_step(archive: &Path, tools: &Path, rationale: &str, absolute_tar: bool) -> CommandPlan {
+/// On Windows the program is the absolute System32 `tar.exe` — bsdtar, which
+/// reads zip and `.tar.xz` alike — never a bare `tar`: with Git for Windows
+/// ahead of System32 on PATH that name is GNU tar, which reads a path like
+/// `E:/…` as a remote host and dies with `Cannot connect to E: resolve
+/// failed`. It did, on the QEMU upgrade, after a download that had worked.
+/// The dock shows the path that ran, so the line is not mistaken for a
+/// plain `tar`.
+fn extract_step(archive: &Path, tools: &Path, rationale: &str) -> CommandPlan {
     let archive_text = archive.to_string_lossy().into_owned();
     let tools_text = tools.to_string_lossy().into_owned();
+    let program = if cfg!(windows) {
+        r"C:\Windows\System32\tar.exe"
+    } else {
+        "tar"
+    };
+    // `-U` unlinks before creating: an upgrade unpacks over the copy that is
+    // there, and without it bsdtar's hard links inside the archive fail on
+    // the existing file — `Can't create … esp32s3_rev0_rom.bin: File exists`
+    // — leaving a working install reported as a failed one.
     CommandPlan {
-        program: if absolute_tar {
-            "C:\\Windows\\System32\\tar.exe".to_string()
-        } else {
-            "tar".to_string()
-        },
+        program: program.to_string(),
         args: vec![
+            "-U".to_string(),
             "-xf".to_string(),
             archive_text.clone(),
             "-C".to_string(),
             tools_text.clone(),
         ],
-        display: format!("tar -xf {archive_text} -C {tools_text}"),
+        display: format!("{program} -U -xf {archive_text} -C {tools_text}"),
         rationale: rationale.to_string(),
         warning: None,
     }
@@ -161,7 +171,6 @@ fn gdb_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
             &archive,
             tools,
             "unpacks the gdb bundle into the data directory's tools/",
-            true,
         ),
         archive,
     })
@@ -206,7 +215,6 @@ fn gcc_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
             tools,
             "unpacks the RISC-V C toolchain into the data directory's tools/, which moves \
              with it when the directory is relocated",
-            true,
         ),
         archive,
     })
@@ -280,7 +288,6 @@ fn qemu_download_into(tool: &str, tools: &Path) -> Result<ToolDownload> {
             tools,
             "unpacks into the data directory's tools/qemu — bsdtar handles .tar.xz and \
              ships with Windows",
-            false,
         ),
         archive,
     })
@@ -374,7 +381,6 @@ fn codelldb_download_into(tools: &Path) -> Result<ToolDownload> {
             &into,
             "unpacks the debug adapter into the data directory's tools/codelldb — a .vsix is \
              a zip, which bsdtar reads",
-            cfg!(windows),
         ),
         archive,
     })
@@ -774,7 +780,21 @@ mod tests {
                 plan.urls,
             ),
         }
-        assert!(plan.extract.display.starts_with("tar -xf"));
+        // Windows unpacks with its own bsdtar by absolute path — a bare `tar`
+        // there can be Git's GNU tar, which reads `E:/…` as a remote host.
+        let expected_tar = if cfg!(windows) {
+            r"C:\Windows\System32\tar.exe"
+        } else {
+            "tar"
+        };
+        assert_eq!(plan.extract.program, expected_tar);
+        assert!(
+            plan.extract
+                .display
+                .starts_with(&format!("{expected_tar} -U -xf")),
+            "{}",
+            plan.extract.display
+        );
     }
 
     /// Every platform rusty runs on has an adapter to offer, and the names

@@ -28,6 +28,23 @@ in green the whole time. It now shows the server's own progress —
 `rust-analyzer · Indexing 26% 12/45 (esp-hal)` — until the work is done, so
 an empty popup reads as "not yet" rather than "never".
 
+**Changed — a stock QEMU says what it cannot do.** Espressif's build of the
+emulator has an empty GPIO write handler: a pin read back is always 0, so
+`led.toggle()` followed by `led.is_set_high()` prints `false` for ever and
+looks like a broken driver. The run now says so in the dock, in as many
+words, and the Simulate panel flags such a copy beside Run and offers to
+upgrade it to rusty's build, which models the pins — the same image alternates
+`true`/`false` there. Real hardware was never affected.
+
+**Fixed — a tool download that unpacked with the wrong tar.** With Git for
+Windows ahead of System32 on PATH, `tar` is GNU tar, which reads a path
+like `E:/…` as a remote host and fails with `Cannot connect to E:`. Every
+archive rusty unpacks now goes through Windows' own bsdtar.
+
+**Added — Initialize a repository.** A project that is not under git showed
+"not inside a git repository" and nothing else; the Git panel now offers to
+run `git init` there, in the dock like every other git command.
+
 **Fixed — the pin map read no esp-hal 1.x project.** It looked for the
 vendor's pin table in `esp-metadata`'s TOML, which esp-hal 1.0 replaced
 with generated Rust in `esp-metadata-generated`; every current project got

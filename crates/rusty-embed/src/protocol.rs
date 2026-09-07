@@ -624,6 +624,14 @@ mod tests {
             parse_pin_source("[rusty:pins] firmware"),
             Some(PinSource::Firmware),
         );
+        // The stock build's line carries a paragraph for the dock; the word
+        // still decides.
+        assert_eq!(
+            parse_pin_source(
+                "[rusty:pins] firmware — Espressif's stock QEMU: its GPIO write handler is empty"
+            ),
+            Some(PinSource::Firmware),
+        );
 
         // A word this frontend does not know is a *newer* rusty talking to it.
         // Falling back to "firmware" would put a confident wrong caption under

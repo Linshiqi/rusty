@@ -12,6 +12,20 @@ pub struct SimTool {
     pub install: String,
 }
 
+/// The emulator the plan will boot, once one was found — and whether it is
+/// rusty's build, which models the GPIO registers, or Espressif's stock one,
+/// whose GPIO write handler is empty: a pin read back there is always 0, so
+/// `led.toggle()` followed by `led.is_set_high()` prints `false` for ever
+/// and reads as a broken driver. The panel says which beside Run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Emulator {
+    /// `qemu-system-riscv32` or `qemu-system-xtensa`.
+    pub name: String,
+    pub path: String,
+    pub gpio_model: bool,
+}
+
 /// A display pin nobody has wired yet.
 ///
 /// One value, named once: the file format and the wire model both need it,
@@ -357,6 +371,10 @@ pub struct SimPlan {
     pub reason: Option<String>,
     /// Tools to install before the steps can run.
     pub missing: Vec<SimTool>,
+    /// The emulator found, and whether it models the pins. Absent when it
+    /// is among `missing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emulator: Option<Emulator>,
     /// build → image → boot, each inspectable before anything runs.
     pub steps: Vec<CommandPlan>,
     /// Drawn beside the serial output when `.rusty/sim.toml` describes one.
@@ -391,6 +409,7 @@ impl SimPlan {
             supported: false,
             reason: Some(reason.into()),
             missing: Vec::new(),
+            emulator: None,
             steps: Vec::new(),
             board: None,
             parts: Vec::new(),

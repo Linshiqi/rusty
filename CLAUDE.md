@@ -245,7 +245,18 @@ announces `[rusty:pins] emulator`, and the board's caption follows that rather
 than asserting — a caption promising register-level truth over a stock build
 would send somebody with a dark LED to check their wiring when the bug is a
 missing `println!`, and the reverse is just as wrong. An announcement the
-frontend does not recognise leaves the weaker claim standing.
+frontend does not recognise leaves the weaker claim standing. And the stock
+build **says what it costs**, in the dock at every run (`[rusty:pins]
+firmware — …its GPIO write handler is empty, so is_set_high()/is_high() read
+0…`) and on the Simulate panel (`SimPlan.emulator`, whose `gpio_model` is
+`has_gpio_model` of the binary the plan will boot, with an Upgrade button
+that runs the same download over the copy that is there — the Toolchain
+panel never lists QEMU, only the simulator's plan does).
+Found when a user's blinky printed `GPIO2 high :false` for ever under a
+QEMU installed before rusty's build existed: `toggle()` reads the output
+register back, the stub never stores it, and nothing on screen said the
+emulator was the reason. Measured both ways on one image — stuck at `false`
+under Espressif's build, alternating under ours.
 
 The pin channel is a chardev of its own (`-chardev socket` + `-global`, since
 the machine creates the GPIO device and there is no `-device` to hang it off),
@@ -572,7 +583,11 @@ and a new branch.
   split on `diff --git`. The user's own git, config, credentials and hooks;
   `GIT_PAGER=cat` and `GIT_TERMINAL_PROMPT=0` because a git that waited on
   either would hang the panel. Not a repository is a sentence in the panel,
-  not the banner: it is an ordinary thing to open.
+  not the banner: it is an ordinary thing to open — and the one refusal the
+  panel can fix, so it carries an Initialize button that runs `git init`
+  through the dock. The panel knows *which* refusal it got from
+  `CommandError.kind` (`not-a-repository`), the stable name beside the
+  prose, rather than by matching the English.
 - **A merge is shown against its first parent** (`-m --first-parent`), as
   Fork does — `git show` on a clean merge prints an empty combined diff,
   which reads as "this merge changed nothing".
@@ -1715,6 +1730,18 @@ usty`) holds `location.toml`
   clippy --workspace --all-targets -- -D warnings` — or update. The job log
   needs a GitHub login, so the test job now also names what failed in
   annotations and the step summary, which the run page shows to anyone.
+- **A bare `tar` on a Windows PATH is often Git's GNU tar, and GNU tar reads
+  `E:/…` as a remote host.** `where tar` on this machine answers `C:\Program
+  Files\Git\usr\bin\tar.exe` before `C:\Windows\System32\tar.exe`, and the
+  QEMU upgrade's unpack died with `tar: Cannot connect to E: resolve failed`
+  — GNU tar's colon rule, which no slash style escapes. Every archive rusty
+  unpacks goes through the absolute System32 `tar.exe` (bsdtar 3.8 with
+  liblzma, so `.tar.xz` and zip both read) on Windows; the dock shows that
+  path so nobody reads the line as a plain `tar`. And with `-U`: the QEMU
+  upgrade unpacks over the install that is there, and bsdtar's hard links
+  inside the archive fail on an existing file (`Can't create …
+  esp32s3_rev0_rom.bin: File exists`, exit 1) — every binary replaced, the
+  install reported as failed.
 - **A file on PATH called `rust-analyzer` is usually rustup's proxy, not
   rust-analyzer.** The proxy exists on every machine with rustup whether or
   not the component does; with the component missing it starts, prints an

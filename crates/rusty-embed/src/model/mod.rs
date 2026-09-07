@@ -50,8 +50,8 @@ pub use repo::{RELEASES_API, REPO, REPO_ISSUES, REPO_RELEASES};
 #[cfg(feature = "backend")]
 pub(crate) use sim::is_upright;
 pub use sim::{
-    Drive, PartDef, Placement, SimAnalog, SimBoard, SimButton, SimDebug, SimDisplay, SimLed,
-    SimMotor, SimPlan, SimPot, SimRgb, SimSeven, SimTool, UNWIRED_PIN,
+    Drive, Emulator, PartDef, Placement, SimAnalog, SimBoard, SimButton, SimDebug, SimDisplay,
+    SimLed, SimMotor, SimPlan, SimPot, SimRgb, SimSeven, SimTool, UNWIRED_PIN,
 };
 pub use toolchain::{ToolStatus, Toolchain, ToolchainReport, ToolchainStatus};
 pub use wizard::{Explanation, WizardChoice, WizardOption};

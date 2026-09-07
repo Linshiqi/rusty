@@ -92,6 +92,38 @@ pub fn Simulate() -> impl IntoView {
 
         view! {
             <div class="flex min-h-0 flex-1 flex-col">
+                // A stock QEMU, named where Run is: its GPIO write handler is
+                // empty, so a pin read back is always 0, and a blinky that
+                // prints `false` for ever is the emulator's doing. rusty's
+                // build models the pins; the same download that installs a
+                // missing emulator installs it over the copy that is there.
+                {plan
+                    .emulator
+                    .clone()
+                    .filter(|emulator| !emulator.gpio_model)
+                    .map(|emulator| {
+                        let name = emulator.name.clone();
+                        view! {
+                            <div class="flex flex-col gap-1.5 border-b border-line bg-amber-fill px-4 py-3">
+                                <p class="max-w-[80ch] text-callout">{t!("simulate.stock-qemu")}</p>
+                                <div class="flex items-center gap-2.5">
+                                    <span class="min-w-0 truncate font-mono text-caption text-label-3 select-text">
+                                        {emulator.path.clone()}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        disabled=move || running.get()
+                                        on:click=move |_| {
+                                            controller::install_sim_tool(state, name.clone())
+                                        }
+                                        class="shrink-0 rounded-[6px] bg-rust px-2.5 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                    >
+                                        {t!("simulate.upgrade-qemu")}
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })}
                 {(!missing.is_empty())
                     .then(|| {
                         view! {

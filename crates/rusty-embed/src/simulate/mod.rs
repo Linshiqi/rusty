@@ -27,7 +27,7 @@ mod board_file;
 use std::path::{Path, PathBuf};
 
 use crate::install::GDB_RELEASE;
-use crate::model::{CommandPlan, EmbeddedProject, PartDef, SimDebug, SimPlan, SimTool};
+use crate::model::{CommandPlan, EmbeddedProject, Emulator, PartDef, SimDebug, SimPlan, SimTool};
 use crate::{project, toolchain, tools};
 
 pub use board_file::save as save_board;
@@ -131,6 +131,15 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
             PathBuf::from(emulator)
         }
     };
+    // Which emulator, and whether it models the pins. The stock build's GPIO
+    // write handler is empty, so a pin read back there is always 0; said
+    // beside Run, so a blinky that prints `false` for ever reads as the
+    // emulator's doing rather than the driver's.
+    let found_emulator = qemu.is_file().then(|| Emulator {
+        name: emulator.to_string(),
+        path: qemu.display().to_string(),
+        gpio_model: has_gpio_model(&qemu),
+    });
     // A refusal past this point still carries what it found missing: the
     // panel offers the installs alongside the reason rather than after it.
     let refuse = |reason: String, missing: Vec<SimTool>| {
@@ -276,6 +285,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         supported: true,
         reason: None,
         missing,
+        emulator: found_emulator,
         steps: vec![build, image_step, run],
         board,
         parts: user_parts(root),
@@ -597,6 +607,30 @@ mod tests {
     /// Dropping `--release` would not be enough: esp-generate's template
     /// sets `[profile.dev] opt-level = "s"`, so the dev profile optimises
     /// too and breakpoints still move off the line they were set on.
+    /// The plan names the emulator it will boot and whether it models the
+    /// pins — read off the binary, so a stock copy dropped over rusty's (or
+    /// the reverse) answers for itself.
+    #[test]
+    fn the_plan_says_whether_its_emulator_models_the_pins() {
+        let dir = firmware(BLINKY);
+        let with_qemu = machine(dir.path(), &[("qemu", "qemu-system-riscv32")]);
+        let plan = plan_on(&c3(dir.path()), false, &with_qemu);
+        let emulator = plan.emulator.clone().expect("an emulator was found");
+        assert_eq!(emulator.name, "qemu-system-riscv32");
+        assert!(!emulator.gpio_model, "an empty file is not rusty's build");
+        assert!(plan.missing.iter().all(|t| t.name != "qemu-system-riscv32"));
+
+        std::fs::write(&emulator.path, b"...[rusty:gpio@1] 0=1...").unwrap();
+        let plan = plan_on(&c3(dir.path()), false, &with_qemu);
+        assert!(plan.emulator.is_some_and(|e| e.gpio_model));
+
+        // No emulator at all: nothing to say about one, and it is missing.
+        let bare = machine(dir.path().join("bare").as_path(), &[]);
+        let plan = plan_on(&c3(dir.path()), false, &bare);
+        assert!(plan.emulator.is_none());
+        assert!(plan.missing.iter().any(|t| t.name == "qemu-system-riscv32"));
+    }
+
     #[test]
     fn a_debug_run_builds_unoptimised_and_takes_that_elf() {
         let dir = firmware(BLINKY);
