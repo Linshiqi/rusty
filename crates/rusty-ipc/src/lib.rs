@@ -177,6 +177,17 @@ pub mod crates {
     pub const REPORT: &str = "crate_report";
 }
 
+/// Where the project's builds went on disk, and the sweep that keeps a build
+/// directory to what the current dependency graph needs.
+pub mod disk {
+    pub const REPORT: &str = "disk_report";
+    pub const SWEEP: &str = "disk_sweep";
+    pub const REMOVE: &str = "disk_remove";
+    pub const REMOVE_CACHE: &str = "disk_remove_cache";
+    pub const AUTO_SWEEP: &str = "disk_auto_sweep";
+    pub const SET_AUTO_SWEEP: &str = "set_disk_auto_sweep";
+}
+
 /// Running firmware without hardware: Espressif's QEMU.
 pub mod sim {
     pub const PLAN: &str = "plan_simulation";

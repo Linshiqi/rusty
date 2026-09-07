@@ -8,7 +8,7 @@
 //! was in the slot killed the session that had replaced it — see
 //! `AppState::release_session`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusty_embed::{CommandPlan, LogLine, WizardChoice, process, toolchain, wizard};
 use tauri::{State, ipc::Channel};
@@ -198,15 +198,101 @@ pub async fn run_command(
         warning: None,
     };
 
+    // A cargo build on a volume with no room dies mid-compile with
+    // `IO failure on output stream`, which reads as a broken compiler. Refuse
+    // first, with the number, and point at the place that frees space.
+    if let Some(dir) = working_dir.as_deref()
+        && cargo_writes(&plan.program, &plan.args)
+        && let Some(volume) = rusty_core::disk::volume_of(dir)
+        && volume.free_bytes < LOW_DISK_BYTES
+    {
+        return Err(CommandError::new(format!(
+            "only {} MB free on the volume holding {}; a build needs room to write. \
+             Free space in the Crates panel's Disk section, then retry.",
+            volume.free_bytes / (1024 * 1024),
+            dir.display(),
+        )));
+    }
+
     let session = process::spawn(&plan, working_dir.as_deref())?;
     let ours = state.start_session(session.stopper()).await;
 
+    let lines = on_line.clone();
     let code = blocking("the command", move || {
-        stream::forward(|| session.recv(), &on_line);
+        stream::forward(|| session.recv(), &lines);
         session.wait()
     })
     .await?;
 
     state.release_session(&ours).await;
+
+    // The opt-in that keeps a build directory from growing back: after a
+    // cargo command that succeeded, sweep what the current graph no longer
+    // needs, and say what went in the same output the build wrote to.
+    if code == Some(0)
+        && cargo_writes(&plan.program, &plan.args)
+        && rusty_embed::config::workbench().disk_auto_sweep
+        && let Some(root) = state.root().await
+    {
+        let swept = blocking("sweeping the build directory", move || {
+            let workspace = rusty_core::Workspace::load(&root).ok()?;
+            rusty_core::disk::sweep(
+                &workspace.target_directory(),
+                &root,
+                &workspace.current(),
+                &rusty_core::SweepPolicy::default(),
+            )
+            .ok()
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(swept) = swept
+            && swept.removed_items > 0
+        {
+            let _ = on_line.send(LogLine {
+                stream: rusty_embed::LogStream::Stdout,
+                text: format!(
+                    "rusty: swept {} stale build artifacts ({} MB) the dependency graph no \
+                     longer needs",
+                    swept.removed_items,
+                    swept.removed_bytes / (1024 * 1024),
+                ),
+                level: None,
+            });
+        }
+    }
     Ok(code)
+}
+
+/// Below this much free space a cargo command is refused before it starts.
+/// Two gibibytes: one crate's object files can pass a gigabyte, and a build
+/// that dies half-way leaves work the next one has to redo.
+const LOW_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Whether this command is a cargo invocation that writes to the build
+/// directory — the ones worth guarding, and worth sweeping after.
+fn cargo_writes(program: &str, args: &[String]) -> bool {
+    let cargo = Path::new(program)
+        .file_stem()
+        .is_some_and(|stem| stem == "cargo");
+    cargo
+        && args.first().is_some_and(|verb| {
+            matches!(
+                verb.as_str(),
+                "build"
+                    | "b"
+                    | "test"
+                    | "t"
+                    | "run"
+                    | "r"
+                    | "check"
+                    | "c"
+                    | "clippy"
+                    | "doc"
+                    | "bench"
+                    | "tauri"
+                    | "espflash"
+            )
+        })
 }

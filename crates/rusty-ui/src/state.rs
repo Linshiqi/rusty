@@ -605,6 +605,18 @@ pub struct Project {
     pub catalog_problems: RwSignal<Vec<rusty_embed::CatalogProblem>>,
     /// Direct dependencies against crates.io, when the Crates panel asked.
     pub crate_rows: RwSignal<Option<Vec<rusty_core::CrateRow>>>,
+    /// Where the builds went on disk, when the Disk section asked.
+    pub disk: RwSignal<Option<rusty_core::DiskReport>>,
+    /// A scan or a removal in flight — one at a time, since a removal
+    /// re-derives what it removes and a scan read at the same moment would
+    /// describe a directory being changed under it.
+    pub disk_busy: RwSignal<bool>,
+    /// Sweep stale artifacts after every successful cargo command. Mirrors
+    /// `workbench.toml`, which the backend reads at the end of each build.
+    pub disk_auto_sweep: RwSignal<bool>,
+    /// Days an incremental cache may go untouched before the scan calls it
+    /// idle. Session state: a threshold is something to try, not to keep.
+    pub disk_idle_days: RwSignal<u32>,
 }
 
 /// What is plugged in, and the command that would talk to it.
@@ -1390,6 +1402,10 @@ impl AppState {
                 feature_impact: RwSignal::new(None),
                 catalog_problems: RwSignal::new(Vec::new()),
                 crate_rows: RwSignal::new(None),
+                disk: RwSignal::new(None),
+                disk_busy: RwSignal::new(false),
+                disk_auto_sweep: RwSignal::new(false),
+                disk_idle_days: RwSignal::new(7),
             },
             device: Device {
                 ports: RwSignal::new(Vec::new()),

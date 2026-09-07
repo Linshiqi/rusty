@@ -15,6 +15,10 @@ use rusty_i18n::t;
 pub fn bytes(value: u64) -> String {
     const K: u64 = 1024;
     match value {
+        // Disks, not flash: the Disk section reports build directories and
+        // volumes, where "92692.2 MB" is a number nobody reads.
+        b if b >= K * K * K * K => format!("{:.2} TB", b as f64 / (K * K * K * K) as f64),
+        b if b >= K * K * K => format!("{:.1} GB", b as f64 / (K * K * K) as f64),
         b if b >= K * K => format!("{:.1} MB", b as f64 / (K * K) as f64),
         b if b >= K => format!("{:.1} KB", b as f64 / K as f64),
         b => format!("{b} B"),
@@ -102,6 +106,9 @@ mod tests {
         assert_eq!(bytes(1023), "1023 B");
         assert_eq!(bytes(1024), "1.0 KB");
         assert_eq!(bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(bytes(1536 * 1024 * 1024), "1.5 GB");
+        assert_eq!(bytes(895 * 1024 * 1024 * 1024), "895.0 GB");
+        assert_eq!(bytes(1024u64.pow(4)), "1.00 TB");
     }
 
     #[test]

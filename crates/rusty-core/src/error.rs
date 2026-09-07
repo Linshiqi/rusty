@@ -31,6 +31,21 @@ pub enum Error {
     /// Anything guppy rejects while walking the graph.
     #[error(transparent)]
     Graph(#[from] guppy::Error),
+
+    /// A filesystem operation the Disk view asked for did not go through.
+    #[error("could not {what} `{path}`: {source}")]
+    Io {
+        what: String,
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A removal that was asked for and refused, with the reason in words the
+    /// caller can act on — a path outside the target directory, a tree a
+    /// build is holding the lock on.
+    #[error("{detail}")]
+    Refused { detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

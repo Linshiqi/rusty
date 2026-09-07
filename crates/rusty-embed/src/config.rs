@@ -171,6 +171,12 @@ pub struct WorkbenchState {
     /// not a shrug — the next twenty keystrokes do something else entirely.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vim: bool,
+    /// Sweep stale build artifacts after every successful cargo command run
+    /// from the dock — the opt-in that keeps a build directory from growing
+    /// back. Off by default: deleting anything without being asked is not a
+    /// default, even when the deletion is safe.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disk_auto_sweep: bool,
     /// Display language, as a BCP-47 tag. `None` means follow the system,
     /// which is what a first run gets.
     ///
@@ -264,6 +270,8 @@ mod file {
         pub keybinds: std::collections::BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub vim: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub disk_auto_sweep: bool,
         #[serde(default)]
         pub locale: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,6 +315,7 @@ mod file {
                 proxy: file.proxy,
                 keybinds: file.keybinds,
                 vim: file.vim,
+                disk_auto_sweep: file.disk_auto_sweep,
                 locale: file.locale,
                 terminal_shell: file.terminal_shell,
                 assistant: file.assistant.map(|a| AssistantChoice {
@@ -340,6 +349,7 @@ mod file {
                 proxy: state.proxy.clone(),
                 keybinds: state.keybinds.clone(),
                 vim: state.vim,
+                disk_auto_sweep: state.disk_auto_sweep,
                 locale: state.locale.clone(),
                 terminal_shell: state.terminal_shell.clone(),
                 assistant: state.assistant.as_ref().map(|a| Assistant {
@@ -636,6 +646,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             vim: true,
+            disk_auto_sweep: true,
             locale: Some("zh-CN".into()),
             terminal_shell: Some("system".into()),
             assistant: Some(AssistantChoice {
@@ -664,6 +675,7 @@ mod tests {
         assert_eq!(back.proxy, state.proxy);
         assert_eq!(back.keybinds, state.keybinds);
         assert_eq!(back.vim, state.vim);
+        assert_eq!(back.disk_auto_sweep, state.disk_auto_sweep);
         assert_eq!(back.locale, state.locale);
         assert_eq!(back.terminal_shell, state.terminal_shell);
         assert_eq!(back.assistant, state.assistant);

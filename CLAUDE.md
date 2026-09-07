@@ -612,6 +612,65 @@ with a batch.
   re-checked *after* the round trip too, because typing is synchronous and the
   read is not.
 
+## The build directory
+
+A Rust `target/` only grows: every `cargo update` leaves the old version of
+each moved dependency compiled beside the new one, every dropped dependency
+leaves its artifacts, every crate's incremental cache outlives its last
+change. One machine here had 140 GB under one project's `target/` and a
+full disk, and the compiler's report of that was `IO failure on output
+stream`. `rusty_core::disk` is the answer; the Crates panel's Disk section,
+`rusty-cli disk` / `sweep` and the assistant's `disk_report` tool are its
+three consumers, as with every other analysis.
+
+- **Stable cargo records nothing about when an artifact was last used.** A
+  build that finds a unit fresh touches none of its files — `-Z mtime-on-use`
+  is nightly-only, checked empirically before this was written — so "recently
+  used" cannot be read off the filesystem, and cargo-sweep's default mode
+  does not work on stable. What can be read is *what the build needs today*:
+  the resolved graph from `cargo metadata`. Every unit's dep-info file names
+  its source, and a registry source names `<name>-<version>`. Stale means:
+  a version the lockfile no longer resolves, a package no longer in the
+  graph, an incremental cache idle past the threshold (a week by default,
+  adjustable in the section), or an incremental cache beyond a crate's
+  newest four — rustc keys the cache on the unit's flags, so every feature
+  set, profile override and wrapper leaves one, and this workspace had a
+  hundred per crate and 77 GB of them. Nothing else — the same version
+  built by another toolchain looks identical and is kept. A whole tree's
+  `incremental/` can also be dropped on request; it is a cache and rustc
+  rebuilds it. An empty dep-info file is a compile that never finished and
+  is left to cargo, which rebuilds the unit regardless.
+- **Nothing is deleted on a guess.** A dep-info the scan cannot read, a
+  fingerprint record not in the shape it knows, an empty yardstick because
+  `cargo metadata` failed: each marks nothing stale and lands in the
+  report's `warnings`. Build-script run directories are linked to their
+  compiled script through cargo's fingerprint record (`deps[..][3]` is the
+  script's fingerprint hash, and the script's own record holds that hash in
+  hex); when the record is unreadable only a package gone from the graph
+  condemns them.
+- **A removal re-scans; the frontend never sends paths.** `sweep` takes a
+  policy and a tree, `remove_tree` a path the scan itself lists (a
+  `<profile>` or `<triple>/<profile>` tree, or an extra it knows —
+  `doc`, `rusty-sim`, `tmp`, `flycheck*`), and both refuse a tree whose
+  `.cargo-lock` is held: cargo and rust-analyzer's check both hold it for
+  the whole of a build. Whole trees and cargo's caches ask first with the
+  size; a sweep does not, because the table is its preview and nothing it
+  removes is needed by the build as configured.
+- **A cargo command is refused below 2 GiB free** on the volume it would
+  write to, with the number, before it starts. `cargo_writes` names the
+  verbs that write; `cargo metadata` and friends are not guarded.
+- **The auto-sweep is opt-in and lives in `workbench.toml`**
+  (`disk_auto_sweep`), read by the backend at the end of every successful
+  cargo command from the dock, which then reports what it removed in the
+  same output. Off by default: deleting without being asked is not a
+  default even when the deletion is safe.
+- **rusty does not write the user's cargo config.** A shared build
+  directory (`build.target-dir` in `~/.cargo/config.toml`) is the biggest
+  saving of all — each dependency compiled once for every project — and the
+  Disk section says so, shows the exact snippet with the absolute path, and
+  copies it. The simulator, `size` and the tool follow `cargo metadata`'s
+  `target_directory`, so a shared directory needs no other change.
+
 ## The first run
 
 A freshly installed workbench on a machine with no Rust could do nothing, and

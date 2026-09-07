@@ -71,6 +71,23 @@ impl Workspace {
         self.graph.workspace().root()
     }
 
+    /// Where cargo puts this workspace's builds, as `cargo metadata` reports
+    /// it — so a `build.target-dir` set in the user's own `~/.cargo/config.toml`
+    /// is honoured, not just one in the project.
+    pub fn target_directory(&self) -> std::path::PathBuf {
+        self.graph
+            .workspace()
+            .target_directory()
+            .as_std_path()
+            .to_path_buf()
+    }
+
+    /// What the resolved graph holds, as the yardstick for what a build
+    /// directory still needs. See [`crate::disk::Current`].
+    pub fn current(&self) -> crate::disk::Current {
+        crate::disk::Current::from_graph(&self.graph)
+    }
+
     /// Everything the Overview page renders, in one pass.
     pub fn report(&self) -> Result<WorkspaceReport> {
         let duplicates = duplicates::analyze(&self.graph);

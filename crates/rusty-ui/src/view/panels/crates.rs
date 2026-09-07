@@ -135,6 +135,13 @@ pub fn Crates() -> impl IntoView {
                     <div class="border-t border-line">
                         <super::features::Features />
                     </div>
+                    // And what all of it costs on disk: the same page, because
+                    // the dependencies are what fill `target/`, and the answer
+                    // to "why is my disk full" is a column away from "what do
+                    // I depend on".
+                    <div class="border-t border-line">
+                        <super::disk::Disk />
+                    </div>
                 </div>
             </div>
         }

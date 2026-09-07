@@ -9,6 +9,30 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Added — the Disk section of the Crates panel.** Where this project's
+builds went: the build directory's size by profile and target, how much of
+it is stale — artifacts of dependency versions the lockfile no longer
+resolves, of packages no longer in the graph, incremental caches idle past a
+threshold you choose or beyond a crate's newest four variants — and the
+volume's free space. One button sweeps the stale part (the current build is
+never touched; a version the lockfile moves back to is simply rebuilt); each
+tree, its incremental caches, `cargo doc`'s output, simulator images and
+cargo's own caches can be removed on their own, after asking with the size.
+Nothing in a tree a build is holding the lock on is removed. An opt-in
+sweeps after every successful cargo command. The section also shows the
+`~/.cargo/config.toml` snippet for one shared build directory across
+projects — each dependency compiled once — and, where debug symbols
+dominate, the profile setting that shrinks them; rusty does not write
+either file for you. `rusty-cli disk` and `rusty-cli sweep [--apply]` do the
+same headless, and the assistant has `disk_report`.
+
+**Changed.** A cargo command is refused before it starts when the volume it
+would write to has under 2 GB free, with the number — a build that dies
+half-way reports `IO failure on output stream`, which reads as a broken
+compiler.
+
 ## v0.6.10
 
 **Fixed — a stash of an untracked file opened as "no files changed".** The

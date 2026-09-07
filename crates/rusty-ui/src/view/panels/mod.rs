@@ -6,6 +6,7 @@
 
 mod assistant;
 mod crates;
+mod disk;
 mod features;
 mod files;
 pub mod git;

@@ -25,6 +25,8 @@ pub mod model;
 pub use model::*;
 
 #[cfg(feature = "backend")]
+pub mod disk;
+#[cfg(feature = "backend")]
 mod duplicates;
 #[cfg(feature = "backend")]
 mod error;

@@ -17,6 +17,7 @@ pub(super) fn tools() -> Vec<Box<dyn Tool>> {
         Box::new(ExplainDuplicate),
         Box::new(SimulateFeatures),
         Box::new(ListFeatures),
+        Box::new(DiskReport),
     ]
 }
 
@@ -174,5 +175,39 @@ impl Tool for ListFeatures {
         let workspace = ctx.require_workspace()?;
         let rows = workspace.feature_rows(&selection(args, "list_features")?)?;
         Ok(json!({ "features": rows }))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct DiskReport;
+
+impl Tool for DiskReport {
+    fn def(&self) -> ToolDef {
+        read_only(
+            "disk_report",
+            "Where this project's builds went on disk: the target directory's size by \
+             build tree (profile and target triple) and by kind (compiled crates, \
+             incremental caches, build scripts), how much of it is stale and why — \
+             artifacts of dependency versions the lockfile no longer resolves, of \
+             packages no longer in the graph, idle incremental caches — plus the \
+             volume's free space and cargo's own caches. Use this, not `du` or a \
+             guess, when the user asks why the disk is full or what is safe to \
+             delete; the stale figures are what a sweep would remove without \
+             affecting the current build.",
+            no_arguments(),
+        )
+    }
+
+    fn call(&self, _args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
+        let workspace = ctx.require_workspace()?;
+        let root = ctx.require_root()?;
+        let scan = rusty_core::disk::scan(
+            &workspace.target_directory(),
+            root,
+            &workspace.current(),
+            rusty_core::disk::ScanOptions::default(),
+        );
+        Ok(serde_json::to_value(scan.report)?)
     }
 }
