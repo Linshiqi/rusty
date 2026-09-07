@@ -27,7 +27,9 @@ mod board_file;
 use std::path::{Path, PathBuf};
 
 use crate::install::GDB_RELEASE;
-use crate::model::{CommandPlan, EmbeddedProject, Emulator, PartDef, SimDebug, SimPlan, SimTool};
+use crate::model::{CommandPlan, EmbeddedProject, Emulator, Sheet, SimDebug, SimPlan, SimTool};
+use crate::nets::Row;
+use crate::schematic::Library;
 use crate::{project, toolchain, tools};
 
 pub use board_file::save as save_board;
@@ -284,10 +286,18 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         }
     };
 
-    let (board, notes) = match board_file::load(root, chip) {
-        Some(loaded) => (Some(loaded.board), loaded.note.into_iter().collect()),
-        None => (None, Vec::new()),
-    };
+    // The symbol library first, so a sheet's parts can be resolved against
+    // it and a library file that would not read is said before the sheet
+    // that needed it.
+    let library = crate::schematic::load(Some(root));
+    let mut notes: Vec<String> = library.warnings.clone();
+    let board = board_file::load(root, chip).map(|loaded| {
+        notes.extend(loaded.note);
+        let mut sheet = loaded.sheet;
+        resolve_symbols(&mut sheet, &library);
+        notes.append(&mut sheet.notes);
+        sheet
+    });
 
     SimPlan {
         supported: true,
@@ -296,11 +306,49 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         emulator: found_emulator,
         steps: vec![build, image_step, run],
         board,
-        parts: user_parts(root),
+        library: library.symbols,
         debug,
         debug_tool,
         notes,
     }
+}
+
+/// Attach to the sheet every symbol its parts use, so the frontend draws
+/// without a second lookup. A part whose symbol no library has is kept —
+/// deleting somebody's part because a library file went missing is a loss,
+/// not a repair — and named in the sheet's notes; the editor draws it as
+/// the unknown it is.
+pub fn resolve_symbols(sheet: &mut Sheet, library: &Library) {
+    let mut missing: Vec<String> = Vec::new();
+    for part in &sheet.parts {
+        if sheet.symbols.iter().any(|s| s.id() == part.symbol) {
+            continue;
+        }
+        match library.find(&part.symbol) {
+            Some(symbol) => sheet.symbols.push(symbol.clone()),
+            None => missing.push(format!("{} ({})", part.reference, part.symbol)),
+        }
+    }
+    if !missing.is_empty() {
+        sheet.notes.push(format!(
+            "no symbol library has: {} — import the part from LCSC in the library panel, put a \
+             .kicad_sym with it under .rusty/symbols/, or change the part's symbol",
+            missing.join(", ")
+        ));
+    }
+}
+
+/// The devkit's header rows for the project's chip, from the catalogue —
+/// the same rows the frontend draws, so a button's GPIO is read off the
+/// same header on both sides.
+pub fn kit_rows_for(root: &Path, chip: &str) -> Vec<Row> {
+    let gpio = crate::catalog::Catalog::load(Some(root))
+        .chips()
+        .iter()
+        .find(|c| c.id == chip)
+        .map(|c| c.gpio.clone())
+        .unwrap_or_default();
+    crate::nets::kit_rows(chip, &gpio)
 }
 
 /// The gdb that can debug this project's chip, if it is installed.
@@ -415,41 +463,6 @@ fn configured_target_dir(root: &Path) -> Option<String> {
                 .and_then(toml::Value::as_str)
                 .map(str::to_string)
         })
-}
-
-/// The user's own part definitions, from `.rusty/parts/*.toml`.
-///
-/// A file that does not parse is skipped rather than sinking the whole
-/// library; the panel offers what could be read.
-pub fn user_parts(root: &Path) -> Vec<PartDef> {
-    #[derive(serde::Deserialize)]
-    struct File {
-        name: String,
-        color: Option<String>,
-    }
-
-    let Ok(entries) = std::fs::read_dir(root.join(".rusty/parts")) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(parsed) = toml::from_str::<File>(&text) else {
-            continue;
-        };
-        out.push(PartDef {
-            name: parsed.name,
-            color: parsed.color.unwrap_or_else(|| "green".to_string()),
-        });
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
 }
 
 /// Create the directory the image step writes into. espflash does not make
@@ -800,31 +813,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn user_parts_load_and_bad_files_are_skipped() {
-        let dir = tempfile::Builder::new()
-            .prefix("rusty-parts")
-            .tempdir()
-            .expect("tempdir");
-        let parts = dir.path().join(".rusty/parts");
-        std::fs::create_dir_all(&parts).expect("dirs");
-        std::fs::write(
-            parts.join("relay.toml"),
-            "name = \"relay\"\ncolor = \"red\"\n",
-        )
-        .expect("write");
-        std::fs::write(parts.join("buzzer.toml"), "name = \"buzzer\"\n").expect("write");
-        std::fs::write(parts.join("broken.toml"), "not = = toml").expect("write");
-
-        let defs = user_parts(dir.path());
-        assert_eq!(defs.len(), 2, "{defs:?}");
-        assert_eq!(defs[0].name, "buzzer");
-        assert_eq!(defs[0].color, "green");
-        assert_eq!(defs[1].name, "relay");
-        assert_eq!(defs[1].color, "red");
-        assert!(user_parts(Path::new("nowhere")).is_empty());
-    }
-
     /// The board a plan carries is drawn for the chip being simulated, and a
     /// file that says otherwise is answered in the plan's notes rather than
     /// by drawing the other part's header.
@@ -840,7 +828,23 @@ mod tests {
         let plan = plan_on(&c3(dir.path()), false, &machine(dir.path(), &[]));
         let board = plan.board.expect("the board is still drawn");
         assert_eq!(board.chip, "esp32c3", "pin rows follow the build");
-        assert_eq!(board.leds[0].pin, 26, "and the parts are still the user's");
+        assert_eq!(
+            board.parts[0].symbol, "Device:LED",
+            "and the parts are still the user's, migrated"
+        );
+        assert!(
+            board.wires.iter().any(|w| w.from.pin == "GPIO26"),
+            "on the pin the old file named: {:?}",
+            board.wires
+        );
+        assert!(
+            board.symbols.iter().any(|s| s.id() == "Device:LED"),
+            "with its symbol resolved for the frontend"
+        );
+        assert!(
+            plan.library.iter().any(|s| s.id() == "rusty:Pot"),
+            "and the whole library offered"
+        );
         assert!(
             plan.notes
                 .iter()

@@ -21,10 +21,15 @@ use std::path::{Path, PathBuf};
 use crate::model::Symbol;
 
 /// The built-in library, one file per KiCad library name.
-const BUILTIN: &[(&str, &str)] = &[(
-    "Device",
-    include_str!("../../data/symbols/Device.kicad_sym"),
-)];
+const BUILTIN: &[(&str, &str)] = &[
+    (
+        "Device",
+        include_str!("../../data/symbols/Device.kicad_sym"),
+    ),
+    // The parts the simulator gives a behaviour of its own: a pot, an analog
+    // source, a text display, an RGB lens, a digit, a motor.
+    ("rusty", include_str!("../../data/symbols/rusty.kicad_sym")),
+];
 
 /// Every symbol the sheet may place, with what could not be read.
 #[derive(Debug, Clone, Default)]

@@ -111,6 +111,7 @@ fn main() {
             simulate::save_sim_board,
             simulate::sim_send,
             simulate::save_sim_trace,
+            simulate::sim_import_symbol,
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
@@ -296,6 +297,7 @@ mod wire_names {
             cmd::sim::SAVE_BOARD => simulate::save_sim_board,
             cmd::sim::SEND => simulate::sim_send,
             cmd::sim::SAVE_TRACE => simulate::save_sim_trace,
+            cmd::sim::IMPORT_SYMBOL => simulate::sim_import_symbol,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

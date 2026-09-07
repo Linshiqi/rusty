@@ -1,443 +1,109 @@
-//! The board's shapes and arithmetic: what a part is, where its wires leave
-//! it, which chip pin a point lands on.
+//! The sheet's shapes and arithmetic: what a placed symbol is, where its
+//! pins are once it is turned, which pin a point lands on, how a wire runs
+//! from one pin to another.
 //!
 //! Pure functions and plain data, no view code — the canvas got its geometry
 //! wrong three times in a row while none of it was testable, so this half
 //! lives where a test can reach it.
+//!
+//! **Units.** A symbol is in KiCad's millimetres with y up; the sheet is in
+//! pixels with y down. [`MM_PX`] is the one scale between them and it is
+//! chosen so that KiCad's pin pitch, 100 mil, is one kit row pitch — a
+//! symbol's pins then sit on the same grid as the devkit's header, which is
+//! what lets a snapped wire meet both ends. Every conversion goes through
+//! [`local`] and [`orient`]; a second copy of the arithmetic is how a pin
+//! circle and the wire that leaves it come to disagree.
 
-use rusty_embed::{Placement, SimBoard};
+use rusty_embed::nets::Row;
+use rusty_embed::{Fill, Graphic, Instance, KIT_REFERENCE, Pin, PinRef, Sheet, Symbol, Wire};
 
-/// One thing on the canvas, whatever its kind — the editor edits these and
-/// splits them back into the wire model on save.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum PartKind {
-    Led {
-        color: String,
-    },
-    Button,
-    Rgb,
-    /// pins are segments a..g.
-    Seven,
-    /// Shows the `[rusty:disp]` channel; needs no pins.
-    Display,
-    /// A slider sending `P<pin>=<0..255>`.
-    Pot,
-    /// A toy car's drive or a fan. Slot 0 is the duty pin; slots 1 and 2 are
-    /// the H-bridge's direction inputs, and leaving them unwired is what
-    /// makes it a fan.
-    Motor,
-    /// A voltage on a pin — a battery through a divider, a thermistor. Sends
-    /// raw ADC counts, because rusty does not know your divider.
-    Analog,
-}
+pub(super) const SNAP: f64 = 8.0;
+pub(super) const KIT_W: f64 = 150.0;
+/// Pin-row pitch on the kit. A multiple of the base grid on purpose —
+/// KiCad's oldest rule is that pins live on the grid, because a snapped
+/// segment can only ever meet an anchor that is itself snapped.
+pub(super) const ROW_PITCH: f64 = 16.0;
+/// One KiCad millimetre in sheet pixels: 2.54 mm is one row pitch.
+pub(super) const MM_PX: f64 = ROW_PITCH / 2.54;
+/// The devkit's symbol id. Generated from the chip's rows rather than read
+/// from a library, and never written to a file — `U1` is drawn by the chip.
+pub(super) const KIT_SYMBOL: &str = "rusty:kit";
+/// What an unknown symbol is drawn as: a box this big, with the id in it.
+pub(super) const UNKNOWN_BOX: (f64, f64) = (64.0, 32.0);
 
-impl PartKind {
-    /// How many wires this part runs to the chip.
-    pub(super) fn wires(&self) -> usize {
-        match self {
-            PartKind::Rgb => 3,
-            PartKind::Seven => 7,
-            // SDA and SCL, like the I2C module it stands for. The screen
-            // content still arrives over the serial channel today; the pins
-            // are where the coming I2C decode will attach, and a part that
-            // floats outside the circuit reads as a mistake either way.
-            PartKind::Display => 2,
-            // Duty, then the two direction inputs. A fan wires only the
-            // first and leaves the other two stubs hanging, which is how the
-            // sheet shows that it turns one way.
-            PartKind::Motor => 3,
-            _ => 1,
-        }
-    }
-
-    /// Fixed body height, so a turned part's anchors are exact rather than
-    /// whatever the browser laid out. Tall enough for every stub at the
-    /// chip's own row pitch: seven pins crowded into 52px read as one
-    /// smudge, and KiCad's oldest rule is that pins sit a full grid step
-    /// apart.
-    pub(super) fn height(&self) -> f64 {
-        let wired = self.wires().max(1) as f64;
-        wired.mul_add(SLOT_PITCH, 12.0).max(28.0)
-    }
-
-    /// Fixed body width, so wire anchors land on the body edge exactly.
-    /// Widths are grid multiples, like everything an anchor derives from —
-    /// a 110px body put every stub 6px off the grid however the part snapped.
-    pub(super) fn width(&self) -> f64 {
-        match self {
-            PartKind::Seven => 80.0,
-            PartKind::Display => 144.0,
-            PartKind::Pot => 128.0,
-            // Room for the slider and the count beside it.
-            PartKind::Analog => 136.0,
-            // Wide enough for the rotor and the readout beside it: "BRAKE"
-            // and "100%" have to fit without the body growing when they
-            // appear, or the wires move every time the motor changes state.
-            PartKind::Motor => 128.0,
-            _ => 112.0,
-        }
-    }
-}
-
+/// One thing on the sheet: a placed symbol, with the symbol beside it so
+/// the view never looks one up. `symbol` is `None` for a part whose symbol
+/// no library has — it is kept, drawn as a labelled box, and its wires
+/// cannot land anywhere, which is the honest picture.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct EditPart {
-    /// Quarter turns, clockwise. The body rotates in CSS and the wire
-    /// anchors rotate with the same arithmetic, so the two never disagree.
-    pub(super) rot: u16,
-    /// Mirrored left-to-right, KiCad's X key. This is what a part on the
-    /// chip's right wants: its stubs face back towards the pins *without*
-    /// reversing their order, which is the one thing rotating by 180 gets
-    /// wrong — and the reason wires to a turned seven-segment crossed.
-    pub(super) flip: bool,
-    pub(super) kind: PartKind,
-    /// pins[0] for LEDs, buttons and pots; RGB uses three; seven uses all.
-    pub(super) pins: [u8; 7],
-    pub(super) label: String,
-    pub(super) x: f64,
-    pub(super) y: f64,
-    /// User-drawn bends per wire slot; empty routes automatically.
-    pub(super) waypoints: [Vec<(f64, f64)>; 7],
-    /// The part's polarity: a lamp that lights when its pin is low, a button
-    /// that pulls its pin low when pressed. Carried by the four kinds the wire
-    /// model gives it to; false and ignored on the rest.
-    pub(super) active_low: bool,
+    pub(super) inst: Instance,
+    pub(super) symbol: Option<Symbol>,
 }
 
 impl EditPart {
-    /// A part from the wire model's shared half. `fallback` is where one with
-    /// no recorded position goes — a hand-written board file has none.
-    ///
-    /// One conversion for all six kinds, in each direction. They used to be
-    /// six copies each way, and a field added to five of them and missed on
-    /// the sixth is invisible until somebody uses that part.
-    fn placed(
-        kind: PartKind,
-        pins: [u8; 7],
-        label: &str,
-        place: &Placement,
-        fallback: (f64, f64),
-        active_low: bool,
-    ) -> Self {
-        EditPart {
-            kind,
-            pins,
-            label: label.to_string(),
-            x: place.x.unwrap_or(fallback.0),
-            y: place.y.unwrap_or(fallback.1),
-            waypoints: waypoints_of(&place.routes),
-            rot: place.rot,
-            flip: place.flip,
-            active_low,
-        }
+    pub(super) fn is_kit(&self) -> bool {
+        self.inst.reference == KIT_REFERENCE
     }
 
-    /// The shared half, back on the wire.
-    ///
-    /// The wire count comes from the kind rather than from the caller: it is
-    /// a property of what the part *is*, and passing it in is one more place
-    /// to write 3 where a seven-segment wanted 7.
-    fn place(&self) -> Placement {
-        Placement {
-            x: Some(self.x),
-            y: Some(self.y),
-            routes: routes_of(&self.waypoints, self.kind.wires()),
-            rot: self.rot,
-            flip: self.flip,
-        }
+    /// A pin by number or name, as a wire names it.
+    pub(super) fn pin(&self, key: &str) -> Option<&Pin> {
+        self.symbol.as_ref()?.pin(key)
+    }
+
+    pub(super) fn pins(&self) -> &[Pin] {
+        self.symbol
+            .as_ref()
+            .map(|s| s.pins.as_slice())
+            .unwrap_or(&[])
     }
 }
 
-pub(super) fn pins3(a: u8, b: u8, c: u8) -> [u8; 7] {
-    [a, b, c, 0, 0, 0, 0]
-}
+/// What undo restores: the parts and the wires, as they were.
+pub(super) type Snapshot = (Vec<EditPart>, Vec<Wire>);
 
-/// The file's flat route list, spread into per-slot waypoint arrays.
-pub(super) fn waypoints_of(routes: &[Vec<(f64, f64)>]) -> [Vec<(f64, f64)>; 7] {
-    let mut out: [Vec<(f64, f64)>; 7] = Default::default();
-    for (slot, route) in routes.iter().take(7).enumerate() {
-        out[slot] = route.clone();
-    }
-    out
-}
+/// Where another marked part stood when a group drag began.
+pub(super) type GroupStart = (usize, (f64, f64));
 
-/// Back to the file shape: one route per wire slot, trailing empties kept so
-/// slot indexes stay aligned, fully-empty lists collapsed to nothing.
-pub(super) fn routes_of(waypoints: &[Vec<(f64, f64)>; 7], wires: usize) -> Vec<Vec<(f64, f64)>> {
-    let slice = &waypoints[..wires];
-    if slice.iter().all(Vec::is_empty) {
-        Vec::new()
-    } else {
-        slice.to_vec()
-    }
-}
+/// A wire touching a moving part, with the axis of the leg at each of its
+/// ends — judged once when the drag starts, so it cannot flip as the part
+/// crosses its own bend. `None` where the end is not on the moving part
+/// or the wire has no planted bend.
+pub(super) type WireStart = (usize, Option<bool>, Option<bool>);
 
-pub(super) fn parts_of(board: &SimBoard) -> Vec<EditPart> {
-    let mut out = Vec::new();
-    for (index, led) in board.leds.iter().enumerate() {
-        out.push(EditPart::placed(
-            PartKind::Led {
-                color: led.color.clone(),
-            },
-            pins3(led.pin, 0, 0),
-            &led.label,
-            &led.place,
-            // Stacked down the left edge, so a hand-written file with several
-            // LEDs and no positions does not pile them all in one spot.
-            (60.0, 40.0 + index as f64 * 56.0),
-            led.active_low,
-        ));
-    }
-    for button in &board.buttons {
-        out.push(EditPart::placed(
-            PartKind::Button,
-            pins3(button.pin, 0, 0),
-            &button.label,
-            &button.place,
-            (60.0, 180.0),
-            button.active_low,
-        ));
-    }
-    for rgb in &board.rgbs {
-        out.push(EditPart::placed(
-            PartKind::Rgb,
-            pins3(rgb.r, rgb.g, rgb.b),
-            &rgb.label,
-            &rgb.place,
-            (60.0, 240.0),
-            rgb.active_low,
-        ));
-    }
-    for seven in &board.sevens {
-        out.push(EditPart::placed(
-            PartKind::Seven,
-            seven.pins,
-            &seven.label,
-            &seven.place,
-            (160.0, 60.0),
-            seven.active_low,
-        ));
-    }
-    for display in &board.displays {
-        out.push(EditPart::placed(
-            PartKind::Display,
-            [display.sda, display.scl, 0, 0, 0, 0, 0],
-            &display.label,
-            &display.place,
-            (160.0, 160.0),
-            false,
-        ));
-    }
-    for analog in &board.analogs {
-        out.push(EditPart::placed(
-            PartKind::Analog,
-            pins3(analog.pin, 0, 0),
-            &analog.label,
-            &analog.place,
-            (60.0, 360.0),
-            false,
-        ));
-    }
-    for motor in &board.motors {
-        out.push(EditPart::placed(
-            PartKind::Motor,
-            [motor.pwm, motor.in1, motor.in2, 0, 0, 0, 0],
-            &motor.label,
-            &motor.place,
-            (160.0, 300.0),
-            false,
-        ));
-    }
-    for pot in &board.pots {
-        out.push(EditPart::placed(
-            PartKind::Pot,
-            pins3(pot.pin, 0, 0),
-            &pot.label,
-            &pot.place,
-            (60.0, 280.0),
-            false,
-        ));
-    }
-    out
-}
+/// Both ends of a wire on the sheet: the connection point and the direction
+/// a wire leaves it, for the `from` end and the `to` end.
+pub(super) type WireEnds = [((f64, f64), (f64, f64)); 2];
 
-/// A board with nothing on it yet, for `chip`. The one place the empty
-/// literal is spelled: the editor's fallback and [`board_of`] both start
-/// from it, so a part list added to the wire model is added here once.
-pub(super) fn empty_board(chip: &str, kit: Option<(f64, f64)>) -> SimBoard {
-    SimBoard {
-        chip: chip.to_string(),
-        kit_x: kit.map(|k| k.0),
-        kit_y: kit.map(|k| k.1),
-        leds: Vec::new(),
-        buttons: Vec::new(),
-        rgbs: Vec::new(),
-        sevens: Vec::new(),
-        displays: Vec::new(),
-        pots: Vec::new(),
-        motors: Vec::new(),
-        analogs: Vec::new(),
-    }
-}
-
-pub(super) fn board_of(chip: &str, kit: (f64, f64), parts: &[EditPart]) -> SimBoard {
-    let mut board = empty_board(chip, Some(kit));
-    for part in parts {
-        let place = part.place();
-        match &part.kind {
-            PartKind::Led { color } => board.leds.push(rusty_embed::SimLed {
-                pin: part.pins[0],
-                color: color.clone(),
-                label: part.label.clone(),
-                active_low: part.active_low,
-                place,
-            }),
-            PartKind::Button => board.buttons.push(rusty_embed::SimButton {
-                pin: part.pins[0],
-                label: part.label.clone(),
-                active_low: part.active_low,
-                place,
-            }),
-            PartKind::Rgb => board.rgbs.push(rusty_embed::SimRgb {
-                r: part.pins[0],
-                g: part.pins[1],
-                b: part.pins[2],
-                label: part.label.clone(),
-                active_low: part.active_low,
-                place,
-            }),
-            PartKind::Seven => board.sevens.push(rusty_embed::SimSeven {
-                pins: part.pins,
-                label: part.label.clone(),
-                active_low: part.active_low,
-                place,
-            }),
-            PartKind::Display => board.displays.push(rusty_embed::SimDisplay {
-                label: part.label.clone(),
-                sda: part.pins[0],
-                scl: part.pins[1],
-                place,
-            }),
-            PartKind::Pot => board.pots.push(rusty_embed::SimPot {
-                pin: part.pins[0],
-                label: part.label.clone(),
-                place,
-            }),
-            PartKind::Analog => board.analogs.push(rusty_embed::SimAnalog {
-                pin: part.pins[0],
-                label: part.label.clone(),
-                // The editor does not edit these two yet; a hand-written file
-                // that set them keeps them because `board_of` is only reached
-                // from the canvas, and the canvas only ever adds defaults.
-                max: 4095,
-                start: 0,
-                note: None,
-                place,
-            }),
-            PartKind::Motor => board.motors.push(rusty_embed::SimMotor {
-                pwm: part.pins[0],
-                in1: part.pins[1],
-                in2: part.pins[2],
-                label: part.label.clone(),
-                place,
-            }),
-        }
-    }
-    board
-}
-
-/// The lens colours of a single-hue lamp: lit, then dark. Hex rather than
-/// classes because the lens is SVG now, and the board sheet is exempt from
-/// theme tokens anyway (CLAUDE.md, "The board sheet is dark in both themes").
-pub(super) fn lamp_colors(color: &str) -> (&'static str, &'static str) {
-    match color {
-        "green" => ("#3ddc84", "#1d4a2f"),
-        "blue" => ("#4aa8ff", "#1d3350"),
-        "red" => ("#ff5c5c", "#4a1d1d"),
-        "yellow" => ("#ffd75c", "#4a3f1d"),
-        _ => ("#f4f4f4", "#3a3f48"),
-    }
-}
-
-/// Additive mix of the RGB lens from three channel levels; dark when none
-/// is on.
-pub(super) fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
-    match (r, g, b) {
-        (false, false, false) => "#2a2d33",
-        (true, false, false) => "#ff5c5c",
-        (false, true, false) => "#3ddc84",
-        (false, false, true) => "#4aa8ff",
-        (true, true, false) => "#ffd75c",
-        (true, false, true) => "#d97cff",
-        (false, true, true) => "#5ce8e8",
-        (true, true, true) => "#f4f4f4",
-    }
-}
-
-/// One editor state the undo stack holds: every part plus the kit position.
-pub(super) type Snapshot = (Vec<EditPart>, (f64, f64));
-
-/// One member of a group being dragged: its index, where it stood when the
-/// drag began, and its routes' first-leg axes (see [`follow_first_bend`]).
-pub(super) type GroupStart = (usize, (f64, f64), [Option<bool>; 7]);
-
-/// What the pointer is currently moving.
-#[derive(Clone, Copy, PartialEq)]
+/// What the pointer is doing between a press and its release.
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum Drag {
-    Part {
-        index: usize,
-        dx: f64,
-        dy: f64,
-        /// Each route's first-segment axis, judged once when the drag began
-        /// — the first bend slides along it so the segment stays parallel
-        /// to itself (see [`follow_first_bend`]).
-        axes: [Option<bool>; 7],
-        /// Where the part stood when the drag began. The sheet keeps drawing
-        /// that footprint, dashed, until the drop — so a move reads as a
-        /// move and not as a part that jumped.
-        from: (f64, f64),
-    },
-    Kit {
-        dx: f64,
-        dy: f64,
-        from: (f64, f64),
-    },
-    /// Panning the sheet: screen-space start of view translation.
     Pan {
         start_tx: f64,
         start_ty: f64,
         px: f64,
         py: f64,
     },
-    /// Pulling a new connection out of a part's pin stub.
-    Wire {
-        part: usize,
-        slot: usize,
+    /// A part (or the group it belongs to) in the hand.
+    Part {
+        index: usize,
+        dx: f64,
+        dy: f64,
+        from: (f64, f64),
+        legs: Vec<WireStart>,
     },
-    /// Pushing one segment of a wire sideways, the way a schematic editor
-    /// moves a corner: the segment keeps its direction and the two bends at
-    /// its ends follow it.
+    /// A new wire being pulled from a pin toward another.
+    Wire { from: (usize, String) },
+    /// The rubber band.
+    Box { start: (f64, f64) },
+    /// One segment of a wire being pushed sideways.
     Segment {
-        part: usize,
-        slot: usize,
+        wire: usize,
         first: usize,
         second: usize,
         horizontal: bool,
-        /// Pointer position along the moving axis when the drag began.
         grab: f64,
-        /// The segment's own position along that axis when it began.
         base: f64,
-    },
-    /// The rubber band: a left-drag that began on the empty sheet. `start`
-    /// is the press point in world coordinates; the other corner follows
-    /// the pointer, and on release everything the band touches is marked.
-    Box {
-        start: (f64, f64),
-    },
-    /// Pulling a wire out of a chip pin towards a part's stub — the reverse
-    /// of [`Drag::Wire`], for a hand that starts at the devkit. The drop
-    /// target is the stub under the pointer ([`stub_under`]).
-    WireFromPin {
-        row: usize,
     },
 }
 
@@ -445,29 +111,14 @@ pub(super) enum Drag {
 /// that is the entire point of a context menu.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum MenuTarget {
-    Wire(usize, usize),
+    Wire(usize),
     Part(usize),
     Sheet,
 }
 
-pub(super) const SNAP: f64 = 8.0;
-pub(super) const KIT_W: f64 = 150.0;
-/// Pin-row pitch on the kit, and the wire-stub pitch on a part. Multiples of
-/// the base grid on purpose — KiCad's oldest rule is that pins live on the
-/// grid, because a snapped segment can only ever meet an anchor that is
-/// itself snapped. The old 14px/6px pitches put every anchor 2px off the
-/// 8px grid, which is why nothing could align no matter how carefully it
-/// was dragged.
-pub(super) const ROW_PITCH: f64 = 16.0;
-pub(super) const STUB_OFFSET: f64 = 16.0;
-pub(super) const SLOT_PITCH: f64 = 16.0;
-/// "This pin is not wired to anything" — new parts start here, and
-/// disconnecting returns here. 255 is no GPIO on any supported chip.
-pub(super) const UNWIRED: u8 = 255;
-
-/// The same rounding on a user-chosen grid — the sheet's corner control offers 1/4/8/16px,
-/// because "the grid is too coarse to align" deserved a dial, even after
-/// the real cause (off-grid anchors) was fixed.
+/// The same rounding on a user-chosen grid — the sheet's corner control
+/// offers 1/4/8/16px, because "the grid is too coarse to align" deserved a
+/// dial, even after the real cause (off-grid anchors) was fixed.
 pub(super) fn snap_to(value: f64, grid: f64) -> f64 {
     if grid <= 1.0 {
         return value.round();
@@ -475,117 +126,146 @@ pub(super) fn snap_to(value: f64, grid: f64) -> f64 {
     (value / grid).round() * grid
 }
 
-/// One row of the drawn part: its label, and the GPIO it carries.
-///
-/// `None` rows — power, ground, EN — refuse wires: an LED soldered to GND on
-/// both ends is a diagram nobody meant.
-pub(super) type Row = (String, Option<u8>);
-
-/// The classic 30-pin ESP32 devkit pinout, top to bottom, left then right.
-///
-/// The one module whose *header order* rusty knows. That order is a property
-/// of the board, not the die, so it cannot be derived — and it used to be
-/// drawn for every chip, which is why an ESP32-C3 board showed GPIO36, 39, 34
-/// and 35, none of which the part has.
-const ESP32_DEVKIT: [(&str, Option<u8>); 30] = [
-    ("EN", None),
-    ("36", Some(36)),
-    ("39", Some(39)),
-    ("34", Some(34)),
-    ("35", Some(35)),
-    ("32", Some(32)),
-    ("33", Some(33)),
-    ("25", Some(25)),
-    ("26", Some(26)),
-    ("27", Some(27)),
-    ("14", Some(14)),
-    ("12", Some(12)),
-    ("13", Some(13)),
-    ("GND", None),
-    ("VIN", None),
-    ("3V3", None),
-    ("GND", None),
-    ("15", Some(15)),
-    ("2", Some(2)),
-    ("4", Some(4)),
-    ("16", Some(16)),
-    ("17", Some(17)),
-    ("5", Some(5)),
-    ("18", Some(18)),
-    ("19", Some(19)),
-    ("21", Some(21)),
-    ("RX", Some(3)),
-    ("TX", Some(1)),
-    ("22", Some(22)),
-    ("23", Some(23)),
-];
-
-/// The rows to draw for a part, given the GPIOs it actually has.
-///
-/// Two different drawings, and the difference is honest rather than
-/// cosmetic. For the ESP32 the answer is a *module*: a real 30-pin devkit
-/// whose header order somebody can match against the board on their desk.
-/// For everything else rusty knows the die's pins and not any module's
-/// header, so it draws a *chip* — the pins in numeric order, split down the
-/// middle, with the rails around them. Every row on screen is then a pin
-/// that exists, which is the whole of the bug this replaced.
-///
-/// An empty `gpio` means the catalogue does not say, and the part is drawn
-/// with rails only rather than with somebody else's pins.
-pub(super) fn kit_rows(chip: &str, gpio: &[u32]) -> Vec<Row> {
-    if chip == "esp32" {
-        return ESP32_DEVKIT
-            .iter()
-            .map(|(name, pin)| ((*name).to_string(), *pin))
-            .collect();
-    }
-
-    let half = gpio.len().div_ceil(2);
-    let mut rows: Vec<Row> = Vec::with_capacity(gpio.len() + 4);
-    rows.push(("EN".to_string(), None));
-    rows.extend(gpio[..half].iter().map(|p| (p.to_string(), Some(*p as u8))));
-    rows.push(("GND".to_string(), None));
-    // The right column starts here, so the rails sit at the top of each side
-    // the way they do on a module.
-    rows.push(("3V3".to_string(), None));
-    rows.extend(gpio[half..].iter().map(|p| (p.to_string(), Some(*p as u8))));
-    rows.push(("GND".to_string(), None));
-    rows
-}
-
-/// Which row carries a GPIO, if the part has it at all.
-///
-/// `None` for a pin the part does not have is the answer, not a gap: a wire
-/// to GPIO26 on a C3 has nowhere to land, and drawing it somewhere would be
-/// the confident wrong answer.
-pub(super) fn row_of_gpio(rows: &[Row], pin: u8) -> Option<usize> {
-    rows.iter().position(|(_, gpio)| *gpio == Some(pin))
-}
-
-/// How many rows go down the left side. The split is the same arithmetic the
-/// row builder used, kept in one place so a drawing and a hit-test cannot
-/// disagree about which side a row is on.
-pub(super) fn left_rows(rows: usize) -> usize {
-    rows.div_ceil(2)
-}
-
-/// World coordinates of a kit row's pin circle.
-pub(super) fn row_point(kit: (f64, f64), rows: usize, row: usize) -> (f64, f64) {
-    let left = left_rows(rows);
-    if row < left {
-        (kit.0 + 10.0, kit.1 + 16.0 + row as f64 * ROW_PITCH)
-    } else {
-        (
-            kit.0 + KIT_W - 10.0,
-            kit.1 + 16.0 + (row - left) as f64 * ROW_PITCH,
-        )
-    }
-}
-
-/// How tall the drawn part is for a given row count — the rails and pins
-/// decide it now, rather than a constant that only ever suited one module.
+/// The kit's header height for a row count — the rails and pins decide it,
+/// rather than a constant that only ever suited one module.
 pub(super) fn kit_height(rows: usize) -> f64 {
-    32.0 + left_rows(rows) as f64 * ROW_PITCH
+    32.0 + rows.div_ceil(2) as f64 * ROW_PITCH
+}
+
+/// Where a kit row's pin circle sits, relative to the kit's top-left.
+pub(super) fn row_offset(rows: usize, row: usize) -> (f64, f64) {
+    let left = rows.div_ceil(2);
+    if row < left {
+        (10.0, 16.0 + row as f64 * ROW_PITCH)
+    } else {
+        (KIT_W - 10.0, 16.0 + (row - left) as f64 * ROW_PITCH)
+    }
+}
+
+/// The devkit as a symbol: one pin per header row, numbered by position
+/// and named by the row (`GPIO2`, `GND`), so a wire to `U1.GPIO2` resolves
+/// the way a wire to `D1.K` does. The body is a rectangle the size of the
+/// drawing, for bounds and the rubber band; the art itself is `kit_art`.
+pub(super) fn kit_symbol(chip: &str, rows: &[Row]) -> Symbol {
+    let height = kit_height(rows.len());
+    let left = rows.len().div_ceil(2);
+    let pins = rows
+        .iter()
+        .enumerate()
+        .map(|(row, spec)| {
+            let (px, py) = row_offset(rows.len(), row);
+            Pin {
+                number: (row + 1).to_string(),
+                name: spec.name.clone(),
+                kind: if spec.rail.is_some() {
+                    rusty_embed::PinKind::PowerIn
+                } else if spec.gpio.is_some() {
+                    rusty_embed::PinKind::Bidirectional
+                } else {
+                    rusty_embed::PinKind::Input
+                },
+                at: (px / MM_PX, -py / MM_PX),
+                length: 0.0,
+                angle: if row < left { 0 } else { 180 },
+                hidden: false,
+            }
+        })
+        .collect();
+    Symbol {
+        library: "rusty".to_string(),
+        name: "kit".to_string(),
+        reference: "U".to_string(),
+        value: chip.to_uppercase(),
+        description: None,
+        pins,
+        graphics: vec![Graphic::Rectangle {
+            start: (0.0, 0.0),
+            end: (KIT_W / MM_PX, -height / MM_PX),
+            width: 0.0,
+            fill: Fill::Background,
+        }],
+    }
+}
+
+/// The editor's parts from the wire model: the devkit first, always, then
+/// every placed symbol with its symbol found among the resolved ones.
+pub(super) fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
+    let mut out = Vec::with_capacity(sheet.parts.len() + 1);
+    out.push(EditPart {
+        inst: Instance {
+            reference: KIT_REFERENCE.to_string(),
+            symbol: KIT_SYMBOL.to_string(),
+            value: sheet.chip.to_uppercase(),
+            x: sheet.kit_x.unwrap_or(460.0),
+            y: sheet.kit_y.unwrap_or(40.0),
+            rot: 0,
+            mirror: false,
+            props: Default::default(),
+        },
+        symbol: Some(kit_symbol(&sheet.chip, rows)),
+    });
+    for inst in &sheet.parts {
+        out.push(EditPart {
+            symbol: sheet
+                .symbols
+                .iter()
+                .find(|s| s.id() == inst.symbol)
+                .cloned(),
+            inst: inst.clone(),
+        });
+    }
+    out
+}
+
+/// Back to the wire model, for saving. The symbols are not sent: the
+/// backend resolves them on load, and the file never carries them.
+pub(super) fn sheet_of(chip: &str, parts: &[EditPart], wires: &[Wire]) -> Sheet {
+    let mut sheet = Sheet::empty(chip);
+    for part in parts {
+        if part.is_kit() {
+            sheet.kit_x = Some(part.inst.x);
+            sheet.kit_y = Some(part.inst.y);
+        } else {
+            sheet.parts.push(part.inst.clone());
+        }
+    }
+    sheet.wires = wires.to_vec();
+    sheet
+}
+
+/// An empty sheet for the project's chip.
+pub(super) fn empty_sheet(chip: &str) -> Sheet {
+    Sheet::empty(chip)
+}
+
+/// A symbol-local point (millimetres, y up) as a sheet offset (pixels, y
+/// down) before the part's own turn and mirror.
+pub(super) fn local(point: (f64, f64)) -> (f64, f64) {
+    (point.0 * MM_PX, -point.1 * MM_PX)
+}
+
+/// A sheet offset turned and mirrored the way a part is: the mirror first,
+/// then quarter turns clockwise on the screen.
+pub(super) fn orient(offset: (f64, f64), rot: u16, mirror: bool) -> (f64, f64) {
+    let (x, y) = if mirror {
+        (-offset.0, offset.1)
+    } else {
+        offset
+    };
+    match rot % 360 {
+        90 => (-y, x),
+        180 => (-x, -y),
+        270 => (y, -x),
+        _ => (x, y),
+    }
+}
+
+/// A point turned about a centre, in quarter turns.
+#[cfg(test)]
+pub(super) fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (f64, f64) {
+    let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
+    let (rx, ry) = orient((dx, dy), rot, false);
+    (centre.0 + rx, centre.1 + ry)
 }
 
 /// The connector a devkit carries at its bottom edge.
@@ -780,108 +460,171 @@ pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
     svg
 }
 
-/// Which kit row a world point lands on, if any.
-pub(super) fn row_under(kit: (f64, f64), rows: usize, point: (f64, f64)) -> Option<usize> {
-    let (kx, ky) = kit;
-    let (x, y) = point;
-    let left = left_rows(rows);
-    if y < ky + 9.0 || y > ky + 16.0 + left as f64 * ROW_PITCH {
-        return None;
+/// Where a pin's connection point is on the sheet — where a wire lands.
+pub(super) fn pin_point(part: &EditPart, pin: &Pin) -> (f64, f64) {
+    let (dx, dy) = orient(local(pin.at), part.inst.rot, part.inst.mirror);
+    (part.inst.x + dx, part.inst.y + dy)
+}
+
+/// The unit vector a wire leaves a pin along: away from the body, on the
+/// sheet, after the part's turn and mirror.
+pub(super) fn pin_out(part: &EditPart, pin: &Pin) -> (f64, f64) {
+    let (dx, dy) = pin.direction();
+    let (ox, oy) = orient(local((dx, dy)), part.inst.rot, part.inst.mirror);
+    let len = ox.hypot(oy);
+    if len < 1e-9 {
+        return (0.0, 0.0);
     }
-    let row = (((y - ky - 16.0) / ROW_PITCH).round().max(0.0)) as usize;
-    if row >= left {
-        return None;
-    }
-    if x >= kx - 8.0 && x <= kx + 30.0 {
-        Some(row)
-    } else if x >= kx + KIT_W - 30.0 && x <= kx + KIT_W + 8.0 {
-        // The right column can be shorter than the left when the count is
-        // odd; a hit past its end is a miss, not the row below.
-        (row + left < rows).then_some(row + left)
+    (-ox / len, -oy / len)
+}
+
+/// The far end of the pin's line, at the body.
+pub(super) fn pin_body_end(part: &EditPart, pin: &Pin) -> (f64, f64) {
+    let (px, py) = pin_point(part, pin);
+    let (ox, oy) = pin_out(part, pin);
+    let len = pin.length * MM_PX;
+    (px - ox * len, py - oy * len)
+}
+
+/// The spelling a wire uses for a pin: its name when no other pin of the
+/// symbol shares it and it is a name at all, its number otherwise — so a
+/// file reads `D1.K` and `U1.GPIO2`, and `U1.9` only where `GND` repeats.
+pub(super) fn pin_key(symbol: &Symbol, pin: &Pin) -> String {
+    let named = pin.name != "~" && !pin.name.is_empty();
+    let unique = symbol.pins.iter().filter(|p| p.name == pin.name).count() == 1;
+    if named && unique {
+        pin.name.clone()
     } else {
-        None
+        pin.number.clone()
     }
 }
 
-/// A point turned about a centre, in quarter turns.
-pub(super) fn rotate_about(point: (f64, f64), centre: (f64, f64), rot: u16) -> (f64, f64) {
-    let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
-    let (rx, ry) = match rot % 360 {
-        90 => (-dy, dx),
-        180 => (-dx, -dy),
-        270 => (dy, -dx),
-        _ => (dx, dy),
+/// The box a part occupies on the sheet, `(x0, y0, x1, y1)`: the symbol's
+/// bounds, turned and mirrored, or the unknown-symbol box.
+pub(super) fn part_box(part: &EditPart) -> (f64, f64, f64, f64) {
+    let (x, y) = (part.inst.x, part.inst.y);
+    let Some((x0, y0, x1, y1)) = part.symbol.as_ref().and_then(Symbol::bounds) else {
+        let (w, h) = UNKNOWN_BOX;
+        return (x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0);
     };
-    (centre.0 + rx, centre.1 + ry)
-}
-
-/// Where a part's `slot`-th wire leaves its body — after the part's own
-/// rotation, because CSS turns the body about its centre and the wires have
-/// to arrive at the same place the eye sees the stub.
-pub(super) fn stub_point(part: &EditPart, slot: usize) -> (f64, f64) {
-    let (w, h) = (part.kind.width(), part.kind.height());
-    // Mirroring moves the stubs to the left edge and leaves their order
-    // alone; rotation then applies to whichever edge they ended on.
-    let x = if part.flip { part.x } else { part.x + w };
-    let upright = (x, part.y + STUB_OFFSET + slot as f64 * SLOT_PITCH);
-    rotate_about(upright, (part.x + w / 2.0, part.y + h / 2.0), part.rot)
-}
-
-/// The whole drawn path of one wire: the part's stub, the bends the user
-/// has placed, and the chip pin — orthogonal by construction, as every
-/// schematic wire is.
-pub(super) fn wire_path(
-    part: &EditPart,
-    slot: usize,
-    kit: (f64, f64),
-    rows: &[Row],
-) -> Option<Vec<(f64, f64)>> {
-    let pin = part.pins[slot];
-    if pin == UNWIRED {
-        return None;
+    let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)];
+    let mut acc: Option<(f64, f64, f64, f64)> = None;
+    for corner in corners {
+        let (dx, dy) = orient(local(corner), part.inst.rot, part.inst.mirror);
+        let (px, py) = (x + dx, y + dy);
+        acc = Some(match acc {
+            None => (px, py, px, py),
+            Some((a, b, c, d)) => (a.min(px), b.min(py), c.max(px), d.max(py)),
+        });
     }
-    let row = row_of_gpio(rows, pin)?;
-    let from = stub_point(part, slot);
-    let to = row_point(kit, rows.len(), row);
+    acc.unwrap_or((x, y, x, y))
+}
 
-    let mut points = vec![from];
-    if part.waypoints[slot].is_empty() {
-        // An untouched wire takes the tidy way round: out of the stub, along
-        // a lane of its own, into the pin.
-        let left = left_rows(rows.len());
-        let lane = if row < left {
-            to.0 - 24.0 - (row as f64 * 8.0)
-        } else {
-            to.0 + 24.0 + ((row - left) as f64 * 8.0)
-        };
-        points.push((lane, from.1));
-        points.push((lane, to.1));
+/// The pin within `radius` of `point`, nearest first: `(part, pin number)`.
+/// Nothing when nothing is in reach, rather than the nearest: a wire that
+/// landed on a pin forty pixels from the pointer would be a connection
+/// nobody made. Hidden pins take no wires.
+pub(super) fn pin_under(
+    parts: &[EditPart],
+    point: (f64, f64),
+    radius: f64,
+) -> Option<(usize, String)> {
+    let mut best: Option<((usize, String), f64)> = None;
+    for (index, part) in parts.iter().enumerate() {
+        for pin in part.pins().iter().filter(|p| !p.hidden) {
+            let (px, py) = pin_point(part, pin);
+            let distance = (px - point.0).hypot(py - point.1);
+            if distance <= radius && best.as_ref().is_none_or(|(_, nearest)| distance < *nearest) {
+                best = Some(((index, pin.number.clone()), distance));
+            }
+        }
+    }
+    best.map(|(hit, _)| hit)
+}
+
+/// Every part whose box touches the rectangle between two corners, in
+/// sheet order — the rubber-band selection. Touching rather than enclosed:
+/// the parts are small and the intent of a band that clips a corner is
+/// never "not that one". The corners may come in either order.
+pub(super) fn parts_in_box(parts: &[EditPart], a: (f64, f64), b: (f64, f64)) -> Vec<usize> {
+    let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
+    let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
+    parts
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| {
+            let (px0, py0, px1, py1) = part_box(part);
+            px0 <= x1 && px1 >= x0 && py0 <= y1 && py1 >= y0
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The box around everything on the sheet — what fit-to-view frames.
+pub(super) fn bounds(parts: &[EditPart]) -> ((f64, f64), (f64, f64)) {
+    let mut min = (f64::MAX, f64::MAX);
+    let mut max = (f64::MIN, f64::MIN);
+    for part in parts {
+        let (x0, y0, x1, y1) = part_box(part);
+        min = (min.0.min(x0), min.1.min(y0));
+        max = (max.0.max(x1), max.1.max(y1));
+    }
+    if parts.is_empty() {
+        return ((0.0, 0.0), (0.0, 0.0));
+    }
+    (min, max)
+}
+
+/// The two ends of a wire on the sheet, each with the direction a wire
+/// leaves its pin: `None` when either end names a part or a pin the sheet
+/// does not have.
+pub(super) fn wire_ends(parts: &[EditPart], wire: &Wire) -> Option<WireEnds> {
+    let end = |at: &PinRef| {
+        let part = parts.iter().find(|p| p.inst.reference == at.part)?;
+        let pin = part.pin(&at.pin)?;
+        Some((pin_point(part, pin), pin_out(part, pin)))
+    };
+    Some([end(&wire.from)?, end(&wire.to)?])
+}
+
+/// The whole drawn path of one wire: pin to pin through the bends the
+/// author placed, orthogonal by construction as every schematic wire is. An
+/// untouched wire steps out of each pin along the pin's own direction and
+/// meets itself with one elbow.
+pub(super) fn wire_path(ends: &WireEnds, bends: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let [(a, out_a), (b, out_b)] = *ends;
+    let mut points = vec![a];
+    if bends.is_empty() {
+        let step = ROW_PITCH;
+        let p1 = (a.0 + out_a.0 * step, a.1 + out_a.1 * step);
+        let p2 = (b.0 + out_b.0 * step, b.1 + out_b.1 * step);
+        points.push(p1);
+        points.push(p2);
     } else {
-        points.extend(part.waypoints[slot].iter().copied());
+        points.extend(bends.iter().copied());
     }
-    points.push(to);
-    Some(orthogonalize(points))
+    points.push(b);
+    simplify_route(orthogonalize(points))
+}
+
+/// Re-tidy one wire after its ends moved: the pins are put back on the
+/// route, collinear bends fold away, and what is stored is again only the
+/// bends between them.
+pub(super) fn retidy(wire: &mut Wire, ends: &WireEnds) {
+    if wire.bends.is_empty() {
+        return;
+    }
+    let mut full = vec![ends[0].0];
+    full.extend(wire.bends.iter().copied());
+    full.push(ends[1].0);
+    let tidy = simplify_route(full);
+    wire.bends = tidy[1..tidy.len() - 1].to_vec();
 }
 
 /// Drop the points a route no longer needs: consecutive duplicates, and any
 /// bend whose neighbours run straight through it. This is what merges two
 /// segments the user has dragged into line — the KiCad behaviour: aligned
 /// segments become one segment, and the next grab moves them as one.
-/// Re-tidy one wire after its ends moved: the stub and the pin are put back
-/// on the route, collinear bends fold away, and what is stored is again only
-/// the bends between them. Two drag paths each spelled this; they had
-/// already drifted in how they read the pin.
-pub(super) fn retidy(part: &mut EditPart, slot: usize, kit: (f64, f64), rows: &[Row]) {
-    let Some(row) = row_of_gpio(rows, part.pins[slot]) else {
-        return;
-    };
-    let mut full = vec![stub_point(part, slot)];
-    full.extend(part.waypoints[slot].iter().copied());
-    full.push(row_point(kit, rows.len(), row));
-    let tidy = simplify_route(full);
-    part.waypoints[slot] = tidy[1..tidy.len() - 1].to_vec();
-}
-
 pub(super) fn simplify_route(full: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(full.len());
     for point in full {
@@ -923,124 +666,587 @@ pub(super) fn orthogonalize(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     out
 }
 
-/// Which way a route's first segment runs — stub against first planted
-/// bend. `Some(true)` is horizontal. Judged once, when the drag starts:
-/// judging it live would flip as the part crosses the bend.
-pub(super) fn first_leg_axis(stub: (f64, f64), first: (f64, f64)) -> Option<bool> {
-    if (stub.1 - first.1).abs() < 0.01 {
+/// Which way a route's leg runs — pin against the planted bend beside it.
+/// `Some(true)` is horizontal. Judged once, when the drag starts: judging
+/// it live would flip as the part crosses the bend.
+pub(super) fn leg_axis(pin: (f64, f64), bend: (f64, f64)) -> Option<bool> {
+    if (pin.1 - bend.1).abs() < 0.01 {
         Some(true)
-    } else if (stub.0 - first.0).abs() < 0.01 {
+    } else if (pin.0 - bend.0).abs() < 0.01 {
         Some(false)
     } else {
         None
     }
 }
 
-/// KiCad's stretch, completed: dragging a part slides the first bend along
-/// the first segment's own axis, so the segment stays parallel to itself
-/// and only changes length. Without this, a planted bend at the old stub
-/// height makes the route run out, all the way back up to where the part
-/// used to be, and down again — a wall of wire the user never drew.
-pub(super) fn follow_first_bend(stub: (f64, f64), axis: Option<bool>, first: &mut (f64, f64)) {
+/// KiCad's stretch, completed: dragging a part slides the bend beside its
+/// pin along the leg's own axis, so the leg stays parallel to itself and
+/// only changes length. Without this, a planted bend at the old pin height
+/// makes the route run out, all the way back up to where the part used to
+/// be, and down again — a wall of wire the user never drew.
+pub(super) fn follow_bend(pin: (f64, f64), axis: Option<bool>, bend: &mut (f64, f64)) {
     match axis {
-        Some(true) => first.1 = stub.1,
-        Some(false) => first.0 = stub.0,
+        Some(true) => bend.1 = pin.1,
+        Some(false) => bend.0 = pin.0,
         None => {}
     }
 }
 
-/// Every route's first-leg axis for one part, judged as a drag begins —
-/// the argument [`follow_first_bend`] wants on every frame after. Slots the
-/// part does not wire, and routes with no planted bend, are `None`.
-pub(super) fn first_leg_axes(part: &EditPart) -> [Option<bool>; 7] {
-    let mut axes = [None; 7];
-    for (slot, axis) in axes.iter_mut().enumerate().take(part.kind.wires()) {
-        if let Some(first) = part.waypoints[slot].first() {
-            *axis = first_leg_axis(stub_point(part, slot), *first);
-        }
-    }
-    axes
-}
-
-/// The part stub within `radius` of `point`, nearest first: `(part, slot)`.
-/// The drop target for a wire pulled from a chip pin — the mirror of
-/// [`row_under`], which finds the pin for a wire pulled from a stub. Nothing
-/// when nothing is in reach, rather than the nearest: a wire that landed on
-/// a stub forty pixels from the pointer would be a connection nobody made.
-pub(super) fn stub_under(
-    parts: &[EditPart],
-    point: (f64, f64),
-    radius: f64,
-) -> Option<(usize, usize)> {
-    let mut best: Option<((usize, usize), f64)> = None;
-    for (index, part) in parts.iter().enumerate() {
-        for slot in 0..part.kind.wires() {
-            let (sx, sy) = stub_point(part, slot);
-            let distance = (sx - point.0).hypot(sy - point.1);
-            if distance <= radius && best.is_none_or(|(_, nearest)| distance < nearest) {
-                best = Some(((index, slot), distance));
-            }
-        }
-    }
-    best.map(|(hit, _)| hit)
-}
-
-/// Every part whose body touches the rectangle between two corners, in
-/// sheet order — the rubber-band selection. Touching rather than enclosed:
-/// the parts are small and the intent of a band that clips a corner is
-/// never "not that one", while a band that had to swallow whole bodies
-/// asks for a bigger gesture than the sheet has room for. The corners may
-/// come in either order, since the band is drawn from wherever the press
-/// was.
-pub(super) fn parts_in_box(parts: &[EditPart], a: (f64, f64), b: (f64, f64)) -> Vec<usize> {
-    let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
-    let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
-    parts
+/// The legs of every wire touching any of `moving`, judged as a drag
+/// begins — the argument [`follow_bend`] wants on every frame after.
+pub(super) fn wire_legs(parts: &[EditPart], wires: &[Wire], moving: &[usize]) -> Vec<WireStart> {
+    let moved = |at: &PinRef| {
+        moving
+            .iter()
+            .any(|i| parts.get(*i).is_some_and(|p| p.inst.reference == at.part))
+    };
+    wires
         .iter()
         .enumerate()
-        .filter(|(_, part)| {
-            let (w, h) = (part.kind.width(), part.kind.height());
-            part.x <= x1 && part.x + w >= x0 && part.y <= y1 && part.y + h >= y0
+        .filter_map(|(index, wire)| {
+            let ends = wire_ends(parts, wire)?;
+            let from = (moved(&wire.from) && !wire.bends.is_empty())
+                .then(|| leg_axis(ends[0].0, wire.bends[0]))
+                .flatten();
+            let to = (moved(&wire.to) && !wire.bends.is_empty())
+                .then(|| leg_axis(ends[1].0, *wire.bends.last().expect("non-empty")))
+                .flatten();
+            (moved(&wire.from) || moved(&wire.to)).then_some((index, from, to))
         })
-        .map(|(index, _)| index)
         .collect()
 }
 
-/// The name beside each stub of a part with more than one — KiCad's pin
-/// names, so the wire being pulled from the third dot is known to be `b`
-/// before it lands, and the properties panel says the same words.
-pub(super) fn stub_names(kind: &PartKind) -> &'static [&'static str] {
-    match kind {
-        PartKind::Rgb => &["R", "G", "B"],
-        PartKind::Seven => &["a", "b", "c", "d", "e", "f", "g"],
-        PartKind::Display => &["SDA", "SCL"],
-        PartKind::Motor => &["PWM", "IN1", "IN2"],
-        _ => &["pin"],
+/// The lamp colours a value names: lit and dark.
+pub(super) fn lamp_colors(color: &str) -> (&'static str, &'static str) {
+    match color.trim().to_ascii_lowercase().as_str() {
+        "green" | "绿" => ("#3ddc84", "#1d4a2f"),
+        "blue" | "蓝" => ("#4aa8ff", "#1d3350"),
+        "yellow" | "黄" => ("#ffd75c", "#4a3f1d"),
+        "white" | "白" => ("#f4f4f4", "#3a3f48"),
+        _ => ("#ff5c5c", "#4a1d1d"),
     }
 }
 
-/// The label a single-pin part wears for its wiring state.
-pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
-    let base = match kind {
-        PartKind::Button => "BTN",
-        PartKind::Pot => "POT",
-        PartKind::Motor => "PWM",
-        PartKind::Analog => "ADC",
-        _ => "GPIO",
-    };
-    if pin == UNWIRED {
-        format!("{base} —")
-    } else {
-        format!("{base}{pin}")
+/// Additive mix of the RGB lens from three channel levels; dark when none
+/// is on.
+pub(super) fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
+    match (r, g, b) {
+        (false, false, false) => "#2a2d33",
+        (true, false, false) => "#ff5c5c",
+        (false, true, false) => "#3ddc84",
+        (false, false, true) => "#4aa8ff",
+        (true, true, false) => "#ffd75c",
+        (true, false, true) => "#d97cff",
+        (false, true, true) => "#5ce8e8",
+        (true, true, true) => "#f4f4f4",
     }
+}
+
+/// The colours a symbol is drawn in on the dark sheet: KiCad's dark theme,
+/// near enough — a warm body outline, a soft red for pins.
+pub(super) const BODY_STROKE: &str = "#d8a24b";
+pub(super) const BODY_FILL: &str = "#3a2f1a";
+pub(super) const PIN_STROKE: &str = "#d97c6c";
+
+/// A three-point arc as the points along it, sixteen steps — no sweep flags
+/// to get wrong under a flipped axis.
+pub(super) fn arc_points(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> Vec<(f64, f64)> {
+    let (ax, ay) = start;
+    let (bx, by) = mid;
+    let (cx, cy) = end;
+    let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if d.abs() < 1e-9 {
+        return vec![start, mid, end];
+    }
+    let ux = ((ax * ax + ay * ay) * (by - cy)
+        + (bx * bx + by * by) * (cy - ay)
+        + (cx * cx + cy * cy) * (ay - by))
+        / d;
+    let uy = ((ax * ax + ay * ay) * (cx - bx)
+        + (bx * bx + by * by) * (ax - cx)
+        + (cx * cx + cy * cy) * (bx - ax))
+        / d;
+    let r = (ax - ux).hypot(ay - uy);
+    let angle = |(x, y): (f64, f64)| (y - uy).atan2(x - ux);
+    let (sa, ma, ea) = (angle(start), angle(mid), angle(end));
+    // Walk counter-clockwise from the start; if the mid point is not on
+    // that way to the end, walk the other way round.
+    let ccw = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
+    let (sweep, sign) = if ccw(sa, ma) <= ccw(sa, ea) {
+        (ccw(sa, ea), 1.0)
+    } else {
+        (ccw(ea, sa), -1.0)
+    };
+    (0..=16)
+        .map(|i| {
+            let t = sa + sign * sweep * f64::from(i) / 16.0;
+            (ux + r * t.cos(), uy + r * t.sin())
+        })
+        .collect()
+}
+
+/// The body of a symbol as SVG markup in the symbol's own millimetres, for
+/// a `<g>` scaled by [`MM_PX`] and flipped in y. Pins are their lines; the
+/// connection dots and every piece of text are the view's, because a dot
+/// takes the pointer and text must read upright whatever the body does.
+pub(super) fn symbol_markup(symbol: &Symbol) -> String {
+    let mut svg = String::new();
+    let paint = |width: f64, fill: Fill| {
+        let fill = match fill {
+            Fill::None => "none".to_string(),
+            Fill::Outline => BODY_STROKE.to_string(),
+            Fill::Background => BODY_FILL.to_string(),
+        };
+        let px = (width * MM_PX).max(1.3);
+        format!(
+            r##"fill="{fill}" stroke="{BODY_STROKE}" stroke-width="{px:.2}" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round""##
+        )
+    };
+    let points_attr = |points: &[(f64, f64)]| {
+        points
+            .iter()
+            .map(|(x, y)| format!("{x:.4},{y:.4}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    for graphic in &symbol.graphics {
+        match graphic {
+            Graphic::Polyline {
+                points,
+                width,
+                fill,
+            } => {
+                let closed = points.len() > 2 && points.first() == points.last();
+                let tag = if closed { "polygon" } else { "polyline" };
+                let list = if closed {
+                    &points[..points.len() - 1]
+                } else {
+                    &points[..]
+                };
+                svg.push_str(&format!(
+                    r##"<{tag} points="{}" {}/>"##,
+                    points_attr(list),
+                    paint(*width, *fill)
+                ));
+            }
+            Graphic::Rectangle {
+                start,
+                end,
+                width,
+                fill,
+            } => svg.push_str(&format!(
+                r##"<rect x="{:.4}" y="{:.4}" width="{:.4}" height="{:.4}" {}/>"##,
+                start.0.min(end.0),
+                start.1.min(end.1),
+                (end.0 - start.0).abs(),
+                (end.1 - start.1).abs(),
+                paint(*width, *fill)
+            )),
+            Graphic::Circle {
+                center,
+                radius,
+                width,
+                fill,
+            } => svg.push_str(&format!(
+                r##"<circle cx="{:.4}" cy="{:.4}" r="{:.4}" {}/>"##,
+                center.0,
+                center.1,
+                radius,
+                paint(*width, *fill)
+            )),
+            Graphic::Arc {
+                start,
+                mid,
+                end,
+                width,
+                fill,
+            } => svg.push_str(&format!(
+                r##"<polyline points="{}" {}/>"##,
+                points_attr(&arc_points(*start, *mid, *end)),
+                paint(*width, *fill)
+            )),
+            Graphic::Text { .. } => {}
+        }
+    }
+    for pin in symbol.pins.iter().filter(|p| !p.hidden && p.length > 0.0) {
+        let (dx, dy) = pin.direction();
+        svg.push_str(&format!(
+            r##"<line x1="{:.4}" y1="{:.4}" x2="{:.4}" y2="{:.4}" stroke="{PIN_STROKE}" stroke-width="1.3" vector-effect="non-scaling-stroke"/>"##,
+            pin.at.0,
+            pin.at.1,
+            pin.at.0 + dx * pin.length,
+            pin.at.1 + dy * pin.length,
+        ));
+    }
+    svg
+}
+
+/// One piece of upright text beside a part: where, how anchored, what.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Label {
+    pub x: f64,
+    pub y: f64,
+    /// `start`, `middle` or `end`.
+    pub anchor: &'static str,
+    pub text: String,
+    pub size: f64,
+}
+
+/// The pin names and numbers of a part, placed on the sheet as KiCad places
+/// them: the number beside the middle of the pin line, the name just inside
+/// the body end. Text stays upright however the part is turned; the
+/// anchor follows which way the pin points so a name never crosses its
+/// own pin. Pins with no name (`~`) and pins too short to write beside are
+/// left alone.
+pub(super) fn pin_labels(part: &EditPart) -> Vec<Label> {
+    let Some(symbol) = part.symbol.as_ref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for pin in symbol.pins.iter().filter(|p| !p.hidden && p.length > 0.0) {
+        let at = pin_point(part, pin);
+        let body = pin_body_end(part, pin);
+        let out_dir = pin_out(part, pin);
+        let horizontal = out_dir.0.abs() > out_dir.1.abs();
+        // The number, above a horizontal pin and left of a vertical one.
+        let mid = ((at.0 + body.0) / 2.0, (at.1 + body.1) / 2.0);
+        out.push(Label {
+            x: if horizontal { mid.0 } else { mid.0 - 4.0 },
+            y: if horizontal { mid.1 - 3.0 } else { mid.1 + 3.0 },
+            anchor: if horizontal { "middle" } else { "end" },
+            text: pin.number.clone(),
+            size: 7.0,
+        });
+        if pin.name == "~" || pin.name.is_empty() || pin.name == pin.number {
+            continue;
+        }
+        let inset = 3.0;
+        out.push(Label {
+            x: body.0 - out_dir.0 * inset,
+            y: body.1 - out_dir.1 * inset + if horizontal { 3.0 } else { 0.0 },
+            anchor: if horizontal {
+                if out_dir.0 > 0.0 { "end" } else { "start" }
+            } else {
+                "middle"
+            },
+            text: pin.name.clone(),
+            size: 7.5,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusty_embed::nets::kit_rows;
+    use rusty_embed::{Fill, PinKind};
 
-    /// Every Espressif part in the catalogue is drawn as its devkit; a part
-    /// rusty knows only as a die is drawn as a chip. The drawing names the
+    fn led_symbol() -> Symbol {
+        let pin = |number: &str, name: &str, x: f64, angle: u16| Pin {
+            number: number.into(),
+            name: name.into(),
+            kind: PinKind::Passive,
+            at: (x, 0.0),
+            length: 2.54,
+            angle,
+            hidden: false,
+        };
+        Symbol {
+            library: "Device".into(),
+            name: "LED".into(),
+            reference: "D".into(),
+            value: "LED".into(),
+            description: None,
+            pins: vec![pin("1", "K", -3.81, 0), pin("2", "A", 3.81, 180)],
+            graphics: vec![
+                Graphic::Polyline {
+                    points: vec![(-1.27, -1.27), (-1.27, 1.27)],
+                    width: 0.254,
+                    fill: Fill::None,
+                },
+                Graphic::Arc {
+                    start: (0.0, 1.0),
+                    mid: (1.0, 0.0),
+                    end: (0.0, -1.0),
+                    width: 0.1,
+                    fill: Fill::None,
+                },
+            ],
+        }
+    }
+
+    fn led(x: f64, y: f64) -> EditPart {
+        EditPart {
+            inst: Instance {
+                reference: "D1".into(),
+                symbol: "Device:LED".into(),
+                value: "red".into(),
+                x,
+                y,
+                rot: 0,
+                mirror: false,
+                props: Default::default(),
+            },
+            symbol: Some(led_symbol()),
+        }
+    }
+
+    fn rows() -> Vec<Row> {
+        kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21])
+    }
+
+    fn kit(x: f64, y: f64) -> EditPart {
+        EditPart {
+            inst: Instance {
+                reference: KIT_REFERENCE.into(),
+                symbol: KIT_SYMBOL.into(),
+                value: "ESP32C3".into(),
+                x,
+                y,
+                rot: 0,
+                mirror: false,
+                props: Default::default(),
+            },
+            symbol: Some(kit_symbol("esp32c3", &rows())),
+        }
+    }
+
+    /// KiCad's pin pitch is one row pitch, so a symbol's pins land on the
+    /// sheet's grid — and so do the kit's, whose symbol is generated from
+    /// the row geometry and must answer with the row points exactly.
+    #[test]
+    fn pins_land_on_the_grid_and_the_kits_pins_are_its_row_points() {
+        let part = led(200.0, 96.0);
+        let k = part.pin("K").unwrap();
+        let a = part.pin("A").unwrap();
+        assert_eq!(pin_point(&part, k), (200.0 - 24.0, 96.0));
+        assert_eq!(pin_point(&part, a), (224.0, 96.0));
+        assert_eq!(
+            pin_out(&part, k),
+            (-1.0, 0.0),
+            "the cathode's wire leaves leftward"
+        );
+        assert_eq!(pin_out(&part, a), (1.0, 0.0));
+        assert_eq!(
+            pin_body_end(&part, k),
+            (192.0, 96.0),
+            "2.54 mm is one pitch"
+        );
+
+        let kit = kit(460.0, 40.0);
+        let rows = rows();
+        for (row, spec) in rows.iter().enumerate() {
+            // By number: `GND` names two rows, and by name finds the first.
+            let pin = kit.pin(&(row + 1).to_string()).unwrap();
+            assert_eq!(pin.name, spec.name);
+            let (ox, oy) = row_offset(rows.len(), row);
+            let (px, py) = pin_point(&kit, pin);
+            assert!(
+                (px - (460.0 + ox)).abs() < 1e-9 && (py - (40.0 + oy)).abs() < 1e-9,
+                "row {row}"
+            );
+        }
+        assert_eq!(kit.pin("GPIO2").map(|p| p.number.as_str()), Some("4"));
+        assert_eq!(
+            pin_key(kit.symbol.as_ref().unwrap(), kit.pin("GPIO2").unwrap()),
+            "GPIO2"
+        );
+        assert_eq!(
+            pin_key(kit.symbol.as_ref().unwrap(), kit.pin("GND").unwrap()),
+            "9",
+            "GND repeats"
+        );
+        let (x0, y0, x1, y1) = part_box(&kit);
+        assert_eq!((x0, y0), (460.0, 40.0));
+        assert!((x1 - 610.0).abs() < 1e-9 && (y1 - (40.0 + kit_height(rows.len()))).abs() < 1e-9);
+    }
+
+    /// A turned part moves its pins with it, and the wire still leaves
+    /// each pin away from the body. Mirroring swaps the sides without
+    /// reversing the order of pins on one side.
+    #[test]
+    fn a_turned_or_mirrored_part_moves_its_pins_with_it() {
+        let mut part = led(200.0, 96.0);
+        part.inst.rot = 90;
+        let k = part.pin("K").unwrap().clone();
+        assert_eq!(
+            pin_point(&part, &k),
+            (200.0, 72.0),
+            "the cathode swings to the top"
+        );
+        assert_eq!(pin_out(&part, &k), (0.0, -1.0));
+        part.inst.rot = 0;
+        part.inst.mirror = true;
+        assert_eq!(
+            pin_point(&part, &k),
+            (224.0, 96.0),
+            "mirrored: the cathode is on the right"
+        );
+        assert_eq!(pin_out(&part, &k), (1.0, 0.0));
+        assert_eq!(orient((1.0, 0.0), 180, false), (-1.0, 0.0));
+        assert_eq!(orient((1.0, 0.0), 270, false), (0.0, -1.0));
+        assert_eq!(rotate_about((10.0, 0.0), (0.0, 0.0), 90), (0.0, 10.0));
+    }
+
+    #[test]
+    fn a_wire_runs_only_in_right_angles_and_ends_on_both_pins() {
+        let parts = vec![kit(460.0, 40.0), led(200.0, 96.0)];
+        let wire = Wire {
+            from: PinRef::new("U1", "GPIO2"),
+            to: PinRef::new("D1", "A"),
+            bends: Vec::new(),
+        };
+        let ends = wire_ends(&parts, &wire).expect("both pins exist");
+        let path = wire_path(&ends, &wire.bends);
+        assert_eq!(path[0], ends[0].0);
+        assert_eq!(*path.last().unwrap(), (224.0, 96.0));
+        for pair in path.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(
+                (a.0 - b.0).abs() < 0.01 || (a.1 - b.1).abs() < 0.01,
+                "diagonal: {a:?}->{b:?}"
+            );
+        }
+        // Bends are honoured and the elbows they need are added.
+        let bent = wire_path(&ends, &[(300.0, 200.0)]);
+        assert!(bent.contains(&(300.0, 200.0)));
+        assert!(bent.len() >= 4);
+        // A missing pin is no path at all.
+        let bad = Wire {
+            from: PinRef::new("U1", "GPIO99"),
+            to: PinRef::new("D1", "A"),
+            bends: Vec::new(),
+        };
+        assert!(wire_ends(&parts, &bad).is_none());
+    }
+
+    #[test]
+    fn a_dragged_part_slides_the_leg_beside_it_and_a_tidy_drops_collinear_bends() {
+        let parts = vec![kit(460.0, 40.0), led(200.0, 96.0)];
+        let wires = vec![Wire {
+            from: PinRef::new("D1", "A"),
+            to: PinRef::new("U1", "GPIO2"),
+            bends: vec![(300.0, 96.0), (300.0, 200.0)],
+        }];
+        let legs = wire_legs(&parts, &wires, &[1]);
+        assert_eq!(
+            legs,
+            vec![(0, Some(true), None)],
+            "the anode's leg is horizontal; the kit is not moving"
+        );
+        let mut bend = wires[0].bends[0];
+        follow_bend((230.0, 140.0), Some(true), &mut bend);
+        assert_eq!(bend, (300.0, 140.0), "slid along its own axis");
+
+        let mut wire = wires[0].clone();
+        wire.bends = vec![(240.0, 96.0), (300.0, 96.0), (300.0, 200.0)];
+        let ends = wire_ends(&parts, &wire).unwrap();
+        retidy(&mut wire, &ends);
+        assert_eq!(
+            wire.bends,
+            vec![(300.0, 96.0), (300.0, 200.0)],
+            "the bend on the straight run folds away"
+        );
+    }
+
+    #[test]
+    fn pins_and_parts_are_found_within_reach_and_nowhere_else() {
+        let parts = vec![kit(460.0, 40.0), led(200.0, 96.0)];
+        assert_eq!(
+            pin_under(&parts, (222.0, 98.0), 10.0),
+            Some((1, "2".to_string()))
+        );
+        assert_eq!(pin_under(&parts, (222.0, 140.0), 10.0), None);
+        let (kx, ky) = row_offset(rows().len(), 3);
+        assert_eq!(
+            pin_under(&parts, (460.0 + kx + 2.0, 40.0 + ky), 10.0),
+            Some((0, "4".to_string()))
+        );
+        assert_eq!(
+            parts_in_box(&parts, (150.0, 60.0), (190.0, 130.0)),
+            vec![1],
+            "touching the lamp's box"
+        );
+        assert_eq!(parts_in_box(&parts, (0.0, 0.0), (700.0, 400.0)), vec![0, 1]);
+        assert!(parts_in_box(&parts, (0.0, 0.0), (100.0, 50.0)).is_empty());
+        let (min, max) = bounds(&parts);
+        assert!(min.0 <= 176.0 && max.0 >= 610.0);
+    }
+
+    #[test]
+    fn the_symbol_markup_draws_every_shape_and_labels_read_upright() {
+        let part = led(200.0, 96.0);
+        let markup = symbol_markup(part.symbol.as_ref().unwrap());
+        assert!(markup.contains("<polyline"), "{markup}");
+        assert!(
+            markup.matches("<line").count() == 2,
+            "two pin lines: {markup}"
+        );
+        assert!(markup.contains("non-scaling-stroke"));
+        // The arc passes through its mid point.
+        let arc = arc_points((0.0, 1.0), (1.0, 0.0), (0.0, -1.0));
+        assert_eq!(arc.len(), 17);
+        assert!(
+            arc.iter()
+                .any(|(x, y)| (x - 1.0).abs() < 1e-6 && y.abs() < 1e-6),
+            "{arc:?}"
+        );
+        assert!((arc[16].1 - -1.0).abs() < 1e-6);
+        let labels = pin_labels(&part);
+        let names: Vec<&str> = labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(names, vec!["1", "K", "2", "A"]);
+        let k = &labels[1];
+        assert_eq!(
+            k.anchor, "start",
+            "the cathode's name sits inside, to the right of its pin"
+        );
+        assert!(k.x > 192.0 && k.x < 200.0, "{k:?}");
+    }
+
+    #[test]
+    fn the_sheet_round_trips_through_the_editors_parts() {
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.kit_x = Some(300.0);
+        sheet.kit_y = Some(20.0);
+        sheet.parts.push(led(200.0, 96.0).inst);
+        sheet.symbols.push(led_symbol());
+        sheet.wires.push(Wire {
+            from: PinRef::new("U1", "GPIO2"),
+            to: PinRef::new("D1", "A"),
+            bends: vec![(300.0, 96.0)],
+        });
+        let parts = parts_of(&sheet, &rows());
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].is_kit() && parts[0].symbol.is_some());
+        assert_eq!(
+            parts[1].symbol.as_ref().map(|s| s.name.as_str()),
+            Some("LED")
+        );
+        let again = sheet_of("esp32c3", &parts, &sheet.wires);
+        assert_eq!(again.kit_x, Some(300.0));
+        assert_eq!(again.parts, sheet.parts);
+        assert_eq!(again.wires, sheet.wires);
+        assert!(again.symbols.is_empty(), "the backend resolves them");
+
+        let mut orphan = sheet.clone();
+        orphan.symbols.clear();
+        let parts = parts_of(&orphan, &rows());
+        assert!(parts[1].symbol.is_none());
+        assert_eq!(
+            part_box(&parts[1]),
+            (168.0, 80.0, 232.0, 112.0),
+            "the unknown box"
+        );
+    }
+
+    #[test]
+    fn the_snap_grid_rounds_both_ways() {
+        assert_eq!(snap_to(11.0, 8.0), 8.0);
+        assert_eq!(snap_to(13.0, 8.0), 16.0);
+        assert_eq!(snap_to(12.3, 1.0), 12.0);
+    }
+
     /// module, so a board can be told apart on screen and in a test.
     #[test]
     fn every_espressif_part_is_drawn_as_its_devkit() {
@@ -1081,428 +1287,5 @@ mod tests {
         let tall = kit_art(style, 300.0, "ESP32-C3");
         assert!(short.contains(r#"y="188""#), "connector at 200-12: {short}");
         assert!(tall.contains(r#"y="288""#), "connector at 300-12: {tall}");
-    }
-
-    /// Mirroring is what a part on the chip's right needs: stubs on the
-    /// near edge, in the same order. Rotating by 180 also brings them
-    /// near, but reverses them — which is what made seven wires cross.
-    #[test]
-    fn mirroring_moves_the_stubs_without_reordering_them() {
-        let mut part = led(200.0, 100.0, 26);
-        part.kind = PartKind::Seven;
-        part.pins = [1, 2, 3, 4, 5, 6, 7];
-
-        let upright: Vec<(f64, f64)> = (0..7).map(|s| stub_point(&part, s)).collect();
-        part.flip = true;
-        let mirrored: Vec<(f64, f64)> = (0..7).map(|s| stub_point(&part, s)).collect();
-        part.flip = false;
-        part.rot = 180;
-        let turned: Vec<(f64, f64)> = (0..7).map(|s| stub_point(&part, s)).collect();
-
-        let width = PartKind::Seven.width();
-        assert!(
-            mirrored.iter().all(|p| (p.0 - 200.0).abs() < 0.01),
-            "mirrored stubs sit on the left edge: {mirrored:?}",
-        );
-        assert!(
-            upright.iter().all(|p| (p.0 - (200.0 + width)).abs() < 0.01),
-            "upright stubs sit on the right edge: {upright:?}",
-        );
-        let order: Vec<f64> = mirrored.iter().map(|p| p.1).collect();
-        let mut sorted = order.clone();
-        sorted.sort_by(f64::total_cmp);
-        assert_eq!(order, sorted, "mirroring keeps slot order top to bottom");
-
-        let turned_order: Vec<f64> = turned.iter().map(|p| p.1).collect();
-        let mut turned_sorted = turned_order.clone();
-        turned_sorted.sort_by(f64::total_cmp);
-        assert_ne!(
-            turned_order, turned_sorted,
-            "rotating by 180 reverses them — the case mirroring exists for",
-        );
-    }
-
-    fn led(x: f64, y: f64, pin: u8) -> EditPart {
-        EditPart {
-            kind: PartKind::Led {
-                color: "green".to_string(),
-            },
-            pins: [pin, 0, 0, 0, 0, 0, 0],
-            label: "GPIO".to_string(),
-            x,
-            y,
-            waypoints: Default::default(),
-            rot: 0,
-            flip: false,
-            active_low: false,
-        }
-    }
-
-    /// ESP32's GPIO set, as the catalogue carries it.
-    fn esp32_gpio() -> Vec<u32> {
-        vec![
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            25, 26, 27, 32, 33, 34, 35, 36, 37, 38, 39,
-        ]
-    }
-
-    #[test]
-    fn the_esp32_keeps_its_real_devkit_header() {
-        let rows = kit_rows("esp32", &esp32_gpio());
-        assert_eq!(rows.len(), 30);
-        assert_eq!(row_of_gpio(&rows, 26), Some(8));
-        assert_eq!(row_of_gpio(&rows, 23), Some(29));
-        // RX and TX carry GPIO numbers; EN, GND, VIN and 3V3 carry none.
-        assert_eq!(row_of_gpio(&rows, 3), Some(26));
-        for name in ["EN", "GND", "VIN", "3V3"] {
-            assert!(
-                rows.iter().all(|(n, gpio)| n != name || gpio.is_none()),
-                "{name} must not offer a GPIO",
-            );
-        }
-        assert_eq!(row_of_gpio(&rows, UNWIRED), None);
-    }
-
-    /// The bug this replaced: every board was drawn as the 30-pin ESP32
-    /// devkit, so an ESP32-C3 showed GPIO36, 39, 34 and 35 — none of which
-    /// the part has — and a wire could be dropped on one.
-    #[test]
-    fn another_part_is_drawn_with_its_own_pins_and_no_others() {
-        let c3: Vec<u32> = (0..=21).collect();
-        let rows = kit_rows("esp32c3", &c3);
-
-        for absent in [26u8, 32, 33, 34, 35, 36, 39] {
-            assert_eq!(
-                row_of_gpio(&rows, absent),
-                None,
-                "GPIO{absent} is not on a C3 and must have no row to land on",
-            );
-        }
-        for present in [0u8, 9, 21] {
-            assert!(row_of_gpio(&rows, present).is_some(), "GPIO{present} is");
-        }
-        // Rails at the top of each side, pins between them.
-        assert_eq!(rows.len(), c3.len() + 4, "22 pins and four rails");
-        assert!(rows.iter().filter(|(_, gpio)| gpio.is_none()).count() == 4);
-    }
-
-    /// A part rusty has no pin list for is drawn with rails and nothing else,
-    /// rather than with somebody else's pins.
-    #[test]
-    fn an_unknown_part_offers_no_pins_at_all() {
-        let rows = kit_rows("mystery", &[]);
-        assert!(rows.iter().all(|(_, gpio)| gpio.is_none()));
-        assert_eq!(row_of_gpio(&rows, 0), None);
-    }
-
-    #[test]
-    fn a_turned_part_moves_its_stub_with_it() {
-        let mut part = led(100.0, 100.0, 26);
-        let upright = stub_point(&part, 0);
-        // Width 112, height 28 → centre (156, 114); the stub sits on the
-        // grid at (212, 116), and a quarter turn swings it to the bottom.
-        assert_eq!(upright, (212.0, 116.0));
-
-        part.rot = 90;
-        let turned = stub_point(&part, 0);
-        assert_eq!(turned, (154.0, 170.0));
-
-        part.rot = 180;
-        assert_eq!(stub_point(&part, 0), (100.0, 112.0));
-
-        part.rot = 360;
-        assert_eq!(stub_point(&part, 0), upright, "a full turn is no turn");
-    }
-
-    #[test]
-    fn a_wire_runs_only_in_right_angles_and_ends_on_its_pin() {
-        let part = led(60.0, 40.0, 26);
-        let kit = (460.0, 40.0);
-        let path = wire_path(&part, 0, kit, &kit_rows("esp32", &esp32_gpio()))
-            .expect("a wired pin has a path");
-
-        assert_eq!(path[0], stub_point(&part, 0), "starts at the stub");
-        assert_eq!(
-            *path.last().unwrap(),
-            {
-                let rows = kit_rows("esp32", &esp32_gpio());
-                row_point(kit, rows.len(), row_of_gpio(&rows, 26).unwrap())
-            },
-            "ends on the pin",
-        );
-        for pair in path.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            assert!(
-                (a.0 - b.0).abs() < 0.01 || (a.1 - b.1).abs() < 0.01,
-                "every segment is horizontal or vertical: {a:?} → {b:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn an_unwired_pin_has_no_path_at_all() {
-        let part = led(60.0, 40.0, UNWIRED);
-        assert!(wire_path(&part, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_none());
-        // A pin the chip does not have is refused rather than drawn to
-        // nowhere — this is how a board file from another chip fails.
-        let alien = led(60.0, 40.0, 99);
-        assert!(wire_path(&alien, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).is_none());
-    }
-
-    #[test]
-    fn user_bends_survive_the_orthogonal_pass() {
-        let mut part = led(60.0, 40.0, 26);
-        part.waypoints[0] = vec![(200.0, 54.0), (200.0, 168.0)];
-        let path =
-            wire_path(&part, 0, (460.0, 40.0), &kit_rows("esp32", &esp32_gpio())).expect("path");
-        assert!(path.contains(&(200.0, 54.0)));
-        assert!(path.contains(&(200.0, 168.0)));
-        // Idempotent: a path already square gains no extra corners.
-        assert_eq!(orthogonalize(path.clone()), path);
-    }
-
-    #[test]
-    fn only_pin_rows_accept_a_dropped_wire() {
-        let kit = (460.0, 40.0);
-        let rows = kit_rows("esp32", &esp32_gpio());
-        let n = rows.len();
-        let row = row_of_gpio(&rows, 26).expect("gpio 26");
-        let (px, py) = row_point(kit, n, row);
-        assert_eq!(row_under(kit, n, (px, py)), Some(row));
-        // A few pixels off still lands, because a pin is a small target.
-        assert_eq!(row_under(kit, n, (px + 6.0, py + 3.0)), Some(row));
-        // The middle of the board is not a pin.
-        assert_eq!(row_under(kit, n, (kit.0 + 75.0, py)), None);
-        // Neither is empty sheet.
-        assert_eq!(row_under(kit, n, (kit.0 - 200.0, py)), None);
-    }
-
-    /// Every field that can be non-default *is* non-default here. The old
-    /// fixture set `rot` and left `flip` alone, and a `flip` that never
-    /// crossed the wire looked exactly like one that did.
-    #[test]
-    fn parts_survive_the_round_trip_through_the_wire_model() {
-        let mut part = led(60.0, 40.0, 26);
-        part.rot = 90;
-        part.flip = true;
-        part.active_low = true;
-        part.waypoints[0] = vec![(200.0, 54.0)];
-        let board = board_of("esp32", (460.0, 40.0), &[part.clone()]);
-
-        assert_eq!(board.leds.len(), 1);
-        assert_eq!(board.leds[0].place.rot, 90);
-        assert!(board.leds[0].place.flip, "a mirrored part reaches the wire");
-        assert!(board.leds[0].active_low, "and so does its polarity");
-        assert_eq!(board.leds[0].place.routes, vec![vec![(200.0, 54.0)]]);
-        assert_eq!(board.kit_x, Some(460.0));
-
-        let back = parts_of(&board);
-        assert_eq!(back.len(), 1);
-        assert_eq!(back[0], part);
-    }
-
-    /// Every stub on a many-wired part has a name, and only those: the sheet
-    /// indexes the names by slot, and a name short by one is a panic on the
-    /// seventh segment.
-    #[test]
-    fn every_stub_of_a_many_wired_part_has_a_name() {
-        for kind in [
-            PartKind::Rgb,
-            PartKind::Seven,
-            PartKind::Display,
-            PartKind::Motor,
-        ] {
-            assert_eq!(stub_names(&kind).len(), kind.wires(), "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn aligned_segments_merge_into_one() {
-        // Two horizontal runs at the same height, joined by a redundant
-        // bend: the bend must go, leaving one segment.
-        let route = vec![(0.0, 10.0), (40.0, 10.0), (80.0, 10.0), (80.0, 50.0)];
-        assert_eq!(
-            simplify_route(route),
-            vec![(0.0, 10.0), (80.0, 10.0), (80.0, 50.0)],
-        );
-
-        // A zero-length jog — the residue a drag leaves — vanishes whole.
-        let jog = vec![
-            (0.0, 10.0),
-            (40.0, 10.0),
-            (40.0, 10.0),
-            (90.0, 10.0),
-            (90.0, 40.0),
-        ];
-        assert_eq!(
-            simplify_route(jog),
-            vec![(0.0, 10.0), (90.0, 10.0), (90.0, 40.0)],
-        );
-
-        // Genuine corners survive untouched.
-        let l = vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)];
-        assert_eq!(simplify_route(l.clone()), l);
-    }
-
-    #[test]
-    fn a_display_wires_its_two_i2c_pins() {
-        let display = EditPart {
-            kind: PartKind::Display,
-            pins: [21, 22, 0, 0, 0, 0, 0],
-            label: "DISPLAY".to_string(),
-            x: 100.0,
-            y: 100.0,
-            waypoints: Default::default(),
-            rot: 0,
-            flip: false,
-            active_low: false,
-        };
-        assert_eq!(display.kind.wires(), 2);
-        assert!(
-            wire_path(
-                &display,
-                0,
-                (460.0, 40.0),
-                &kit_rows("esp32", &esp32_gpio())
-            )
-            .is_some(),
-            "sda routes"
-        );
-        assert!(
-            wire_path(
-                &display,
-                1,
-                (460.0, 40.0),
-                &kit_rows("esp32", &esp32_gpio())
-            )
-            .is_some(),
-            "scl routes"
-        );
-    }
-
-    #[test]
-    fn the_snap_grid_rounds_both_ways() {
-        assert_eq!(snap_to(0.0, SNAP), 0.0);
-        assert_eq!(snap_to(3.0, SNAP), 0.0);
-        assert_eq!(snap_to(5.0, SNAP), 8.0);
-        assert_eq!(snap_to(-3.0, SNAP), -0.0);
-        assert_eq!(snap_to(-5.0, SNAP), -8.0);
-        assert_eq!(snap_to(13.0, 4.0), 12.0);
-        assert_eq!(snap_to(13.4, 1.0), 13.0);
-        assert_eq!(snap_to(23.0, 16.0), 16.0);
-    }
-
-    /// The screenshot bug: a part dragged far below its planted bend grew a
-    /// wall of wire back up to the old height. The first bend must slide
-    /// along the first segment's own axis, and the route afterwards must
-    /// never double back on itself.
-    #[test]
-    fn dragging_a_part_slides_the_first_bend_not_the_history() {
-        let mut part = led(96.0, 96.0, 26);
-        let stub = stub_point(&part, 0);
-        // A user-planted bend, dead level with the stub: a horizontal first
-        // leg, exactly the screenshot's shape.
-        part.waypoints[0] = vec![(stub.0 + 160.0, stub.1)];
-        let axis = first_leg_axis(stub, part.waypoints[0][0]);
-        assert_eq!(axis, Some(true), "level with the stub means horizontal");
-
-        // Drag the part a long way down.
-        part.y += 160.0;
-        let moved_stub = stub_point(&part, 0);
-        follow_first_bend(moved_stub, axis, &mut part.waypoints[0][0]);
-        assert_eq!(
-            part.waypoints[0][0].1, moved_stub.1,
-            "a horizontal first leg follows the stub's height",
-        );
-
-        // And the rendered route must have no U-turn: no two consecutive
-        // segments on the same axis in opposite directions.
-        let route =
-            wire_path(&part, 0, (560.0, 96.0), &kit_rows("esp32", &esp32_gpio())).expect("wired");
-        for window in route.windows(3) {
-            let (a, b, c) = (window[0], window[1], window[2]);
-            let vertical = (a.0 - b.0).abs() < 0.01 && (b.0 - c.0).abs() < 0.01;
-            let horizontal = (a.1 - b.1).abs() < 0.01 && (b.1 - c.1).abs() < 0.01;
-            let doubles_back = (vertical && (b.1 - a.1) * (c.1 - b.1) < 0.0)
-                || (horizontal && (b.0 - a.0) * (c.0 - b.0) < 0.0);
-            assert!(!doubles_back, "route doubles back: {a:?} {b:?} {c:?}");
-        }
-    }
-
-    #[test]
-    fn every_anchor_lies_on_the_base_grid() {
-        // The root cause of "cannot align, ever": anchors 2px off the grid.
-        // Pin rows and stubs must land on multiples of the base step when
-        // the part and kit themselves are snapped.
-        let part = led(96.0, 96.0, 26);
-        let (sx, sy) = stub_point(&part, 0);
-        assert_eq!(sx % SNAP, 0.0, "stub x on grid");
-        assert_eq!(sy % SNAP, 0.0, "stub y on grid");
-
-        // Every layout, not just the devkit: an odd pin count puts one more
-        // row on the left, and a half-step there would put every anchor off
-        // the grid on that side only.
-        let kit = (456.0, 40.0);
-        for gpio in [esp32_gpio(), (0..=21).collect(), (0..=20).collect()] {
-            let rows = kit_rows("other", &gpio);
-            for row in 0..rows.len() {
-                let (_, py) = row_point(kit, rows.len(), row);
-                assert_eq!(py % SNAP, 0.0, "row {row} y on grid");
-            }
-        }
-    }
-
-    #[test]
-    fn a_wire_from_a_pin_lands_on_the_stub_within_reach_and_nowhere_else() {
-        let parts = vec![led(100.0, 100.0, 26), led(100.0, 200.0, UNWIRED)];
-        let stub = stub_point(&parts[0], 0);
-        assert_eq!(stub_under(&parts, stub, 10.0), Some((0, 0)), "dead on");
-        assert_eq!(
-            stub_under(&parts, (stub.0 + 6.0, stub.1 - 5.0), 10.0),
-            Some((0, 0)),
-            "a little off, still within the radius"
-        );
-        assert_eq!(
-            stub_under(&parts, (stub.0 + 40.0, stub.1), 10.0),
-            None,
-            "out of reach of every stub is nothing, not the nearest"
-        );
-        let other = stub_point(&parts[1], 0);
-        assert_eq!(
-            stub_under(&parts, (other.0 + 3.0, other.1 + 3.0), 10.0),
-            Some((1, 0)),
-            "the second part's stub is its own target"
-        );
-    }
-
-    #[test]
-    fn the_rubber_band_takes_every_part_it_touches_from_either_corner() {
-        let parts = vec![led(0.0, 0.0, 26), led(300.0, 0.0, 27), led(0.0, 300.0, 25)];
-        assert_eq!(
-            parts_in_box(&parts, (60.0, 20.0), (-10.0, -10.0)),
-            vec![0],
-            "drawn upwards and leftwards, clipping one corner"
-        );
-        assert_eq!(
-            parts_in_box(&parts, (-5.0, -5.0), (420.0, 10.0)),
-            vec![0, 1],
-            "a band across the top row, and not the part below it"
-        );
-        assert!(
-            parts_in_box(&parts, (150.0, 150.0), (200.0, 200.0)).is_empty(),
-            "empty sheet, empty selection"
-        );
-    }
-
-    #[test]
-    fn first_leg_axes_are_read_off_the_planted_bends_and_nothing_else() {
-        let mut part = led(100.0, 100.0, 26);
-        let stub = stub_point(&part, 0);
-        part.waypoints[0] = vec![(stub.0 + 40.0, stub.1)];
-        assert_eq!(first_leg_axes(&part)[0], Some(true), "level with the stub");
-        part.waypoints[0] = vec![(stub.0, stub.1 + 40.0)];
-        assert_eq!(first_leg_axes(&part)[0], Some(false), "straight below it");
-        part.waypoints[0].clear();
-        assert_eq!(first_leg_axes(&part), [None; 7], "no bend, no axis");
     }
 }

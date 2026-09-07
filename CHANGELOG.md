@@ -11,15 +11,23 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
-- **Schematic symbols, the library first.** The board's parts are on their
-  way to being real schematic symbols with real pins, KiCad's way, and this
-  release carries the library under them: KiCad's `.kicad_sym` format read
-  and written, a built-in `Device` library (R, C, LED, SW_Push), a
-  project's own `.rusty/symbols/`, and LCSC (嘉立创) parts imported by
-  number from EasyEDA's component service. `rusty-cli symbol C2286` fetches
-  a part, reads it into a symbol and keeps it in the data directory's
-  `symbols/lcsc.kicad_sym`, a file KiCad can open too. The board editor
-  does not draw them yet.
+- **The board is a schematic.** Parts on the Simulate sheet are KiCad
+  symbols with real pins — `Device:R`, `Device:C`, `Device:LED`,
+  `Device:SW_Push`, and the simulator's own pot, analog source, display,
+  RGB lens, digit and motor — and wires join pin to pin: a part's pin to
+  the devkit's header, or part to part. What lights, conducts and drives
+  what is read off the wires: GPIO → R → LED → GND lights the LED, the
+  wrong way round stays dark, a capacitor passes nothing, a button to
+  ground drives its GPIO low while pressed, and a lamp with no series
+  resistor is pointed out in words. A part LCSC (嘉立创) sells is imported
+  by its number from the library panel (or `rusty-cli symbol C2286`), read
+  from EasyEDA's own drawing into the same symbol format and kept in the
+  data directory's `symbols/lcsc.kicad_sym`, which KiCad can open; a
+  project's own `.kicad_sym` files under `.rusty/symbols/` join the
+  library too. `.rusty/sim.toml` is now `[[part]]` and `[[wire]]` (version
+  2); a first-format file is read as the circuit it claimed and rewritten
+  the first time you save, and `.rusty/parts/*.toml` lamps are retired in
+  favour of symbols.
 **Fixed — completion never offered anything that was not already imported.**
 Typing `Out` in a file without `use esp_hal::gpio::Output` offered nothing,
 and `Output::` nothing after it, because rust-analyzer only enables its

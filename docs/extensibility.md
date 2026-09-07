@@ -204,26 +204,28 @@ Decided now so the UI can be built against it. Implementation is deferred.
 
 ## Simulator parts
 
-The Simulate panel's part library extends the same way everything else does:
-data first. A file in the project's `.rusty/parts/` adds a part:
+The Simulate panel's parts are KiCad schematic symbols, and they extend the
+same way everything else does: data first. A `.kicad_sym` file — KiCad's
+own library format, from KiCad 6 on — in the project's `.rusty/symbols/`
+joins the library under the file's name (`.rusty/symbols/Sensors.kicad_sym`
+places `Sensors:BME280`), and a part LCSC (嘉立创) sells is imported by its
+number from the library panel or `rusty-cli symbol C2286`, into the data
+directory's `symbols/lcsc.kicad_sym`, which KiCad can open too. What a
+symbol *does* on the sheet follows its reference prefix and pin names
+(`rusty_embed::nets::behaviour_of`): an `R` conducts, a `C` does not, an
+`SW` conducts while pressed, a `D` or `LED` with pins `A` and `K` lights
+when its anode is high and its cathode low; the built-in `rusty` library
+carries the parts with a behaviour of their own — a pot, an analog source,
+a text display, an RGB lens, a digit, a motor.
 
-```toml
-# .rusty/parts/relay.toml
-name = "relay"
-color = "red"      # glow hue: green, blue, red, yellow
-```
-
-A part defined this way appears in the library's Custom section and behaves
-as a lamp on the gpio report channel.
-
-Every lamp, RGB, seven-segment and button in `.rusty/sim.toml` takes an
-`active_low = true` key. On a lamp it means "lights when the pin is low" —
-the anode on 3V3 and the GPIO sinking, which is how most devkits wire their
-onboard LED; on a button it means "pressing pulls the pin low" — the button
-to ground with a pull-up, which is what `Pull::Up` + `is_low()` reads. The
-console message `B<pin>=1` still says *pressed*; the level the emulator's
-pin is driven to follows this key. Absent means active-high, which is what
-every file written before the key existed meant.
+`.rusty/sim.toml` is the sheet: `[[part]]` entries placing a symbol by
+`library:name`, `[[wire]]` entries joining two pins (`U1.GPIO2` to `R1.1`;
+the devkit is `U1`, its pins named by GPIO and rail). There is no
+`active_low` any more — polarity is wiring. A lamp whose anode is on 3V3
+and whose cathode goes to a GPIO lights when the pin is low; a button to
+ground drives its GPIO low while pressed. A first-format file (`[[led]]`,
+`[[button]]`…) is read as the circuit it claimed and rewritten the first
+time the editor saves. `docs/schematic.md` has the whole format.
 
 Everything on the board rides two serial directions:
 
@@ -233,7 +235,7 @@ Everything on the board rides two serial directions:
 | `[rusty:disp] tick 42` | firmware → board | text for the display part; empty payload clears it |
 | `[rusty:tel@1234] gyro_x=1.25,pid_p=-0.5` | firmware → Plot | named numeric channels; the stamp is the firmware's own clock in µs |
 | `[rusty:param] kp=2 0..20` | firmware → Plot | "this is a tunable, this is what I hold, this is the range I take" |
-| `B14=1` / `B14=0` | board → firmware | button pressed / released |
+| `B14=1` / `B14=0` | board → firmware | button pressed / released — the number is the GPIO the switch reaches through the wires |
 | `P34=200` | board → firmware | potentiometer moved, 0..255 |
 | `Skp=8.5` | Plot → firmware | set a tunable; the firmware answers with the `[rusty:param]` line above |
 

@@ -26,6 +26,7 @@ mod part;
 mod project;
 mod registers;
 mod repo;
+mod sheet;
 mod sim;
 mod symbol;
 mod toolchain;
@@ -48,12 +49,10 @@ pub use registers::{Peripheral, Register, RegisterField, RegisterMap};
 pub use repo::{RELEASES_API, REPO, REPO_ISSUES, REPO_RELEASES};
 // Only the `.rusty/sim.toml` writer needs it, and that is backend-side; on
 // wasm the re-export would be an unused import.
+pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
 #[cfg(feature = "backend")]
 pub(crate) use sim::is_upright;
-pub use sim::{
-    Drive, Emulator, PartDef, Placement, SimAnalog, SimBoard, SimButton, SimDebug, SimDisplay,
-    SimLed, SimMotor, SimPlan, SimPot, SimRgb, SimSeven, SimTool, UNWIRED_PIN,
-};
+pub use sim::{Drive, Emulator, SimDebug, SimPlan, SimTool};
 pub use symbol::{Fill, Graphic, Pin, PinKind, Symbol};
 pub use toolchain::{ToolStatus, Toolchain, ToolchainReport, ToolchainStatus};
 pub use wizard::{Explanation, WizardChoice, WizardOption};

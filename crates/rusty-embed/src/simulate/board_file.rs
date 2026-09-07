@@ -4,27 +4,32 @@
 //! every user-authored TOML here gets, so a panel refactor cannot silently
 //! break the files people wrote (rule 2).
 //!
-//! **One definition per part, used in both directions.** Reading and writing
-//! were two parallel sets of structs, and parallel sets drift: `flip` was
-//! added to the wire model and to *neither* of them, so mirroring a part was
-//! dropped on save and read back as `false` — the mirror survived until the
-//! project was reopened. Sharing the definition makes that omission a
-//! compile error instead of a silent loss.
+//! Two formats are read and one is written. **Version 2** is the schematic:
+//! `[[part]]` entries placing a symbol by `library:name`, and `[[wire]]`
+//! entries joining two pins (`U1.GPIO2` to `R1.1`). **Version 1** — no
+//! `version` key — was the first board: `[[led]]`, `[[button]]` and friends,
+//! each *being* the GPIO it sat on. A version-1 file is read by the reader
+//! that always read it and migrated into a sheet: a lamp on GPIO 2 becomes a
+//! `Device:LED` wired to GPIO2 and GND, with no resistor, because that is
+//! exactly what the old board claimed; the rules then say what is wrong with
+//! it. Saving writes version 2, so the migration is realised the first time
+//! the editor saves and never silently before.
 //!
-//! Its own module because the format and both conversions were four hundred
-//! lines of `simulate.rs`, under a header that promised "the simulator, and
-//! nothing else".
+//! **One definition per part, used in both directions.** Reading and writing
+//! were two parallel sets of structs once, and parallel sets drift: `flip`
+//! was added to the wire model and to *neither* of them, so mirroring a part
+//! was dropped on save and read back as `false`. Sharing the definition
+//! makes that omission a compile error instead of a silent loss.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::model::{
-    SimAnalog, SimBoard, SimButton, SimDisplay, SimLed, SimMotor, SimPot, SimRgb, SimSeven,
-    UNWIRED_PIN,
-};
+use crate::model::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
 
+/// The `[board]` table, common to both versions.
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct Board {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,160 +40,202 @@ struct Board {
     y: Option<f64>,
 }
 
-/// Where a part sits, in the file's spelling.
-///
-/// Flattened, so the keys stay where a hand-written file puts them —
-/// `x`, `y`, `rot`, `flip` directly inside `[[led]]`, not under a
-/// sub-table nobody asked for. The wire model nests instead, for a reason
-/// that does not apply here: TOML is self-describing and its own
-/// deserializer types integers, which is what flatten needs.
+// ---------------------------------------------------------------- version 2
+
 #[derive(Debug, Default, Deserialize, Serialize)]
-struct Place {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    y: Option<f64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    routes: Vec<Vec<(f64, f64)>>,
+struct Part {
+    #[serde(rename = "ref")]
+    reference: String,
+    symbol: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    value: String,
+    x: f64,
+    y: f64,
     #[serde(default, skip_serializing_if = "crate::model::is_upright")]
     rot: u16,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    mirror: bool,
+    /// Behaviour-specific settings — an analog source's full scale — as
+    /// text, so a part added tomorrow carries its knobs without a format
+    /// change.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    props: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct WireRecord {
+    from: String,
+    to: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bends: Vec<(f64, f64)>,
+}
+
+/// Values before tables: TOML puts `version` before `[board]`, and every
+/// array-of-tables after that. Reordering these fields reorders the file.
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct FileV2 {
+    version: u32,
+    #[serde(default)]
+    board: Board,
+    #[serde(default, rename = "part", skip_serializing_if = "Vec::is_empty")]
+    parts: Vec<Part>,
+    #[serde(default, rename = "wire", skip_serializing_if = "Vec::is_empty")]
+    wires: Vec<WireRecord>,
+}
+
+// ---------------------------------------------------------------- version 1
+
+/// A display pin nobody had wired in the first format.
+const UNWIRED_PIN: u8 = 255;
+
+/// Where a part sat, in the first format's spelling: `x`, `y`, `rot`,
+/// `flip` directly inside `[[led]]`. `routes` were the wires' bends toward
+/// the chip; the migration drops them, since a wire pin to pin routes
+/// itself.
+#[derive(Debug, Default, Deserialize)]
+struct Place {
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    routes: Vec<Vec<(f64, f64)>>,
+    #[serde(default)]
+    rot: u16,
+    #[serde(default)]
     flip: bool,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Led {
     pin: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
-    /// `active_low = true`: lights when the pin is low. Absent is
-    /// active-high, which is what every file before the key meant.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Button {
     pin: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
-    /// `active_low = true`: pressing pulls the pin low.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Rgb {
     r: u8,
     g: u8,
     b: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Seven {
     pins: [u8; 7],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     active_low: bool,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Display {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
-    /// Absent means "not wired yet" — old board files carry no pins at
-    /// all, and an unwired screen still shows text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     sda: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     scl: Option<u8>,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Analog {
     pin: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     max: Option<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     start: Option<u16>,
-    /// What the count means on this board, in the author's own words.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     note: Option<String>,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Motor {
-    /// Absent means "not wired". A motor with no duty pin is drawn and
-    /// says it has nothing to be driven by, rather than sitting at zero
-    /// as though the firmware had commanded a stop.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pwm: Option<u8>,
-    /// The H-bridge direction pins. Both absent is a fan.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     in1: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     in2: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
     #[serde(flatten)]
     place: Place,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Pot {
     pin: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[allow(dead_code)]
     label: Option<String>,
     #[serde(flatten)]
     place: Place,
 }
 
-/// Values before tables: TOML puts `[board]` after nothing, and every
-/// array-of-tables after that. Reordering these fields reorders the file.
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct Sheet {
+#[derive(Debug, Default, Deserialize)]
+struct FileV1 {
     #[serde(default)]
     board: Board,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     led: Vec<Led>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     button: Vec<Button>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     rgb: Vec<Rgb>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     seven: Vec<Seven>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     display: Vec<Display>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pot: Vec<Pot>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     motor: Vec<Motor>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     analog: Vec<Analog>,
 }
 
-impl Sheet {
+impl FileV1 {
     fn is_empty(&self) -> bool {
         self.led.is_empty()
             && self.button.is_empty()
@@ -201,61 +248,49 @@ impl Sheet {
     }
 }
 
-impl Place {
-    /// `into_`, not `to_`: this consumes the file record so the route
-    /// vectors move rather than being cloned on every board load.
-    fn into_model(self) -> crate::model::Placement {
-        crate::model::Placement {
-            x: self.x,
-            y: self.y,
-            routes: self.routes,
-            rot: self.rot,
-            flip: self.flip,
-        }
-    }
-
-    /// Positions are rounded on the way out: the canvas works in
-    /// fractional pixels and a file full of `128.00000000000003` is a
-    /// file nobody wants to read or diff.
-    fn from_model(place: &crate::model::Placement) -> Self {
-        Place {
-            x: place.x.map(f64::round),
-            y: place.y.map(f64::round),
-            routes: place.routes.clone(),
-            rot: place.rot,
-            flip: place.flip,
-        }
-    }
-}
-
 /// What the file described, drawn for the chip the project builds for.
 pub struct Loaded {
-    pub board: SimBoard,
+    pub sheet: Sheet,
     /// Set when the file named a different chip — see [`load`].
     pub note: Option<String>,
 }
 
-/// The board `.rusty/sim.toml` describes, if the project carries one.
+/// The sheet `.rusty/sim.toml` describes, if the project carries one.
 ///
 /// `chip` is the chip the project builds for, and it is the chip the board is
-/// drawn with whatever the file says. The frontend draws the pin rows from
-/// `SimBoard::chip`, and a hand-written file — or one written before the
-/// project switched parts — can name another: a C3 project drawn with the
-/// ESP32 header offered GPIO34–39, pins the part does not have, and a wire
-/// dropped on one was a bug nothing reported. A file with no chip used to
-/// mean `esp32`, which was the same wrong header by default. So the header
-/// follows the build, and a disagreement is said in the note rather than
-/// drawn.
+/// drawn with whatever the file says. A hand-written file — or one written
+/// before the project switched parts — can name another: a C3 project drawn
+/// with the ESP32 header offered GPIO34–39, pins the part does not have, and
+/// a wire dropped on one was a bug nothing reported. So the header follows
+/// the build, and a disagreement is said in the note rather than drawn.
+///
+/// A file that does not parse is `None` here and reported by the plan: the
+/// editor then starts empty, and saving would overwrite — which is why the
+/// plan's note names the file first.
 pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
     let text = std::fs::read_to_string(root.join(".rusty/sim.toml")).ok()?;
-    let parsed: Sheet = toml::from_str(&text).ok()?;
-    if parsed.is_empty() {
-        return None;
-    }
-
+    let table: toml::Table = toml::from_str(&text).ok()?;
+    let version = table
+        .get("version")
+        .and_then(toml::Value::as_integer)
+        .unwrap_or(1);
     let project_chip = crate::chip::normalize(chip);
-    let note = parsed
-        .board
+    let (board, mut sheet) = if version >= 2 {
+        let parsed: FileV2 = table.try_into().ok()?;
+        let sheet = read_v2(&parsed, &project_chip);
+        (parsed.board, sheet)
+    } else {
+        let parsed: FileV1 = table.try_into().ok()?;
+        if parsed.is_empty() {
+            return None;
+        }
+        let sheet = migrate(&parsed, &project_chip);
+        (parsed.board, sheet)
+    };
+    sheet.kit_x = board.x;
+    sheet.kit_y = board.y;
+
+    let note = board
         .chip
         .as_deref()
         .map(crate::chip::normalize)
@@ -267,204 +302,300 @@ pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
                  the board from the editor rewrites the file to match."
             )
         });
-
-    let board = SimBoard {
-        chip: project_chip,
-        kit_x: parsed.board.x,
-        kit_y: parsed.board.y,
-        leds: parsed
-            .led
-            .into_iter()
-            .map(|led| SimLed {
-                label: led.label.unwrap_or_else(|| format!("GPIO{}", led.pin)),
-                color: led.color.unwrap_or_else(|| "green".to_string()),
-                pin: led.pin,
-                active_low: led.active_low,
-                place: led.place.into_model(),
-            })
-            .collect(),
-        buttons: parsed
-            .button
-            .into_iter()
-            .map(|b| SimButton {
-                label: b.label.unwrap_or_else(|| format!("BTN{}", b.pin)),
-                pin: b.pin,
-                active_low: b.active_low,
-                place: b.place.into_model(),
-            })
-            .collect(),
-        rgbs: parsed
-            .rgb
-            .into_iter()
-            .map(|rgb| SimRgb {
-                label: rgb.label.unwrap_or_else(|| "RGB".to_string()),
-                r: rgb.r,
-                g: rgb.g,
-                b: rgb.b,
-                active_low: rgb.active_low,
-                place: rgb.place.into_model(),
-            })
-            .collect(),
-        sevens: parsed
-            .seven
-            .into_iter()
-            .map(|seven| SimSeven {
-                label: seven.label.unwrap_or_else(|| "7SEG".to_string()),
-                pins: seven.pins,
-                active_low: seven.active_low,
-                place: seven.place.into_model(),
-            })
-            .collect(),
-        displays: parsed
-            .display
-            .into_iter()
-            .map(|display| SimDisplay {
-                label: display.label.unwrap_or_else(|| "DISPLAY".to_string()),
-                sda: display.sda.unwrap_or(UNWIRED_PIN),
-                scl: display.scl.unwrap_or(UNWIRED_PIN),
-                place: display.place.into_model(),
-            })
-            .collect(),
-        pots: parsed
-            .pot
-            .into_iter()
-            .map(|pot| SimPot {
-                label: pot.label.unwrap_or_else(|| format!("POT{}", pot.pin)),
-                pin: pot.pin,
-                place: pot.place.into_model(),
-            })
-            .collect(),
-        analogs: parsed
-            .analog
-            .into_iter()
-            .map(|a| SimAnalog {
-                label: a.label.unwrap_or_else(|| format!("A{}", a.pin)),
-                pin: a.pin,
-                max: a.max.unwrap_or(4095),
-                start: a.start.unwrap_or(0),
-                note: a.note,
-                place: a.place.into_model(),
-            })
-            .collect(),
-        motors: parsed
-            .motor
-            .into_iter()
-            .map(|motor| SimMotor {
-                label: motor.label.unwrap_or_else(|| "MOTOR".to_string()),
-                pwm: motor.pwm.unwrap_or(UNWIRED_PIN),
-                in1: motor.in1.unwrap_or(UNWIRED_PIN),
-                in2: motor.in2.unwrap_or(UNWIRED_PIN),
-                place: motor.place.into_model(),
-            })
-            .collect(),
-    };
-    Some(Loaded { board, note })
+    Some(Loaded { sheet, note })
 }
 
-/// Write the board back to `.rusty/sim.toml`, the file the editor edits.
+fn read_v2(file: &FileV2, chip: &str) -> Sheet {
+    let mut sheet = Sheet::empty(chip);
+    for part in &file.parts {
+        if part.reference == KIT_REFERENCE || sheet.part(&part.reference).is_some() {
+            sheet.notes.push(format!(
+                "`{}` is placed twice in .rusty/sim.toml; the second one was skipped",
+                part.reference
+            ));
+            continue;
+        }
+        sheet.parts.push(Instance {
+            reference: part.reference.clone(),
+            symbol: part.symbol.clone(),
+            value: part.value.clone(),
+            x: part.x,
+            y: part.y,
+            rot: part.rot % 360,
+            mirror: part.mirror,
+            props: part.props.clone(),
+        });
+    }
+    for wire in &file.wires {
+        match (PinRef::parse(&wire.from), PinRef::parse(&wire.to)) {
+            (Some(from), Some(to)) => sheet.wires.push(Wire {
+                from,
+                to,
+                bends: wire.bends.clone(),
+            }),
+            _ => sheet.notes.push(format!(
+                "a wire from `{}` to `{}` in .rusty/sim.toml does not name two pins as `part.pin`, and was skipped",
+                wire.from, wire.to
+            )),
+        }
+    }
+    sheet
+}
+
+/// The first format as a schematic: what each old part claimed, drawn with
+/// the wires it implied and none it did not. The user's bends are dropped —
+/// they ran to the chip's header, and a wire pin to pin routes itself.
+fn migrate(file: &FileV1, chip: &str) -> Sheet {
+    let mut sheet = Sheet::empty(chip);
+    let gpio = |n: u8| format!("{KIT_REFERENCE}.GPIO{n}");
+    let rail = |high: bool| format!("{KIT_REFERENCE}.{}", if high { "3V3" } else { "GND" });
+    // The old position was a body's top-left corner; the symbol's anchor
+    // sits near where its body was, on the grid.
+    let anchor = |place: &Place, dx: f64, dy: f64| {
+        let x = place.x.unwrap_or(60.0) + dx;
+        let y = place.y.unwrap_or(60.0) + dy;
+        ((x / 8.0).round() * 8.0, (y / 8.0).round() * 8.0)
+    };
+
+    fn add(
+        sheet: &mut Sheet,
+        prefix: &str,
+        symbol: &str,
+        value: &str,
+        at: (f64, f64),
+        place: &Place,
+    ) -> String {
+        let reference = sheet.next_reference(prefix);
+        sheet.parts.push(Instance {
+            reference: reference.clone(),
+            symbol: symbol.to_string(),
+            value: value.to_string(),
+            x: at.0,
+            y: at.1,
+            rot: place.rot % 360,
+            mirror: place.flip,
+            props: BTreeMap::new(),
+        });
+        reference
+    }
+    fn join(sheet: &mut Sheet, from: &str, to: &str) {
+        if let (Some(from), Some(to)) = (PinRef::parse(from), PinRef::parse(to)) {
+            sheet.wires.push(Wire {
+                from,
+                to,
+                bends: Vec::new(),
+            });
+        }
+    }
+    let wired = |pin: u8| pin != UNWIRED_PIN;
+
+    for (index, led) in file.led.iter().enumerate() {
+        let mut place = Place {
+            x: led.place.x,
+            y: led.place.y,
+            ..Default::default()
+        };
+        if place.x.is_none() {
+            place.y = Some(40.0 + index as f64 * 56.0);
+        }
+        let reference = add(
+            &mut sheet,
+            "D",
+            "Device:LED",
+            led.color.as_deref().unwrap_or("green"),
+            anchor(&place, 48.0, 16.0),
+            &led.place,
+        );
+        // Active-high: the GPIO sources the anode. Active-low: the anode
+        // sits on 3V3 and the GPIO sinks the cathode — what most devkits'
+        // onboard lamps do.
+        if led.active_low {
+            join(&mut sheet, &rail(true), &format!("{reference}.A"));
+            join(&mut sheet, &format!("{reference}.K"), &gpio(led.pin));
+        } else {
+            join(&mut sheet, &gpio(led.pin), &format!("{reference}.A"));
+            join(&mut sheet, &format!("{reference}.K"), &rail(false));
+        }
+    }
+    for button in &file.button {
+        let reference = add(
+            &mut sheet,
+            "SW",
+            "Device:SW_Push",
+            "",
+            anchor(&button.place, 48.0, 16.0),
+            &button.place,
+        );
+        join(&mut sheet, &gpio(button.pin), &format!("{reference}.1"));
+        join(
+            &mut sheet,
+            &format!("{reference}.2"),
+            &rail(!button.active_low),
+        );
+    }
+    for rgb in &file.rgb {
+        let reference = add(
+            &mut sheet,
+            "D",
+            "rusty:RGB_LED",
+            "",
+            anchor(&rgb.place, 56.0, 32.0),
+            &rgb.place,
+        );
+        for (pin, channel) in [(rgb.r, "R"), (rgb.g, "G"), (rgb.b, "B")] {
+            if wired(pin) {
+                join(&mut sheet, &gpio(pin), &format!("{reference}.{channel}"));
+            }
+        }
+        // Common anode lights a channel pulled low, which is what the old
+        // `active_low` meant.
+        join(
+            &mut sheet,
+            &format!("{reference}.COM"),
+            &rail(rgb.active_low),
+        );
+    }
+    for seven in &file.seven {
+        let reference = add(
+            &mut sheet,
+            "DS",
+            "rusty:7SEG",
+            "",
+            anchor(&seven.place, 40.0, 64.0),
+            &seven.place,
+        );
+        for (pin, segment) in seven.pins.iter().zip(["a", "b", "c", "d", "e", "f", "g"]) {
+            if wired(*pin) {
+                join(&mut sheet, &gpio(*pin), &format!("{reference}.{segment}"));
+            }
+        }
+        join(
+            &mut sheet,
+            &format!("{reference}.COM"),
+            &rail(seven.active_low),
+        );
+    }
+    for display in &file.display {
+        let reference = add(
+            &mut sheet,
+            "DS",
+            "rusty:Display",
+            "",
+            anchor(&display.place, 72.0, 24.0),
+            &display.place,
+        );
+        if let Some(sda) = display.sda.filter(|p| wired(*p)) {
+            join(&mut sheet, &gpio(sda), &format!("{reference}.SDA"));
+        }
+        if let Some(scl) = display.scl.filter(|p| wired(*p)) {
+            join(&mut sheet, &gpio(scl), &format!("{reference}.SCL"));
+        }
+        join(&mut sheet, &format!("{reference}.VCC"), &rail(true));
+        join(&mut sheet, &format!("{reference}.GND"), &rail(false));
+    }
+    for pot in &file.pot {
+        let reference = add(
+            &mut sheet,
+            "RV",
+            "rusty:Pot",
+            "",
+            anchor(&pot.place, 64.0, 16.0),
+            &pot.place,
+        );
+        join(&mut sheet, &format!("{reference}.W"), &gpio(pot.pin));
+        join(&mut sheet, &format!("{reference}.1"), &rail(true));
+        join(&mut sheet, &format!("{reference}.3"), &rail(false));
+    }
+    for analog in &file.analog {
+        let reference = add(
+            &mut sheet,
+            "V",
+            "rusty:Analog",
+            analog.note.as_deref().unwrap_or(""),
+            anchor(&analog.place, 64.0, 16.0),
+            &analog.place,
+        );
+        let props = &mut sheet.parts.last_mut().expect("just pushed").props;
+        if let Some(max) = analog.max {
+            props.insert("max".to_string(), max.to_string());
+        }
+        if let Some(start) = analog.start {
+            props.insert("start".to_string(), start.to_string());
+        }
+        join(&mut sheet, &format!("{reference}.OUT"), &gpio(analog.pin));
+        join(&mut sheet, &format!("{reference}.GND"), &rail(false));
+    }
+    for motor in &file.motor {
+        let reference = add(
+            &mut sheet,
+            "M",
+            "rusty:Motor",
+            "",
+            anchor(&motor.place, 64.0, 24.0),
+            &motor.place,
+        );
+        for (pin, name) in [(motor.pwm, "PWM"), (motor.in1, "IN1"), (motor.in2, "IN2")] {
+            if let Some(pin) = pin.filter(|p| wired(*p)) {
+                join(&mut sheet, &gpio(pin), &format!("{reference}.{name}"));
+            }
+        }
+    }
+    sheet.notes.push(
+        ".rusty/sim.toml is in the first board format and was read as a schematic: each lamp \
+         is a Device:LED wired to its GPIO and a rail, each button a Device:SW_Push, and the \
+         rest the rusty library's parts. No resistors were added, because the old board had \
+         none. Saving the board from the editor rewrites the file in the new format."
+            .to_string(),
+    );
+    sheet
+}
+
+/// Write the sheet back to `.rusty/sim.toml`, in version 2.
 ///
 /// Serialised through this module's structs, not the wire ones — the file
-/// format is a contract with people who write it by hand, and it stays stable
-/// when the wire model grows.
-pub fn save(root: &Path, board: &SimBoard) -> Result<()> {
-    let unwired = |pin: u8| (pin != UNWIRED_PIN).then_some(pin);
-
-    let sheet = Sheet {
+/// format is a contract with people who write it by hand, and it stays
+/// stable when the wire model grows. Positions are rounded on the way out:
+/// the canvas works in fractional pixels and a file full of
+/// `128.00000000000003` is a file nobody wants to read or diff.
+pub fn save(root: &Path, sheet: &Sheet) -> Result<()> {
+    let file = FileV2 {
+        version: 2,
         board: Board {
-            chip: Some(board.chip.clone()),
-            x: board.kit_x.map(f64::round),
-            y: board.kit_y.map(f64::round),
+            chip: Some(sheet.chip.clone()),
+            x: sheet.kit_x.map(f64::round),
+            y: sheet.kit_y.map(f64::round),
         },
-        led: board
-            .leds
+        parts: sheet
+            .parts
             .iter()
-            .map(|led| Led {
-                pin: led.pin,
-                color: Some(led.color.clone()),
-                label: Some(led.label.clone()),
-                active_low: led.active_low,
-                place: Place::from_model(&led.place),
+            .map(|p| Part {
+                reference: p.reference.clone(),
+                symbol: p.symbol.clone(),
+                value: p.value.clone(),
+                x: p.x.round(),
+                y: p.y.round(),
+                rot: p.rot,
+                mirror: p.mirror,
+                props: p.props.clone(),
             })
             .collect(),
-        button: board
-            .buttons
+        wires: sheet
+            .wires
             .iter()
-            .map(|b| Button {
-                pin: b.pin,
-                label: Some(b.label.clone()),
-                active_low: b.active_low,
-                place: Place::from_model(&b.place),
-            })
-            .collect(),
-        rgb: board
-            .rgbs
-            .iter()
-            .map(|rgb| Rgb {
-                r: rgb.r,
-                g: rgb.g,
-                b: rgb.b,
-                label: Some(rgb.label.clone()),
-                active_low: rgb.active_low,
-                place: Place::from_model(&rgb.place),
-            })
-            .collect(),
-        seven: board
-            .sevens
-            .iter()
-            .map(|seven| Seven {
-                pins: seven.pins,
-                label: Some(seven.label.clone()),
-                active_low: seven.active_low,
-                place: Place::from_model(&seven.place),
-            })
-            .collect(),
-        display: board
-            .displays
-            .iter()
-            .map(|display| Display {
-                label: Some(display.label.clone()),
-                sda: unwired(display.sda),
-                scl: unwired(display.scl),
-                place: Place::from_model(&display.place),
-            })
-            .collect(),
-        pot: board
-            .pots
-            .iter()
-            .map(|pot| Pot {
-                pin: pot.pin,
-                label: Some(pot.label.clone()),
-                place: Place::from_model(&pot.place),
-            })
-            .collect(),
-        analog: board
-            .analogs
-            .iter()
-            .map(|a| Analog {
-                pin: a.pin,
-                label: Some(a.label.clone()),
-                max: Some(a.max),
-                start: Some(a.start),
-                note: a.note.clone(),
-                place: Place::from_model(&a.place),
-            })
-            .collect(),
-        motor: board
-            .motors
-            .iter()
-            .map(|motor| Motor {
-                pwm: unwired(motor.pwm),
-                in1: unwired(motor.in1),
-                in2: unwired(motor.in2),
-                label: Some(motor.label.clone()),
-                place: Place::from_model(&motor.place),
+            .map(|w| WireRecord {
+                from: w.from.to_string(),
+                to: w.to.to_string(),
+                bends: w
+                    .bends
+                    .iter()
+                    .map(|(x, y)| (x.round(), y.round()))
+                    .collect(),
             })
             .collect(),
     };
-
+    let path = root.join(".rusty/sim.toml");
     let dir = root.join(".rusty");
-    let path = dir.join("sim.toml");
-    let text = toml::to_string_pretty(&sheet).map_err(|error| Error::Encode {
+    let text = toml::to_string(&file).map_err(|error| Error::Encode {
         path: path.display().to_string(),
         detail: error.to_string(),
     })?;
@@ -481,163 +612,156 @@ pub fn save(root: &Path, board: &SimBoard) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Placement;
 
-    /// A round trip proves nothing about a field left at its default.
-    ///
-    /// This test existed while `flip` was being dropped on save, and passed:
-    /// the fixture set `flip: false` on every part, so a writer that never
-    /// wrote it and a reader that hard-coded `false` agreed perfectly. The
-    /// rule the fixture now follows is that **every optional field differs
-    /// from its default** — that is what makes the comparison mean something.
-    #[test]
-    fn the_board_round_trips_through_save_and_load() {
+    fn project(text: &str) -> tempfile::TempDir {
         let dir = tempfile::Builder::new()
-            .prefix("rusty-sim-rt")
-            .tempdir()
-            .expect("tempdir");
-        let place = |x: f64, y: f64, rot: u16, flip: bool| Placement {
-            x: Some(x),
-            y: Some(y),
-            routes: vec![vec![(120.0, 60.0), (200.0, 90.0)]],
-            rot,
-            flip,
-        };
-        let board = SimBoard {
-            chip: "esp32".to_string(),
-            kit_x: Some(420.0),
-            kit_y: Some(30.0),
-            // Every polarity set, or the round trip would pass with a writer
-            // that never wrote the key — the blind spot `flip` sat in.
-            leds: vec![SimLed {
-                pin: 26,
-                color: "green".to_string(),
-                label: "G".to_string(),
-                active_low: true,
-                place: place(40.0, 60.0, 90, true),
-            }],
-            buttons: vec![SimButton {
-                pin: 14,
-                label: "BTN14".to_string(),
-                active_low: true,
-                place: place(30.0, 120.0, 180, true),
-            }],
-            rgbs: vec![SimRgb {
-                r: 21,
-                g: 22,
-                b: 23,
-                label: "RGB".to_string(),
-                active_low: true,
-                place: place(80.0, 160.0, 270, true),
-            }],
-            sevens: vec![SimSeven {
-                pins: [1, 2, 3, 4, 5, 6, 7],
-                label: "7SEG".to_string(),
-                active_low: true,
-                place: place(200.0, 40.0, 270, true),
-            }],
-            displays: vec![
-                SimDisplay {
-                    sda: 21,
-                    scl: 22,
-                    label: "DISPLAY".to_string(),
-                    place: place(300.0, 200.0, 90, true),
-                },
-                // The sentinel has to survive too: a screen nobody has wired
-                // writes no pins at all, and must read back unwired rather
-                // than as GPIO0.
-                SimDisplay {
-                    sda: UNWIRED_PIN,
-                    scl: UNWIRED_PIN,
-                    label: "LOOSE".to_string(),
-                    place: Placement::default(),
-                },
-            ],
-            pots: vec![SimPot {
-                pin: 34,
-                label: "POT34".to_string(),
-                place: place(20.0, 200.0, 90, true),
-            }],
-            analogs: vec![SimAnalog {
-                pin: 35,
-                label: "BATT".to_string(),
-                max: 1023,
-                start: 800,
-                note: Some("1023 = 4.2 V through 100k/27k".to_string()),
-                place: place(500.0, 320.0, 180, true),
-            }],
-            motors: vec![
-                // An H-bridge drive: all three wired.
-                SimMotor {
-                    pwm: 5,
-                    in1: 6,
-                    in2: 7,
-                    label: "DRIVE".to_string(),
-                    place: place(400.0, 260.0, 270, true),
-                },
-                // And a fan, which is the same part with the direction pins
-                // left off. Both spellings have to survive the file, or the
-                // one nobody wrote a fixture for is the one that breaks.
-                SimMotor {
-                    pwm: 8,
-                    in1: UNWIRED_PIN,
-                    in2: UNWIRED_PIN,
-                    label: "FAN".to_string(),
-                    place: Placement::default(),
-                },
-            ],
-        };
-        save(dir.path(), &board).expect("save");
-        let loaded = load(dir.path(), "esp32").expect("load");
-        assert_eq!(loaded.board, board);
-        assert!(loaded.note.is_none(), "the file and the project agree");
-
-        // Named explicitly as well as compared: `assert_eq` on the whole
-        // board says "something differs", and the field that differs is the
-        // one worth naming.
-        let loaded = loaded.board;
-        assert!(loaded.leds[0].place.flip, "a mirrored part stays mirrored");
-        assert_eq!(
-            loaded.sevens[0].place.rot, 270,
-            "and a turned one stays turned"
-        );
-        assert_eq!(loaded.displays[1].sda, UNWIRED_PIN);
-        assert_eq!(
-            loaded.analogs[0].max, 1023,
-            "a source that is not a 12-bit ADC keeps saying so",
-        );
-        assert_eq!(
-            loaded.analogs[0].note.as_deref(),
-            Some("1023 = 4.2 V through 100k/27k"),
-        );
-        assert_eq!(
-            loaded.motors[0].in1, 6,
-            "an H-bridge keeps its direction pins"
-        );
-        assert_eq!(
-            loaded.motors[1].in1, UNWIRED_PIN,
-            "and a fan keeps not having any",
-        );
-    }
-
-    #[test]
-    fn the_board_file_converts_to_the_wire_model() {
-        let dir = tempfile::Builder::new()
-            .prefix("rusty-sim-board")
+            .prefix("rusty-sim")
             .tempdir()
             .expect("tempdir");
         std::fs::create_dir_all(dir.path().join(".rusty")).expect("dirs");
-        std::fs::write(
-            dir.path().join(".rusty/sim.toml"),
-            "[board]\nchip = \"esp32\"\n[[led]]\npin = 26\ncolor = \"green\"\n[[led]]\npin = 27\ncolor = \"blue\"\nlabel = \"BLUE\"\n",
-        )
-        .expect("write");
-        let board = load(dir.path(), "esp32").expect("board").board;
-        assert_eq!(board.chip, "esp32");
-        assert_eq!(board.leds.len(), 2);
-        assert_eq!(board.leds[0].label, "GPIO26");
-        assert_eq!(board.leds[1].label, "BLUE");
-        assert!(load(Path::new("nowhere-at-all"), "esp32").is_none());
+        std::fs::write(dir.path().join(".rusty/sim.toml"), text).expect("write");
+        dir
+    }
+
+    /// A round trip proves nothing about a field left at its default, so
+    /// every optional field here differs from its default: a turned,
+    /// mirrored part with a value and a prop, a wire with bends.
+    #[test]
+    fn a_sheet_round_trips_through_save_and_load() {
+        let dir = project("");
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.kit_x = Some(420.0);
+        sheet.kit_y = Some(30.0);
+        sheet.parts.push(Instance {
+            reference: "D1".into(),
+            symbol: "Device:LED".into(),
+            value: "red".into(),
+            x: 96.0,
+            y: 64.0,
+            rot: 90,
+            mirror: true,
+            props: BTreeMap::new(),
+        });
+        sheet.parts.push(Instance {
+            reference: "V1".into(),
+            symbol: "rusty:Analog".into(),
+            value: "1023 = 4.2 V through 100k/27k".into(),
+            x: 200.0,
+            y: 120.0,
+            rot: 270,
+            mirror: false,
+            props: [("max".to_string(), "1023".to_string())]
+                .into_iter()
+                .collect(),
+        });
+        sheet.wires.push(Wire {
+            from: PinRef::new("U1", "GPIO2"),
+            to: PinRef::new("D1", "A"),
+            bends: vec![(120.0, 64.0), (120.0, 40.0)],
+        });
+        sheet.wires.push(Wire {
+            from: PinRef::new("D1", "K"),
+            to: PinRef::new("U1", "9"),
+            bends: Vec::new(),
+        });
+        save(dir.path(), &sheet).expect("save");
+        let text = std::fs::read_to_string(dir.path().join(".rusty/sim.toml")).unwrap();
+        assert!(text.starts_with("version = 2\n"), "{text}");
+        assert!(text.contains("[[part]]\nref = \"D1\""), "{text}");
+        assert!(text.contains("from = \"U1.GPIO2\""), "{text}");
+
+        let loaded = load(dir.path(), "esp32c3").expect("load");
+        assert!(loaded.note.is_none());
+        assert_eq!(loaded.sheet, sheet);
+        assert!(
+            loaded.sheet.parts[0].mirror,
+            "a mirrored part stays mirrored"
+        );
+        assert_eq!(loaded.sheet.parts[1].props["max"], "1023");
+        assert_eq!(loaded.sheet.wires[0].bends.len(), 2);
+    }
+
+    #[test]
+    fn a_first_format_file_is_read_as_the_circuit_it_claimed() {
+        let dir = project(
+            "[board]\nchip = \"esp32\"\nx = 400\ny = 20\n\
+             [[led]]\npin = 26\ncolor = \"green\"\nx = 40\ny = 60\nrot = 90\nflip = true\n\
+             [[led]]\npin = 27\ncolor = \"blue\"\nactive_low = true\n\
+             [[button]]\npin = 14\nactive_low = true\n\
+             [[rgb]]\nr = 21\ng = 22\nb = 23\nactive_low = true\n\
+             [[seven]]\npins = [1, 2, 3, 4, 5, 6, 255]\n\
+             [[display]]\nsda = 21\nscl = 22\n\
+             [[pot]]\npin = 34\n\
+             [[analog]]\npin = 35\nmax = 1023\nstart = 800\nnote = \"1023 = 4.2 V\"\n\
+             [[motor]]\npwm = 5\nin1 = 6\nin2 = 7\n\
+             [[motor]]\npwm = 8\n",
+        );
+        let loaded = load(dir.path(), "esp32").expect("load");
+        let sheet = loaded.sheet;
+        assert_eq!((sheet.kit_x, sheet.kit_y), (Some(400.0), Some(20.0)));
+        let references: Vec<&str> = sheet.parts.iter().map(|p| p.reference.as_str()).collect();
+        assert_eq!(
+            references,
+            vec![
+                "D1", "D2", "SW1", "D3", "DS1", "DS2", "RV1", "V1", "M1", "M2"
+            ]
+        );
+        let d1 = sheet.part("D1").unwrap();
+        assert_eq!(
+            (d1.symbol.as_str(), d1.value.as_str()),
+            ("Device:LED", "green")
+        );
+        assert_eq!((d1.rot, d1.mirror), (90, true));
+        assert_eq!((d1.x, d1.y), (88.0, 80.0), "near the old body, on the grid");
+
+        let wire = |from: &str, to: &str| {
+            sheet.wires.iter().any(|w| {
+                w.from == PinRef::parse(from).unwrap() && w.to == PinRef::parse(to).unwrap()
+            })
+        };
+        // Active-high: GPIO to anode, cathode to ground. Active-low: 3V3 to
+        // anode, cathode to the GPIO.
+        assert!(wire("U1.GPIO26", "D1.A") && wire("D1.K", "U1.GND"));
+        assert!(wire("U1.3V3", "D2.A") && wire("D2.K", "U1.GPIO27"));
+        assert!(
+            wire("U1.GPIO14", "SW1.1") && wire("SW1.2", "U1.GND"),
+            "a pull-up button goes to ground"
+        );
+        assert!(
+            wire("U1.GPIO21", "D3.R") && wire("D3.COM", "U1.3V3"),
+            "common anode on 3V3"
+        );
+        assert!(
+            wire("U1.GPIO1", "DS1.a") && !sheet.wires.iter().any(|w| w.to.pin == "g"),
+            "an unwired segment stays unwired"
+        );
+        assert!(wire("DS1.COM", "U1.GND"));
+        assert!(wire("U1.GPIO21", "DS2.SDA") && wire("DS2.VCC", "U1.3V3"));
+        assert!(wire("RV1.W", "U1.GPIO34") && wire("RV1.1", "U1.3V3") && wire("RV1.3", "U1.GND"));
+        let v1 = sheet.part("V1").unwrap();
+        assert_eq!(v1.value, "1023 = 4.2 V");
+        assert_eq!(v1.props["max"], "1023");
+        assert_eq!(v1.props["start"], "800");
+        assert!(wire("V1.OUT", "U1.GPIO35"));
+        assert!(wire("U1.GPIO6", "M1.IN1"));
+        assert_eq!(
+            sheet.wires_of("M2").count(),
+            1,
+            "a fan wires only its duty pin"
+        );
+        assert_eq!(sheet.notes.len(), 1);
+        assert!(
+            sheet.notes[0].contains("first board format"),
+            "{}",
+            sheet.notes[0]
+        );
+
+        // Saved, it is version 2 and reads back as itself.
+        save(dir.path(), &sheet).expect("save");
+        let again = load(dir.path(), "esp32").expect("load").sheet;
+        assert_eq!(again.parts, sheet.parts);
+        assert_eq!(again.wires, sheet.wires);
+        assert!(again.notes.is_empty(), "no migration the second time");
     }
 
     /// The pin rows follow the chip being simulated. A file that names
@@ -645,39 +769,52 @@ mod tests {
     /// showing GPIO34–39 — and a file that names none does not mean ESP32.
     #[test]
     fn the_board_is_drawn_for_the_projects_chip_whatever_the_file_says() {
-        let dir = tempfile::Builder::new()
-            .prefix("rusty-sim-chip")
-            .tempdir()
-            .expect("tempdir");
-        std::fs::create_dir_all(dir.path().join(".rusty")).expect("dirs");
-
-        std::fs::write(
-            dir.path().join(".rusty/sim.toml"),
-            "[board]\nchip = \"ESP32\"\n[[led]]\npin = 26\n",
-        )
-        .expect("write");
+        let dir = project("[board]\nchip = \"ESP32\"\n[[led]]\npin = 26\n");
         let loaded = load(dir.path(), "esp32c3").expect("board");
-        assert_eq!(loaded.board.chip, "esp32c3");
+        assert_eq!(loaded.sheet.chip, "esp32c3");
         let note = loaded.note.expect("the disagreement is said");
         assert!(
             note.contains("esp32") && note.contains("esp32c3"),
             "both parts are named: {note}"
         );
 
-        std::fs::write(dir.path().join(".rusty/sim.toml"), "[[led]]\npin = 8\n").expect("write");
+        std::fs::write(dir.path().join(".rusty/sim.toml"), "[[led]]\npin = 8\n").unwrap();
         let loaded = load(dir.path(), "esp32c3").expect("board");
         assert_eq!(
-            loaded.board.chip, "esp32c3",
-            "no chip in the file is the project's, not esp32"
+            loaded.sheet.chip, "esp32c3",
+            "no chip in the file is the project's"
         );
-        assert!(loaded.note.is_none(), "and nothing to disagree with");
+        assert!(loaded.note.is_none());
 
-        // Spelling differences are not a disagreement.
         std::fs::write(
             dir.path().join(".rusty/sim.toml"),
-            "[board]\nchip = \"ESP32-C3\"\n[[led]]\npin = 8\n",
+            "version = 2\n[board]\nchip = \"ESP32-C3\"\n[[part]]\nref = \"R1\"\nsymbol = \"Device:R\"\nx = 0\ny = 0\n",
         )
-        .expect("write");
-        assert!(load(dir.path(), "esp32c3").expect("board").note.is_none());
+        .unwrap();
+        assert!(
+            load(dir.path(), "esp32c3").expect("board").note.is_none(),
+            "spelling is not disagreement"
+        );
+        assert!(load(Path::new("nowhere-at-all"), "esp32").is_none());
+    }
+
+    #[test]
+    fn a_bad_wire_or_a_repeated_reference_is_noted_and_skipped() {
+        let dir = project(
+            "version = 2\n[[part]]\nref = \"R1\"\nsymbol = \"Device:R\"\nx = 0\ny = 0\n\
+             [[part]]\nref = \"R1\"\nsymbol = \"Device:C\"\nx = 8\ny = 8\n\
+             [[part]]\nref = \"U1\"\nsymbol = \"Device:C\"\nx = 8\ny = 8\n\
+             [[wire]]\nfrom = \"R1.1\"\nto = \"GND\"\n\
+             [[wire]]\nfrom = \"R1.2\"\nto = \"U1.GND\"\n",
+        );
+        let sheet = load(dir.path(), "esp32c3").expect("board").sheet;
+        assert_eq!(
+            sheet.parts.len(),
+            1,
+            "the repeat and the kit's name are refused"
+        );
+        assert_eq!(sheet.wires.len(), 1);
+        assert_eq!(sheet.notes.len(), 3, "{:?}", sheet.notes);
+        assert!(sheet.notes[2].contains("`GND`"), "{}", sheet.notes[2]);
     }
 }

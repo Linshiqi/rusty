@@ -1,166 +1,159 @@
-//! The parts library: what can be dropped onto the board.
+//! The parts library: every symbol the sheet may place, and the way to
+//! bring in one it cannot.
 //!
-//! Built-ins first, then whatever the project defines in `.rusty/parts/`.
-//! Adding is all it does — a part arrives unwired and the sheet owns
-//! everything after that, which is why this needs two props rather than the
-//! editor's whole state.
+//! Grouped by library, in the order somebody looks: KiCad's `Device`
+//! first, the simulator's own `rusty` parts, then everything imported from
+//! LCSC and whatever the project keeps under `.rusty/symbols/`. Picking a
+//! part arms it to the cursor; the sheet owns everything after that, which
+//! is why this needs callbacks rather than the editor's whole state.
 
+use leptos::{ev, prelude::*};
+use rusty_embed::Symbol;
+use rusty_embed::nets::{Behaviour, behaviour_of};
 use rusty_i18n::t;
 
-use leptos::prelude::*;
+use crate::view::icon::{Icon, IconView};
 
-use super::geometry::PartKind;
+/// What a part looks like in the list: a small glyph by behaviour, so a
+/// lamp and a resistor are told apart before the name is read.
+fn glyph(symbol: &Symbol) -> &'static str {
+    match behaviour_of(symbol) {
+        Behaviour::Led => "size-3.5 rounded-full bg-[#ff5c5c]",
+        Behaviour::Rgb => {
+            "size-3.5 rounded-full bg-[conic-gradient(#ff5c5c,#3ddc84,#4aa8ff,#ff5c5c)]"
+        }
+        Behaviour::Resistor => "h-2 w-4 rounded-[2px] bg-[#d8a24b]",
+        Behaviour::Capacitor => "h-3.5 w-2.5 border-x-2 border-[#d8a24b]",
+        Behaviour::Switch => "size-3.5 rounded-[4px] bg-line-strong",
+        Behaviour::Seven => "size-3.5 rounded-[3px] bg-[#3a2323]",
+        Behaviour::Display => "h-3 w-4 rounded-[2px] bg-[#0d1a12] ring-1 ring-[#1d4a2f]",
+        Behaviour::Pot => "size-3.5 rounded-full bg-line-strong ring-2 ring-[#c9a227]",
+        Behaviour::Analog => "h-3.5 w-3 rounded-[2px] border border-line-strong",
+        Behaviour::Motor => "size-3.5 rounded-full border border-line-strong",
+        Behaviour::Other => "h-3 w-3.5 rounded-[2px] border border-[#d8a24b]",
+    }
+}
 
-/// `on_add` carries the kind and a label stub — only the custom parts and the
-/// RGB lens use the stub, so it is a string rather than another enum.
 #[component]
 pub(super) fn Library(
-    user_parts: Vec<rusty_embed::PartDef>,
-    on_add: Callback<(PartKind, String)>,
+    symbols: Signal<Vec<Symbol>>,
+    on_add: Callback<Symbol>,
+    on_import: Callback<String>,
+    importing: Signal<bool>,
 ) -> impl IntoView {
-    let add_part = move |kind: PartKind, label: String| on_add.run((kind, label));
+    let number = RwSignal::new(String::new());
+    let submit = move || {
+        let text = number.get_untracked();
+        if text.trim().is_empty() {
+            return;
+        }
+        on_import.run(text);
+    };
+    // The libraries in a fixed order, the rest alphabetical after them.
+    let groups = Memo::new(move |_| {
+        let mut names: Vec<String> =
+            symbols.with(|list| list.iter().map(|s| s.library.clone()).collect());
+        names.sort();
+        names.dedup();
+        let rank = |name: &str| match name {
+            "Device" => 0,
+            "rusty" => 1,
+            "lcsc" => 2,
+            _ => 3,
+        };
+        names.sort_by_key(|n| rank(n));
+        names
+    });
 
     view! {
-                <div class="flex w-[160px] flex-none flex-col gap-1 overflow-y-auto border-r border-line bg-sidebar p-2">
-                    <span class="px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                        {t!("parts.heading")}
-                    </span>
-                    // One LED, not one per colour: the colour is a property,
-                    // picked in the panel on the right once it is selected.
-                    <button
-                        type="button"
-                        title=t!("parts.led-hint")
-                        on:click=move |_| add_part(
-                            PartKind::Led {
-                                color: "red".to_string(),
-                            },
-                            String::new(),
-                        )
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="size-3.5 rounded-full bg-[#ff5c5c]" />
-                        <span>{t!("parts.led")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.button-hint")
-                        on:click=move |_| add_part(PartKind::Button, String::new())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="grid size-3.5 place-items-center rounded-[4px] bg-line-strong">
-                            <span class="size-1.5 rounded-full bg-label-3" />
-                        </span>
-                        <span>{t!("parts.button")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.analog-hint")
-                        on:click=move |_| add_part(PartKind::Analog, String::new())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="grid h-3.5 w-3 shrink-0 place-items-center rounded-[2px] border border-line-strong">
-                            <span class="h-px w-1.5 bg-label-3" />
-                        </span>
-                        <span>{t!("parts.analog")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.motor-hint")
-                        on:click=move |_| add_part(PartKind::Motor, String::new())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="relative grid size-3.5 shrink-0 place-items-center rounded-full border border-line-strong">
-                            <span class="absolute top-0 left-1/2 h-1/2 w-px -translate-x-1/2 bg-label-3" />
-                            <span class="size-1 rounded-full bg-label-3" />
-                        </span>
-                        <span>{t!("parts.motor")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.rgb-hint")
-                        on:click=move |_| add_part(PartKind::Rgb, "RGB".to_string())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="size-3.5 rounded-full bg-[conic-gradient(#ff5c5c,#3ddc84,#4aa8ff,#ff5c5c)]" />
-                        <span>{t!("parts.rgb")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.seven-hint")
-                        on:click=move |_| add_part(PartKind::Seven, String::new())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="grid size-3.5 place-items-center rounded-[3px] bg-[#3a2323] font-mono text-[9px] leading-none text-[#ff5c5c]">
-                            "8"
-                        </span>
-                        <span>{t!("parts.seven")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.display-hint")
-                        on:click=move |_| add_part(PartKind::Display, String::new())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="h-3 w-4 rounded-[2px] bg-[#0d1a12] ring-1 ring-[#1d4a2f]" />
-                        <span>{t!("parts.display")}</span>
-                    </button>
-                    <button
-                        type="button"
-                        title=t!("parts.pot-hint")
-                        on:click=move |_| add_part(PartKind::Pot, String::new())
-                        class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                    >
-                        <span class="grid size-3.5 place-items-center rounded-full bg-line-strong">
-                            <span class="h-2 w-0.5 bg-[#c9a227]" />
-                        </span>
-                        <span>{t!("parts.pot")}</span>
-                    </button>
-                    {(!user_parts.is_empty())
-                        .then(|| {
-                            view! {
-                                <span class="mt-2 px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
-                                    {t!("parts.custom")}
-                                </span>
-                            }
-                        })}
-                    {user_parts
-                        .iter()
-                        .map(|def| {
-                            let name = def.name.clone();
-                            let color = def.color.clone();
-                            let add_color = color.clone();
-                            let add_name = name.clone();
-                            view! {
-                                <button
-                                    type="button"
-                                    title=format!("{name} — from .rusty/parts/")
-                                    on:click=move |_| {
-                                        add_part(
-                                            PartKind::Led {
-                                                color: add_color.clone(),
-                                            },
-                                            add_name.clone(),
-                                        )
+        <div class="flex w-[172px] flex-none flex-col overflow-y-auto border-r border-line bg-sidebar">
+            <div class="flex flex-col gap-1 p-2">
+                <span class="px-1 pb-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                    {t!("parts.heading")}
+                </span>
+                <For
+                    each=move || groups.get()
+                    key=|name| name.clone()
+                    children=move |name: String| {
+                        let heading = name.clone();
+                        let members = Memo::new(move |_| {
+                            symbols.with(|list| {
+                                list.iter().filter(|s| s.library == name).cloned().collect::<Vec<_>>()
+                            })
+                        });
+                        view! {
+                            <span class="mt-1.5 px-1 text-caption text-label-4">{heading}</span>
+                            <For
+                                each=move || members.get()
+                                key=|symbol| symbol.id()
+                                children=move |symbol: Symbol| {
+                                    let title = symbol
+                                        .description
+                                        .clone()
+                                        .unwrap_or_else(|| symbol.id());
+                                    let label = symbol.name.clone();
+                                    let prefix = symbol.reference.trim_end_matches(['?', '_']).to_string();
+                                    let glyph = glyph(&symbol);
+                                    view! {
+                                        <button
+                                            type="button"
+                                            title=title
+                                            on:click=move |_| on_add.run(symbol.clone())
+                                            class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
+                                        >
+                                            <span class=format!("shrink-0 {glyph}") />
+                                            <span class="min-w-0 flex-1 truncate text-left">{label}</span>
+                                            <span class="font-mono text-caption text-label-4">{prefix}</span>
+                                        </button>
                                     }
-                                    class="flex items-center gap-2 rounded-[6px] px-2 py-1.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
-                                >
-                                    <span class=format!(
-                                        "size-3.5 rounded-full {}",
-                                        match color.as_str() {
-                                            "blue" => "bg-[#4aa8ff]",
-                                            "red" => "bg-[#ff5c5c]",
-                                            "yellow" => "bg-[#ffd75c]",
-                                            _ => "bg-[#3ddc84]",
-                                        },
-                                    ) />
-                                    <span>{name.clone()}</span>
-                                </button>
+                                }
+                            />
+                        }
+                    }
+                />
+            </div>
+            // A part LCSC sells, by its number: fetched from EasyEDA's
+            // service, read into a symbol, kept in the data directory's
+            // library, and armed to the cursor at once.
+            <div class="mt-auto flex flex-col gap-1.5 border-t border-line p-2">
+                <span class="px-1 text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                    {t!("parts.import-heading")}
+                </span>
+                <div class="flex items-center gap-1">
+                    <input
+                        type="text"
+                        placeholder="C2286"
+                        title=t!("parts.import-hint")
+                        prop:value=move || number.get()
+                        on:input=move |event| number.set(event_target_value(&event))
+                        on:keydown=move |event: ev::KeyboardEvent| {
+                            if event.key() == "Enter" {
+                                event.prevent_default();
+                                submit();
                             }
-                        })
-                        .collect_view()}
-                    <p class="mt-1 px-1 text-caption leading-snug text-label-4">
-                        {t!("misc.own-parts")}
-                    </p>
+                        }
+                        class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                    />
+                    <button
+                        type="button"
+                        title=t!("parts.import")
+                        disabled=move || importing.get()
+                        on:click=move |_| submit()
+                        class="grid size-[26px] shrink-0 place-items-center rounded-[6px] bg-rust text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                    >
+                        <IconView icon=Icon::Plus size=13 />
+                    </button>
                 </div>
+                <p class="px-1 text-caption leading-snug text-label-4">
+                    {move || {
+                        if importing.get() {
+                            t!("parts.importing")
+                        } else {
+                            t!("parts.import-note")
+                        }
+                    }}
+                </p>
+            </div>
+        </div>
     }
 }

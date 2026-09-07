@@ -1,504 +1,498 @@
 //! What the board editor's commands do to the sheet, with no signals in them.
 //!
 //! The sibling of [`super::geometry`], and there for the same reason: the
-//! canvas is a 1,900-line component, and everything inside it that is really
-//! arithmetic or bookkeeping was unreachable from a test. Geometry moved out
-//! first because it had been wrong three times; this is the other half — what
-//! rotating, deleting, duplicating and undoing actually *do* to the part list.
+//! canvas is a two-thousand-line component, and everything inside it that
+//! is really arithmetic or bookkeeping was unreachable from a test. What
+//! rotating, deleting, duplicating, wiring and undoing actually *do* to the
+//! part list and the wire list is pinned here.
 //!
-//! Every function here takes the list and mutates it. The component keeps the
-//! signals, calls these, and sets `dirty` — so a command is one line there and
-//! its behaviour is pinned here.
+//! Every function here takes the lists and mutates them. The component
+//! keeps the signals, calls these, and sets `dirty` — so a command is one
+//! line there and its behaviour is here.
 
-use super::geometry::{
-    EditPart, GroupStart, PartKind, Snapshot, UNWIRED, follow_first_bend, single_pin_label,
-    stub_point,
-};
+use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
+
+use super::geometry::{EditPart, GroupStart, Snapshot, pin_key};
 
 /// How many steps of undo the editor keeps.
 ///
 /// Bounded because each snapshot is a whole copy of the sheet and a long
-/// session otherwise grows without limit; a hundred is far past what anyone
-/// walks back through in one sitting.
-const HISTORY: usize = 100;
+/// session would otherwise grow without limit; sixty-four is more than a
+/// hand undoes in one go and far less than a browser tab minds.
+const HISTORY_CAP: usize = 64;
 
-/// Record the sheet before a change, dropping the oldest step once the cap is
-/// reached.
+/// Push a snapshot, dropping the oldest once the cap is reached.
 pub(super) fn remember(past: &mut Vec<Snapshot>, now: Snapshot) {
-    past.push(now);
-    if past.len() > HISTORY {
+    if past.len() >= HISTORY_CAP {
         past.remove(0);
     }
+    past.push(now);
 }
 
-/// The label a freshly placed part carries.
-///
-/// An em dash rather than a pin number, because a new part is deliberately
-/// unwired: connecting it is the user's move, made by pulling its stub to a
-/// chip pin. A label naming a pin nothing is attached to is a lie the user
-/// has to notice.
-pub(super) fn new_label(kind: &PartKind, stub: &str) -> String {
-    match kind {
-        PartKind::Led { .. } => "GPIO —".to_string(),
-        PartKind::Button => "BTN —".to_string(),
-        PartKind::Rgb if stub.is_empty() => "RGB".to_string(),
-        PartKind::Rgb => stub.to_string(),
-        PartKind::Seven => "7SEG".to_string(),
-        PartKind::Display => "DISPLAY".to_string(),
-        PartKind::Pot => "POT —".to_string(),
-        PartKind::Motor => "MOTOR".to_string(),
-        PartKind::Analog => "ADC —".to_string(),
-    }
+/// The next free `prefix<n>`: `D3` when `D1` and `D2` are placed. A deleted
+/// `D2` is reused, as KiCad's annotation does. Never the devkit's `U1`.
+pub(super) fn next_reference(list: &[EditPart], prefix: &str) -> String {
+    let prefix = prefix.trim_end_matches(['?', '_']);
+    let prefix = if prefix.is_empty() { "U" } else { prefix };
+    (1..)
+        .map(|n| format!("{prefix}{n}"))
+        .find(|candidate| {
+            *candidate != KIT_REFERENCE && list.iter().all(|p| p.inst.reference != *candidate)
+        })
+        .expect("the integers do not run out")
 }
 
-/// Place a new part, returning its index — which is what the caller selects.
-///
-/// A new button pulls low when pressed — to ground with a pull-up, the
-/// wiring nearly every tutorial and devkit uses, and what `Pull::Up` +
-/// `is_low()` reads — and the file says so explicitly. Lamps start
-/// active-high, the plain GPIO → resistor → LED → ground. Either is one
-/// checkbox away in the properties panel.
-pub(super) fn add(list: &mut Vec<EditPart>, kind: PartKind, stub: &str, x: f64, y: f64) -> usize {
-    let label = new_label(&kind, stub);
-    let active_low = matches!(kind, PartKind::Button);
+/// Place a symbol at `(x, y)`, numbered after the parts already there. Its
+/// value starts as the symbol's own unless that is just the symbol's name
+/// — `LED` beside an LED says nothing, `10kΩ` beside an imported resistor
+/// says everything. Returns the new part's index.
+pub(super) fn add(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
+    let reference = next_reference(list, &symbol.reference);
+    let value = if symbol.value == symbol.name {
+        String::new()
+    } else {
+        symbol.value.clone()
+    };
     list.push(EditPart {
-        kind,
-        pins: [UNWIRED; 7],
-        label,
-        x,
-        y,
-        waypoints: Default::default(),
-        rot: 0,
-        flip: false,
-        active_low,
+        inst: Instance {
+            reference,
+            symbol: symbol.id(),
+            value,
+            x,
+            y,
+            rot: 0,
+            mirror: false,
+            props: Default::default(),
+        },
+        symbol: Some(symbol.clone()),
     });
     list.len() - 1
 }
 
-/// Whether a label is one the editor wrote — `GPIO26`, `BTN —` — rather than
-/// one the user typed. Only the editor's own labels follow the wiring; a
-/// name somebody chose (`STATUS`, `ARM`) is kept through a rewire, the way
-/// KiCad keeps a reference the user set.
-pub(super) fn is_auto_label(kind: &PartKind, label: &str) -> bool {
-    if label == single_pin_label(kind, UNWIRED) {
-        return true;
+/// Rename a part, and every wire end that named it. Refused — `false` —
+/// for a blank name, the devkit's, or one another part already wears;
+/// a sheet with two `D1`s is a sheet whose wires no longer say which.
+pub(super) fn rename(list: &mut [EditPart], wires: &mut [Wire], index: usize, name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name == KIT_REFERENCE {
+        return false;
     }
-    let base = single_pin_label(kind, UNWIRED);
-    let base = base.trim_end_matches(" —");
-    label
-        .strip_prefix(base)
-        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
-}
-
-/// Give a part the name the user typed. Blank is not a name: the editor's
-/// own label comes back, so a part is never nameless on the sheet.
-pub(super) fn rename(list: &mut [EditPart], index: usize, label: &str) {
-    if let Some(part) = list.get_mut(index) {
-        let label = label.trim();
-        part.label = if label.is_empty() {
-            match part.kind.wires() {
-                1 => single_pin_label(&part.kind, part.pins[0]),
-                _ => new_label(&part.kind, ""),
-            }
-        } else {
-            label.to_string()
-        };
+    if list
+        .iter()
+        .enumerate()
+        .any(|(i, p)| i != index && p.inst.reference == name)
+    {
+        return false;
     }
-}
-
-/// Flip a part's polarity: a lamp that lights low, a button that pulls low.
-pub(super) fn set_active_low(list: &mut [EditPart], index: usize, on: bool) {
-    if let Some(part) = list.get_mut(index) {
-        part.active_low = on;
-    }
-}
-
-/// Turn a part a quarter turn clockwise.
-pub(super) fn rotate(list: &mut [EditPart], index: usize) {
     let Some(part) = list.get_mut(index) else {
-        return;
+        return false;
     };
-    part.rot = (part.rot + 90) % 360;
-    // The stubs have moved, so hand-drawn routes to them are about a shape
-    // that no longer exists.
-    for route in &mut part.waypoints {
-        route.clear();
+    if part.is_kit() {
+        return false;
+    }
+    let old = std::mem::replace(&mut part.inst.reference, name.to_string());
+    for wire in wires {
+        if wire.from.part == old {
+            wire.from.part = name.to_string();
+        }
+        if wire.to.part == old {
+            wire.to.part = name.to_string();
+        }
+    }
+    true
+}
+
+pub(super) fn set_value(list: &mut [EditPart], index: usize, value: &str) {
+    if let Some(part) = list.get_mut(index) {
+        part.inst.value = value.trim().to_string();
     }
 }
 
-/// Mirror a part left-to-right.
-///
-/// Not a rotation: a 180° turn brings the stubs to the near edge and reverses
-/// their order, so seven wires to a seven-segment cross on the way in.
-pub(super) fn flip(list: &mut [EditPart], index: usize) {
+pub(super) fn set_prop(list: &mut [EditPart], index: usize, key: &str, value: &str) {
     if let Some(part) = list.get_mut(index) {
-        part.flip = !part.flip;
-        for route in &mut part.waypoints {
-            route.clear();
+        if value.trim().is_empty() {
+            part.inst.props.remove(key);
+        } else {
+            part.inst
+                .props
+                .insert(key.to_string(), value.trim().to_string());
         }
+    }
+}
+
+/// A quarter turn clockwise. The devkit does not turn: its art is drawn
+/// upright and its header reads that way.
+pub(super) fn rotate(list: &mut [EditPart], index: usize) {
+    if let Some(part) = list.get_mut(index).filter(|p| !p.is_kit()) {
+        part.inst.rot = (part.inst.rot + 90) % 360;
+    }
+}
+
+/// Mirror left-to-right — KiCad's X key. Not a second rotation: a part
+/// on the chip's right wants its pins on the near edge *in the same
+/// order*, and turning it 180° reverses them.
+pub(super) fn mirror(list: &mut [EditPart], index: usize) {
+    if let Some(part) = list.get_mut(index).filter(|p| !p.is_kit()) {
+        part.inst.mirror = !part.inst.mirror;
     }
 }
 
 pub(super) fn nudge(list: &mut [EditPart], index: usize, dx: f64, dy: f64) {
     if let Some(part) = list.get_mut(index) {
-        part.x += dx;
-        part.y += dy;
+        part.inst.x += dx;
+        part.inst.y += dy;
     }
 }
 
-/// Drop the hand-drawn bends on one wire, leaving it to route itself.
-pub(super) fn straighten(list: &mut [EditPart], index: usize, slot: usize) {
-    if let Some(part) = list.get_mut(index) {
-        part.waypoints[slot].clear();
-    }
-}
-
-/// Unwire one slot: the pin goes, and so do the bends that were drawn for it.
-///
-/// A single-pin part's label names its pin, so it goes back to naming nothing
-/// — a lamp still labelled `GPIO26` with no wire on it is the confident wrong
-/// answer in miniature.
-pub(super) fn disconnect(list: &mut [EditPart], index: usize, slot: usize) {
-    let Some(part) = list.get_mut(index) else {
-        return;
-    };
-    part.pins[slot] = UNWIRED;
-    part.waypoints[slot].clear();
-    if part.kind.wires() == 1 && is_auto_label(&part.kind, &part.label) {
-        part.label = single_pin_label(&part.kind, UNWIRED);
-    }
-}
-
-pub(super) fn remove(list: &mut Vec<EditPart>, index: usize) {
-    if index < list.len() {
-        list.remove(index);
-    }
-}
-
-/// Remove several parts at once — the Delete key on a rubber-band selection.
-/// Highest index first, because each removal shifts everything after it;
-/// named twice is removed once; past the end is ignored.
-pub(super) fn remove_many(list: &mut Vec<EditPart>, indices: &[usize]) {
-    let mut order: Vec<usize> = indices.to_vec();
-    order.sort_unstable();
-    order.dedup();
-    for index in order.into_iter().rev() {
-        remove(list, index);
-    }
-}
-
-/// Move a group by one displacement from where each part stood when the
-/// drag began: `(index, (x, y), first-leg axes)` per part, as the component
-/// snapshots them at the press. From the start rather than by deltas, so a
-/// snapped frame cannot accumulate into drift. Bends stay on the sheet, as
-/// for a single dragged part, and each route's first bend slides along its
-/// own axis for the same reason (see `follow_first_bend`).
+/// Move every part in `start` by one displacement from where it stood
+/// when the drag began — never by a delta from the last frame, which
+/// accumulates snapping into drift.
 pub(super) fn translate(list: &mut [EditPart], start: &[GroupStart], dx: f64, dy: f64) {
-    for (index, (x, y), axes) in start {
-        let Some(part) = list.get_mut(*index) else {
-            continue;
-        };
-        part.x = x + dx;
-        part.y = y + dy;
-        let stubs: Vec<(f64, f64)> = (0..part.kind.wires())
-            .map(|slot| stub_point(part, slot))
-            .collect();
-        for (slot, stub) in stubs.into_iter().enumerate() {
-            if let Some(first) = part.waypoints[slot].first_mut() {
-                follow_first_bend(stub, axes[slot], first);
-            }
+    for (index, (x, y)) in start {
+        if let Some(part) = list.get_mut(*index) {
+            part.inst.x = x + dx;
+            part.inst.y = y + dy;
         }
     }
 }
 
-/// Copy a part beside itself, returning the copy's index.
+/// Remove a part and every wire that touched it. The devkit stays.
+pub(super) fn remove(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, index: usize) -> bool {
+    if index >= list.len() || list[index].is_kit() {
+        return false;
+    }
+    let reference = list.remove(index).inst.reference;
+    wires.retain(|w| w.from.part != reference && w.to.part != reference);
+    true
+}
+
+/// Remove several parts at once — Delete on a rubber-band selection.
+/// Highest index first, so each removal leaves the rest where they were.
+pub(super) fn remove_many(list: &mut Vec<EditPart>, wires: &mut Vec<Wire>, indices: &[usize]) {
+    let mut order: Vec<usize> = indices.to_vec();
+    order.sort_unstable();
+    order.dedup();
+    for index in order.into_iter().rev() {
+        remove(list, wires, index);
+    }
+}
+
+/// A copy beside the original, numbered afresh, with no wires: wires are
+/// connections somebody made, and a copy of a connection is a short.
 pub(super) fn duplicate(list: &mut Vec<EditPart>, index: usize) -> Option<usize> {
-    let original = list.get(index).cloned()?;
-    // Same pins — two lamps on one GPIO is legal wiring — but its own routes,
-    // because the copy sits somewhere else.
+    let original = list.get(index).filter(|p| !p.is_kit())?.clone();
+    let prefix: String = original
+        .inst
+        .reference
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_string();
+    let reference = next_reference(list, &prefix);
     list.push(EditPart {
-        x: original.x + 24.0,
-        y: original.y + 24.0,
-        waypoints: Default::default(),
-        ..original
+        inst: Instance {
+            reference,
+            x: original.inst.x + 16.0,
+            y: original.inst.y + 16.0,
+            ..original.inst
+        },
+        symbol: original.symbol,
     });
     Some(list.len() - 1)
 }
 
-/// The rectangle everything on the sheet occupies: `((min_x, min_y), (max_x,
-/// max_y))`, the devkit included.
-///
-/// Its own function because "fit the view" is the one place the editor has to
-/// be right about every part's *extent* rather than its origin, and a part
-/// whose width is forgotten is one that ends up half off screen.
-pub(super) fn bounds(
-    list: &[EditPart],
-    kit: (f64, f64),
-    kit_size: (f64, f64),
-) -> ((f64, f64), (f64, f64)) {
-    let mut min = kit;
-    let mut max = (kit.0 + kit_size.0, kit.1 + kit_size.1);
-    for part in list {
-        min.0 = min.0.min(part.x);
-        min.1 = min.1.min(part.y);
-        max.0 = max.0.max(part.x + part.kind.width());
-        max.1 = max.1.max(part.y + part.kind.height());
+/// The pin's spelling in a wire, from its part's symbol.
+fn key_of(part: &EditPart, number: &str) -> Option<PinRef> {
+    let symbol = part.symbol.as_ref()?;
+    let pin = symbol.pin(number)?;
+    Some(PinRef::new(&part.inst.reference, pin_key(symbol, pin)))
+}
+
+/// Whether a wire end names this pin, whichever spelling it used.
+pub(super) fn end_is(list: &[EditPart], end: &PinRef, index: usize, number: &str) -> bool {
+    let Some(part) = list.get(index) else {
+        return false;
+    };
+    if end.part != part.inst.reference {
+        return false;
     }
-    (min, max)
+    part.pin(&end.pin).is_some_and(|p| p.number == number)
+}
+
+/// Every wire touching a pin.
+pub(super) fn wires_at(
+    list: &[EditPart],
+    wires: &[Wire],
+    index: usize,
+    number: &str,
+) -> Vec<usize> {
+    wires
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| end_is(list, &w.from, index, number) || end_is(list, &w.to, index, number))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Join two pins. Refused — `None` — for a pin to itself, and for a pair
+/// already joined; both are wires that mean nothing. Returns the index of
+/// the wire made.
+pub(super) fn connect(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    to: (usize, &str),
+) -> Option<usize> {
+    if from == to {
+        return None;
+    }
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let b = key_of(list.get(to.0)?, to.1)?;
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends: Vec::new(),
+    });
+    Some(wires.len() - 1)
+}
+
+/// Drop every wire at a pin.
+pub(super) fn disconnect_pin(list: &[EditPart], wires: &mut Vec<Wire>, index: usize, number: &str) {
+    let doomed = wires_at(list, wires, index, number);
+    for at in doomed.into_iter().rev() {
+        wires.remove(at);
+    }
+}
+
+/// Drop every wire touching a part.
+pub(super) fn disconnect_all(list: &[EditPart], wires: &mut Vec<Wire>, index: usize) {
+    let Some(part) = list.get(index) else {
+        return;
+    };
+    let reference = part.inst.reference.clone();
+    wires.retain(|w| w.from.part != reference && w.to.part != reference);
+}
+
+pub(super) fn remove_wire(wires: &mut Vec<Wire>, index: usize) {
+    if index < wires.len() {
+        wires.remove(index);
+    }
+}
+
+/// Forget a wire's bends, so it routes itself again.
+pub(super) fn straighten(wires: &mut [Wire], index: usize) {
+    if let Some(wire) = wires.get_mut(index) {
+        wire.bends.clear();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusty_embed::nets::kit_rows;
+    use rusty_embed::{Fill, Graphic, Pin, PinKind};
 
-    /// The editor's labels follow the wiring; a typed name does not. The
-    /// test is about the rule, so it names both kinds of label for two kinds
-    /// of part rather than checking one string.
-    #[test]
-    fn only_the_editors_own_labels_count_as_automatic() {
-        let led = PartKind::Led {
-            color: "red".to_string(),
-        };
-        assert!(is_auto_label(&led, "GPIO26"));
-        assert!(is_auto_label(&led, "GPIO —"), "unwired is the editor's too");
-        assert!(!is_auto_label(&led, "STATUS"));
-        assert!(
-            !is_auto_label(&led, "GPIO26 arm"),
-            "a suffix makes it a name"
-        );
-        assert!(is_auto_label(&PartKind::Button, "BTN14"));
-        assert!(
-            !is_auto_label(&PartKind::Button, "GPIO14"),
-            "another kind's label"
-        );
+    use crate::view::panels::simulate::geometry::{KIT_SYMBOL, kit_symbol};
+
+    fn symbol(library: &str, name: &str, reference: &str, pins: &[(&str, &str)]) -> Symbol {
+        Symbol {
+            library: library.into(),
+            name: name.into(),
+            reference: reference.into(),
+            value: name.into(),
+            description: None,
+            pins: pins
+                .iter()
+                .enumerate()
+                .map(|(i, (number, name))| Pin {
+                    number: (*number).into(),
+                    name: (*name).into(),
+                    kind: PinKind::Passive,
+                    at: (if i == 0 { -3.81 } else { 3.81 }, 0.0),
+                    length: 2.54,
+                    angle: if i == 0 { 0 } else { 180 },
+                    hidden: false,
+                })
+                .collect(),
+            graphics: vec![Graphic::Rectangle {
+                start: (-1.0, -1.0),
+                end: (1.0, 1.0),
+                width: 0.254,
+                fill: Fill::None,
+            }],
+        }
     }
 
-    /// A blank name is not a name: the editor's own comes back, so a part is
-    /// never nameless on the sheet.
-    #[test]
-    fn renaming_keeps_a_typed_name_and_refuses_a_blank_one() {
-        let mut list = sheet();
-        rename(&mut list, 0, "  STATUS  ");
-        assert_eq!(list[0].label, "STATUS");
-        rename(&mut list, 0, "   ");
-        assert_eq!(
-            list[0].label,
-            single_pin_label(&list[0].kind, list[0].pins[0]),
-            "blank falls back to the wiring label"
-        );
-        rename(&mut list, 7, "nothing here");
-    }
-
-    /// A new button pulls low when pressed — the pull-up wiring every
-    /// tutorial uses — and a new lamp lights high. Both are one checkbox
-    /// away, and the checkbox is what `set_active_low` is.
-    #[test]
-    fn a_new_button_is_active_low_and_a_new_lamp_is_not() {
-        let mut list = Vec::new();
-        let button = add(&mut list, PartKind::Button, "", 0.0, 0.0);
-        let lamp = add(
-            &mut list,
-            PartKind::Led {
-                color: "green".to_string(),
-            },
-            "",
-            0.0,
-            40.0,
-        );
-        assert!(list[button].active_low);
-        assert!(!list[lamp].active_low);
-        set_active_low(&mut list, lamp, true);
-        assert!(list[lamp].active_low);
-        assert!(
-            duplicate(&mut list, lamp).is_some_and(|copy| list[copy].active_low),
-            "a copy keeps the polarity: two lamps on one rail are wired alike",
-        );
+    fn led() -> Symbol {
+        symbol("Device", "LED", "D", &[("1", "K"), ("2", "A")])
     }
 
     fn sheet() -> Vec<EditPart> {
-        let mut list = Vec::new();
-        let at = add(
-            &mut list,
-            PartKind::Led {
-                color: "green".to_string(),
+        let rows = kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21]);
+        vec![EditPart {
+            inst: Instance {
+                reference: KIT_REFERENCE.into(),
+                symbol: KIT_SYMBOL.into(),
+                value: "ESP32C3".into(),
+                x: 460.0,
+                y: 40.0,
+                rot: 0,
+                mirror: false,
+                props: Default::default(),
             },
-            "",
-            60.0,
-            40.0,
-        );
-        list[at].pins[0] = 26;
-        list[at].label = "GPIO26".to_string();
-        list[at].waypoints[0] = vec![(120.0, 40.0)];
-        list
+            symbol: Some(kit_symbol("esp32c3", &rows)),
+        }]
     }
 
     #[test]
-    fn a_new_part_arrives_unwired_and_says_so() {
-        let mut list = Vec::new();
-        let at = add(&mut list, PartKind::Button, "", 10.0, 20.0);
-        assert_eq!(at, 0);
+    fn a_new_part_is_numbered_after_the_ones_there_and_a_gap_is_reused() {
+        let mut list = sheet();
+        let first = add(&mut list, &led(), 100.0, 100.0);
+        let second = add(&mut list, &led(), 150.0, 100.0);
+        assert_eq!(list[first].inst.reference, "D1");
+        assert_eq!(list[second].inst.reference, "D2");
         assert_eq!(
-            list[0].pins, [UNWIRED; 7],
-            "connecting it is the user's move"
+            list[first].inst.value, "",
+            "`LED` beside an LED says nothing"
+        );
+        let mut wires = Vec::new();
+        assert!(remove(&mut list, &mut wires, first));
+        assert_eq!(add(&mut list, &led(), 0.0, 0.0), 2);
+        assert_eq!(list[2].inst.reference, "D1", "the gap is filled");
+        let mut lcsc = symbol("lcsc", "C25804", "R", &[("1", "1"), ("2", "2")]);
+        lcsc.value = "10kΩ".into();
+        let r = add(&mut list, &lcsc, 0.0, 0.0);
+        assert_eq!(list[r].inst.reference, "R1");
+        assert_eq!(list[r].inst.value, "10kΩ", "a real value is kept");
+        assert_eq!(next_reference(&list, "U"), "U2", "never the devkit's");
+        assert_eq!(
+            next_reference(&list, "LED?"),
+            "LED1",
+            "LCSC's question mark is not part of the name"
+        );
+    }
+
+    #[test]
+    fn wiring_joins_two_pins_by_their_spelling_and_refuses_what_means_nothing() {
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let mut wires = Vec::new();
+        let made = connect(&list, &mut wires, (0, "4"), (d, "2")).expect("wired");
+        assert_eq!(
+            wires[made].from,
+            PinRef::new("U1", "GPIO2"),
+            "the row's unique name"
+        );
+        assert_eq!(wires[made].to, PinRef::new("D1", "A"), "the pin's name");
+        assert_eq!(
+            connect(&list, &mut wires, (d, "2"), (0, "4")),
+            None,
+            "already joined, either way round"
         );
         assert_eq!(
-            list[0].label, "BTN —",
-            "and the label must not name a pin nothing is attached to",
+            connect(&list, &mut wires, (d, "2"), (d, "2")),
+            None,
+            "a pin to itself"
         );
-        // An RGB carries whatever the library entry called it, when it has one.
-        let mut list = Vec::new();
-        add(&mut list, PartKind::Rgb, "STATUS", 0.0, 0.0);
-        assert_eq!(list[0].label, "STATUS");
-    }
-
-    /// Turning or mirroring moves the stubs, so routes drawn to where they
-    /// *were* describe a shape that no longer exists.
-    #[test]
-    fn turning_a_part_drops_the_routes_drawn_to_its_old_stubs() {
-        let mut list = sheet();
-        rotate(&mut list, 0);
-        assert_eq!(list[0].rot, 90);
-        assert!(list[0].waypoints[0].is_empty());
-
-        let mut list = sheet();
-        flip(&mut list, 0);
-        assert!(list[0].flip);
-        assert!(list[0].waypoints[0].is_empty());
-        flip(&mut list, 0);
-        assert!(!list[0].flip, "mirroring twice is not mirrored");
-    }
-
-    #[test]
-    fn a_full_turn_comes_back_upright() {
-        let mut list = sheet();
-        for _ in 0..4 {
-            rotate(&mut list, 0);
-        }
-        assert_eq!(list[0].rot, 0);
-    }
-
-    #[test]
-    fn disconnecting_takes_the_pin_the_route_and_the_label() {
-        let mut list = sheet();
-        disconnect(&mut list, 0, 0);
-        assert_eq!(list[0].pins[0], UNWIRED);
-        assert!(list[0].waypoints[0].is_empty());
+        connect(&list, &mut wires, (d, "1"), (0, "9")).expect("to ground");
+        assert_eq!(
+            wires[1].to,
+            PinRef::new("U1", "9"),
+            "GND repeats, so its number"
+        );
+        assert_eq!(wires_at(&list, &wires, d, "1"), vec![1]);
         assert!(
-            !list[0].label.contains("26"),
-            "a lamp still labelled GPIO26 with no wire on it is a lie: {}",
-            list[0].label,
+            end_is(&list, &PinRef::new("D1", "K"), d, "1"),
+            "a name resolves to its number"
         );
+        disconnect_pin(&list, &mut wires, d, "2");
+        assert_eq!(wires.len(), 1);
+        assert!(rename(&mut list, &mut wires, d, "D9"));
+        assert_eq!(wires[0].from.part, "D9", "the wire follows the new name");
+        assert!(!rename(&mut list, &mut wires, d, ""));
+        assert!(!rename(&mut list, &mut wires, d, "U1"));
+        assert!(
+            !rename(&mut list, &mut wires, 0, "U2"),
+            "the devkit keeps its name"
+        );
+        let other = add(&mut list, &led(), 0.0, 0.0);
+        assert!(!rename(&mut list, &mut wires, other, "D9"), "taken");
+        disconnect_all(&list, &mut wires, d);
+        assert!(wires.is_empty());
     }
 
     #[test]
-    fn straightening_keeps_the_wire_and_drops_only_the_bends() {
+    fn removing_a_part_takes_its_wires_and_the_devkit_cannot_go() {
         let mut list = sheet();
-        straighten(&mut list, 0, 0);
-        assert!(list[0].waypoints[0].is_empty());
-        assert_eq!(list[0].pins[0], 26, "the wire itself stays connected");
-    }
-
-    #[test]
-    fn a_duplicate_shares_the_pins_and_not_the_routes() {
-        let mut list = sheet();
-        let copy = duplicate(&mut list, 0).expect("a copy");
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let r = add(
+            &mut list,
+            &symbol("Device", "R", "R", &[("1", "~"), ("2", "~")]),
+            200.0,
+            100.0,
+        );
+        let mut wires = Vec::new();
+        connect(&list, &mut wires, (0, "4"), (r, "1"));
+        connect(&list, &mut wires, (r, "2"), (d, "2"));
+        assert!(!remove(&mut list, &mut wires, 0), "the devkit stays");
+        assert!(remove(&mut list, &mut wires, r));
+        assert_eq!(wires.len(), 0, "both wires touched the resistor");
         assert_eq!(list.len(), 2);
-        assert_eq!(
-            list[copy].pins[0], 26,
-            "two lamps on one GPIO is legal wiring"
-        );
-        assert!(
-            list[copy].waypoints[0].is_empty(),
-            "but the copy sits elsewhere, so its route is its own",
-        );
-        assert!(list[copy].x > list[0].x && list[copy].y > list[0].y);
+        remove_many(&mut list, &mut wires, &[1, 0, 1]);
+        assert_eq!(list.len(), 1, "the lamp went, the devkit did not");
     }
 
-    /// Every operation has to survive an index that is not there: the panel
-    /// holds a selection across edits, and a stale one arriving here must do
-    /// nothing rather than panic in a WebView with no stack trace.
     #[test]
-    fn a_stale_index_does_nothing() {
+    fn turning_mirroring_and_duplicating_leave_the_devkit_alone() {
         let mut list = sheet();
-        rotate(&mut list, 9);
-        flip(&mut list, 9);
-        nudge(&mut list, 9, 1.0, 1.0);
-        straighten(&mut list, 9, 0);
-        disconnect(&mut list, 9, 0);
-        remove(&mut list, 9);
-        assert_eq!(duplicate(&mut list, 9), None);
-        assert_eq!(list, sheet(), "nothing moved");
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        for _ in 0..4 {
+            rotate(&mut list, d);
+        }
+        assert_eq!(list[d].inst.rot, 0, "four turns come back upright");
+        rotate(&mut list, d);
+        mirror(&mut list, d);
+        assert_eq!((list[d].inst.rot, list[d].inst.mirror), (90, true));
+        rotate(&mut list, 0);
+        mirror(&mut list, 0);
+        assert_eq!((list[0].inst.rot, list[0].inst.mirror), (0, false));
+        assert_eq!(duplicate(&mut list, 0), None);
+        let copy = duplicate(&mut list, d).expect("copied");
+        assert_eq!(list[copy].inst.reference, "D2");
+        assert_eq!(
+            (
+                list[copy].inst.x,
+                list[copy].inst.rot,
+                list[copy].inst.mirror
+            ),
+            (116.0, 90, true)
+        );
+        nudge(&mut list, copy, -8.0, 0.0);
+        assert_eq!(list[copy].inst.x, 108.0);
+        translate(&mut list, &[(d, (100.0, 100.0))], 10.0, 20.0);
+        assert_eq!((list[d].inst.x, list[d].inst.y), (110.0, 120.0));
+        set_value(&mut list, d, " blue ");
+        assert_eq!(list[d].inst.value, "blue");
+        set_prop(&mut list, d, "max", "1023");
+        assert_eq!(list[d].inst.prop::<u16>("max"), Some(1023));
+        set_prop(&mut list, d, "max", "");
+        assert!(list[d].inst.props.is_empty());
     }
 
     #[test]
     fn history_is_capped_and_keeps_the_newest() {
         let mut past: Vec<Snapshot> = Vec::new();
-        for n in 0..HISTORY + 10 {
-            remember(&mut past, (Vec::new(), (n as f64, 0.0)));
+        for i in 0..(HISTORY_CAP + 5) {
+            let mut list = sheet();
+            list[0].inst.x = i as f64;
+            remember(&mut past, (list, Vec::new()));
         }
-        assert_eq!(past.len(), HISTORY);
-        assert_eq!(
-            past.last().unwrap().1.0,
-            (HISTORY + 9) as f64,
-            "the newest step is the one undo reaches first",
-        );
-        assert_eq!(past[0].1.0, 10.0, "and the oldest fell off the front");
-    }
-
-    /// The bug this prevents: framing the sheet by part *origins* leaves
-    /// every part's body hanging off the right and bottom edges.
-    #[test]
-    fn bounds_cover_each_parts_body_not_just_its_corner() {
-        let list = sheet();
-        let (min, max) = bounds(&list, (460.0, 40.0), (150.0, 300.0));
-        assert_eq!(min, (60.0, 40.0), "the leftmost part sets the left edge");
-        assert_eq!(max.0, 610.0, "the devkit's right edge is furthest right");
-        let part_right = list[0].x + list[0].kind.width();
-        assert!(max.0 >= part_right, "and no body may fall outside");
-        assert!(max.1 >= 340.0);
-    }
-
-    #[test]
-    fn a_group_moves_by_one_displacement_from_where_each_stood() {
-        let mut list = sheet();
-        add(&mut list, PartKind::Button, "", 60.0, 200.0);
-        let start = vec![
-            (
-                0,
-                (list[0].x, list[0].y),
-                [Some(true), None, None, None, None, None, None],
-            ),
-            (1, (list[1].x, list[1].y), [None; 7]),
-        ];
-        translate(&mut list, &start, 40.0, -16.0);
-        assert_eq!((list[0].x, list[0].y), (100.0, 24.0));
-        assert_eq!((list[1].x, list[1].y), (100.0, 184.0));
-        // The displacement is from the start, not cumulative: a second frame
-        // with the same numbers lands in the same place.
-        translate(&mut list, &start, 40.0, -16.0);
-        assert_eq!((list[0].x, list[0].y), (100.0, 24.0));
-        // The LED's planted bend slid along its horizontal first leg to stay
-        // level with the stub, exactly as a single dragged part's does.
-        let stub = stub_point(&list[0], 0);
-        assert_eq!(
-            list[0].waypoints[0][0].1, stub.1,
-            "the bend followed the stub's height"
-        );
-        assert_eq!(list[0].waypoints[0][0].0, 120.0, "and kept its own x");
-    }
-
-    #[test]
-    fn removing_several_takes_each_named_part_once_whatever_the_order() {
-        let mut list = sheet();
-        add(&mut list, PartKind::Button, "", 60.0, 200.0);
-        add(&mut list, PartKind::Pot, "", 60.0, 300.0);
-        // Named low-to-high and with a duplicate: removing from the front
-        // first would shift the later index onto the wrong part.
-        remove_many(&mut list, &[0, 2, 0]);
-        assert_eq!(list.len(), 1);
-        assert!(matches!(list[0].kind, PartKind::Button));
-        // An index past the end is ignored rather than a panic.
-        remove_many(&mut list, &[7]);
-        assert_eq!(list.len(), 1);
+        assert_eq!(past.len(), HISTORY_CAP);
+        assert_eq!(past[0].0[0].inst.x, 5.0, "the oldest five were dropped");
+        assert_eq!(past.last().unwrap().0[0].inst.x, (HISTORY_CAP + 4) as f64);
     }
 }

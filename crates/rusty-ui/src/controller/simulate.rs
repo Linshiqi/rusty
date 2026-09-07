@@ -326,10 +326,10 @@ pub fn sim_analog(state: AppState, pin: u8, count: u16) {
 
 /// Persist the board editor's layout, then re-plan so the panel shows what
 /// the file now says.
-pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSignal<bool>) {
+pub fn save_sim_board(state: AppState, board: rusty_embed::Sheet, dirty: RwSignal<bool>) {
     #[derive(serde::Serialize)]
     struct Args {
-        board: rusty_embed::SimBoard,
+        board: rusty_embed::Sheet,
     }
     let args = Args { board };
     spawn_local(async move {
@@ -347,6 +347,25 @@ pub fn save_sim_board(state: AppState, board: rusty_embed::SimBoard, dirty: RwSi
             }
         }
     });
+}
+
+/// Fetch an LCSC part's symbol through the backend, which keeps it in the
+/// data directory's library. `done` hears the symbol, or `None` when the
+/// import failed — the failure itself goes to the banner like any other.
+pub fn import_symbol(state: AppState, number: String, done: Callback<Option<rusty_embed::Symbol>>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        number: String,
+    }
+    let args = Args { number };
+    let future = async move {
+        let answer = ipc::call::<_, rusty_embed::Symbol>(cmd::sim::IMPORT_SYMBOL, &args).await;
+        if answer.is_err() {
+            done.run(None);
+        }
+        answer
+    };
+    track(state, future, move |symbol| done.run(Some(symbol)));
 }
 
 /// Open the dock terminal and type the gdb attach line into it — the escape

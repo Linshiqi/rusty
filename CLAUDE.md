@@ -239,7 +239,9 @@ Espressif's `esp32_gpio_write` is an empty function, so a pin has no state in
 either direction — which is why probing the real register addresses over QMP
 reads zero on esp32 and esp32c3 alike. The board therefore shows *what the
 firmware says it set*, and the panel says so in as many words. A part needs no
-code in rusty to exist, which is why `.rusty/parts/*.toml` can add one.
+code in rusty to exist, which is why a KiCad `.kicad_sym` under
+`.rusty/symbols/` — or an LCSC part number typed into the library panel — can
+add one.
 
 That ceiling is now the *fallback*, not the roof. `qemu/` holds a real GPIO
 model — Espressif's stub replaced — and `qemu-release.yml` builds it for four
@@ -289,8 +291,10 @@ no ADC model to put an analog value into.
 ### 6. Extensibility is data first
 
 See `docs/extensibility.md`. Chips and boards are TOML in three layers
-(built-in < user config < `<project>/.rusty/`); simulator parts are TOML in
-`<project>/.rusty/parts/`; a chip's register description is the vendor's own
+(built-in < user config < `<project>/.rusty/`); the simulator's parts are KiCad
+symbol libraries in `<project>/.rusty/symbols/`, or LCSC parts imported by
+number into the data directory's `symbols/`; a chip's register description is
+the vendor's own
 SVD, found in `<project>/.rusty/svd/` or the data directory and fetched on
 demand — never bundled, because a vendor file is a hundred thousand lines of
 XML nobody wants in a git repository by accident. Code extensions go through MCP. UI contributions are
@@ -1044,10 +1048,11 @@ usty`) holds `location.toml`
   every optional field to something that is not its default.
 - **Geometry and protocol get tests; views get driven.** The board canvas got
   its arithmetic wrong three times while none of it was reachable from a test.
-  The pure halves now live beside the component: `simulate/geometry.rs` (shapes
-  and anchors, under tests that pin the real pinmap, rotated anchor points,
-  orthogonality and endpoint anchoring) and `simulate/edit.rs` (what rotate,
-  mirror, delete, duplicate and undo *do* to the part list). What genuinely
+  The pure halves now live beside the component: `simulate/geometry.rs` (pin
+  points on the grid, the devkit's generated symbol against its row points,
+  turned and mirrored parts, wire paths, hit-testing, the symbol markup)
+  and `simulate/edit.rs` (what placing, wiring, renaming, rotating,
+  deleting, duplicating and undoing *do* to the parts and the wires). What genuinely
   needs a browser — a drag, a right-click — is driven through `mock.js` and
   asserted on numbers read back from the DOM, in a *separate* call from the one
   that dispatched the event.
@@ -1088,18 +1093,17 @@ usty`) holds `location.toml`
   `"[^"]*[^ ] {6,}[^ ]`. Where hand alignment genuinely reads better —
   `rusty_ai::model::presets` is a table — say so with `#[rustfmt::skip]` and
   a comment, rather than leaving the file unformatted.
-- **Five fields copied onto six structs will lose one.** `SimLed`,
-  `SimButton`, `SimRgb`, `SimSeven`, `SimDisplay` and `SimPot` each repeated
-  `x`/`y`/`routes`/`rot`/`flip`, comments and all, and the file format
-  repeated them again in *two* more sets — one for reading, one for writing.
-  `flip` was added to the six wire types and to none of the four other
-  places, so mirroring a part worked until the project was reopened. There is
-  one `Placement` now, and one `file::Place` used in both directions.
-  Nested rather than `#[serde(flatten)]` on the wire side, deliberately:
-  flatten routes the struct through serde's buffering path, and the frontend
-  decodes from a JS value where a buffered number is not reliably the integer
-  `rot` needs. The file side does flatten, because TOML is self-describing
-  and its keys have to stay where a hand-written file puts them.
+- **Five fields copied onto six structs will lose one.** The first board's
+  `SimLed`, `SimButton`, `SimRgb`, `SimSeven`, `SimDisplay` and `SimPot` each
+  repeated `x`/`y`/`routes`/`rot`/`flip`, comments and all, and the file
+  format repeated them again in *two* more sets — one for reading, one for
+  writing. `flip` was added to the six wire types and to none of the four
+  other places, so mirroring a part worked until the project was reopened.
+  The six types went with the first board — the sheet has one `Instance`
+  and one `Wire` — but the rule they taught stays in `board_file`: one
+  `Part` and one `WireRecord`, each used to read *and* to write, so a field
+  added on one side cannot be forgotten on the other. The file keeps its
+  keys flat, where a hand-written file puts them.
 - **TOML scoping**: in `data/boards.toml`, every scalar key must precede the
   first `[[board.usb]]` or `[board.pins]` header. A `flash_baud` after the usb
   block is parsed as a usb field. `deny_unknown_fields` catches it.
@@ -1493,26 +1497,29 @@ usty`) holds `location.toml`
   board file means (`pin_level`). The console message `B<pin>=1` keeps
   meaning *pressed*, because that is what the text-protocol firmware reads.
 - **Mirror, do not rotate, to face a part at the chip.** Rotating 180° does
-  bring a part's stubs to the near edge — and reverses their order, so seven
-  wires to a seven-segment cross on the way in. `flip` mirrors: near edge,
-  same order. Both transforms mirror the part's *writing* too, so readouts
-  and labels carry the inverse (`readable` in `simulate/mod.rs`).
+  bring a part's pins to the near edge — and reverses their order, so seven
+  wires to a seven-segment cross on the way in. `mirror` mirrors: near edge,
+  same order. Neither transform touches the writing: pin names, numbers,
+  the reference and the value are placed in sheet coordinates *after* the
+  turn (`pin_labels`), so nothing is ever drawn mirrored.
 - **Each part on the sheet is its own keyed view.** The parts were one
   closure rebuilding every part's DOM on every change to the list — on
-  every pointer-move frame of a drag, that is — and a hover on one stub cost
+  every pointer-move frame of a drag, that is — and a hover on one pin cost
   a re-render of thirty. `<For>` keyed by index, and every field a view
-  reads comes through its own memo (`this`, `kind`, `pins`, `place`,
-  `label`, `active_low`), so a frame touches one part's `style`. The face
-  follows the kind and nothing else; what it shows follows the pins and the
-  firmware through closures inside it.
-- **Both ends of a wire are a place to start it.** A stub drags to a chip
-  pin (`Drag::Wire`) and a chip pin drags to a stub (`Drag::WireFromPin`);
-  both land through the same assignment in `pointerup`, because two
-  gestures that agreed about what wiring means only in prose would drift.
-  `stub_under` is `row_under`'s mirror, in sheet units so the reach does
-  not shrink with the zoom, and answers nothing when nothing is in reach —
-  a wire that landed on a stub forty pixels from the pointer would be a
-  connection nobody made.
+  reads comes through its own memo (`this`, `symbol`, `place`, `value`,
+  `bbox`, `pin_dots`, `labels`), so a drag frame touches one part's
+  `transform`. The body follows the symbol and nothing else; the face
+  follows the symbol's behaviour and the rules' reading through closures
+  inside it.
+- **Both ends of a wire are a place to start it.** Any pin drags to any
+  other — a part's to the devkit's, the devkit's to a part's, part to part
+  — through one `Drag::Wire { from }` and one `edit::connect` in
+  `pointerup`, because two gestures that agreed about what wiring means
+  only in prose would drift. `pin_under` works in sheet units so the reach
+  does not shrink with the zoom, and answers nothing when nothing is in
+  reach — a wire that landed on a pin forty pixels from the pointer would
+  be a connection nobody made. A pin to itself and a pair already joined
+  are refused as wires that mean nothing.
 - **Selection is a set, and the left button on empty sheet draws it.** A
   plain drag on the background is the rubber band (`Drag::Box`,
   `parts_in_box`, touching rather than enclosed); panning is the middle
@@ -1522,13 +1529,15 @@ usty`) holds `location.toml`
   group's verbs when the set is more than one. A group drag snapshots where
   every other member stood at the press (`group_start`) and `edit::translate`
   moves each by the grabbed part's displacement *from the start*, so a
-  snapped frame cannot accumulate into drift; each member's first bend
-  slides along its own axis exactly as a single part's does. Any removal
-  clears the set, because every index above the removed part has shifted.
+  snapped frame cannot accumulate into drift; the legs of every wire
+  touching the group slide along their own axis exactly as a single
+  part's do. Any removal clears the set, because every index above the
+  removed part has shifted.
 - **Wire bends belong to the sheet, not to the part — KiCad semantics.**
-  Dragging a part stretches only the stub-to-first-bend segment; every bend
-  the user placed stays put, and the orthogonal pass grows the elbow the
-  stretched segment needs. (An earlier fix translated bends with the part;
+  Dragging a part stretches only the leg from its pin to the nearest bend,
+  at whichever end of the wire the part is (`wire_legs`, `follow_bend`);
+  every bend the user placed stays put, and the orthogonal pass grows the
+  elbow the stretched leg needs. (An earlier fix translated bends with the part;
   that read a rendering artefact as a semantics bug and inverted the
   behaviour every schematic editor has taught.)
 - **Leptos flushes to the DOM in a microtask.** Clicking an element and reading
@@ -1791,31 +1800,77 @@ usty`) holds `location.toml`
   because `cargo test` stops at the first failing binary — the CI passes
   `--no-fail-fast` now so a run names them all.
 
-## Schematic symbols
+## The sheet
 
-The board editor's parts are becoming schematic symbols — KiCad's drawing of
-a part with real pins, wired pin to pin — and `docs/schematic.md` is the
-design. What is in the tree so far is the library under them:
-`model::symbol` (the drawing, wasm-safe, what the frontend renders),
-`schematic::kicad_sym` (KiCad's `.kicad_sym` read and written),
-`schematic::easyeda` (an LCSC part number fetched from EasyEDA's component
-service and read into the same type), and `rusty-cli symbol C2286` as the
-headless proof.
+The board editor's parts are schematic symbols — KiCad's drawing of a part
+with real pins, wired pin to pin — and `docs/schematic.md` is the design.
+`model::symbol` is the drawing (wasm-safe, what the frontend renders),
+`model::sheet` the board (placed symbols and wires), `nets` the reading of
+the wires (unconditional, because both sides read it), `schematic::kicad_sym`
+KiCad's `.kicad_sym` read and written, `schematic::easyeda` an LCSC part
+number fetched from EasyEDA's component service and read into the same type,
+`simulate::board_file` the file in both its formats, and
+`view/panels/simulate/` the editor. `rusty-cli symbol C2286` is the headless
+proof of the import.
 
 - **One `Symbol` for every source.** KiCad's coordinates — millimetres, y
   up, origin at the anchor — and KiCad's pin convention: `at` is the
   connection point and `angle` points from it *into* the body, 0 meaning
   the body lies to the right. Every importer converts at its own edge; the
-  renderer flips y once. A pin is found by number and then by name, so
+  frontend converts once, in `local` and `orient`, with `MM_PX` chosen so
+  that KiCad's 100 mil pin pitch is one kit row pitch — a symbol's pins then
+  sit on the same grid as the devkit's header, which is what lets a snapped
+  wire meet both ends. A pin is found by number and then by name, so
   `D1.K` and `D1.2` both land.
+- **The devkit is a part like any other: `U1`, whose symbol is generated
+  from its rows.** `nets::kit_rows` names the header (`GPIO2`, `GND`,
+  `3V3`; the ESP32 devkit's `RX` is `GPIO3` by name) and the frontend's
+  `kit_symbol` puts one pin on each row, so wiring, hit-testing and the
+  file need no second code path for the chip. A wire spells a pin by its
+  name when the name is unique in its symbol and by its number otherwise
+  (`pin_key`): `U1.GPIO2`, `D1.K`, and `U1.9` only where `GND` repeats.
+- **Polarity is wiring.** There is no `active_low` any more. A lamp lights
+  when its anode's net is high and its cathode's low; on 3V3 with the GPIO
+  sinking the cathode, it lights when the pin is low. A switch to ground
+  drives its GPIO low while pressed, one to 3V3 high — `nets::button_drives`
+  says which, and the backend reads the *same* function at run start to
+  set the pin channel's polarity, so the emulator and the sheet cannot
+  disagree. A resistor conducts, a capacitor does not, and both partitions
+  matter: the *wired* nets say whether a GPIO sits straight on a lamp (the
+  missing-resistor finding), the *conducting* nets say what level reaches
+  it.
+- **The rules run in one memo** (`eval`, from parts, wires, the firmware's
+  levels and the held switches), and every part's face reads its answer:
+  `is_lit` for a lamp, `is_pin_lit` per channel for an RGB lens or a digit
+  against its `COM`, `level` for a motor's direction pins, `gpio_of` for
+  what a knob or a source is on. Findings — a lamp with no series resistor,
+  rails shorted, GPIOs fighting, a switch that reaches nothing, a wire to a
+  pin that is not there — are `Warning`s with a stable kind, translated by
+  the frontend and printed in English by the CLI.
 - **The library is three layers, later ones winning by `library:name`**:
-  the built-in `Device.kicad_sym` (R, C, LED, SW_Push in KiCad's own
-  shapes), the data directory's `symbols/` — where `lcsc.kicad_sym` holds
-  every imported part, one file KiCad itself can open — and the project's
-  `.rusty/symbols/`. A file that does not parse is named in `warnings` and
-  skipped; a cache file that no longer parses is moved to `.broken` before
-  the import writes, because a read that degrades to empty in front of a
-  read-modify-write is how a library of imports vanishes.
+  the built-in `Device.kicad_sym` (R, C, LED, SW_Push in KiCad's own shapes)
+  and `rusty.kicad_sym` (the parts with a behaviour of their own: pot,
+  analog source, display, RGB lens, digit, motor — `behaviour_of` keys on
+  the id for these and on the reference prefix and pin names for the rest),
+  the data directory's `symbols/` — where `lcsc.kicad_sym` holds every
+  imported part, one file KiCad itself can open — and the project's
+  `.rusty/symbols/`. A file that does not parse is named in the plan's
+  notes and skipped; a cache file that no longer parses is moved to
+  `.broken` before the import writes, because a read that degrades to
+  empty in front of a read-modify-write is how a library of imports
+  vanishes. A part whose symbol no library has is *kept*, drawn as a
+  labelled box, and named in the notes — deleting somebody's part because
+  a library file went missing is a loss, not a repair.
+- **`.rusty/sim.toml` is read in two formats and written in one.** Version
+  2 is `[[part]]` and `[[wire]]`; a file with no `version` is the first
+  board — `[[led]]`, `[[button]]`, each *being* its GPIO — read by the
+  reader that always read it and migrated into the circuit it claimed: a
+  lamp on GPIO 2 becomes a `Device:LED` wired to `GPIO2` and `GND` with no
+  resistor, because the old board had none, and the rules then say so. The
+  migration is realised the first time the editor saves and never silently
+  before. `Instance.props` is the open bag for a behaviour's knobs (an
+  analog source's `max`), so a part added tomorrow carries its settings
+  without a format change.
 - **Read, never trusted.** A node the S-expression reader does not know is
   skipped; a pin without a number is refused with the symbol's name; a
   derived symbol (`extends`) is skipped whole rather than half-read.
@@ -1837,6 +1892,21 @@ headless proof.
 - **The fetch goes through `net`'s ladder**, both hosts (`easyeda.com`,
   then `lceda.cn`), and the failure names the last route tried. It reached
   the service from a machine where `curl` and Python could not.
+- **Text is never turned.** The symbol's body is one `<g>` scaled from
+  millimetres and flipped upright, then rotated and mirrored as the part
+  is; pin names and numbers, the reference and the value are placed in
+  sheet coordinates *after* the turn (`pin_labels`), with the anchor
+  following which way the pin points, so nothing on the sheet is ever
+  drawn mirrored. Arcs are sampled into polylines rather than emitted as
+  SVG arcs: a sweep flag under a flipped axis is a flag to get wrong.
+- **A part's group takes the pointer; the SVG around it does not.** The
+  parts layer is `pointer-events: none` and each part, pin dot and wire
+  grab handle opts back in, so a press on empty sheet still reaches the
+  canvas for the rubber band and the pan, and a press on a symbol's body
+  selects it. A switch is pressed rather than dragged while a session
+  runs; the cap sinks, the rules see it conducting, and the GPIO it
+  reaches is driven through the same `B<pin>=1` the old buttons sent, so
+  firmware written for the text protocol hears it too.
 
 ## Meeting C
 

@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use rusty_embed::{LogLine, LogStream, SimBoard, SimPlan, install, process, project, simulate};
+use rusty_embed::{
+    LogLine, LogStream, Sheet, SimPlan, Symbol, install, nets, process, project, simulate,
+};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -20,12 +22,9 @@ pub(crate) fn note(on_line: &Channel<LogLine>, text: impl Into<String>) {
     });
 }
 
-/// Persist the board editor's layout into the project's `.rusty/sim.toml`.
+/// Persist the board editor's sheet into the project's `.rusty/sim.toml`.
 #[tauri::command]
-pub async fn save_sim_board(
-    board: SimBoard,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
+pub async fn save_sim_board(board: Sheet, state: State<'_, AppState>) -> Result<(), CommandError> {
     let root = state
         .firmware_root()
         .await
@@ -35,6 +34,23 @@ pub async fn save_sim_board(
     })
     .await?
     .map_err(CommandError::from)
+}
+
+/// An LCSC part as a schematic symbol, fetched from EasyEDA's component
+/// service and kept in the data directory's `symbols/lcsc.kicad_sym`, so
+/// the next plan offers it in the library. The symbol comes back for the
+/// sheet to place at once.
+#[tauri::command]
+pub async fn sim_import_symbol(number: String) -> Result<Symbol, CommandError> {
+    let imported = blocking("importing the symbol", move || {
+        rusty_embed::schematic::easyeda::import(&number)
+    })
+    .await?
+    .map_err(CommandError::from)?;
+    for warning in &imported.warnings {
+        eprintln!("symbol import: {warning}");
+    }
+    Ok(imported.symbol)
 }
 
 /// How this project would be simulated, or exactly why it cannot be.
@@ -432,18 +448,26 @@ pub async fn run_simulation(
         }
         return Err(CommandError::new(lines.join("\n")));
     }
-    // Which buttons pull their pin low when pressed: the board file's word,
-    // read once here, so the pin channel drives the level the wiring means
-    // rather than the level the message happens to spell.
+    // Which buttons pull their pin low when pressed: read off the sheet's
+    // wires once here — a switch to ground drives low, one to 3V3 high —
+    // so the pin channel drives the level the wiring means rather than the
+    // level the message happens to spell.
     let low_when_pressed: std::collections::HashSet<u32> = plan
         .board
         .as_ref()
-        .map(|board| {
-            board
-                .buttons
+        .map(|sheet| {
+            let rows = simulate::kit_rows_for(&root, &sheet.chip);
+            sheet
+                .parts
                 .iter()
-                .filter(|button| button.active_low)
-                .map(|button| u32::from(button.pin))
+                .filter(|part| {
+                    sheet
+                        .symbol_of(&part.reference)
+                        .is_some_and(|s| nets::behaviour_of(s) == nets::Behaviour::Switch)
+                })
+                .filter_map(|part| nets::button_drives(sheet, &rows, &part.reference))
+                .filter(|(_, high)| !high)
+                .map(|(gpio, _)| u32::from(gpio))
                 .collect()
         })
         .unwrap_or_default();

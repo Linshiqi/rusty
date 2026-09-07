@@ -80,80 +80,112 @@ names in `warnings` every file it could not read.
 
 ```toml
 version = 2
+
+[board]
 chip = "esp32c3"
+x = 460                      # where the devkit sits, sheet units
+y = 40
 
 [[part]]
 ref = "D1"
 symbol = "Device:LED"        # library:name, or "lcsc:C2286"
-value = "red"
-at = [120, 80]               # sheet units
-rot = 0
-mirror = false
+value = "red"                # a lamp's colour; a resistor's 220; anything
+x = 168                      # the symbol's anchor, sheet units
+y = 96
+rot = 90                     # quarter turns clockwise; absent is 0
+mirror = true                # absent is false
 
 [[part]]
-ref = "R1"
-symbol = "Device:R"
-value = "220"
-at = [80, 80]
+ref = "V1"
+symbol = "rusty:Analog"
+value = "4095 = 4.2 V through 100k/27k"
+x = 200
+y = 120
+[part.props]                 # a behaviour's own knobs, as text
+max = "4095"
 
 [[wire]]
 from = "U1.GPIO2"            # the devkit is U1; its pins are named by GPIO
-to = "R1.1"
+to = "R1.1"                  # and rail: GND, 3V3, VIN, 5V, EN
 [[wire]]
 from = "R1.2"
-to = "D1.A"                  # a pin by number or by name
-[[wire]]
-from = "D1.K"
-to = "U1.GND"
+to = "D1.A"                  # a pin by name, or by number where a name repeats
+bends = [[300, 96], [300, 200]]
 ```
 
-A wire joins two pins. Nets are derived, never stored: union-find over the
-wires, with the devkit's `GND` and `3V3` pins naming the rails. A version-1
-file is read by the old loader and migrated: a lamp on GPIO *n* becomes an
-LED whose anode is wired to GPIO *n* and whose cathode goes to GND, with a
-note that the resistor is missing, because that is exactly what the old
-board claimed and the new rules will now say what is wrong with it.
+A wire joins two pins; its bends are the author's, and a wire without any
+routes itself. Nets are derived, never stored. A file with no `version` is
+the first board — `[[led]]`, `[[button]]` and friends — and is read by the
+reader that always read it, then migrated: a lamp on GPIO *n* becomes a
+`Device:LED` wired to `GPIOn` and `GND` (or to `3V3` and `GPIOn` when it was
+active-low), a button a `Device:SW_Push` to its GPIO and its rail, the rest
+the `rusty` library's parts, with no resistors, because the old board had
+none. The plan's notes say so; the editor rewrites the file in version 2
+the first time it saves.
 
 ## What the simulator reads
 
-The emulator (or the firmware's own narration) sets GPIO levels. The rules
-turn nets into what the parts show:
+`rusty_embed::nets` — pure, compiled for both sides — turns the wires into
+what the parts show. The emulator (or the firmware's own narration) sets
+GPIO levels; the rails are fixed; everything else follows:
 
-- **A net's level** is the level of the GPIO or rail driving it; two GPIOs
-  driving one net is reported, not resolved.
+- **A net's level** is the level of the rail or the reported GPIO driving
+  it. Ground and a supply on one net is a `Short`; two GPIOs reported at
+  different levels on one net is a `Conflict`. A net with no driver floats.
 - **A two-terminal passive** joins two nets for the purpose of a DC level: a
   resistor conducts, a capacitor is open. So GPIO → R → LED → GND lights the
   LED; GPIO → C → LED does not.
-- **An LED** lights when its anode's net is high and its cathode's net is
-  low, and nothing else lights it. Reversed, it stays dark; that is the
-  finding, not a failure.
-- **A missing series resistor** — an LED between a GPIO and GND with no
-  resistor in the path — is a warning on the sheet, in the words a person
-  would use: the LED lights, and on the desk it would not for long.
-- **A button** joins its two nets while pressed; the pin it drives is read
-  through the same rule, so a pull-up input reads low while it is pressed
-  and high otherwise, exactly as `Input::is_high()` sees it.
+- **An LED** (a symbol with pins `A` and `K`, or KiCad's `D` with pin 1 the
+  cathode) lights when its anode's net is high and its cathode's low, and
+  nothing else lights it. Reversed, it stays dark; that is the finding, not
+  a failure. **An RGB lens or a digit** lights a channel against its `COM`:
+  common anode lights a channel pulled low, common cathode one driven high,
+  and no common wired lights nothing.
+- **A missing series resistor** — a GPIO in the *wired* net of a lamp's pin,
+  nothing between — is `LedWithoutResistor`: the lamp lights here, and on
+  the desk it would not for long.
+- **A switch** joins its pins while pressed (a four-pin tactile switch has
+  its pairs joined always). `button_drives` reads what a press does — the
+  GPIO on one side, the rail on the other — and both the sheet and the
+  backend's pin channel read it, so the emulator is driven to the level the
+  wiring means. A switch that reaches no GPIO, or no rail, is
+  `SwitchDrivesNothing`.
+- **A knob, a source, a motor** are *on* whatever GPIO their pin reaches
+  through the wires and the resistors (`gpio_of`): the pot's wiper sends
+  `P<gpio>=`, the analog source `A<gpio>=`, the motor reads its duty from
+  `[rusty:pwm]` on that GPIO and its direction from the levels at `IN1` and
+  `IN2`.
 
-Everything above is pure, in `rusty_embed::schematic::rules`, under tests
-that name the circuit they check.
+Every rule is under a test that names the circuit it checks, and the
+findings are `Warning`s with a stable kind: the frontend translates them,
+the CLI prints them.
 
-## Rendering
+## The editor
 
-A symbol's graphics become an SVG group; pins are drawn as KiCad draws them
-— a line of the pin's length ending in a circle at the connection point,
-number beside the line, name inside the body. Wires are orthogonal
-polylines between pin ends, as the first generation drew them. Rotation
-and mirroring are transforms on the group; the reference and value are
-counter-rotated so they read upright.
+`view/panels/simulate/`: `geometry.rs` (pure — pin points after a turn and
+a mirror, hit-testing, wire paths, the devkit's generated symbol, the
+symbol's SVG markup), `edit.rs` (pure — what placing, wiring, renaming,
+rotating, deleting, duplicating and undoing do to the parts and the wires),
+`library.rs` (the palette, grouped by library, with the LCSC import box),
+`mod.rs` (the canvas and the properties panel).
 
-## Order of work
+A symbol's graphics become one SVG group scaled from millimetres and
+flipped upright, then turned and mirrored as the part is; text — pin
+names and numbers, the reference above, the value below — is placed in
+sheet coordinates after the turn, so it always reads upright. Pins are
+gold dots that pulse until something reaches them; a wire is pulled from
+any pin to any other, in either direction, and lands only within reach.
+Wires are orthogonal polylines through the author's bends, with KiCad's
+semantics: moving a part stretches only the leg beside its pin, a
+dragged segment pushes its neighbours, aligned segments merge. Lamps glow,
+a digit lights segment by segment, a pressed switch sinks its cap, wires
+take the colour of their net's level while the firmware runs, and the
+rules' findings sit in the sheet's corner.
 
-1. ✔ `symbol` model and `kicad_sym` importer, with KiCad's own `R`, `C`,
-   `LED` and `SW_Push` as fixtures.
-2. ✔ `easyeda` importer against captured answers for a resistor, a
-   capacitor, an LED and a switch; the fetch through `net`; `rusty-cli
-   symbol C2286` to prove it headless.
-3. Nets and rules, pure and tested.
-4. The file format and the migration.
-5. The editor: symbol rendering, pin-to-pin wiring, the library panel with
-   "import from LCSC…".
+## Not yet
+
+Net labels and power symbols (every rail is a wire to the devkit); symbols
+with several units; turning the devkit; an unwired pin marked on the sheet
+beyond its pulse; a broader ERC than the five findings; EasyEDA's text
+records beyond plain labels; the I2C decode the display's SDA/SCL pins are
+waiting for.

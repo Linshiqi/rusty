@@ -13,6 +13,7 @@
 pub mod model;
 // The plant is arithmetic and no IO, like `protocol` — the frontend runs
 // it on a timer, so it compiles to wasm with the model types.
+pub mod nets;
 pub mod plant;
 pub mod protocol;
 // What a fresh machine is missing, derived from the toolchain report. Pure,

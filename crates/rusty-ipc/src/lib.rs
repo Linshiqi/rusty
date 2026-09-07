@@ -202,6 +202,8 @@ pub mod sim {
     pub const SEND: &str = "sim_send";
     pub const SAVE_TRACE: &str = "save_sim_trace";
     pub const INSTALL: &str = "install_sim_tool";
+    /// An LCSC part number, answered with its symbol and kept in the library.
+    pub const IMPORT_SYMBOL: &str = "sim_import_symbol";
 }
 
 pub mod features {
