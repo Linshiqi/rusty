@@ -1770,6 +1770,15 @@ usty`) holds `location.toml`
   inside the archive fail on an existing file (`Can't create …
   esp32s3_rev0_rom.bin: File exists`, exit 1) — every binary replaced, the
   install reported as failed.
+- **A Windows verbatim path (`\\?\E:\…`) cannot be handed to a tool that
+  appends to it.** Tauri's `resource_dir()` comes back canonicalised under
+  `cargo tauri dev`, and QEMU joins `-L <dir>` to `esp32c3-rom.bin` with a
+  forward slash, which the verbatim prefix forbids: `ROM code binary not
+  found`, for a file exactly where the bundle put it, on the first run
+  after the bundle shipped. `tools::plain` strips the prefix at
+  `set_bundled_dir`, so every path derived from the bundle is plain.
+  Anything else that turns a canonicalised path into a command-line
+  argument wants the same.
 - **A file on PATH called `rust-analyzer` is usually rustup's proxy, not
   rust-analyzer.** The proxy exists on every machine with rustup whether or
   not the component does; with the component missing it starts, prints an

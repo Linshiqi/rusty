@@ -52,8 +52,31 @@ static BUNDLED: OnceLock<PathBuf> = OnceLock::new();
 
 /// Name the directory the installer shipped tools in (`<resources>/bundled`).
 /// Idempotent; the first caller wins.
+///
+/// Spelled plainly first: Tauri's resource directory arrives as a Windows
+/// verbatim path (`\\?\E:\…`) under `cargo tauri dev`, and QEMU joins its
+/// `-L` directory to `esp32c3-rom.bin` with a forward slash, which the
+/// verbatim prefix forbids — so it answered "ROM code binary not found" for
+/// a file sitting exactly where the bundle had put it.
 pub fn set_bundled_dir(dir: PathBuf) {
-    let _ = BUNDLED.set(dir);
+    let _ = BUNDLED.set(plain(&dir));
+}
+
+/// A path without Windows' verbatim prefix: `\\?\E:\x` is `E:\x`,
+/// `\\?\UNC\host\share` is `\\host\share`, and anything else is itself.
+/// Tools that take a path on their command line and go on to append to it
+/// (QEMU, tar) cannot be handed the verbatim form.
+pub fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
 }
 
 /// The bundled tools root, when the app set one and its QEMU was built for
@@ -226,6 +249,30 @@ mod tests {
 
     /// Probing must never fail the caller: a machine with none of these tools
     /// installed is the normal state before the toolchain panel is read.
+    /// The verbatim prefix goes; a plain path, a UNC path and a POSIX path
+    /// come back as they were. QEMU's `-L` is what this exists for.
+    #[test]
+    fn a_verbatim_windows_path_is_spelled_plainly() {
+        assert_eq!(
+            plain(Path::new(r"\\?\E:\CodeBase\rusty\target\debug\bundled")),
+            PathBuf::from(r"E:\CodeBase\rusty\target\debug\bundled")
+        );
+        assert_eq!(
+            plain(Path::new(r"\\?\UNC\nas\share\tools")),
+            PathBuf::from(r"\\nas\share\tools")
+        );
+        assert_eq!(
+            plain(Path::new(r"E:\CodeBase\rusty")),
+            PathBuf::from(r"E:\CodeBase\rusty")
+        );
+        assert_eq!(plain(Path::new("/opt/rusty")), PathBuf::from("/opt/rusty"));
+        assert_eq!(
+            plain(Path::new(r"\\?\pipe\rusty")),
+            PathBuf::from(r"\\?\pipe\rusty"),
+            "a device path is not a drive path"
+        );
+    }
+
     /// The bundle is a second root: searched after the data directory, so a
     /// copy the user installed wins, and before PATH.
     #[test]

@@ -9,25 +9,33 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.12
 
-- **The board is a schematic.** Parts on the Simulate sheet are KiCad
-  symbols with real pins — `Device:R`, `Device:C`, `Device:LED`,
-  `Device:SW_Push`, and the simulator's own pot, analog source, display,
-  RGB lens, digit and motor — and wires join pin to pin: a part's pin to
-  the devkit's header, or part to part. What lights, conducts and drives
-  what is read off the wires: GPIO → R → LED → GND lights the LED, the
-  wrong way round stays dark, a capacitor passes nothing, a button to
-  ground drives its GPIO low while pressed, and a lamp with no series
-  resistor is pointed out in words. A part LCSC (嘉立创) sells is imported
-  by its number from the library panel (or `rusty-cli symbol C2286`), read
-  from EasyEDA's own drawing into the same symbol format and kept in the
-  data directory's `symbols/lcsc.kicad_sym`, which KiCad can open; a
-  project's own `.kicad_sym` files under `.rusty/symbols/` join the
-  library too. `.rusty/sim.toml` is now `[[part]]` and `[[wire]]` (version
-  2); a first-format file is read as the circuit it claimed and rewritten
-  the first time you save, and `.rusty/parts/*.toml` lamps are retired in
-  favour of symbols.
+**Added — the board is a schematic.** Parts on the Simulate sheet are KiCad
+symbols with real pins — `Device:R`, `Device:C`, `Device:LED`,
+`Device:SW_Push`, and the simulator's own pot, analog source, display,
+RGB lens, digit and motor — and wires join pin to pin: a part's pin to
+the devkit's header, or part to part. What lights, conducts and drives
+what is read off the wires: GPIO → R → LED → GND lights the LED, the
+wrong way round stays dark, a capacitor passes nothing, a button to
+ground drives its GPIO low while pressed, and a lamp with no series
+resistor is pointed out in words. A part LCSC (嘉立创) sells is imported
+by its number from the library panel (or `rusty-cli symbol C2286`), read
+from EasyEDA's own drawing into the same symbol format and kept in the
+data directory's `symbols/lcsc.kicad_sym`, which KiCad can open; a
+project's own `.kicad_sym` files under `.rusty/symbols/` join the
+library too. `.rusty/sim.toml` is now `[[part]]` and `[[wire]]` (version
+2); a first-format file is read as the circuit it claimed and rewritten
+the first time you save, and `.rusty/parts/*.toml` lamps are retired in
+favour of symbols.
+
+**Fixed — the bundled QEMU would not boot under `cargo tauri dev`.** The
+emulator that ships with the app was started with its ROM directory spelled
+as a Windows verbatim path (`\\?\E:\…`), which QEMU cannot join a file
+name to, so every run ended in `ROM code binary not found` with the ROM
+sitting exactly where the bundle had put it. The directory is spelled
+plainly now.
+
 **Fixed — completion never offered anything that was not already imported.**
 Typing `Out` in a file without `use esp_hal::gpio::Output` offered nothing,
 and `Output::` nothing after it, because rust-analyzer only enables its

@@ -475,8 +475,10 @@ fn graphic(record: &str, frame: &Frame) -> std::result::Result<Vec<Graphic>, Str
                 .map(|s| num(s).ok_or_else(|| format!("`{s}` in the point list")))
                 .collect::<std::result::Result<_, _>>()?;
             let mut points: Vec<(f64, f64)> = numbers
-                .chunks_exact(2)
-                .map(|xy| frame.point(xy[0], xy[1]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[x, y]| frame.point(*x, *y))
                 .collect();
             if points.len() < 2 {
                 return Err("fewer than two points".to_string());
