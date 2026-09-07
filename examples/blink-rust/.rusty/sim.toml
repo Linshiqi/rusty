@@ -1,23 +1,53 @@
-# The board this example draws. One LED on the pin the firmware drives, and a
-# display for the text it prints — the pot and button are absent because this
-# example has no input.
+# The board this example draws: one LED on the pin the firmware drives,
+# through the resistor it would need on the desk, and a display for the
+# text it prints. No pot and no button, because this example has no input.
+version = 2
 
 [board]
 chip = "esp32c3"
-x = 460.0
-y = 96.0
+x = 460
+y = 96
 
-[[led]]
-pin = 0
-color = "green"
-label = "GPIO0"
-x = 216.0
-y = 176.0
+[[part]]
+ref = "R1"
+symbol = "Device:R"
+value = "220"
+x = 312
+y = 176
+rot = 90
 
-[[display]]
-label = "DISPLAY"
-sda = 21
-scl = 22
-x = 760.0
-y = 176.0
-flip = true
+[[part]]
+ref = "D1"
+symbol = "Device:LED"
+value = "green"
+x = 216
+y = 176
+
+[[wire]]
+from = "U1.GPIO0"
+to = "R1.1"
+[[wire]]
+from = "R1.2"
+to = "D1.A"
+[[wire]]
+from = "D1.K"
+to = "U1.GND"
+
+[[part]]
+ref = "DS1"
+symbol = "rusty:Display"
+x = 760
+y = 192
+
+[[wire]]
+from = "U1.GPIO5"
+to = "DS1.SDA"
+[[wire]]
+from = "U1.GPIO6"
+to = "DS1.SCL"
+[[wire]]
+from = "DS1.VCC"
+to = "U1.3V3"
+[[wire]]
+from = "DS1.GND"
+to = "U1.GND"

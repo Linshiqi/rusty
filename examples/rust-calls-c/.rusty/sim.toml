@@ -1,36 +1,103 @@
-# Three lamps on the pins the firmware drives, and a display for the text it
-# prints. The pot and button are absent: these examples take no input.
+# Three lamps on the pins the firmware drives, each through its resistor,
+# and a display for the text it prints. No pot and no button: these
+# examples take no input.
+version = 2
 
 [board]
 chip = "esp32c3"
-x = 460.0
-y = 96.0
+x = 460
+y = 96
 
-[[led]]
-pin = 0
-color = "red"
-label = "L0"
-x = 216.0
-y = 160.0
+[[part]]
+ref = "R1"
+symbol = "Device:R"
+value = "220"
+x = 312
+y = 160
+rot = 90
 
-[[led]]
-pin = 1
-color = "green"
-label = "L1"
-x = 216.0
-y = 192.0
+[[part]]
+ref = "D1"
+symbol = "Device:LED"
+value = "red"
+x = 216
+y = 160
 
-[[led]]
-pin = 3
-color = "blue"
-label = "L3"
-x = 216.0
-y = 224.0
+[[wire]]
+from = "U1.GPIO0"
+to = "R1.1"
+[[wire]]
+from = "R1.2"
+to = "D1.A"
+[[wire]]
+from = "D1.K"
+to = "U1.GND"
 
-[[display]]
-label = "DISPLAY"
-sda = 21
-scl = 22
-x = 760.0
-y = 192.0
-flip = true
+[[part]]
+ref = "R2"
+symbol = "Device:R"
+value = "220"
+x = 312
+y = 192
+rot = 90
+
+[[part]]
+ref = "D2"
+symbol = "Device:LED"
+value = "green"
+x = 216
+y = 192
+
+[[wire]]
+from = "U1.GPIO1"
+to = "R2.1"
+[[wire]]
+from = "R2.2"
+to = "D2.A"
+[[wire]]
+from = "D2.K"
+to = "U1.GND"
+
+[[part]]
+ref = "R3"
+symbol = "Device:R"
+value = "220"
+x = 312
+y = 224
+rot = 90
+
+[[part]]
+ref = "D3"
+symbol = "Device:LED"
+value = "blue"
+x = 216
+y = 224
+
+[[wire]]
+from = "U1.GPIO3"
+to = "R3.1"
+[[wire]]
+from = "R3.2"
+to = "D3.A"
+[[wire]]
+from = "D3.K"
+to = "U1.GND"
+
+[[part]]
+ref = "DS1"
+symbol = "rusty:Display"
+x = 760
+y = 192
+
+[[wire]]
+from = "U1.GPIO5"
+to = "DS1.SDA"
+[[wire]]
+from = "U1.GPIO6"
+to = "DS1.SCL"
+[[wire]]
+from = "DS1.VCC"
+to = "U1.3V3"
+[[wire]]
+from = "DS1.GND"
+to = "U1.GND"

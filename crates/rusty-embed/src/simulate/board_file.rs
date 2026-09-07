@@ -817,4 +817,50 @@ mod tests {
         assert_eq!(sheet.notes.len(), 3, "{:?}", sheet.notes);
         assert!(sheet.notes[2].contains("`GND`"), "{}", sheet.notes[2]);
     }
+
+    /// The repository's own examples open clean: no migration note, every
+    /// symbol found, and nothing for the rules to point at. An example that
+    /// showed a finding on a fresh clone would be teaching the wrong thing.
+    #[test]
+    fn the_examples_boards_load_without_notes_or_findings() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let library = crate::schematic::builtin();
+        let rows = crate::nets::kit_rows("esp32c3", &(0..=21).collect::<Vec<u32>>());
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&examples).expect("examples/") {
+            let root = entry.expect("entry").path();
+            if !root.join(".rusty/sim.toml").is_file() {
+                continue;
+            }
+            seen += 1;
+            let loaded = load(&root, "esp32c3").unwrap_or_else(|| panic!("{}", root.display()));
+            let mut sheet = loaded.sheet;
+            crate::simulate::resolve_symbols(&mut sheet, &library);
+            assert!(
+                loaded.note.is_none(),
+                "{}: {:?}",
+                root.display(),
+                loaded.note
+            );
+            assert!(
+                sheet.notes.is_empty(),
+                "{}: {:?}",
+                root.display(),
+                sheet.notes
+            );
+            let reading = crate::nets::evaluate(crate::nets::Inputs {
+                sheet: &sheet,
+                rows: &rows,
+                gpio: &Default::default(),
+                pressed: &Default::default(),
+            });
+            assert!(
+                reading.warnings.is_empty(),
+                "{}: {:?}",
+                root.display(),
+                reading.warnings
+            );
+        }
+        assert!(seen >= 4, "the examples carry boards");
+    }
 }

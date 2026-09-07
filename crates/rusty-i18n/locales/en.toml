@@ -911,8 +911,7 @@ color-green = "green"
 color-blue = "blue"
 color-red = "red"
 color-yellow = "yellow"
-# The simulator's parts library. Each tooltip says what the part *does on the
-# wire*, because that is what decides whether it is the one you want.
+# The simulator's parts library.
 heading = "Parts"
 
 import-heading = "Import from LCSC"

@@ -222,17 +222,6 @@ pub fn kit_pin(rows: &[Row], key: &str) -> Option<usize> {
         .or_else(|| rows.iter().position(|r| r.name == key))
 }
 
-/// The spelling a file should use for a kit row: its name when no other
-/// row shares it, its number otherwise.
-pub fn kit_pin_key(rows: &[Row], row: usize) -> String {
-    let name = &rows[row].name;
-    if rows.iter().filter(|r| r.name == *name).count() == 1 {
-        name.clone()
-    } else {
-        (row + 1).to_string()
-    }
-}
-
 /// Something the rules want said about the sheet. Not a refusal: the board
 /// runs, and this is what somebody at the desk would point at.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -889,8 +878,6 @@ mod tests {
         assert_eq!(kit_pin(&rows, "GPIO2"), Some(3));
         assert_eq!(kit_pin(&rows, "4"), Some(3), "the fourth row, by number");
         assert_eq!(kit_pin(&rows, "GND"), Some(8), "the first GND");
-        assert_eq!(kit_pin_key(&rows, 8), "9", "GND repeats, so its number");
-        assert_eq!(kit_pin_key(&rows, 3), "GPIO2");
         assert_eq!(kit_pin(&rows, "GPIO99"), None);
         assert_eq!(kit_pin(&rows, "0"), None);
         let esp32 = kit_rows("esp32", &[]);

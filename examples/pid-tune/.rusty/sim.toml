@@ -1,16 +1,35 @@
-# The board this example draws. One LED on the pin the firmware drives when
-# it is pushing hard — the interesting output of this example is not on the
-# board at all, it is in the Plot panel, and that is the point: some firmware
-# is read through a curve rather than through a light.
+# The board this example draws: one LED on the pin the firmware drives
+# when it is pushing hard. The interesting output of this example is not
+# on the board at all, it is in the Plot panel, and that is the point:
+# some firmware is read through a curve rather than through a light.
+version = 2
 
 [board]
 chip = "esp32c3"
-x = 460.0
-y = 96.0
+x = 460
+y = 96
 
-[[led]]
-pin = 0
-color = "amber"
-label = "DRIVE"
-x = 216.0
-y = 176.0
+[[part]]
+ref = "R1"
+symbol = "Device:R"
+value = "220"
+x = 312
+y = 176
+rot = 90
+
+[[part]]
+ref = "D1"
+symbol = "Device:LED"
+value = "yellow"
+x = 216
+y = 176
+
+[[wire]]
+from = "U1.GPIO0"
+to = "R1.1"
+[[wire]]
+from = "R1.2"
+to = "D1.A"
+[[wire]]
+from = "D1.K"
+to = "U1.GND"
