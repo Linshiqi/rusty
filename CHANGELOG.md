@@ -28,6 +28,13 @@ in green the whole time. It now shows the server's own progress —
 `rust-analyzer · Indexing 26% 12/45 (esp-hal)` — until the work is done, so
 an empty popup reads as "not yet" rather than "never".
 
+**Changed — the devkit is drawn as the board on the desk.** The module with
+its antenna and shield can, printed with the chip and module names, the
+USB-UART bridge, the EN/RST and BOOT buttons, the power LED, the RGB LED on
+the devkits that carry one, and the connector — micro-USB on the classic
+ESP32 devkit, USB-C elsewhere, two on the S3 and C6 — around the same pin
+rows as before, for every Espressif part in the catalogue.
+
 **Changed — rusty's QEMU ships in the installer.** The emulator with the
 GPIO model is packaged with the app, so a fresh install simulates without
 a download and a pin read back in the emulator is what the firmware set.

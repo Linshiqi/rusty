@@ -588,6 +588,198 @@ pub(super) fn kit_height(rows: usize) -> f64 {
     32.0 + left_rows(rows) as f64 * ROW_PITCH
 }
 
+/// The connector a devkit carries at its bottom edge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Usb {
+    /// A bare chip, drawn as one: no board around it.
+    None,
+    MicroB,
+    TypeC,
+    /// The S3 and C6 devkits: one for the USB-UART bridge, one native.
+    DualTypeC,
+}
+
+/// What a devkit for a chip looks like beyond its pins: the module soldered
+/// on it, its connector, the two buttons every Espressif devkit carries and
+/// whether it has an RGB LED. Drawn from the family the catalogue names —
+/// the pin rows stay data-driven; this is the board around them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct KitStyle {
+    /// The module's printed name, or `None` for a part rusty knows only as
+    /// a die, which is drawn as a chip rather than as somebody's devkit.
+    pub module: Option<&'static str>,
+    pub usb: Usb,
+    /// The reset button's silkscreen — `EN` on the classic ESP32 devkit,
+    /// `RST` on the rest — and the boot button's.
+    pub buttons: (&'static str, &'static str),
+    pub rgb: bool,
+}
+
+pub(super) fn kit_style(chip: &str) -> KitStyle {
+    let devkit = |module, usb, reset, rgb| KitStyle {
+        module: Some(module),
+        usb,
+        buttons: (reset, "BOOT"),
+        rgb,
+    };
+    match chip {
+        "esp32" => devkit("ESP-WROOM-32", Usb::MicroB, "EN", false),
+        "esp32s2" => devkit("ESP32-S2-MINI-1", Usb::TypeC, "RST", true),
+        "esp32s3" => devkit("ESP32-S3-WROOM-1", Usb::DualTypeC, "RST", true),
+        "esp32c2" => devkit("ESP8684-MINI-1", Usb::MicroB, "RST", false),
+        "esp32c3" => devkit("ESP32-C3-MINI-1", Usb::TypeC, "RST", true),
+        "esp32c6" => devkit("ESP32-C6-WROOM-1", Usb::DualTypeC, "RST", true),
+        "esp32h2" => devkit("ESP32-H2-MINI-1", Usb::TypeC, "RST", true),
+        "esp32p4" => devkit("ESP32-P4", Usb::DualTypeC, "RST", false),
+        _ => KitStyle {
+            module: None,
+            usb: Usb::None,
+            buttons: ("", ""),
+            rgb: false,
+        },
+    }
+}
+
+/// The board drawn around the pin rows, as SVG markup for the kit's own
+/// `<svg>`: the PCB, the module with its antenna meander and shield can,
+/// the bridge chip and regulator, the reset and boot buttons, the power LED,
+/// the RGB LED where the devkit has one, and the connector — everything a
+/// hand reaching for the board on the desk uses to orient itself. Pure text,
+/// so a test can say which board it is; `height` follows the pin rows.
+pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
+    let w = KIT_W;
+    let h = height;
+    let mut svg = String::new();
+    // The PCB: matte black, a hairline of silkscreen inside the edge.
+    svg.push_str(&format!(
+        r##"<rect x="4" y="2" width="{}" height="{}" rx="7" fill="#141920" stroke="#3a414b" stroke-width="1.5"/>"##,
+        w - 8.0,
+        h - 4.0,
+    ));
+    let Some(module) = style.module else {
+        // A die, not a devkit: the chip outline the editor always drew.
+        svg.push_str(&format!(
+            r##"<rect x="42" y="12" width="{}" height="84" rx="4" fill="#2e333b" stroke="#4a515d"/>"##,
+            w - 84.0,
+        ));
+        svg.push_str(&format!(
+            r##"<text x="{}" y="58" text-anchor="middle" font-family="ui-monospace" font-size="12" fill="#aab3c0">{label}</text>"##,
+            w / 2.0,
+        ));
+        return svg;
+    };
+
+    // The shield can's brushed-metal fill; only a devkit has one to paint.
+    svg.push_str(concat!(
+        r##"<defs><linearGradient id="kit-can" x1="0" y1="0" x2="1" y2="1">"##,
+        r##"<stop offset="0" stop-color="#d3d8dd"/><stop offset="0.55" stop-color="#9aa1a9"/>"##,
+        r##"<stop offset="1" stop-color="#676d74"/></linearGradient></defs>"##,
+    ));
+    // The module: its own substrate, the antenna meander in copper across the
+    // top, the shield can below it with the names printed on it.
+    svg.push_str(
+        r##"<rect x="40" y="6" width="70" height="98" rx="2" fill="#0e1216" stroke="#2a3038"/>"##,
+    );
+    let mut meander = String::from("M44 11");
+    let mut x = 44.0;
+    let mut down = true;
+    while x < 104.0 {
+        x += 6.0;
+        meander.push_str(&format!(" H{x:.0}"));
+        meander.push_str(if down { " V21" } else { " V11" });
+        down = !down;
+    }
+    svg.push_str(&format!(
+        r##"<path d="{meander}" fill="none" stroke="#c8a24a" stroke-width="1.6" stroke-linejoin="round"/>"##
+    ));
+    svg.push_str(r##"<rect x="44" y="27" width="62" height="70" rx="3" fill="url(#kit-can)" stroke="#8d949c"/>"##);
+    svg.push_str(&format!(
+        r##"<text x="{cx}" y="50" text-anchor="middle" font-family="ui-monospace" font-size="9" font-weight="700" fill="#1f242a">{label}</text>"##,
+        cx = w / 2.0,
+    ));
+    svg.push_str(&format!(
+        r##"<text x="{cx}" y="62" text-anchor="middle" font-family="ui-monospace" font-size="5.5" fill="#2b3138">{module}</text>"##,
+        cx = w / 2.0,
+    ));
+    svg.push_str(&format!(
+        r##"<text x="{cx}" y="84" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="6.5" font-style="italic" fill="#3d444c">espressif</text>"##,
+        cx = w / 2.0,
+    ));
+    if style.rgb {
+        // The addressable LED under the module, off: a dark square with the
+        // four dice a WS2812 shows through its lens.
+        svg.push_str(r##"<rect x="98" y="106" width="8" height="8" rx="1" fill="#1a1e24" stroke="#3a4149"/>"##);
+        svg.push_str(r##"<circle cx="102" cy="110" r="1.6" fill="#f3f4f6" opacity="0.7"/>"##);
+    }
+
+    // Between the module and the connector, when the board is tall enough
+    // to hold them: the USB-UART bridge, the regulator, a few passives.
+    let free = h - 30.0 - 106.0;
+    if free > 30.0 {
+        let top = 108.0;
+        svg.push_str(&format!(
+            r##"<rect x="60" y="{y}" width="20" height="20" rx="1" fill="#0b0e12" stroke="#3a4149"/><circle cx="63" cy="{dot}" r="1" fill="#6b7280"/>"##,
+            y = top,
+            dot = top + 3.0,
+        ));
+        svg.push_str(&format!(
+            r##"<rect x="86" y="{y}" width="12" height="8" rx="1" fill="#16191e" stroke="#3a4149"/>"##,
+            y = top + 4.0,
+        ));
+        for (i, px) in [86.0, 91.0, 96.0].into_iter().enumerate() {
+            svg.push_str(&format!(
+                r##"<rect x="{px}" y="{y}" width="3" height="5" rx="0.5" fill="{fill}"/>"##,
+                y = top + 16.0,
+                fill = if i == 1 { "#4a3b2a" } else { "#3b4a3a" },
+            ));
+        }
+    }
+
+    // The two buttons, low on the board where every devkit has them, the
+    // silkscreen above each.
+    let (reset, boot) = style.buttons;
+    for (bx, name) in [(42.0, reset), (94.0, boot)] {
+        svg.push_str(&format!(
+            r##"<text x="{tx}" y="{ty}" text-anchor="middle" font-family="ui-monospace" font-size="5.5" fill="#98a1ae">{name}</text>"##,
+            tx = bx + 7.0,
+            ty = h - 32.0,
+        ));
+        svg.push_str(&format!(
+            r##"<rect x="{bx}" y="{by}" width="14" height="14" rx="2" fill="#2b3036" stroke="#4a515b"/><circle cx="{cx}" cy="{cy}" r="4" fill="#c9ced4"/>"##,
+            by = h - 30.0,
+            cx = bx + 7.0,
+            cy = h - 23.0,
+        ));
+    }
+    // The power LED beside the connector.
+    svg.push_str(&format!(
+        r##"<circle cx="60" cy="{cy}" r="1.8" fill="#e03a3a"/>"##,
+        cy = h - 6.0,
+    ));
+    // The connector, on the bottom edge.
+    let can = "url(#kit-can)";
+    match style.usb {
+        Usb::None => {}
+        Usb::MicroB => svg.push_str(&format!(
+            r##"<rect x="66" y="{y}" width="18" height="9" rx="2" fill="{can}" stroke="#8d949c"/>"##,
+            y = h - 11.0,
+        )),
+        Usb::TypeC => svg.push_str(&format!(
+            r##"<rect x="64" y="{y}" width="22" height="10" rx="5" fill="{can}" stroke="#8d949c"/>"##,
+            y = h - 12.0,
+        )),
+        Usb::DualTypeC => {
+            for x in [52.0, 80.0] {
+                svg.push_str(&format!(
+                    r##"<rect x="{x}" y="{y}" width="18" height="10" rx="5" fill="{can}" stroke="#8d949c"/>"##,
+                    y = h - 12.0,
+                ));
+            }
+        }
+    }
+    svg
+}
+
 /// Which kit row a world point lands on, if any.
 pub(super) fn row_under(kit: (f64, f64), rows: usize, point: (f64, f64)) -> Option<usize> {
     let (kx, ky) = kit;
@@ -846,6 +1038,50 @@ pub(super) fn single_pin_label(kind: &PartKind, pin: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every Espressif part in the catalogue is drawn as its devkit; a part
+    /// rusty knows only as a die is drawn as a chip. The drawing names the
+    /// module, so a board can be told apart on screen and in a test.
+    #[test]
+    fn every_espressif_part_is_drawn_as_its_devkit() {
+        for chip in [
+            "esp32", "esp32s2", "esp32s3", "esp32c2", "esp32c3", "esp32c6", "esp32h2", "esp32p4",
+        ] {
+            let style = kit_style(chip);
+            let module = style
+                .module
+                .unwrap_or_else(|| panic!("{chip} has no module"));
+            let art = kit_art(style, kit_height(26), "ESP32");
+            assert!(
+                art.contains(module),
+                "{chip}: the can is printed with {module}"
+            );
+            assert!(art.contains("kit-can"), "{chip}: a shield can");
+            assert!(art.contains(style.buttons.1), "{chip}: a BOOT button");
+            assert_ne!(style.usb, Usb::None, "{chip}: a connector");
+        }
+        assert_eq!(kit_style("esp32").buttons.0, "EN");
+        assert_eq!(kit_style("esp32c3").buttons.0, "RST");
+        assert_eq!(kit_style("esp32s3").usb, Usb::DualTypeC);
+
+        let bare = kit_style("stm32f103");
+        assert_eq!(bare.module, None);
+        let art = kit_art(bare, kit_height(10), "STM32F103");
+        assert!(art.contains("STM32F103"));
+        assert!(!art.contains("kit-can"), "no module, no can");
+    }
+
+    /// The buttons and the connector sit at the bottom edge whatever the
+    /// pin count made the board's height — they are placed from `height`,
+    /// not from the top.
+    #[test]
+    fn the_connector_follows_the_boards_height() {
+        let style = kit_style("esp32c3");
+        let short = kit_art(style, 200.0, "ESP32-C3");
+        let tall = kit_art(style, 300.0, "ESP32-C3");
+        assert!(short.contains(r#"y="188""#), "connector at 200-12: {short}");
+        assert!(tall.contains(r#"y="288""#), "connector at 300-12: {tall}");
+    }
 
     /// Mirroring is what a part on the chip's right needs: stubs on the
     /// near edge, in the same order. Rotating by 180 also brings them

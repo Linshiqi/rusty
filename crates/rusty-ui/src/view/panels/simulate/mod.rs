@@ -223,6 +223,8 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
     let running = state.app.session_running;
     let chip = board.chip.clone();
     let chip_label = board.chip.to_uppercase();
+    // The board around the pins — module, buttons, connector — by family.
+    let kit_look = kit_style(&board.chip);
 
     // The pin rows this part actually has. From the catalogue, so a chip
     // added tomorrow draws its own pins rather than the ESP32 devkit's —
@@ -1105,7 +1107,11 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                         height=kit_h
                                         viewBox=format!("0 0 {KIT_W} {kit_h}")
                                     >
-                                        <rect x="4" y="2" width=KIT_W - 8.0 height=kit_h - 4.0 rx="10" fill="#1a1d23" stroke="#454b56" stroke-width="1.5" />
+                                        // The board itself, drawn as markup:
+                                        // a devkit is forty elements that never
+                                        // change shape, and a `view!` of them
+                                        // would be forty closures to read.
+                                        <g inner_html=kit_art(kit_look, kit_h, &chip_label)></g>
                                         {drawn
                                             .into_iter()
                                             .enumerate()
@@ -1158,11 +1164,6 @@ fn BoardEditor(board: SimBoard, user_parts: Vec<rusty_embed::PartDef>) -> impl I
                                                 }
                                             })
                                             .collect_view()}
-                                        <rect x="42" y="12" width=KIT_W - 84.0 height="84" rx="4" fill="#2e333b" stroke="#4a515d" />
-                                        <text x=KIT_W / 2.0 y="58" text-anchor="middle" font-family="ui-monospace" font-size="12" fill="#aab3c0">
-                                            {chip_label.clone()}
-                                        </text>
-                                        <rect x=KIT_W / 2.0 - 15.0 y=kit_h - 22.0 width="30" height="14" rx="2" fill="#3a3e46" />
                                     </svg>
                                 </div>
                             }
