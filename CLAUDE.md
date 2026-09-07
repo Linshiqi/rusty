@@ -1785,6 +1785,15 @@ usty`) holds `location.toml`
   first v0.6.12 release built only the Windows installer. Mark scripts
   executable in the index (`git update-index --chmod=+x scripts/x.sh`)
   and have workflows run them through `bash scripts/x.sh` regardless.
+- **The AppImage bundler deploys the dependencies of every ELF among the
+  app's resources.** QEMU's `share/qemu` carries firmware for every
+  machine it models, some of it ELF for other architectures
+  (`openbios-sparc32`), and linuxdeploy walking the bundled tree ended the
+  Linux release with `failed to run linuxdeploy` while the deb beside it
+  had built. `scripts/fetch-qemu.sh` keeps only the `esp32*` ROMs, and the
+  bundle step sets `NO_STRIP` so linuxdeploy does not rewrite the QEMU
+  binaries either. Anything else shipped as a resource on Linux has to
+  pass the same walk.
 - **A file on PATH called `rust-analyzer` is usually rustup's proxy, not
   rust-analyzer.** The proxy exists on every machine with rustup whether or
   not the component does; with the component missing it starts, prints an

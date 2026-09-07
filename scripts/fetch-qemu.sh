@@ -34,6 +34,15 @@ rm -rf "$dest/qemu"
 tar -xf "$dest/$asset" -C "$dest"
 rm -f "$dest/$asset"
 
+# Only the ESP ROMs travel. QEMU's share directory carries firmware for
+# every machine it can model — openbios-sparc32, PowerPC and s390 images,
+# some of them ELF files for other architectures — and the AppImage bundler
+# walks the app's resources deploying the dependencies of every ELF it
+# finds, so a SPARC executable in there ended the Linux build with
+# "failed to run linuxdeploy". Three megabytes of ROMs stand in for forty of
+# firmware nothing here can boot.
+find "$dest/qemu/share/qemu" -mindepth 1 -maxdepth 1 ! -name 'esp32*' -exec rm -rf {} +
+
 # The platform the binaries are for, read at runtime: a universal macOS
 # bundle carries one architecture's QEMU, and the other must not try it.
 printf '%s\n' "$platform" > "$dest/qemu/PLATFORM"

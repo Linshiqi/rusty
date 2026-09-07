@@ -139,6 +139,10 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # linuxdeploy strips every ELF it deploys into the AppImage, and the
+          # bundled QEMU binaries are sixty-megabyte ELFs it has no business
+          # rewriting; a strip that fails there fails the whole bundle.
+          NO_STRIP: "true"
         run: |
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             cargo tauri build ${{ matrix.tauri_args }} \
