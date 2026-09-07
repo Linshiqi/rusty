@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.11
 
 **Added — the Disk section of the Crates panel.** Where this project's
 builds went: the build directory's size by profile and target, how much of
