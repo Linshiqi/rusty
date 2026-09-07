@@ -730,6 +730,7 @@ refresh = "重新读取项目"
 [pinmap]
 pins = "{chip} 引脚"
 not-on-part = "GPIO{gpio}——这颗芯片没有"
+unverified = "GPIO{gpio} —— 源码里用到；未与芯片核对"
 claimed = "源码里点名了 {total} 个引脚中的 {claimed} 个。经由绑定间接引用的引脚这里看不到。"
 input-only = "仅输入"
 free = "空闲"

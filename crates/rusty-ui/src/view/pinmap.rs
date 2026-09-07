@@ -106,6 +106,21 @@ fn Body(report: PinReport) -> impl IntoView {
     // work after a chip switch, so it leads rather than hiding in a column.
     let unknown = report.unknown.clone();
     let note = report.note.clone();
+    // With no pin table read, a claim the table does not list is not "not on
+    // this part" — nothing here knows what is on the part. It is unverified,
+    // and reads as such: a neutral list, not a red one.
+    let blind = report.pins.is_empty();
+    let (unknown_box, unknown_row) = if blind {
+        (
+            "mb-1.5 rounded-[6px] bg-sunken px-2 py-1.5",
+            "block w-full text-left font-mono text-caption text-label-3 hover:underline",
+        )
+    } else {
+        (
+            "mb-1.5 rounded-[6px] bg-crimson-fill px-2 py-1.5",
+            "block w-full text-left font-mono text-caption text-crimson hover:underline",
+        )
+    };
 
     view! {
         <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -120,20 +135,25 @@ fn Body(report: PinReport) -> impl IntoView {
             {(!unknown.is_empty())
                 .then(|| {
                     view! {
-                        <div class="mb-1.5 rounded-[6px] bg-crimson-fill px-2 py-1.5">
+                        <div class=unknown_box>
                             {unknown
                                 .into_iter()
                                 .map(|claim| {
                                     let (file, line) = (claim.file.clone(), claim.line);
+                                    let label = if blind {
+                                        t!("pinmap.unverified", gpio = claim.gpio.to_string())
+                                    } else {
+                                        t!("pinmap.not-on-part", gpio = claim.gpio.to_string())
+                                    };
                                     view! {
                                         <button
                                             type="button"
                                             on:click=move |_| {
                                                 controller::open_at(state.focused(), file.clone(), line, 0)
                                             }
-                                            class="block w-full text-left font-mono text-caption text-crimson hover:underline"
+                                            class=unknown_row
                                         >
-                                            {t!("pinmap.not-on-part", gpio = claim.gpio.to_string())}
+                                            {label}
                                         </button>
                                     }
                                 })

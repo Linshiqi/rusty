@@ -50,27 +50,46 @@ pub fn report(root: &Path, firmware: &Path, chip: &str) -> PinReport {
         unknown: claims.clone(),
     };
 
-    let Some((path, text)) = device_file(firmware, chip) else {
+    let candidates = device_files(firmware, chip);
+    if candidates.is_empty() {
         return blind(format!(
-            "rusty could not find esp-hal's description of {chip}, so it can only show \
-             what the source names — not which pins exist, which are input-only, or \
-             which the module has already spent on flash and USB. Building the project \
-             once fetches it.",
+            "rusty could not find esp-hal's description of {chip} — esp-metadata's \
+             `devices/{chip}.toml` or esp-metadata-generated's `_generated_{chip}.rs`, \
+             at the versions Cargo.lock names — so it can only show what the source \
+             names: not which pins exist, which are input-only, or which the module \
+             has already spent on flash and USB. Building the project once fetches it.",
         ));
-    };
+    }
 
-    let Ok(device) = toml::from_str::<DeviceFile>(&text) else {
+    // Two spellings of the same vendor table: esp-metadata's TOML up to
+    // esp-hal 0.23, and the generated Rust of esp-metadata-generated from
+    // esp-hal 1.0 on, which every current project locks. A lock can name
+    // several versions of the generated crate — a transitive dependency
+    // pinned to an old one beside esp-hal's own — and their shapes differ,
+    // so each is tried and the first that reads is the table.
+    let mut parsed = None;
+    for (path, text) in &candidates {
+        let entries = if path.extension().is_some_and(|e| e == "toml") {
+            toml::from_str::<DeviceFile>(text)
+                .ok()
+                .map(|device| device.device.gpio.pins)
+        } else {
+            generated_pins(text)
+        };
+        if let Some(entries) = entries {
+            parsed = Some((path.clone(), entries));
+            break;
+        }
+    }
+    let Some((path, entries)) = parsed else {
         return blind(format!(
             "{} is not in the shape rusty knows, so the pin capabilities were not read. \
              The claims below still come from your own source.",
-            path.display(),
+            candidates[0].0.display(),
         ));
     };
 
-    let mut pins: Vec<PinInfo> = device
-        .device
-        .gpio
-        .pins
+    let mut pins: Vec<PinInfo> = entries
         .into_iter()
         .map(|entry| PinInfo {
             reserved: entry.reserved(),
@@ -166,43 +185,233 @@ pub fn claims(root: &Path, firmware: &Path) -> Vec<PinClaim> {
     found
 }
 
-/// The device description esp-hal was generated from, at the version this
-/// project locks.
+/// Every device description this project's lock names, most likely first:
+/// the `esp-metadata-generated` version esp-hal itself depends on, then any
+/// other version of it the lock holds (newest first), then `esp-metadata`'s
+/// TOML for projects on esp-hal 0.x.
 ///
 /// Resolved through `Cargo.lock` rather than by taking the newest on the
 /// machine: two projects can pin different esp-hal versions, and a pin table
-/// from the wrong one is worse than none.
-fn device_file(root: &Path, chip: &str) -> Option<(PathBuf, String)> {
-    let lock = std::fs::read_to_string(root.join("Cargo.lock")).ok()?;
-    let version = locked_version(&lock, "esp-metadata")?;
+/// from the wrong one is worse than none. A lock with two versions of the
+/// generated crate is ordinary — one project here had 0.1.0 pulled in by a
+/// transitive dependency beside esp-hal's 0.4.0 — and the first one in the
+/// file was the wrong one.
+fn device_files(root: &Path, chip: &str) -> Vec<(PathBuf, String)> {
+    let Ok(lock) = std::fs::read_to_string(root.join("Cargo.lock")) else {
+        return Vec::new();
+    };
+    let mut generated: Vec<String> = Vec::new();
+    if let Some(own) = dependency_version(&lock, "esp-hal", "esp-metadata-generated") {
+        generated.push(own);
+    }
+    for version in locked_versions(&lock, "esp-metadata-generated")
+        .into_iter()
+        .rev()
+    {
+        if !generated.contains(&version) {
+            generated.push(version);
+        }
+    }
+    let mut relative: Vec<PathBuf> = generated
+        .iter()
+        .map(|version| {
+            PathBuf::from(format!("esp-metadata-generated-{version}"))
+                .join("src")
+                .join(format!("_generated_{chip}.rs"))
+        })
+        .collect();
+    for version in locked_versions(&lock, "esp-metadata").into_iter().rev() {
+        relative.push(
+            PathBuf::from(format!("esp-metadata-{version}"))
+                .join("devices")
+                .join(format!("{chip}.toml")),
+        );
+    }
+    if relative.is_empty() {
+        return Vec::new();
+    }
 
-    let home = crate::tools::cargo_home()?;
+    let Some(home) = crate::tools::cargo_home() else {
+        return Vec::new();
+    };
     // The registry directory carries a hash of the index URL, so it is found
     // rather than constructed.
-    let registries = std::fs::read_dir(home.join("registry/src")).ok()?;
-    for registry in registries.flatten() {
-        let candidate = registry
-            .path()
-            .join(format!("esp-metadata-{version}"))
-            .join("devices")
-            .join(format!("{chip}.toml"));
-        if let Ok(text) = std::fs::read_to_string(&candidate) {
-            return Some((candidate, text));
+    let Ok(registries) = std::fs::read_dir(home.join("registry/src")) else {
+        return Vec::new();
+    };
+    let registries: Vec<PathBuf> = registries.flatten().map(|e| e.path()).collect();
+    let mut found = Vec::new();
+    for relative in relative {
+        for registry in &registries {
+            let candidate = registry.join(&relative);
+            if let Ok(text) = std::fs::read_to_string(&candidate) {
+                found.push((candidate, text));
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// The pin table as `esp-metadata-generated` spells it: a `for_each_gpio!`
+/// macro whose body lists one call per pin,
+/// `_for_each_inner_gpio!((2, GPIO2(_2 => FSPIQ) (_2 => FSPIQ) ([Input] [Output])))`
+/// — number, then the input and output functions by mux level, then the
+/// capabilities, `([Input] [])` for a pin with no output driver — followed
+/// by one `all(…)` call repeating every entry, which is skipped. Analog
+/// functions come from `for_each_analog_function!`, one `(ADC1_CH2, GPIO2)`
+/// per call. Anything not in that shape yields `None`, and the caller says
+/// the table was not read rather than showing half of one.
+fn generated_pins(text: &str) -> Option<Vec<PinEntry>> {
+    let mut pins: BTreeMap<u32, PinEntry> = BTreeMap::new();
+    let gpio = flattened_macro(text, "for_each_gpio")?;
+    for piece in gpio.split("_for_each_inner_gpio!((").skip(1) {
+        if piece.starts_with("all(") {
+            continue;
+        }
+        let (number, rest) = piece.split_once(',')?;
+        let pin: u32 = number.trim().parse().ok()?;
+        let rest = rest.trim_start();
+        let (inputs, rest) = paren_group(&rest[rest.find('(')?..])?;
+        let (outputs, rest) = paren_group(rest.trim_start())?;
+        let (capabilities, _) = paren_group(rest.trim_start())?;
+        let mut functions = BTreeMap::new();
+        for group in [inputs, outputs] {
+            for (level, name) in mux_pairs(group) {
+                functions.entry(level).or_insert(name);
+            }
+        }
+        pins.insert(
+            pin,
+            PinEntry {
+                pin,
+                input_only: !capabilities.contains("[Output]"),
+                functions,
+                analog: BTreeMap::new(),
+            },
+        );
+    }
+    if pins.is_empty() {
+        return None;
+    }
+    if let Some(analog) = flattened_macro(text, "for_each_analog_function") {
+        for piece in analog.split("_for_each_inner_analog_function!((").skip(1) {
+            let Some((inner, _)) = piece.split_once(')') else {
+                continue;
+            };
+            let Some((name, gpio)) = inner.split_once(',') else {
+                continue;
+            };
+            let Ok(gpio) = gpio.trim().trim_start_matches("GPIO").parse::<u32>() else {
+                continue;
+            };
+            if let Some(pin) = pins.get_mut(&gpio) {
+                let level = pin.analog.len().to_string();
+                pin.analog.insert(level, name.trim().to_string());
+            }
+        }
+    }
+    Some(pins.into_values().collect())
+}
+
+/// One `macro_rules!` body with its whitespace collapsed, so entries rustfmt
+/// wrapped across lines read as one token stream.
+fn flattened_macro(text: &str, name: &str) -> Option<String> {
+    let start = text.find(&format!("macro_rules! {name} "))?;
+    let body = &text[start..];
+    // The next top-level macro ends this one. Each body declares an indented
+    // inner `macro_rules! _for_each_inner_…`, so only one at the start of a
+    // line counts.
+    let end = body[1..]
+        .find(
+            "
+macro_rules!",
+        )
+        .map_or(body.len(), |at| at + 1);
+    let flat = body[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    // esp-metadata-generated 0.1.0 called every inner macro `_for_each_inner`;
+    // later versions name it after the table. One spelling for the callers.
+    let inner = format!(
+        "_for_each_inner_{}!((",
+        name.trim_start_matches("for_each_")
+    );
+    Some(flat.replace("_for_each_inner!((", &inner))
+}
+
+/// The text inside the parenthesised group `s` starts with, and what follows
+/// the closing parenthesis.
+fn paren_group(s: &str) -> Option<(&str, &str)> {
+    if !s.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (at, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[1..at], &s[at + 1..]));
+                }
+            }
+            _ => {}
         }
     }
     None
 }
 
-fn locked_version(lock: &str, package: &str) -> Option<String> {
+/// `_0 => MTMS _2 => FSPIHD` → `[("0", "MTMS"), ("2", "FSPIHD")]`.
+fn mux_pairs(group: &str) -> Vec<(String, String)> {
+    let tokens: Vec<&str> = group.split_whitespace().collect();
+    tokens
+        .windows(3)
+        .filter(|w| w[1] == "=>" && w[0].starts_with('_'))
+        .map(|w| (w[0][1..].to_string(), w[2].to_string()))
+        .collect()
+}
+
+/// Every version of `package` the lock holds, in the file's order — sorted by
+/// name then version, as cargo writes it.
+fn locked_versions(lock: &str, package: &str) -> Vec<String> {
+    let mut versions = Vec::new();
     let mut lines = lock.lines();
     while let Some(line) = lines.next() {
-        if line.trim() == format!("name = \"{package}\"") {
-            let version = lines.next()?.trim();
-            return version
+        if line.trim() == format!("name = \"{package}\"")
+            && let Some(version) = lines.next()
+            && let Some(version) = version
+                .trim()
                 .strip_prefix("version = \"")
                 .and_then(|rest| rest.strip_suffix('"'))
-                .map(str::to_string);
+        {
+            versions.push(version.to_string());
         }
+    }
+    versions
+}
+
+/// The version of `dep` that `of` depends on, when the lock spells it out —
+/// cargo writes `"dep 1.2.3"` in a dependency list only when the graph holds
+/// more than one version of `dep`. `None` when it is unique (and
+/// [`locked_versions`] has the one) or when `of` is not in the lock.
+fn dependency_version(lock: &str, of: &str, dep: &str) -> Option<String> {
+    let mut lines = lock.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim() != format!("name = \"{of}\"") {
+            continue;
+        }
+        // Inside this package's block, up to the next one.
+        for line in lines.by_ref() {
+            let line = line.trim();
+            if line == "[[package]]" {
+                return None;
+            }
+            if let Some(rest) = line.strip_prefix(&format!("\"{dep} "))
+                && let Some(version) = rest.strip_suffix("\",").or_else(|| rest.strip_suffix('"'))
+            {
+                return Some(version.to_string());
+            }
+        }
+        return None;
     }
     None
 }
@@ -268,6 +477,79 @@ mod tests {
 
     fn device(pins: &str) -> DeviceFile {
         toml::from_str(&format!("[device.gpio]\npins = [\n{pins}\n]\n")).expect("parsed")
+    }
+
+    /// esp-hal 1.x ships the same table as generated Rust. The entries are
+    /// in the shape rustfmt leaves them — wrapped mid-entry — and the `all(`
+    /// repetition at the end is not a twenty-second pin.
+    #[test]
+    fn the_generated_description_reads_like_the_toml_one() {
+        let text = "\
+macro_rules! for_each_gpio {
+    ($($pattern:tt => $code:tt;)*) => {
+        macro_rules! _for_each_inner_gpio { $(($pattern) => $code;)* ($other : tt) => {}
+        } _for_each_inner_gpio!((0, GPIO0() () ([Input] [Output])));
+        _for_each_inner_gpio!((12, GPIO12(_0 => SPIHD) (_0 => SPIHD) ([Input]
+        [Output]))); _for_each_inner_gpio!((7, GPIO7(_2 => FSPID) (_0 => MTDO _2 =>
+        FSPID) ([Input] [Output])));
+        _for_each_inner_gpio!((34, GPIO34() () ([Input] [])));
+        _for_each_inner_gpio!((all(0, GPIO0() () ([Input] [Output])), (12, GPIO12(_0 =>
+        SPIHD) (_0 => SPIHD) ([Input] [Output]))));
+    };
+}
+/// analog
+macro_rules! for_each_analog_function {
+    ($($pattern:tt => $code:tt;)*) => {
+        macro_rules! _for_each_inner_analog_function { $(($pattern) => $code;)* ($other :
+        tt) => {} } _for_each_inner_analog_function!((ADC1_CH0, GPIO0));
+        _for_each_inner_analog_function!((TOUCH1, GPIO0));
+        _for_each_inner_analog_function!((USB_DM, GPIO34));
+    };
+}
+";
+        let pins = generated_pins(text).expect("the generated shape is read");
+        assert_eq!(
+            pins.iter().map(|p| p.pin).collect::<Vec<_>>(),
+            vec![0, 7, 12, 34],
+            "every listed pin once, the all(…) repetition ignored",
+        );
+        let by_pin = |n: u32| pins.iter().find(|p| p.pin == n).unwrap();
+        assert!(!by_pin(0).input_only);
+        assert!(
+            by_pin(34).input_only,
+            "`([Input] [])` is a pin with no driver"
+        );
+        assert_eq!(
+            by_pin(12).functions.get("0").map(String::as_str),
+            Some("SPIHD")
+        );
+        assert!(by_pin(12).reserved().unwrap().contains("SPI flash"));
+        // The output group's level 0 counts when the input group has none.
+        assert_eq!(
+            by_pin(7).functions.get("0").map(String::as_str),
+            Some("MTDO")
+        );
+        assert_eq!(
+            by_pin(7).functions.get("2").map(String::as_str),
+            Some("FSPID")
+        );
+        assert_eq!(
+            by_pin(0).analog.values().cloned().collect::<Vec<_>>(),
+            vec!["ADC1_CH0", "TOUCH1"]
+        );
+        assert!(by_pin(34).reserved().unwrap().contains("native USB"));
+        assert!(generated_pins("nothing here").is_none());
+        // 0.1.0's spelling of the inner macro reads the same.
+        let old = "macro_rules! for_each_gpio {
+    ($($pattern:tt => $code:tt;)*) => {
+        macro_rules! _for_each_inner { $(($pattern) => $code;)* ($other : tt) => {} }
+        _for_each_inner!((0, GPIO0() () ([Input] [Output]))); _for_each_inner!((12,
+        GPIO12(_0 => SPIHD) (_0 => SPIHD) ([Input] [Output])));
+    };
+}
+";
+        let pins = generated_pins(old).expect("the old spelling is read");
+        assert_eq!(pins.iter().map(|p| p.pin).collect::<Vec<_>>(), vec![0, 12]);
     }
 
     /// The rule that matters most: a pin the module has already spent is not
@@ -400,9 +682,61 @@ mod tests {
         let lock = "[[package]]\nname = \"esp-hal\"\nversion = \"1.1.2\"\n\n\
                     [[package]]\nname = \"esp-metadata\"\nversion = \"0.8.0\"\n";
         assert_eq!(
-            locked_version(lock, "esp-metadata").as_deref(),
-            Some("0.8.0")
+            locked_versions(lock, "esp-metadata"),
+            vec!["0.8.0".to_string()]
         );
-        assert_eq!(locked_version(lock, "nothing-here"), None);
+        assert!(locked_versions(lock, "nothing-here").is_empty());
+    }
+
+    /// A lock with two versions of the generated crate names, in esp-hal's
+    /// own dependency list, which one esp-hal was built from. The first
+    /// `[[package]]` in the file is the older one and was the wrong table.
+    #[test]
+    fn esp_hals_own_generated_version_is_read_off_its_dependency_list() {
+        let lock = "\
+[[package]]
+name = \"esp-hal\"
+version = \"1.1.2\"
+source = \"registry+https://github.com/rust-lang/crates.io-index\"
+dependencies = [
+ \"bitflags\",
+ \"esp-metadata-generated 0.4.0\",
+ \"esp-riscv-rt\",
+]
+
+[[package]]
+name = \"esp-metadata-generated\"
+version = \"0.1.0\"
+
+[[package]]
+name = \"esp-metadata-generated\"
+version = \"0.4.0\"
+
+[[package]]
+name = \"esp-rom-sys\"
+version = \"0.1.1\"
+dependencies = [
+ \"esp-metadata-generated 0.1.0\",
+]
+";
+        assert_eq!(
+            locked_versions(lock, "esp-metadata-generated"),
+            vec!["0.1.0".to_string(), "0.4.0".to_string()]
+        );
+        assert_eq!(
+            dependency_version(lock, "esp-hal", "esp-metadata-generated").as_deref(),
+            Some("0.4.0")
+        );
+        assert_eq!(
+            dependency_version(lock, "esp-rom-sys", "esp-metadata-generated").as_deref(),
+            Some("0.1.0")
+        );
+        // A unique dependency is written without a version: nothing to read
+        // here, and `locked_versions` has the one.
+        assert_eq!(dependency_version(lock, "esp-hal", "bitflags"), None);
+        assert_eq!(
+            dependency_version(lock, "not-locked", "esp-metadata-generated"),
+            None
+        );
     }
 }

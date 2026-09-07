@@ -762,6 +762,7 @@ refresh = "Re-read the project"
 [pinmap]
 pins = "{chip} pins"
 not-on-part = "GPIO{gpio} — not on this part"
+unverified = "GPIO{gpio} — named in your source; not checked against the part"
 claimed = "{claimed} of {total} named in your source. A pin reached through a binding is not seen here."
 input-only = "input-only"
 free = "free"
