@@ -76,8 +76,15 @@ pub(crate) fn completion_items(
     // Sorted first, then capped generously — a few hundred items is tens of
     // kilobytes, and a `use`-everything reply of thousands is what the cap
     // is for.
-    let mut items: Vec<&Value> = items.into_iter().flatten().collect();
-    items.sort_by_cached_key(|item| {
+    // The index is the position in the server's reply, taken before sorting:
+    // it is what names the raw item again when the accepted one is resolved.
+    let mut items: Vec<(u32, &Value)> = items
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, item)| (index as u32, item))
+        .collect();
+    items.sort_by_cached_key(|(_, item)| {
         let label = item["label"].as_str().unwrap_or_default();
         let sort = item["sortText"].as_str().unwrap_or(label);
         (sort.to_string(), label.to_string())
@@ -85,7 +92,7 @@ pub(crate) fn completion_items(
     items
         .into_iter()
         .take(MAX_COMPLETIONS)
-        .map(|item| {
+        .map(|(index, item)| {
             let label = item["label"].as_str().unwrap_or_default().to_string();
             let edit = item["textEdit"].as_object();
             let insert = edit
@@ -103,9 +110,25 @@ pub(crate) fn completion_items(
                 detail: item["detail"].as_str().map(str::to_string),
                 insert,
                 edit: range,
+                index,
+                label_detail: item["labelDetails"]["detail"].as_str().map(str::to_string),
             }
         })
         .collect()
+}
+
+/// The edits an accepted completion makes *besides* the insertion — for
+/// rust-analyzer, the `use` line an item not yet in scope brings with it.
+/// Read off a resolved item; an item without any yields none.
+pub(crate) fn completion_additional_edits(
+    item: &Value,
+    text: &str,
+    encoding: Encoding,
+) -> Vec<ActionEdit> {
+    item["additionalTextEdits"]
+        .as_array()
+        .and_then(|edits| action_edits(edits, text, encoding))
+        .unwrap_or_default()
 }
 
 /// A `textDocument/hover` reply. `contents` is MarkupContent | MarkedString |
@@ -632,6 +655,9 @@ mod tests {
         assert_eq!(got[0].label, "len");
         assert_eq!(got[1].label, "aaa");
         assert_eq!(got[2].label, "method_0000");
+        // The index still names the raw item: `len` arrived second to last.
+        assert_eq!(got[0].index as usize, MAX_COMPLETIONS + 50);
+        assert_eq!(got[2].index, 0);
         // An item without sortText ranks by its label.
         let bare = json!({ "items": [{ "label": "zeta" }, { "label": "alpha" }] });
         let got = completion_items(&bare, "", Encoding::Utf8);
@@ -655,5 +681,55 @@ mod tests {
         let moves =
             json!({ "documentChanges": [{ "kind": "rename", "oldUri": ours, "newUri": ours }] });
         assert_eq!(single_file_edits(&moves, ours), None);
+    }
+}
+
+#[cfg(test)]
+mod flyimport_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// An item not yet in scope carries its import as an additional edit,
+    /// and the note beside the label says so — the two halves of what VS
+    /// Code shows as `HashMap (use std::collections::HashMap)`.
+    #[test]
+    fn an_import_travels_as_an_additional_edit_with_its_note() {
+        let text = "fn main() {\n    let m = HashM\n}\n";
+        let reply = json!({ "items": [{
+            "label": "HashMap",
+            "kind": 22,
+            "labelDetails": { "detail": " (use std::collections::HashMap)" },
+            "sortText": "7fffffff",
+            "data": { "position": 1 },
+        }] });
+        let items = completion_items(&reply, text, Encoding::Utf8);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].index, 0);
+        assert_eq!(
+            items[0].label_detail.as_deref(),
+            Some(" (use std::collections::HashMap)")
+        );
+
+        let resolved = json!({
+            "label": "HashMap",
+            "additionalTextEdits": [{
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 0 },
+                },
+                "newText": "use std::collections::HashMap;\n\n",
+            }],
+        });
+        let edits = completion_additional_edits(&resolved, text, Encoding::Utf8);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "use std::collections::HashMap;\n\n");
+        assert_eq!(
+            (edits[0].range.start_line, edits[0].range.start_col),
+            (0, 0)
+        );
+        // An item with nothing to add yields nothing, not an error.
+        assert!(
+            completion_additional_edits(&json!({ "label": "x" }), text, Encoding::Utf8).is_empty()
+        );
     }
 }

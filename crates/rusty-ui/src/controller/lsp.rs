@@ -77,6 +77,36 @@ pub fn request_completion(state: AppState, path: String, line: u32, col: u32, wo
     });
 }
 
+/// Ask what an accepted completion brings with it besides the insertion —
+/// the `use` line for an item that was not in scope — and hand the edits
+/// to `then`. Nothing arrives for an item that needs none.
+pub fn resolve_completion(
+    state: AppState,
+    path: String,
+    index: u32,
+    then: impl FnOnce(Vec<rusty_lsp::ActionEdit>) + 'static,
+) {
+    if state.lsp.status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        index: u32,
+    }
+    spawn_local(async move {
+        if let Ok(edits) = ipc::call::<_, Vec<rusty_lsp::ActionEdit>>(
+            cmd::lsp::RESOLVE_COMPLETION,
+            &Args { path, index },
+        )
+        .await
+            && !edits.is_empty()
+        {
+            then(edits);
+        }
+    });
+}
+
 /// Ask what call the caret sits inside, for the signature card.
 ///
 /// Syncs the draft first, like completion does: an answer about stale text

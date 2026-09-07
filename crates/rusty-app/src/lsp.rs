@@ -137,6 +137,24 @@ pub async fn lsp_complete(
     )
 }
 
+/// The edits an accepted completion makes besides the insertion — the
+/// import for an item that was not in scope.
+#[tauri::command]
+pub async fn lsp_resolve_completion(
+    path: String,
+    index: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::ActionEdit>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(Vec::new());
+    };
+    Ok(
+        tokio::task::spawn_blocking(move || client.resolve_completion(&path, index))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
+}
+
 #[tauri::command]
 pub async fn lsp_hover(
     path: String,

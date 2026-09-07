@@ -74,6 +74,14 @@ pub struct CompletionItem {
     /// The range the insertion replaces, when the server said. Without it the
     /// caller replaces the word being typed.
     pub edit: Option<EditRange>,
+    /// Where the item stood in the server's reply — the handle for
+    /// `completionItem/resolve`, which is how an item that is not yet in
+    /// scope brings its `use` line along when accepted.
+    pub index: u32,
+    /// The server's short note beside the label: for an item that would be
+    /// imported, ` (use esp_hal::gpio::Output)` — the one thing the row has
+    /// to say before the user commits to it.
+    pub label_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

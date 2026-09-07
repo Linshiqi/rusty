@@ -9,6 +9,26 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Fixed — completion never offered anything that was not already imported.**
+Typing `Out` in a file without `use esp_hal::gpio::Output` offered nothing,
+and `Output::` nothing after it, because rust-analyzer only enables its
+import-on-completion when the client can fetch the `use` line lazily, and
+rusty never said it could. It does now: an item not yet in scope shows with
+its path — `Output (use esp_hal::gpio::Output)` — and accepting it adds the
+import at the top of the file, as VS Code does. A hover that shows
+`{unknown}` for such a name is rust-analyzer's honest answer until the
+import exists.
+
+**Fixed — the pin map read no esp-hal 1.x project.** It looked for the
+vendor's pin table in `esp-metadata`'s TOML, which esp-hal 1.0 replaced
+with generated Rust in `esp-metadata-generated`; every current project got
+"could not find esp-hal's description", and the pins the source named were
+then painted red as "not on this part" — a claim nothing there could make.
+The generated table is read now, and a project whose table genuinely
+cannot be read lists its pins as unverified rather than as missing.
+
 ## v0.6.11
 
 **Added — the Disk section of the Crates panel.** Where this project's

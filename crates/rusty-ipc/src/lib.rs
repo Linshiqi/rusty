@@ -148,6 +148,9 @@ pub mod lsp {
     pub const CHANGE: &str = "lsp_change";
     pub const SAVED: &str = "lsp_saved";
     pub const COMPLETE: &str = "lsp_complete";
+    /// The `use` line an accepted completion brings with it, when the item
+    /// was not yet in scope.
+    pub const RESOLVE_COMPLETION: &str = "lsp_resolve_completion";
     pub const HOVER: &str = "lsp_hover";
     pub const DEFINITION: &str = "lsp_definition";
     pub const SIGNATURE: &str = "lsp_signature";

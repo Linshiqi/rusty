@@ -1586,6 +1586,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                                         {kind}
                                                     </span>
                                                     <span class="shrink-0">{item.label.clone()}</span>
+                                                    <span class="shrink-0 text-label-4">
+                                                        {item.label_detail.clone().unwrap_or_default()}
+                                                    </span>
                                                     <span class="min-w-0 flex-1 truncate text-label-3">
                                                         {detail}
                                                     </span>

@@ -376,6 +376,18 @@ positioned in a coordinate system that is not the document's.
   nothing — an editor with no completion, reported in exactly those words,
   while every request and reply was correct. `convert::completion_items`
   sorts first and caps at 400.
+- **rust-analyzer offers an unimported item only to a client that can
+  resolve `additionalTextEdits` lazily.** `enable_imports_on_the_fly` is
+  gated on `completionItem.resolveSupport` naming that property — computing
+  a `use` line per candidate eagerly is too slow — so a client without it
+  gets no `Output` for `Out` in a file that lacks the import, and no
+  `Output::new` after, since the path does not resolve. Reported as "still
+  no completion", with a hover of `{unknown}` for the variable, which was
+  correct. The client declares it; `completion()` keeps the raw reply;
+  `resolve_completion(path, index)` asks `completionItem/resolve` for the
+  accepted item and the frontend splices the edits above the caret, shifting
+  it by what was inserted. `label_detail` carries the ` (use …)` note so the
+  row says what accepting it will add.
 
 ## Two editor groups
 
@@ -1115,6 +1127,24 @@ usty`) holds `location.toml`
   problem names both. One candidate is `Info`, not `Blocking`: everything
   that needs the chip finds it, and a red badge on a working project is
   crying wolf.
+- **esp-hal 1.x ships the vendor's pin table as generated Rust, and a lock
+  can hold two versions of it.** The pin map read `esp-metadata`'s
+  `devices/<chip>.toml`, which esp-hal 1.0 replaced with
+  `esp-metadata-generated`'s `src/_generated_<chip>.rs` — a `for_each_gpio!`
+  macro, one `(2, GPIO2(_2 => FSPIQ) (_2 => FSPIQ) ([Input] [Output]))` per
+  pin, `([Input] [])` for a pin with no driver, analog functions in
+  `for_each_analog_function!` — so every current project got "could not find
+  esp-hal's description" and its named pins painted red as "not on this
+  part", a claim nothing there could make. `generated_pins` reads that shape
+  (0.1.0 spelled the inner macro `_for_each_inner`, later versions
+  `_for_each_inner_gpio`; both are read). And `locked_version` took the
+  *first* `esp-metadata-generated` in the lock, which was a 0.1.0 a
+  transitive dependency pinned beside esp-hal's 0.4.0: `dependency_version`
+  reads the version off esp-hal's own dependency list — cargo writes
+  `"esp-metadata-generated 0.4.0"` there exactly when two exist — and every
+  candidate is tried, newest first. A project whose table still cannot be
+  read lists its pins as *unverified*, neutrally; "not on this part" is
+  said only against a table that was read.
 - **Hint-severity diagnostics are not problems.** The Problems panel says it
   lists what would stop the project building; a `#[cfg]` branch being off is
   the normal state of every crate that supports more than one chip. They were

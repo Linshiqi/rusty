@@ -122,6 +122,66 @@ pub(super) fn accept_completion(
     let _ = area.set_selection_end(Some(caret));
     state.editor.completion.set(None);
     controller::schedule_pulse(state);
+
+    // An item that was not in scope brings its `use` line — fetched now,
+    // applied when it lands. The import goes above the caret, so the caret
+    // moves down by what was inserted and stays on the same text.
+    let (path, index, element) = (popup.path.clone(), item.index, area.clone());
+    controller::resolve_completion(state, path.clone(), index, move |edits| {
+        if state.active_path_now().as_deref() == Some(path.as_str()) {
+            apply_server_edits(state, &element, &edits);
+        }
+    });
+}
+
+/// Splice edits the server computed against the document as it was when
+/// asked — a completion's imports — keeping the caret on the text it was on.
+/// Applied bottom-up so earlier ranges stay valid; the caret shifts by the
+/// length of every edit that lies wholly before it. An edit whose range
+/// falls outside the document is refused whole rather than guessed at.
+pub(super) fn apply_server_edits(
+    state: AppState,
+    area: &web_sys::HtmlTextAreaElement,
+    edits: &[rusty_lsp::ActionEdit],
+) {
+    if edits.is_empty() {
+        return;
+    }
+    let text = state.editor.draft.get_untracked();
+    let (caret, _) = doc_selection(area, state);
+    let mut spans: Vec<(usize, usize, &str)> = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let from = byte_of_utf16(
+            &text,
+            utf16_offset_of(&text, edit.range.start_line, edit.range.start_col) as usize,
+        );
+        let to = byte_of_utf16(
+            &text,
+            utf16_offset_of(&text, edit.range.end_line, edit.range.end_col) as usize,
+        );
+        if from > to || to > text.len() {
+            return;
+        }
+        spans.push((from, to, edit.new_text.as_str()));
+    }
+    spans.sort_by_key(|(from, ..)| std::cmp::Reverse(*from));
+
+    record_edit(state);
+    let mut new = text.clone();
+    let mut shift: i64 = 0;
+    for (from, to, replacement) in spans {
+        new.replace_range(from..to, replacement);
+        if to <= caret {
+            shift += replacement.len() as i64 - (to - from) as i64;
+        }
+    }
+    let caret = (caret as i64 + shift).clamp(0, new.len() as i64) as usize;
+    echo_edit(state, &new);
+    set_buffer(state, area, &new);
+    let at = utf16_len(&new[..caret]);
+    let _ = area.set_selection_start(Some(at));
+    let _ = area.set_selection_end(Some(at));
+    controller::schedule_pulse(state);
 }
 
 /// Whether a cell sits inside a hover range.

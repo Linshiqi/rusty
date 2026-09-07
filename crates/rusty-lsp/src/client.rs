@@ -37,7 +37,8 @@ use crate::{
     convert, discover,
     error::{Error, Result},
     model::{
-        CodeActionFix, CompletionItem, HoverInfo, Location, LspEvent, SemanticSpan, SignatureInfo,
+        ActionEdit, CodeActionFix, CompletionItem, HoverInfo, Location, LspEvent, SemanticSpan,
+        SignatureInfo,
     },
     positions::{Encoding, content_change, scalar_to_character},
     pull, rpc,
@@ -110,6 +111,11 @@ pub(crate) struct Shared {
     /// reader is gone and no reply will come.
     pending: Mutex<HashMap<i64, Sender<Option<Value>>>>,
     docs: Mutex<HashMap<String, Doc>>,
+    /// The latest completion reply, raw, with the path it answered for: the
+    /// items the frontend sees are converted copies, and `completionItem/
+    /// resolve` needs the server's own item — its `data` in particular — so
+    /// the accepted one is looked up here by index.
+    completions: Mutex<Option<(String, Vec<Value>)>>,
     next_id: AtomicI64,
     /// False once the reader thread has ended: every request from then on
     /// fails at once instead of waiting its budget out for an answer that
@@ -159,6 +165,7 @@ impl LspClient {
             poke: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
+            completions: Mutex::new(None),
             next_id: AtomicI64::new(1),
             alive: AtomicBool::new(true),
             encoding: OnceLock::new(),
@@ -293,10 +300,49 @@ impl LspClient {
             }),
         )?;
         let text = self.shared.open_text(path).unwrap_or_default();
+        let raw: Vec<Value> = result
+            .get("items")
+            .and_then(Value::as_array)
+            .or_else(|| result.as_array())
+            .cloned()
+            .unwrap_or_default();
+        *self.shared.completions.lock().expect("lsp completions") = Some((path.to_string(), raw));
         Ok(convert::completion_items(
             &result,
             &text,
             self.shared.encoding(),
+        ))
+    }
+
+    /// The edits an accepted completion makes besides its insertion — the
+    /// `use` line for an item that was not in scope — fetched from the
+    /// server for the `index`th item of the latest reply for `path`.
+    ///
+    /// Empty when the reply has since been replaced by one for another
+    /// position: the insertion has already happened by then, and an import
+    /// added for the wrong item would be worse than none. Items that carried
+    /// their edits eagerly are answered without a round trip.
+    pub fn resolve_completion(&self, path: &str, index: u32) -> Result<Vec<ActionEdit>> {
+        let item = {
+            let latest = self.shared.completions.lock().expect("lsp completions");
+            match latest.as_ref() {
+                Some((for_path, items)) if for_path == path => items.get(index as usize).cloned(),
+                _ => None,
+            }
+        };
+        let Some(item) = item else {
+            return Ok(Vec::new());
+        };
+        let text = self.shared.open_text(path).unwrap_or_default();
+        let encoding = self.shared.encoding();
+        if item.get("additionalTextEdits").is_some() {
+            return Ok(convert::completion_additional_edits(&item, &text, encoding));
+        }
+        let resolved =
+            self.shared
+                .request_within("completionItem/resolve", item, RESOLVE_TIMEOUT)?;
+        Ok(convert::completion_additional_edits(
+            &resolved, &text, encoding,
         ))
     }
 
@@ -796,7 +842,19 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "diagnostic": { "relatedDocumentSupport": false },
                 // No snippet support declared, so inserts arrive as plain text
                 // rather than `$0` placeholders nothing here interprets.
-                "completion": { "completionItem": { "snippetSupport": false } },
+                // `resolveSupport` for `additionalTextEdits` is what turns on
+                // rust-analyzer's imports-on-the-fly: it will not offer an
+                // item that is not yet in scope unless the client can fetch
+                // the `use` line lazily, because computing one per candidate
+                // is too slow to do eagerly. Without this, typing `Out` in a
+                // file that does not import `esp_hal::gpio` offered nothing —
+                // no `Output`, no import — while VS Code offered both.
+                "completion": {
+                    "completionItem": {
+                        "snippetSupport": false,
+                        "resolveSupport": { "properties": ["additionalTextEdits"] },
+                    },
+                },
                 "hover": { "contentFormat": ["plaintext", "markdown"] },
                 "definition": {},
                 // Actions come back as literals with lazily-resolved edits;
