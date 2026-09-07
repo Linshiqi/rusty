@@ -1122,6 +1122,9 @@ pub struct Lsp {
     pub session: RwSignal<u64>,
     /// What the compiler and rust-analyzer think is wrong, by file.
     pub diagnostics: RwSignal<HashMap<String, Vec<FileDiagnostic>>>,
+    /// What the server is busy with, while it is — `Indexing 26% …` — so an
+    /// empty completion reads as "not yet" rather than "none".
+    pub progress: RwSignal<Option<String>>,
 }
 
 /// A running simulation: the board, the plot, the trace, the tunables.
@@ -1488,6 +1491,7 @@ impl AppState {
                 status: RwSignal::new(LspStatus::Off),
                 session: RwSignal::new(0),
                 diagnostics: RwSignal::new(HashMap::new()),
+                progress: RwSignal::new(None),
             },
             sim: Sim {
                 display: RwSignal::new(String::new()),

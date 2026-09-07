@@ -220,6 +220,7 @@ pub fn start_lsp(state: AppState) {
     let session = state.lsp.session.get_untracked() + 1;
     state.lsp.session.set(session);
     state.lsp.status.set(LspStatus::Starting);
+    state.lsp.progress.set(None);
 
     let channel = ipc::Channel::new();
     let on_event = Closure::wrap(Box::new(move |value: JsValue| {
@@ -285,7 +286,9 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
                 }
             });
         }
+        LspEvent::Progress { text } => state.lsp.progress.set(text),
         LspEvent::Exited {} => {
+            state.lsp.progress.set(None);
             if state.lsp.status.get_untracked() == LspStatus::Ready {
                 state.lsp.status.set(LspStatus::Off);
             }

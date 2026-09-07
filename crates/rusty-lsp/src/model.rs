@@ -56,6 +56,14 @@ pub enum LspEvent {
         path: String,
         items: Vec<FileDiagnostic>,
     },
+    /// What the server is busy with — `Indexing 12/45 esp-hal`, `Fetching`,
+    /// `Building build-artifacts` — or `None` once nothing is. `Ready` says
+    /// the protocol is up; this says why a request may still come back
+    /// empty, which is the difference between "no completion" and "not yet".
+    #[serde(rename_all = "camelCase")]
+    Progress {
+        text: Option<String>,
+    },
     Exited {},
 }
 

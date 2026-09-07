@@ -1651,16 +1651,19 @@ usty`) holds `location.toml`
   window down. Anything deferred past a frame uses `try_get_untracked` and
   returns on `None`. The signals that belong to `AppState` are fine — it is
   the component-local ones that die.
-- **No completion inside a macro's arguments is rust-analyzer's, not ours.**
-  Reported as "a new line offers completions, editing an existing one does
-  not", which is a real difference and a misleading description of it.
-  Measured against the server directly, same file and same document text:
-  `e.` on a line of its own answers with 14 items, and the `e.` left behind by
-  deleting the `x` in `assert!(…, e.x)` answers with none. `assert!` has to be
-  expanded before `e` has a type, and arguments reading `e.)` do not parse, so
-  there is nothing to expand. VS Code behaves the same way for the same
-  reason. Nothing to fix here, and inventing a list would be the guess this
-  project refuses; the trigger in `surface.rs` fires on `.` wherever it is. gdb reads
+- **Completion inside a macro's arguments works; an empty answer there is
+  the server still loading, or a name that does not resolve.** An earlier
+  note here said `assert!(…, e.)` answers with nothing and blamed macro
+  expansion. Measured again (2026-09-07) against a warm rust-analyzer on
+  `examples/pid-tune`: `println!("…", output.)` answers with the ninety
+  methods of `f32`, and the popup shows them — rust-analyzer completes with
+  a placeholder identifier at the caret, so the incomplete `output.)` is no
+  obstacle. The two things that *do* produce an empty answer: a receiver
+  whose type is `{unknown}` (an `Output` never imported — the auto-import
+  completion is the fix for that), and a server that has said `Ready` but
+  is still indexing, which is why the status bar now shows its progress
+  (`workDoneProgress` on, `$/progress` folded into `LspEvent::Progress`)
+  instead of "rust-analyzer" in green over a minute of empty replies. gdb reads
   DWARF; Rust's default Windows target emits a PDB, so on `-msvc` gdb loads
   the binary, sets breakpoints that never hit and shows addresses where lines
   should be. LLDB reads PDB — it resolves a Rust test symbol to its source

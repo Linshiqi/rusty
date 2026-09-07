@@ -18,7 +18,7 @@
 //!   re-request instead, and the puller thread owns freshness.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     process::Child,
@@ -116,6 +116,9 @@ pub(crate) struct Shared {
     /// resolve` needs the server's own item — its `data` in particular — so
     /// the accepted one is looked up here by index.
     completions: Mutex<Option<(String, Vec<Value>)>>,
+    /// The server's work in progress, by token — what `$/progress` has begun
+    /// and not yet ended. Summarised into `LspEvent::Progress` on change.
+    progress: Mutex<BTreeMap<String, Progress>>,
     next_id: AtomicI64,
     /// False once the reader thread has ended: every request from then on
     /// fails at once instead of waiting its budget out for an answer that
@@ -166,6 +169,7 @@ impl LspClient {
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
             completions: Mutex::new(None),
+            progress: Mutex::new(BTreeMap::new()),
             next_id: AtomicI64::new(1),
             alive: AtomicBool::new(true),
             encoding: OnceLock::new(),
@@ -885,7 +889,11 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                     "formats": ["relative"],
                 },
             },
-            "window": { "workDoneProgress": false },
+            // On, so the server narrates its indexing: without it a fresh
+            // project shows "rust-analyzer" as ready while every completion
+            // for the next minute comes back empty, and the user concludes
+            // there is no completion.
+            "window": { "workDoneProgress": true },
             "workspace": {
                 "workspaceFolders": false,
                 "configuration": false,
@@ -975,9 +983,85 @@ fn dispatch(shared: &Shared, message: Value) {
         (None, Some(method)) if method == "textDocument/publishDiagnostics" => {
             pull::publish(shared, &message["params"]);
         }
-        // Progress, logs, show-message: narration, not state.
+        (None, Some(method)) if method == "$/progress" => {
+            shared.progress(&message["params"]);
+        }
+        // Logs, show-message: narration, not state.
         _ => {}
     }
+}
+
+/// One thing the server has said it is doing.
+#[derive(Debug, Clone, Default)]
+struct Progress {
+    title: String,
+    message: Option<String>,
+    percentage: Option<u64>,
+}
+
+impl Shared {
+    /// Fold one `$/progress` notification into the table of work in flight
+    /// and tell the frontend what that table now says. A `begin` opens an
+    /// entry, `report` updates it, `end` closes it; a report for a token
+    /// never begun is ignored rather than invented.
+    fn progress(&self, params: &Value) {
+        let token = match &params["token"] {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let value = &params["value"];
+        let text = {
+            let mut table = self.progress.lock().expect("lsp progress");
+            match value["kind"].as_str() {
+                Some("begin") => {
+                    table.insert(
+                        token,
+                        Progress {
+                            title: value["title"].as_str().unwrap_or("working").to_string(),
+                            message: value["message"].as_str().map(str::to_string),
+                            percentage: value["percentage"].as_u64(),
+                        },
+                    );
+                }
+                Some("report") => {
+                    if let Some(entry) = table.get_mut(&token) {
+                        if let Some(message) = value["message"].as_str() {
+                            entry.message = Some(message.to_string());
+                        }
+                        if let Some(percentage) = value["percentage"].as_u64() {
+                            entry.percentage = Some(percentage);
+                        }
+                    }
+                }
+                Some("end") => {
+                    table.remove(&token);
+                }
+                _ => return,
+            }
+            progress_summary(table.values())
+        };
+        let _ = self.events.send(LspEvent::Progress { text });
+    }
+}
+
+/// The work in flight as one line: `Indexing 45% esp-hal · Fetching`. The
+/// first two entries, since a status bar has room for one thought.
+fn progress_summary<'a>(entries: impl Iterator<Item = &'a Progress>) -> Option<String> {
+    let parts: Vec<String> = entries
+        .take(2)
+        .map(|entry| {
+            let mut text = entry.title.clone();
+            if let Some(percentage) = entry.percentage {
+                text.push_str(&format!(" {percentage}%"));
+            }
+            if let Some(message) = &entry.message {
+                text.push(' ');
+                text.push_str(message);
+            }
+            text
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// A fake rust-analyzer on the other end of two pipes.
@@ -1222,6 +1306,80 @@ mod tests {
             matches!((shutdown, exit), (Some(s), Some(e)) if s < e),
             "shutdown then exit, before any kill: {order:?}",
         );
+    }
+
+    /// The server's indexing arrives as `$/progress` and leaves as an event
+    /// the status bar can show — with the create request answered, since a
+    /// server whose request goes unanswered stalls.
+    #[test]
+    fn indexing_progress_becomes_an_event_and_ends_with_none() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server(|message, writer| {
+            if method(message) == "textDocument/didOpen" {
+                let notify = |writer: &mut PipeWriter, value: Value| {
+                    rpc::write_message(writer, &value).unwrap();
+                };
+                notify(
+                    writer,
+                    json!({ "jsonrpc": "2.0", "id": 77, "method": "window/workDoneProgress/create",
+                            "params": { "token": "rustAnalyzer/Indexing" } }),
+                );
+                notify(
+                    writer,
+                    json!({ "jsonrpc": "2.0", "method": "$/progress", "params": {
+                        "token": "rustAnalyzer/Indexing",
+                        "value": { "kind": "begin", "title": "Indexing", "percentage": 0 } } }),
+                );
+                notify(
+                    writer,
+                    json!({ "jsonrpc": "2.0", "method": "$/progress", "params": {
+                        "token": "rustAnalyzer/Indexing",
+                        "value": { "kind": "report", "message": "12/45 (esp-hal)", "percentage": 26 } } }),
+                );
+                notify(
+                    writer,
+                    json!({ "jsonrpc": "2.0", "method": "$/progress", "params": {
+                        "token": "rustAnalyzer/Indexing", "value": { "kind": "end" } } }),
+                );
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+
+        let mut texts = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while texts.len() < 3 {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Some(LspEvent::Progress { text }) => texts.push(text),
+                Some(_) => continue,
+                None => panic!("progress never arrived: {texts:?}"),
+            }
+        }
+        assert_eq!(
+            texts,
+            vec![
+                Some("Indexing 0%".to_string()),
+                Some("Indexing 26% 12/45 (esp-hal)".to_string()),
+                None,
+            ]
+        );
+        // The create request was answered, by id.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let answered = loop {
+            let done = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.get("id") == Some(&json!(77)) && m.get("method").is_none());
+            if done || Instant::now() > deadline {
+                break done;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(answered, "window/workDoneProgress/create went unanswered");
     }
 
     /// A lazy action whose resolve fails, and nothing else to offer. That

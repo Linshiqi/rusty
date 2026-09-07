@@ -21,6 +21,13 @@ import at the top of the file, as VS Code does. A hover that shows
 `{unknown}` for such a name is rust-analyzer's honest answer until the
 import exists.
 
+**Changed — the status bar says what rust-analyzer is doing.** A freshly
+opened embedded project takes rust-analyzer a while to index, and every
+completion in that time comes back empty; the status bar said "rust-analyzer"
+in green the whole time. It now shows the server's own progress —
+`rust-analyzer · Indexing 26% 12/45 (esp-hal)` — until the work is done, so
+an empty popup reads as "not yet" rather than "never".
+
 **Fixed — the pin map read no esp-hal 1.x project.** It looked for the
 vendor's pin table in `esp-metadata`'s TOML, which esp-hal 1.0 replaced
 with generated Rust in `esp-metadata-generated`; every current project got

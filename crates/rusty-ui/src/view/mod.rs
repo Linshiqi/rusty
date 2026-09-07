@@ -817,6 +817,15 @@ fn StatusBar() -> impl IntoView {
                             crate::state::LspStatus::Starting => {
                                 (t!("status.lsp-starting"), Tone::Neutral)
                             }
+                            // Busy comes before errors: while the index is
+                            // being built, both the diagnostics and the
+                            // completions are provisional, and "12 errors"
+                            // over a half-loaded workspace is the wrong
+                            // headline.
+                            crate::state::LspStatus::Ready if state.lsp.progress.get().is_some() => {
+                                let what = state.lsp.progress.get().unwrap_or_default();
+                                (format!("rust-analyzer · {what}"), Tone::Amber)
+                            }
                             crate::state::LspStatus::Ready if errors > 0 => {
                                 (t!("status.lsp-errors", count = errors), Tone::Crimson)
                             }
