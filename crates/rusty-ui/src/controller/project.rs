@@ -353,6 +353,7 @@ pub fn restore(state: AppState) {
                     .into(),
                 "Run `cargo tauri dev` from crates/rusty-app for the whole app.".into(),
             ],
+            kind: None,
         }));
         return;
     }

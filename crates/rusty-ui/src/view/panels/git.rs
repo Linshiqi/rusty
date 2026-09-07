@@ -107,7 +107,30 @@ pub fn GitPanel() -> impl IntoView {
             .into_any();
         }
         if let Some(why) = state.git.unavailable.get() {
-            return view! { <Empty title=t!("git.unavailable-title") detail=why /> }.into_any();
+            // Not a repository is the one refusal the panel can fix itself.
+            let offer_init = state.git.not_a_repo.get();
+            return view! {
+                <Empty title=t!("git.unavailable-title") detail=why>
+                    {offer_init
+                        .then(|| {
+                            view! {
+                                <div class="flex flex-col items-center gap-2">
+                                    <button
+                                        type="button"
+                                        on:click=move |_| controller::git_init(state)
+                                        class="rounded-[6px] bg-rust px-3 py-1 text-footnote font-medium text-white hover:opacity-90"
+                                    >
+                                        {t!("git.init")}
+                                    </button>
+                                    <p class="max-w-[46ch] text-footnote text-label-3">
+                                        {t!("git.init-hint")}
+                                    </p>
+                                </div>
+                            }
+                        })}
+                </Empty>
+            }
+            .into_any();
         }
         view! {
             // The browser's own menu is never the answer here: rows offer

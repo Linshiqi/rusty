@@ -48,9 +48,14 @@ pub fn load_history(state: AppState) {
             Ok(history) => {
                 state.git.history.set(Some(history));
                 state.git.unavailable.set(None);
+                state.git.not_a_repo.set(false);
             }
             Err(error) => {
                 state.git.history.set(None);
+                state
+                    .git
+                    .not_a_repo
+                    .set(error.kind.as_deref() == Some("not-a-repository"));
                 state.git.unavailable.set(Some(error.message));
             }
         }
@@ -154,6 +159,18 @@ pub fn set_identity(state: AppState, name: String, email: String, local: bool) {
             return;
         }
         run_args_at_root_then(state, "git", for_email, move |_| load_identity(state));
+    });
+}
+
+/// `git init` in the project, as a dock command, then read everything back:
+/// an empty repository logs nothing and refuses nothing, so the panel comes
+/// up with the working tree as untracked changes and no history — the
+/// ordinary state of a project that has just started keeping one.
+pub fn git_init(state: AppState) {
+    run_args_at_root_then(state, "git", vec!["init".to_string()], move |code| {
+        if code == Some(0) {
+            after_git(state);
+        }
     });
 }
 

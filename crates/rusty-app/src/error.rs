@@ -11,6 +11,11 @@ use serde::Serialize;
 pub struct CommandError {
     pub message: String,
     pub causes: Vec<String>,
+    /// A stable name for the failure, when the frontend can act on which
+    /// failure it was — `not-a-repository` is the one the Git panel answers
+    /// with an Initialize button. The message is prose; this is the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl CommandError {
@@ -18,6 +23,7 @@ impl CommandError {
         Self {
             message: message.into(),
             causes: Vec::new(),
+            kind: None,
         }
     }
 
@@ -56,6 +62,7 @@ impl CommandError {
         Self {
             message: error.to_string(),
             causes,
+            kind: None,
         }
     }
 }
@@ -107,7 +114,11 @@ impl From<rusty_dbg::Error> for CommandError {
 
 impl From<rusty_git::Error> for CommandError {
     fn from(error: rusty_git::Error) -> Self {
-        Self::from_source(&error)
+        let mut command = Self::from_source(&error);
+        if matches!(error, rusty_git::Error::NotARepository { .. }) {
+            command.kind = Some("not-a-repository".to_string());
+        }
+        command
     }
 }
 

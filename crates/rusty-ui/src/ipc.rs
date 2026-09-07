@@ -108,6 +108,8 @@ pub async fn confirm(message: &str) -> bool {
 pub struct IpcError {
     pub message: String,
     pub causes: Vec<String>,
+    /// The backend's stable name for the failure, when it gave one.
+    pub kind: Option<String>,
 }
 
 impl IpcError {
@@ -120,17 +122,21 @@ impl IpcError {
             message: String,
             #[serde(default)]
             causes: Vec<String>,
+            #[serde(default)]
+            kind: Option<String>,
         }
 
         if let Ok(wire) = serde_wasm_bindgen::from_value::<Wire>(value.clone()) {
             return IpcError {
                 message: wire.message,
                 causes: wire.causes,
+                kind: wire.kind,
             };
         }
         IpcError {
             message: value.as_string().unwrap_or_else(|| format!("{value:?}")),
             causes: Vec::new(),
+            kind: None,
         }
     }
 
@@ -138,6 +144,7 @@ impl IpcError {
         IpcError {
             message: message.into(),
             causes: Vec::new(),
+            kind: None,
         }
     }
 }

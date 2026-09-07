@@ -940,6 +940,9 @@ pub struct Git {
     /// PATH — in the panel rather than on the banner, because a project
     /// without a repository is an ordinary thing to open.
     pub unavailable: RwSignal<Option<String>>,
+    /// The one reason the panel can fix: the project is not a repository,
+    /// and `git init` would make it one.
+    pub not_a_repo: RwSignal<bool>,
     /// Whether the panel has asked once. The watcher refreshes the history
     /// only after that, so a project nobody looks at the history of costs no
     /// `git log` per save.
@@ -1454,6 +1457,7 @@ impl AppState {
                 detail: RwSignal::new(None),
                 file: RwSignal::new(None),
                 unavailable: RwSignal::new(None),
+                not_a_repo: RwSignal::new(false),
                 loaded: RwSignal::new(false),
                 mode: RwSignal::new(GitMode::History),
                 status: RwSignal::new(None),
