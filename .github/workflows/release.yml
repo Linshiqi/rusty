@@ -109,6 +109,15 @@ jobs:
           --disable-strategies compile
           trunk@0.21.14 tauri-cli@~2.11
 
+      # rusty's own QEMU — the GPIO model — ships inside the installer, so a
+      # fresh install simulates without a download and without Espressif's
+      # stock build ever answering for a pin. The script is a no-op, said
+      # aloud, on a platform the qemu-v* release has no build for (Intel
+      # macOS), where the app falls back to fetching Espressif's.
+      - name: Bundle rusty's QEMU
+        shell: bash
+        run: scripts/fetch-qemu.sh
+
       # The tag is the version. Stamping it here means a release is one
       # gesture — the tag — not a version-bump commit plus a matching tag.
       - name: Stamp the tag's version into tauri.conf.json

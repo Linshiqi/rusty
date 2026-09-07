@@ -30,6 +30,18 @@ fn main() {
         // more — the app has no reason to read or write arbitrary paths.
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
+        // The tools the installer shipped — rusty's own QEMU under
+        // `bundled/` in the resource directory — join the finder's ladder
+        // here, before any command can ask for an emulator. In development
+        // the resource directory is the target directory, which tauri-build
+        // fills from `bundle.resources` when `scripts/fetch-qemu.sh` has run.
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(resources) = app.path().resource_dir() {
+                rusty_embed::tools::set_bundled_dir(resources.join("bundled"));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::open_project,
             commands::project_status,

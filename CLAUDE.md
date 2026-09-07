@@ -52,6 +52,12 @@ cd crates/rusty-ui && trunk serve
 # The whole app
 cd crates/rusty-app && cargo tauri dev
 
+# rusty's own QEMU (the GPIO model) into crates/rusty-app/bundled/, where the
+# installer packages it as a resource. The release workflow runs this before
+# every build; run it once here and `cargo tauri dev` uses ours too. Not
+# committed — sixty megabytes of binaries belong in a release asset.
+scripts/fetch-qemu.sh
+
 # Release: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and
 # .github/workflows/release.yml builds installers on Windows (NSIS), macOS
 # (universal DMG) and Ubuntu (deb + AppImage), plus rusty-cli for each, and
@@ -232,8 +238,16 @@ code in rusty to exist, which is why `.rusty/parts/*.toml` can add one.
 
 That ceiling is now the *fallback*, not the roof. `qemu/` holds a real GPIO
 model — Espressif's stub replaced — and `qemu-release.yml` builds it for four
-platforms and publishes it, so `qemu_download` fetches ours first and falls
-back to Espressif's. With ours a LED lights because a pin went high and a
+platforms and publishes it. **The installer ships it**: `scripts/fetch-qemu.sh`
+unpacks the `qemu-v*` asset into `crates/rusty-app/bundled/`, `bundle.resources`
+packages that directory, and the app hands Tauri's resource directory to
+`tools::set_bundled_dir` at setup, so a fresh install simulates with ours and
+never sees the stock build's notice. The bundle sits *after* the data
+directory in the finder's ladder (a copy the user installed on purpose wins)
+and only counts when its `PLATFORM` file names this machine — a universal
+macOS app carries the arm64 QEMU, and an Intel Mac must fall back rather
+than try it. `qemu_download` is the fallback for that case, for the CLI and
+for a checkout that never ran the script: ours first, then Espressif's. With ours a LED lights because a pin went high and a
 button is read through the register the firmware actually reads; with theirs
 everything works exactly as it always did. `qemu/README.md` has the gates each
 build passes and why each can fail.

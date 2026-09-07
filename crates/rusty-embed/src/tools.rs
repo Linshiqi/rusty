@@ -13,6 +13,12 @@
 //!    it, and `<family>/` itself for the archives that unpack with no `bin/`.
 //!    First, because a tool rusty downloaded on request has to be found or the
 //!    panel keeps offering to install it again.
+//!    - The tools the installer shipped beside the app — `bundled/` in Tauri's
+//!      resource directory, the same `<family>/bin/` shape — which is where a
+//!      fresh install finds rusty's own QEMU without downloading anything. After
+//!      the data directory, so a copy the user installed on purpose still wins;
+//!      and only when its `PLATFORM` file names this machine, since a universal
+//!      macOS bundle carries one architecture's binaries.
 //! 2. `$CARGO_HOME/bin` (else `~/.cargo/bin`), where `cargo install` puts
 //!    espflash and friends. Usually on PATH too — but not in a window opened
 //!    before rustup ran, which is exactly the first-run machine.
@@ -35,8 +41,31 @@
 //! does rusty run", and there the copy rusty installed wins.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::config;
+
+/// Where the installer put the tools it ships — set once by the app from
+/// Tauri's resource directory. The CLI and the tests never set it and the
+/// ladder simply has one root fewer.
+static BUNDLED: OnceLock<PathBuf> = OnceLock::new();
+
+/// Name the directory the installer shipped tools in (`<resources>/bundled`).
+/// Idempotent; the first caller wins.
+pub fn set_bundled_dir(dir: PathBuf) {
+    let _ = BUNDLED.set(dir);
+}
+
+/// The bundled tools root, when the app set one and its QEMU was built for
+/// this machine. `bundled/qemu/PLATFORM` is written by `scripts/fetch-qemu.sh`
+/// with the target the binaries are for; a bundle that names another
+/// architecture — Intel macOS opening a universal app built with the
+/// arm64 QEMU — is ignored rather than tried and blamed on the firmware.
+pub(crate) fn bundled_dir() -> Option<PathBuf> {
+    let dir = BUNDLED.get()?;
+    let platform = std::fs::read_to_string(dir.join("qemu").join("PLATFORM")).ok()?;
+    (platform.trim() == host_platform()?).then(|| dir.clone())
+}
 
 /// A binary's file name on this platform.
 pub(crate) fn exe(name: &str) -> String {
@@ -50,8 +79,11 @@ pub(crate) fn exe(name: &str) -> String {
 /// Where a binary is, by the ladder in the module header, or `None` when this
 /// machine has none.
 pub(crate) fn find(name: &str) -> Option<PathBuf> {
-    find_in(name, data_tools_dir().as_deref())
-        .or_else(|| in_dirs(name, &crate::esp_env::esp_env().path_dirs))
+    let roots: Vec<PathBuf> = [data_tools_dir(), bundled_dir()]
+        .into_iter()
+        .flatten()
+        .collect();
+    find_in_roots(name, &roots).or_else(|| in_dirs(name, &crate::esp_env::esp_env().path_dirs))
 }
 
 /// The first of `dirs` holding the binary.
@@ -62,12 +94,11 @@ fn in_dirs(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// [`find`] with the data directory's `tools/` given rather than resolved, so
-/// the ladder can be tested against a directory a test made rather than the
-/// machine it runs on.
-pub(crate) fn find_in(name: &str, tools: Option<&Path>) -> Option<PathBuf> {
+/// The ladder over any number of tools roots, in order — the data directory
+/// and then the bundle — before cargo's bin and PATH.
+pub(crate) fn find_in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let file = exe(name);
-    if let Some(tools) = tools {
+    for tools in roots {
         for family in tool_families(tools) {
             for candidate in [family.join("bin").join(&file), family.join(&file)] {
                 if candidate.is_file() {
@@ -195,6 +226,35 @@ mod tests {
 
     /// Probing must never fail the caller: a machine with none of these tools
     /// installed is the normal state before the toolchain panel is read.
+    /// The bundle is a second root: searched after the data directory, so a
+    /// copy the user installed wins, and before PATH.
+    #[test]
+    fn the_bundle_is_searched_after_the_data_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data-tools");
+        let bundle = dir.path().join("bundled");
+        let bundled_qemu = bundle.join("qemu/bin").join(exe("qemu-system-riscv32"));
+        std::fs::create_dir_all(bundled_qemu.parent().unwrap()).unwrap();
+        std::fs::write(&bundled_qemu, b"ours").unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+
+        let roots = [data.clone(), bundle.clone()];
+        assert_eq!(
+            find_in_roots("qemu-system-riscv32", &roots),
+            Some(bundled_qemu.clone()),
+            "with nothing in the data directory the bundle answers",
+        );
+
+        let own = data.join("qemu/bin").join(exe("qemu-system-riscv32"));
+        std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+        std::fs::write(&own, b"theirs").unwrap();
+        assert_eq!(
+            find_in_roots("qemu-system-riscv32", &roots),
+            Some(own),
+            "a copy in the data directory outranks the bundle",
+        );
+    }
+
     #[test]
     fn probing_for_something_absent_answers_none() {
         assert!(on_path("a-binary-nobody-has-installed-xyzzy").is_none());
@@ -216,15 +276,24 @@ mod tests {
             std::fs::write(file, b"").unwrap();
         }
 
-        assert_eq!(find_in("qemu-system-riscv32", Some(&tools)), Some(qemu));
-        assert_eq!(find_in("espflash", Some(&tools)), Some(espflash));
         assert_eq!(
-            find_in("a-binary-nobody-has-installed-xyzzy", Some(&tools)),
+            find_in_roots("qemu-system-riscv32", std::slice::from_ref(&tools)),
+            Some(qemu)
+        );
+        assert_eq!(
+            find_in_roots("espflash", std::slice::from_ref(&tools)),
+            Some(espflash)
+        );
+        assert_eq!(
+            find_in_roots(
+                "a-binary-nobody-has-installed-xyzzy",
+                std::slice::from_ref(&tools)
+            ),
             None,
         );
         // The directory itself is not a binary, and a name matching a family
         // must not be answered with a folder.
-        assert_eq!(find_in("qemu", Some(&tools)), None);
+        assert_eq!(find_in_roots("qemu", std::slice::from_ref(&tools)), None);
     }
 
     /// The copy rusty installed wins over whatever else the machine has, or
@@ -239,9 +308,12 @@ mod tests {
         std::fs::create_dir_all(ours.parent().unwrap()).unwrap();
         std::fs::write(&ours, b"").unwrap();
 
-        assert_eq!(find_in("cargo", Some(&tools)), Some(ours));
+        assert_eq!(
+            find_in_roots("cargo", std::slice::from_ref(&tools)),
+            Some(ours)
+        );
         assert!(
-            find_in("cargo", None).is_some(),
+            find_in_roots("cargo", &[]).is_some(),
             "and without a tools directory the ladder still reaches PATH",
         );
     }

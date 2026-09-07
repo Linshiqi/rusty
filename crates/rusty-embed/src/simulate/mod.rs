@@ -50,6 +50,9 @@ pub(crate) struct Machine {
     /// The data directory's `tools/`, where the installer unpacks QEMU and the
     /// debuggers. `None` when there is no data directory.
     tools: Option<PathBuf>,
+    /// The tools the installer shipped beside the app, searched after
+    /// `tools` — rusty's own QEMU, for a machine that never downloaded one.
+    bundled: Option<PathBuf>,
     /// `CARGO_TARGET_DIR`, which outranks `[build] target-dir` for the cargo
     /// this plan will spawn — it inherits rusty's environment.
     target_dir: Option<String>,
@@ -59,6 +62,7 @@ impl Machine {
     pub(crate) fn here() -> Self {
         Machine {
             tools: tools::data_tools_dir(),
+            bundled: tools::bundled_dir(),
             target_dir: std::env::var("CARGO_TARGET_DIR")
                 .ok()
                 .filter(|dir| !dir.trim().is_empty()),
@@ -66,7 +70,11 @@ impl Machine {
     }
 
     fn find(&self, binary: &str) -> Option<PathBuf> {
-        tools::find_in(binary, self.tools.as_deref())
+        let roots: Vec<PathBuf> = [self.tools.clone(), self.bundled.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        tools::find_in_roots(binary, &roots)
     }
 }
 
@@ -598,6 +606,7 @@ mod tests {
         }
         Machine {
             tools: Some(tools),
+            bundled: None,
             target_dir: None,
         }
     }
@@ -699,6 +708,7 @@ mod tests {
         let dir = firmware(BLINKY);
         let bare = Machine {
             tools: Some(dir.path().join("tools")),
+            bundled: None,
             target_dir: None,
         };
         let plan = plan_on(&c3(dir.path()), true, &bare);

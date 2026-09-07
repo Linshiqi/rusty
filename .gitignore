@@ -12,3 +12,8 @@ dist/
 
 .DS_Store
 Thumbs.db
+
+# rusty's own QEMU, fetched into the bundle by scripts/fetch-qemu.sh —
+# sixty megabytes of binaries that belong in a release asset, not in git
+/crates/rusty-app/bundled/qemu/
+/crates/rusty-app/bundled/*.tar.xz

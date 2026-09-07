@@ -28,6 +28,12 @@ in green the whole time. It now shows the server's own progress —
 `rust-analyzer · Indexing 26% 12/45 (esp-hal)` — until the work is done, so
 an empty popup reads as "not yet" rather than "never".
 
+**Changed — rusty's QEMU ships in the installer.** The emulator with the
+GPIO model is packaged with the app, so a fresh install simulates without
+a download and a pin read back in the emulator is what the firmware set.
+Espressif's build is fetched only where rusty has no build of its own
+(Intel macOS today).
+
 **Changed — a stock QEMU says what it cannot do.** Espressif's build of the
 emulator has an empty GPIO write handler: a pin read back is always 0, so
 `led.toggle()` followed by `led.is_set_high()` prints `false` for ever and
