@@ -1779,6 +1779,12 @@ usty`) holds `location.toml`
   `set_bundled_dir`, so every path derived from the bundle is plain.
   Anything else that turns a canonicalised path into a command-line
   argument wants the same.
+- **A script committed from this Windows checkout is mode 644, and
+  `core.fileMode=false` hides that here.** macOS and Linux runners then
+  refuse to execute it — `Permission denied`, exit 126 — which is how the
+  first v0.6.12 release built only the Windows installer. Mark scripts
+  executable in the index (`git update-index --chmod=+x scripts/x.sh`)
+  and have workflows run them through `bash scripts/x.sh` regardless.
 - **A file on PATH called `rust-analyzer` is usually rustup's proxy, not
   rust-analyzer.** The proxy exists on every machine with rustup whether or
   not the component does; with the component missing it starts, prints an
