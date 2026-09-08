@@ -835,6 +835,31 @@ jobs:
           finally:
               qemu.kill()
 
+      # Everything above is about pins. This is about the *board*: the
+      # sheet in examples/blink-rust says a lamp is wired to the pin the
+      # firmware drives, through a resistor, and its cathode to ground —
+      # and `board_probe` replays the sheet's own rules over the pins the
+      # emulator reports, so "the lamp lights" is checked rather than
+      # looked at. It fails when a lamp on a GPIO never lights, which is
+      # what a rewired sheet or a broken rule both look like.
+      #
+      # `RUSTY_CONFIG_DIR` is the workspace, so rusty's tool ladder finds
+      # the emulator this job just unpacked into `tools/qemu` — the same
+      # ladder a user's install walks, with the data directory pointed here.
+      - name: The board's own rules light its lamp
+        env:
+          RUSTY_CONFIG_DIR: ${{ github.workspace }}
+        run: |
+          cargo run -p rusty-embed --example board_probe -- examples/blink-rust 8 \
+            > board-probe.log 2>&1 || {
+              echo "::error::the board probe failed on examples/blink-rust"
+              tail -40 board-probe.log | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+                | while IFS= read -r chunk; do echo "::error::…$chunk"; done
+              exit 1
+            }
+          tail -30 board-probe.log
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -849,4 +874,5 @@ jobs:
             probe-qemu.out
             irq-serial.log
             irq-qemu.out
+            board-probe.log
           if-no-files-found: warn

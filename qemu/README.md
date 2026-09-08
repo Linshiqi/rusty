@@ -63,7 +63,7 @@ artifact.
 
 ## What it is proven to do
 
-Six gates, each able to fail:
+Seven gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -110,6 +110,13 @@ loop that prints, so the emulator legitimately holds one transition the
 firmware never announced — the model was rejected for being more truthful
 than the firmware, which is the entire reason it exists. The check now aligns
 the two and reports the lead.
+
+7. The **board** lights. `board_probe` boots `examples/blink-rust` with its
+   own `.rusty/sim.toml`, replays the sheet's rules over the pins the
+   emulator reports, and requires every lamp wired to a GPIO to have lit
+   and gone out. That is the panel's whole claim — this LED is on that pin
+   — checked by a machine instead of by somebody looking at it.
+
 
 ## What each desktop needed
 
