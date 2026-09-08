@@ -46,7 +46,7 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 ///
 /// The tag is pinned for the reason in this module's header; the repository
 /// it hangs off is [`REPO`], named once for the whole crate.
-const RUSTY_QEMU_TAG: &str = "qemu-v3";
+const RUSTY_QEMU_TAG: &str = "qemu-v4";
 
 /// An archive to fetch: where to put it, the URLs to try in order, and the
 /// extraction step. One shape for QEMU, the debuggers and the C toolchain —

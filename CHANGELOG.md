@@ -9,7 +9,7 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
-## Unreleased
+## v0.6.13
 
 **Added — the installer carries the tools, so a fresh install can already
 simulate, debug and flash.** rusty's QEMU, both Espressif debuggers, espflash
