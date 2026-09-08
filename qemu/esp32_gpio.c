@@ -1023,12 +1023,19 @@ static void esp32_i2c_run(Esp32GpioState *s)
         unsigned op = (command >> ESP32_I2C_CMD_OP_SHIFT) & ESP32_I2C_CMD_OP_MASK;
         unsigned bytes = command & ESP32_I2C_CMD_BYTES_MASK;
 
-        /* An empty slot is the end of the list: the driver writes the steps
-         * it needs and leaves the rest zero, and a zero word is not a
-         * `RSTART` it wanted. */
-        if ((command & ~ESP32_I2C_CMD_DONE) == 0) {
-            break;
-        }
+        /*
+         * A zero word is *not* an empty slot, however much it looks like
+         * one. `RSTART` is opcode zero with no byte count and no ack bits,
+         * so a start command and an unused slot are the same thirty-two
+         * bits — and the silicon needs no way to tell them apart, because
+         * it stops at the `STOP` or `END` a driver always ends with.
+         *
+         * Breaking on a zero word here made every transaction execute
+         * nothing at all: it completed, with no acknowledgement, so every
+         * address on the bus looked absent and not one byte was ever
+         * reported. Which is precisely how it read — a bus with nothing on
+         * it, from a model that had never got as far as looking.
+         */
         s->i2c_reg[R_RUSTY_I2C_COMD0 + i] = command | ESP32_I2C_CMD_DONE;
 
         switch (op) {

@@ -1095,6 +1095,18 @@ jobs:
                   print(f"::error::probe: {line.replace('%', '%25')[:900]}")
               for line in traffic[-8:]:
                   print(f"::error::bus: {line.replace('%', '%25')[:900]}")
+              # The emulator's own stderr, which is where an assertion or a
+              # crash inside the model would be. This gate once failed with
+              # three lines of serial and silence everywhere else, and the
+              # one place that could have said whether the guest was stuck
+              # or the emulator had died was not being read.
+              try:
+                  ours = open("i2c-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
               tail = log[-4000:].replace("%", "%25").replace("\r", "")
               print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
               sys.exit(1)
@@ -1235,6 +1247,13 @@ jobs:
                   print(f"::error::probe: {line.replace('%', '%25')[:900]}")
               for line in traffic[-8:]:
                   print(f"::error::wire: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("spi-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
               tail = log[-4000:].replace("%", "%25").replace("\r", "")
               print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
               sys.exit(1)

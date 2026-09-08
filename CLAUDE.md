@@ -1449,6 +1449,15 @@ usty`) holds `location.toml`
   `REG32(I2C_CTR, 0x04)` expands to the same enumerator, and
   `hw/xtensa/esp32.c` includes both those headers and this one — so an
   unprefixed name is a redeclaration error in a file neither of us wrote.
+- **An I2C `RSTART` command word is all zeros, and so is an unused command
+  slot.** The peripheral's command list encodes a start as opcode 0 with no
+  byte count and no ack bits, so the two are the same thirty-two bits — and
+  the silicon needs no way to tell them apart, because it stops at the
+  `STOP` or `END` a driver always ends with. A model that read a zero word
+  as "the end of the list" executed *nothing*: every transaction completed
+  with no acknowledgement, every address on the bus looked absent, and not
+  one byte was reported. It reads exactly like a bus with nothing on it,
+  which is the hardest kind of wrong answer to tell from a right one.
 - **Renaming a script means changing the line that runs it.** `interrupts.py`
   became `patches.py`; the workflow step's name and its comment were updated
   and the `run:` line was not, so every platform stopped at `can't open file`
