@@ -197,7 +197,7 @@ jobs:
       # three files are pinned in upstream.sha256 above, so a rewrite
       # upstream fails loudly rather than quietly doing nothing.
       - name: Give the interrupt path what upstream is missing
-        run: python qemu/interrupts.py qemu-src
+        run: python qemu/patches.py qemu-src
 
       # Espressif's fork asks pkg-config for slirp with `static: true`, which
       # upstream QEMU 9.2 does not:
