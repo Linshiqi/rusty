@@ -106,19 +106,26 @@ fn main() -> ! {
     loop {
         delay.delay_millis(100);
 
-        // The write first, and once: a display is written to and never read,
-        // and the host has to see the bytes to know the transfer happened at
-        // all.
-        if !told {
-            match spi.write(&TELL) {
-                Ok(()) => {
+        // The write every time round, which is what a display gets. It used
+        // to happen once, and once is not enough to assert on: the emulator
+        // says the same transaction only the first time — a driver polling a
+        // sensor would otherwise put twenty kilobytes a second down the
+        // channel — so a one-shot write is reported in exactly one moment,
+        // and if nobody is listening in that moment nobody ever hears it.
+        // Repeating it makes the write alternate with the transfer below, so
+        // each is a change from the one before and both are said every loop.
+        match spi.write(&TELL) {
+            Ok(()) => {
+                if !told {
                     say("wrote ", &TELL);
                     told = true;
                 }
-                Err(error) => {
-                    println!("[spi] the write failed: {error:?}");
-                    // Said once, then wait: a failing transfer every hundred
+            }
+            Err(error) => {
+                if !told {
+                    // Said once: a failing transfer every hundred
                     // milliseconds is a log nobody can read.
+                    println!("[spi] the write failed: {error:?}");
                     told = true;
                 }
             }

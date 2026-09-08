@@ -239,13 +239,26 @@ fn main() -> ! {
             }
         }
 
-        if present[0] && !wrote {
+        // Every time round, which is what a display gets — and what makes it
+        // assertable. The emulator says the same transaction only the first
+        // time, so a one-shot write is reported in exactly one moment; if
+        // nobody is on the channel in that moment, nobody ever hears it. The
+        // line to the serial log is still said once, because that one is
+        // about the firmware and not about the bus.
+        if present[0] {
             match i2c.write(DISPLAY, &DISPLAY_BYTES) {
                 Ok(()) => {
-                    say("wrote ", &DISPLAY_BYTES);
-                    wrote = true;
+                    if !wrote {
+                        say("wrote ", &DISPLAY_BYTES);
+                        wrote = true;
+                    }
                 }
-                Err(error) => println!("[i2c] the display refused: {error:?}"),
+                Err(error) => {
+                    if !wrote {
+                        println!("[i2c] the display refused: {error:?}");
+                        wrote = true;
+                    }
+                }
             }
         }
     }
