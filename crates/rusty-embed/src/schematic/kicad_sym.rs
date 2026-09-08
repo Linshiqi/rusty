@@ -173,12 +173,69 @@ pub fn parse(library: &str, text: &str) -> Result<Vec<Symbol>, ParseError> {
         if node.child("extends").is_some() {
             continue;
         }
-        symbols.push(symbol(library, name, node)?);
+        symbols.extend(units(library, name, node)?);
     }
     Ok(symbols)
 }
 
-fn symbol(library: &str, name: &str, node: &Sx) -> Result<Symbol, ParseError> {
+/// One symbol, or one per unit for a part that has several.
+///
+/// KiCad puts a part's units in sub-symbols named `<part>_<unit>_<style>`:
+/// unit 0 is the body every unit shares and 1..n are the units themselves.
+/// A quad op-amp is four of them plus a power unit, and each is placed
+/// separately on a sheet — they are one package and four *parts*.
+///
+/// Read as one symbol they came out as a single blob with every unit's pins
+/// on top of each other, which is unusable and says nothing about why. So a
+/// part with more than one unit becomes one symbol per unit, `LM324_A`,
+/// `LM324_B` and so on, each carrying the shared body and its own pins.
+/// Nothing else changes: a sheet places `Device:LM324_A` like any other
+/// symbol, and the model needs no notion of a unit at all.
+///
+/// A part with one unit — which is nearly every part here — is exactly what
+/// it was, under its own name and with no suffix.
+fn units(library: &str, name: &str, node: &Sx) -> Result<Vec<Symbol>, ParseError> {
+    let mut numbers: Vec<u32> = node
+        .children("symbol")
+        .filter_map(|child| unit_of(name, child.text(1)?))
+        .filter(|unit| *unit > 0)
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+
+    if numbers.len() < 2 {
+        return Ok(vec![symbol(library, name, node, None)?]);
+    }
+    numbers
+        .into_iter()
+        .map(|unit| symbol(library, name, node, Some(unit)))
+        .collect()
+}
+
+/// The unit number out of a sub-symbol's name: `LM324_2_1` is unit 2.
+///
+/// Matched against the part's own name rather than by counting underscores
+/// from the right, because a part may be called `74LS00_2` and a name split
+/// blindly would read its own suffix as a unit.
+fn unit_of(part: &str, child: &str) -> Option<u32> {
+    let rest = child.strip_prefix(part)?.strip_prefix('_')?;
+    rest.split('_').next()?.parse().ok()
+}
+
+/// `A` for unit 1, `B` for 2, and the number itself past 26 — a part with
+/// more units than the alphabet has letters is not worth an invented
+/// scheme.
+fn unit_suffix(unit: u32) -> String {
+    match u8::try_from(unit).ok().filter(|n| (1..=26).contains(n)) {
+        Some(n) => ((b'A' + n - 1) as char).to_string(),
+        None => unit.to_string(),
+    }
+}
+
+/// One symbol. `only` names the unit to take pins from, for a part that has
+/// several; `None` takes them all, which is the same thing for a part with
+/// one unit and is what every part here has.
+fn symbol(library: &str, name: &str, node: &Sx, only: Option<u32>) -> Result<Symbol, ParseError> {
     let property = |key: &str| -> Option<String> {
         node.children("property")
             .find(|p| p.text(1) == Some(key))
@@ -188,9 +245,15 @@ fn symbol(library: &str, name: &str, node: &Sx) -> Result<Symbol, ParseError> {
     let mut pins = Vec::new();
     let mut graphics = Vec::new();
     // Bodies and pins live in unit sub-symbols (`R_0_1`, `R_1_1`), and KiCad
-    // allows them directly in the symbol as well; both are read.
+    // allows them directly in the symbol as well; both are read. Unit 0 is
+    // the body every unit shares, so it is kept whichever unit is wanted.
     let mut holders: Vec<&Sx> = vec![node];
-    holders.extend(node.children("symbol"));
+    holders.extend(node.children("symbol").filter(|child| {
+        let Some(unit) = child.text(1).and_then(|child| unit_of(name, child)) else {
+            return true;
+        };
+        only.is_none_or(|wanted| unit == 0 || unit == wanted)
+    }));
     for holder in holders {
         for item in holder.items() {
             match item.head() {
@@ -268,6 +331,11 @@ fn symbol(library: &str, name: &str, node: &Sx) -> Result<Symbol, ParseError> {
         }
     }
     let reference = property("Reference").unwrap_or_else(|| "U".to_string());
+    let name = match only {
+        Some(unit) => format!("{name}_{}", unit_suffix(unit)),
+        None => name.to_string(),
+    };
+    let name = name.as_str();
     Ok(Symbol {
         library: library.to_string(),
         name: name.to_string(),
@@ -627,6 +695,82 @@ mod tests {
         assert!(error.detail.contains("never closed"), "{error}");
         let error = parse("test", "(not_a_library)").expect_err("not a library");
         assert!(error.detail.contains("kicad_symbol_lib"), "{error}");
+    }
+
+    /// A package with several units is several parts on a sheet, so it is
+    /// several symbols here. Read as one it came out as every unit's pins
+    /// on top of each other, which is unusable and says nothing about why.
+    #[test]
+    fn a_part_with_units_becomes_one_symbol_for_each() {
+        let text = r#"(kicad_symbol_lib
+            (symbol "LM324"
+              (property "Reference" "U" (at 0 0 0))
+              (symbol "LM324_0_1"
+                (rectangle (start -1 -1) (end 1 1) (stroke (width 0.1)) (fill (type none))))
+              (symbol "LM324_1_1"
+                (pin output line (at 3 0 180) (length 1) (name "~") (number "1"))
+                (pin input line (at -3 1 0) (length 1) (name "~") (number "2")))
+              (symbol "LM324_2_1"
+                (pin output line (at 3 0 180) (length 1) (name "~") (number "7"))
+                (pin input line (at -3 1 0) (length 1) (name "~") (number "6")))))"#;
+        let symbols = parse("Amplifier", text).expect("parses");
+        assert_eq!(
+            symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["LM324_A", "LM324_B"]
+        );
+        assert_eq!(
+            symbols[0]
+                .pins
+                .iter()
+                .map(|p| p.number.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "2"],
+            "each unit carries its own pins and not the others'"
+        );
+        assert_eq!(
+            symbols[1]
+                .pins
+                .iter()
+                .map(|p| p.number.as_str())
+                .collect::<Vec<_>>(),
+            vec!["7", "6"]
+        );
+        assert_eq!(
+            symbols[0].graphics.len(),
+            1,
+            "unit 0 is the body every unit shares, so every unit has it"
+        );
+        assert_eq!(symbols[1].graphics.len(), 1);
+    }
+
+    /// One unit is not a unit: the ordinary part keeps its own name, with no
+    /// suffix and nothing else changed. Every part in this repository is one
+    /// of these, so getting it wrong would be everything.
+    #[test]
+    fn a_part_with_one_unit_is_left_exactly_as_it_was() {
+        let symbols = parse("Device", BUILTIN).expect("parses");
+        assert!(
+            symbols.iter().all(|s| !s.name.ends_with("_A")),
+            "{:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["R", "C", "LED", "SW_Push"]
+        );
+    }
+
+    /// A part whose own name ends in a number: splitting a sub-symbol's
+    /// name from the right would read `74LS00`'s own `00` as a unit.
+    #[test]
+    fn a_unit_is_read_against_the_parts_name_and_not_by_counting_underscores() {
+        assert_eq!(unit_of("74LS00", "74LS00_1_1"), Some(1));
+        assert_eq!(unit_of("74LS00", "74LS00_0_1"), Some(0));
+        assert_eq!(unit_of("74LS00", "74LS00_12_1"), Some(12));
+        assert_eq!(unit_of("74LS00", "somethingelse_1_1"), None);
+        assert_eq!(unit_suffix(1), "A");
+        assert_eq!(unit_suffix(26), "Z");
+        assert_eq!(unit_suffix(27), "27", "past the alphabet, the number");
     }
 }
 
