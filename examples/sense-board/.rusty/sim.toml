@@ -1,0 +1,64 @@
+# The board this example reads: a source you can drag on the ADC pin, a
+# sensor on the I2C bus with its registers spelled out, and a display for
+# what the firmware prints.
+#
+# Nothing here is a hint to the firmware. The source's counts arrive at the
+# converter the firmware samples, and the sensor's registers are what its
+# driver reads back — change either and the numbers in the Plot panel
+# change, without touching a line of code.
+version = 2
+
+[board]
+chip = "esp32c3"
+x = 460
+y = 120
+
+# The knob. `start` is where its slider sits before anybody touches it, and
+# the same value is what the run puts on the pin as it begins — so the panel
+# and the converter agree before the first drag rather than after it.
+[[part]]
+ref = "V1"
+symbol = "rusty:Analog"
+value = "knob"
+x = 208
+y = 128
+props = { start = "2048", max = "4095" }
+
+[[wire]]
+from = "V1.OUT"
+to = "U1.GPIO3"
+[[wire]]
+from = "V1.GND"
+to = "U1.GND"
+
+# The sensor. `addr` is what puts it on the bus at all — a part without one
+# is drawn and wired and the bus never hears of it — and `regs` is what it
+# answers: 0x68 at the identity register, then six bytes of axes from 0x3b,
+# which read as x = +4096, y = 0, z = +16384 (one g, on a part that reports
+# 16384 counts per g).
+[[part]]
+ref = "U2"
+symbol = "rusty:Sensor"
+value = "imu"
+x = 208
+y = 288
+props = { addr = "68", regs = "75=68,3b=100000004000" }
+
+[[wire]]
+from = "U2.SDA"
+to = "U1.GPIO5"
+[[wire]]
+from = "U2.SCL"
+to = "U1.GPIO6"
+[[wire]]
+from = "U2.VCC"
+to = "U1.3V3"
+[[wire]]
+from = "U2.GND"
+to = "U1.GND"
+
+[[part]]
+ref = "DS1"
+symbol = "rusty:Display"
+x = 760
+y = 208

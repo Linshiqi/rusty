@@ -860,7 +860,25 @@ mod tests {
                 root.display(),
                 reading.warnings
             );
+            // And what each sheet puts on the two buses, since a device
+            // that is declared but not wired is exactly the mistake these
+            // examples exist to be a correct answer to.
+            let (bus, bus_said) = crate::nets::bus_devices(&sheet, &rows);
+            let (wire, wire_said) = crate::nets::wire_devices(&sheet, &rows);
+            assert!(
+                bus_said.is_empty() && wire_said.is_empty(),
+                "{}: {bus_said:?} {wire_said:?}",
+                root.display()
+            );
+            if root.ends_with("sense-board") {
+                assert_eq!(
+                    bus.iter().map(|d| d.address).collect::<Vec<_>>(),
+                    vec![0x68],
+                    "the sensor is on the bus at the address the file names"
+                );
+                assert!(wire.is_empty(), "nothing on this board is on SPI");
+            }
         }
-        assert!(seen >= 4, "the examples carry boards");
+        assert!(seen >= 5, "the examples carry boards");
     }
 }

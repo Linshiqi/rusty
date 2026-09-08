@@ -312,6 +312,12 @@ the number the firmware's own ADC would have produced, so it needs no
 conversion to reach the model — which is why it is the message that travels
 down the channel.
 
+`examples/sense-board` is the worked end of all three: a knob on the ADC and
+a sensor on the bus, read with `adc.read_oneshot()` and `i2c.write_read()`
+and nothing else. The firmware knows nothing about the simulator; the sheet
+says what is on the pin and what the sensor answers, and the numbers in the
+Plot panel follow both.
+
 **A part is on the I2C bus because it carries an `addr` prop and is wired to
 one**, not because of its kind: a sensor, a display and a breakout imported
 from LCSC all reach it the same way (`nets::bus_devices`). `cs` and `miso` do
