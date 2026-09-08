@@ -11,6 +11,21 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Added — the installer carries the tools, so a fresh install can already
+simulate, debug and flash.** rusty's QEMU, both Espressif debuggers, espflash
+and the LLDB adapter ship inside the installer instead of being four things
+to find and download first. Nothing is duplicated: a copy you installed
+yourself is still the one used — the bundled tool is a floor under a machine
+that has nothing, not a preference. The exception is the emulator, where
+rusty's build is used even if another is on your PATH, because a stock QEMU
+has none of the pin, converter or bus models and the board view would quietly
+stop meaning anything.
+
+Rust itself is not in the installer and is not meant to be: which toolchain a
+project needs is decided by its own `rust-toolchain.toml`, rustup is the only
+thing that installs one correctly, and a frozen copy would be out of date
+within weeks. The first-run screen still offers to set that up.
+
 **Added — the simulator reads as well as writes: an ADC, an I2C bus and an
 SPI wire.** Firmware in the simulator can now call `adc.read_oneshot()`,
 `i2c.write_read()` and `spi.transfer()` — the ordinary drivers, written as

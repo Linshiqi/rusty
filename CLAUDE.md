@@ -52,11 +52,13 @@ cd crates/rusty-ui && trunk serve
 # The whole app
 cd crates/rusty-app && cargo tauri dev
 
-# rusty's own QEMU (the GPIO model) into crates/rusty-app/bundled/, where the
-# installer packages it as a resource. The release workflow runs this before
-# every build; run it once here and `cargo tauri dev` uses ours too. Not
-# committed — sixty megabytes of binaries belong in a release asset.
-scripts/fetch-qemu.sh
+# The tools the installer ships beside the app, into crates/rusty-app/bundled/:
+# rusty's QEMU (the peripherals), both esp-gdbs, espflash, the LLDB adapter.
+# The release workflow runs this before every build; run it once here and
+# `cargo tauri dev` uses them too. Not committed — three hundred megabytes of
+# binaries belong in a release asset. Rust itself is deliberately not in it;
+# the script says why in its header.
+scripts/bundle-tools.sh
 
 # Release: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and
 # .github/workflows/release.yml builds installers on Windows (NSIS), macOS
@@ -251,7 +253,7 @@ peripherals in one file (`esp32_gpio.c`, which keeps upstream's name because
 it replaces upstream's file) on purpose: all four carry the host's view of
 one board and share its socket, so "one channel, one protocol, one reader"
 stays true on the emulator's side as well as rusty's, and a new file would
-mean a new entry in upstream's build system for each. **The installer ships it**: `scripts/fetch-qemu.sh`
+mean a new entry in upstream's build system for each. **The installer ships it**: `scripts/bundle-tools.sh`
 unpacks the `qemu-v*` asset into `crates/rusty-app/bundled/`, `bundle.resources`
 packages that directory, and the app hands Tauri's resource directory to
 `tools::set_bundled_dir` at setup, so a fresh install simulates with ours and
@@ -766,6 +768,46 @@ A freshly installed workbench on a machine with no Rust could do nothing, and
 said so only if somebody found the Toolchain panel and worked out which of six
 buttons to press first. Every piece needed to fix that already existed — the
 probe, the recipes, the archive downloads — and none of it ran unless asked.
+
+**Most of it does not have to be fetched at all now: the installer carries
+it.** `scripts/bundle-tools.sh` puts rusty's QEMU, both esp-gdbs, espflash and
+the LLDB adapter into `crates/rusty-app/bundled/`, which ships as a Tauri
+resource — three hundred megabytes unpacked, and the difference between an
+install that is a workbench and one that is a list of things to go and find.
+
+- **The bundle is a fallback, not a preference.** `tools::find` reaches it
+  after the data directory, cargo's bin and PATH, so a copy the user
+  installed on purpose still wins — "check the environment, skip what is
+  there" answered at run time, per tool, rather than by an installer copying
+  three hundred megabytes into the data directory and needing elevation to do
+  it. The one exception is `bundle_wins`: rusty's QEMU, because a stock
+  `qemu-system-riscv32` wears the same name and has none of the peripherals.
+- **Rust itself is deliberately not in it** — rustup, cargo, the standard
+  library, espup's Xtensa fork. Which toolchain a project needs is decided by
+  its `rust-toolchain.toml`, rustup is the only thing that installs them
+  correctly, and a copy frozen into an installer goes stale in six weeks. The
+  setup screen asks for those, which is the honest shape for a dependency the
+  user has to own. The C cross compilers are out too: four hundred megabytes
+  each, for a case the bundle could not complete on its own anyway, since
+  Xtensa needs espup regardless.
+- **Not every desktop gets every tool, and the script says which.** Espressif
+  publishes no macOS esp-gdb, so CodeLLDB is that platform's debugger;
+  CodeLLDB is *not* bundled on Linux, because it carries a hundred and thirty
+  megabytes of host LLDB and the AppImage bundler walks every ELF among the
+  app's resources — the failure QEMU's firmware directory already caused
+  once. Linux has esp-gdb in the bundle instead.
+- **"Not published" and "the download failed" are different answers.** The
+  first version treated any `curl` failure as the first, and a network that
+  drops TLS connections produced an installer quietly missing two tools,
+  blamed on a platform that publishes both. The status code decides now, and
+  anything that is not a clean 404 or a clean download stops the build.
+- **Each tool is proven by the binary rusty asks for**, not by the archive
+  having unpacked. `simulate::find_gdb` looks for `xtensa-esp32-elf-gdb` —
+  Espressif builds that family per chip and ships no plain
+  `xtensa-esp-elf-gdb` — so a check on the family's own name would pass on an
+  archive rusty cannot use. `the_shipped_bundle_answers_for_every_tool_it_
+  carries` runs the real ladder over the real directory, and skips aloud on a
+  checkout that has not run the script.
 
 - **`rusty_embed::setup::plan` is the one derivation of "what is missing".**
   The Toolchain panel and the setup screen read the same
@@ -1871,7 +1913,7 @@ usty`) holds `location.toml`
   machine it models, some of it ELF for other architectures
   (`openbios-sparc32`), and linuxdeploy walking the bundled tree ended the
   Linux release with `failed to run linuxdeploy` while the deb beside it
-  had built. `scripts/fetch-qemu.sh` keeps only the `esp32*` ROMs, and the
+  had built. `scripts/bundle-tools.sh` keeps only the `esp32*` ROMs, and the
   bundle step sets `NO_STRIP` so linuxdeploy does not rewrite the QEMU
   binaries either. Anything else shipped as a resource on Linux has to
   pass the same walk.

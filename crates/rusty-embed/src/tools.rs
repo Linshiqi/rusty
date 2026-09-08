@@ -13,17 +13,23 @@
 //!    it, and `<family>/` itself for the archives that unpack with no `bin/`.
 //!    First, because a tool rusty downloaded on request has to be found or the
 //!    panel keeps offering to install it again.
-//!    - The tools the installer shipped beside the app — `bundled/` in Tauri's
-//!      resource directory, the same `<family>/bin/` shape — which is where a
-//!      fresh install finds rusty's own QEMU without downloading anything. After
-//!      the data directory, so a copy the user installed on purpose still wins;
-//!      and only when its `PLATFORM` file names this machine, since a universal
-//!      macOS bundle carries one architecture's binaries.
 //! 2. `$CARGO_HOME/bin` (else `~/.cargo/bin`), where `cargo install` puts
 //!    espflash and friends. Usually on PATH too — but not in a window opened
 //!    before rustup ran, which is exactly the first-run machine.
 //! 3. PATH.
-//! 4. The directories espup exports (`esp_env.rs`): the Xtensa GCC and clang
+//! 4. The tools the installer shipped beside the app — `bundled/` in Tauri's
+//!    resource directory, the same `<family>/bin/` shape — which is what makes
+//!    a fresh install able to simulate, debug and flash with no download at
+//!    all. **Here, and not earlier**: everything in it is a program the user
+//!    may have installed themselves, and a copy they chose on purpose is the
+//!    one they meant. The bundle is a floor under a machine with nothing, not
+//!    a preference. Only when its `PLATFORM` file names this machine, since a
+//!    universal macOS bundle carries one architecture's binaries.
+//!    - The exception is rusty's own QEMU ([`bundle_wins`]), which is searched
+//!      at step 1: a stock `qemu-system-riscv32` wears the same name and has
+//!      none of the peripherals, so one on PATH winning would quietly take the
+//!      board view apart on a machine that had the right one in the bundle.
+//! 5. The directories espup exports (`esp_env.rs`): the Xtensa GCC and clang
 //!    it installed under the `esp` toolchain. Last, because that is where
 //!    `process::command` puts them on a child's PATH — so "is the linker
 //!    there" is answered here exactly as the build will answer it.
@@ -79,15 +85,44 @@ pub fn plain(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// The bundled tools root, when the app set one and its QEMU was built for
-/// this machine. `bundled/qemu/PLATFORM` is written by `scripts/fetch-qemu.sh`
-/// with the target the binaries are for; a bundle that names another
-/// architecture — Intel macOS opening a universal app built with the
-/// arm64 QEMU — is ignored rather than tried and blamed on the firmware.
+/// The bundled tools root, when the app set one and its binaries were built
+/// for this machine. `bundled/PLATFORM` is written by
+/// `scripts/bundle-tools.sh` with the target they are for; a bundle that names
+/// another architecture — Intel macOS opening a universal app built with the
+/// arm64 tools — is ignored rather than tried and blamed on the firmware.
+///
+/// The older layout wrote the file under `qemu/`, when QEMU was all the
+/// bundle held. Both are read, so an app built before the bundle grew is
+/// still understood by a newer library.
 pub(crate) fn bundled_dir() -> Option<PathBuf> {
     let dir = BUNDLED.get()?;
-    let platform = std::fs::read_to_string(dir.join("qemu").join("PLATFORM")).ok()?;
-    (platform.trim() == host_platform()?).then(|| dir.clone())
+    platform_matches(dir).then(|| dir.clone())
+}
+
+/// Whether a bundle's `PLATFORM` names this machine — the pure half, so a
+/// test can put a directory anywhere and ask.
+fn platform_matches(dir: &Path) -> bool {
+    let Ok(platform) = std::fs::read_to_string(dir.join("PLATFORM"))
+        .or_else(|_| std::fs::read_to_string(dir.join("qemu").join("PLATFORM")))
+    else {
+        return false;
+    };
+    host_platform().is_some_and(|here| platform.trim() == here)
+}
+
+/// Whether the bundle outranks whatever the machine already has.
+///
+/// **It does for exactly one thing.** Everything else the installer ships —
+/// the debuggers, the flasher, the LLDB adapter — is the same program the
+/// user may have installed themselves, and a copy they chose on purpose is
+/// the one they meant; the bundle is a floor under a fresh machine, not a
+/// preference. rusty's QEMU is different in kind: a stock `qemu-system-riscv32`
+/// wears the same name and has no pin state, no GPIO interrupt, no converter
+/// and neither bus, so letting one on PATH win would silently take the board
+/// view apart on a machine that had everything it needed sitting in the
+/// bundle.
+fn bundle_wins(name: &str) -> bool {
+    name.starts_with("qemu-system-")
 }
 
 /// A binary's file name on this platform.
@@ -102,11 +137,15 @@ pub(crate) fn exe(name: &str) -> String {
 /// Where a binary is, by the ladder in the module header, or `None` when this
 /// machine has none.
 pub(crate) fn find(name: &str) -> Option<PathBuf> {
-    let roots: Vec<PathBuf> = [data_tools_dir(), bundled_dir()]
-        .into_iter()
-        .flatten()
-        .collect();
-    find_in_roots(name, &roots).or_else(|| in_dirs(name, &crate::esp_env::esp_env().path_dirs))
+    let bundle = bundled_dir();
+    let (early, late) = match bundle_wins(name) {
+        true => (bundle, None),
+        false => (None, bundle),
+    };
+    let roots: Vec<PathBuf> = [data_tools_dir(), early].into_iter().flatten().collect();
+    find_in_roots(name, &roots)
+        .or_else(|| late.and_then(|dir| in_roots(name, std::slice::from_ref(&dir))))
+        .or_else(|| in_dirs(name, &crate::esp_env::esp_env().path_dirs))
 }
 
 /// The first of `dirs` holding the binary.
@@ -120,6 +159,15 @@ fn in_dirs(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 /// The ladder over any number of tools roots, in order — the data directory
 /// and then the bundle — before cargo's bin and PATH.
 pub(crate) fn find_in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
+    in_roots(name, roots)
+        .or_else(|| cargo_bin().and_then(|bin| in_dirs(name, &[bin])))
+        .or_else(|| on_path(name))
+}
+
+/// The tools roots alone, in order, and nothing after them — the half of the
+/// ladder that answers "did rusty put this here", which the bundle needs to
+/// ask *after* PATH rather than before it.
+fn in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let file = exe(name);
     for tools in roots {
         for family in tool_families(tools) {
@@ -130,13 +178,7 @@ pub(crate) fn find_in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
             }
         }
     }
-    if let Some(bin) = cargo_bin() {
-        let candidate = bin.join(&file);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    on_path(name)
+    None
 }
 
 /// The first match for a binary on PATH, and nothing else — the question
@@ -165,11 +207,13 @@ pub(crate) fn data_tools_dir() -> Option<PathBuf> {
 /// panel reports it. Handing the directories to the child is what closes
 /// that gap without touching the user's environment.
 pub(crate) fn tool_bin_dirs() -> Vec<PathBuf> {
-    let Some(tools) = data_tools_dir() else {
-        return Vec::new();
-    };
-    tool_families(&tools)
+    // The bundle too, and after the data directory for the reason the ladder
+    // gives — these are *appended* to the child's PATH, so anything the user
+    // put there themselves is still found first.
+    [data_tools_dir(), bundled_dir()]
         .into_iter()
+        .flatten()
+        .flat_map(|root| tool_families(&root))
         .map(|family| family.join("bin"))
         .filter(|bin| bin.is_dir())
         .collect()
@@ -306,6 +350,96 @@ mod tests {
     fn probing_for_something_absent_answers_none() {
         assert!(on_path("a-binary-nobody-has-installed-xyzzy").is_none());
         assert!(find("a-binary-nobody-has-installed-xyzzy").is_none());
+    }
+
+    /// The bundle is a floor, not a preference — except for the one binary
+    /// that is not the program its name says. A user who installed espflash
+    /// themselves gets theirs; a user with a stock QEMU on PATH still gets
+    /// ours, because a stock one has none of the peripherals and the board
+    /// view would come apart with the right emulator sitting in the bundle.
+    #[test]
+    fn only_the_emulator_outranks_what_the_machine_already_has() {
+        assert!(bundle_wins("qemu-system-riscv32"));
+        assert!(bundle_wins("qemu-system-xtensa"));
+        assert!(!bundle_wins("espflash"));
+        assert!(!bundle_wins("riscv32-esp-elf-gdb"));
+        assert!(!bundle_wins("codelldb"));
+    }
+
+    /// The bundle the installer ships answers for every tool it claims to.
+    ///
+    /// Checked against the real directory `scripts/bundle-tools.sh` fills,
+    /// because every failure this has had was a *shape* failure and not a
+    /// logic one: an archive that nests its payload one level down, or names
+    /// its binary per chip — Espressif ships no plain `xtensa-esp-elf-gdb`,
+    /// only `xtensa-esp32-elf-gdb` and its siblings — so a script that
+    /// unpacked something and declared victory would ship an installer whose
+    /// debugger is not where the ladder looks.
+    ///
+    /// Skipped, aloud, on a checkout that has not run the script; it is not
+    /// a thing every `cargo test` should have to download.
+    #[test]
+    fn the_shipped_bundle_answers_for_every_tool_it_carries() {
+        let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rusty-app/bundled");
+        if !platform_matches(&bundle) {
+            eprintln!(
+                "skipping: no bundle for this machine at {} — run scripts/bundle-tools.sh",
+                bundle.display()
+            );
+            return;
+        }
+        let roots = [bundle.clone()];
+        // The emulator, the debugger for each architecture, and the flasher.
+        // CodeLLDB is not here: it keeps a directory of its own that the
+        // ladder deliberately does not reach into, and `host_adapters` knows
+        // that shape instead.
+        for tool in [
+            "qemu-system-riscv32",
+            "qemu-system-xtensa",
+            "riscv32-esp-elf-gdb",
+            "espflash",
+        ] {
+            assert!(
+                in_roots(tool, &roots).is_some(),
+                "the bundle carries no {tool} the ladder can find"
+            );
+        }
+        // Xtensa's gdb is named per chip, which is the one the simulator asks
+        // for; the family's own name is not a binary at all.
+        assert!(
+            in_roots("xtensa-esp32-elf-gdb", &roots).is_some(),
+            "the Xtensa debugger is not where simulate::find_gdb looks"
+        );
+    }
+
+    /// A bundle that names another architecture is not used at all: a
+    /// universal macOS app carries one architecture's binaries, and trying
+    /// the wrong ones reads as the tool being broken. Both spellings of the
+    /// platform file are read, because an app built before the bundle grew
+    /// past QEMU wrote it one level down.
+    #[test]
+    fn a_bundle_is_used_only_when_it_names_this_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundled");
+        std::fs::create_dir_all(bundle.join("qemu")).unwrap();
+
+        std::fs::write(bundle.join("PLATFORM"), "some-other-machine\n").unwrap();
+        assert!(
+            !platform_matches(&bundle),
+            "a bundle for another architecture is ignored"
+        );
+
+        if let Some(here) = host_platform() {
+            std::fs::write(bundle.join("PLATFORM"), format!("{here}\n")).unwrap();
+            assert!(platform_matches(&bundle));
+
+            std::fs::remove_file(bundle.join("PLATFORM")).unwrap();
+            std::fs::write(bundle.join("qemu").join("PLATFORM"), format!("{here}\n")).unwrap();
+            assert!(
+                platform_matches(&bundle),
+                "the older layout wrote it under qemu/"
+            );
+        }
     }
 
     /// Both layouts the installer produces are searched: QEMU and the

@@ -109,17 +109,22 @@ jobs:
           --disable-strategies compile
           trunk@0.21.14 tauri-cli@~2.11
 
-      # rusty's own QEMU — the GPIO model — ships inside the installer, so a
-      # fresh install simulates without a download and without Espressif's
-      # stock build ever answering for a pin. The script is a no-op, said
-      # aloud, on a platform the qemu-v* release has no build for (Intel
-      # macOS), where the app falls back to fetching Espressif's.
-      # Through `bash`, not by executing the file: a script committed from a
-      # Windows checkout is mode 644, and macOS and Linux runners refuse to
-      # run it ("Permission denied", exit 126) — the first v0.6.12 build.
-      - name: Bundle rusty's QEMU
+      # The tools the installer ships beside the app: rusty's own QEMU — the
+      # one with the peripherals — both esp-gdbs, espflash and the LLDB
+      # adapter. That is the difference between a fresh install that is a
+      # workbench and one that cannot simulate, debug or flash until the user
+      # has found and fetched four things. Rust itself is deliberately not in
+      # there; the script says why.
+      #
+      # A tool with no build for this platform is said aloud and skipped, so
+      # this is a no-op rather than a failure on a desktop nothing publishes
+      # for. Through `bash`, not by executing the file: a script committed
+      # from a Windows checkout is mode 644, and macOS and Linux runners
+      # refuse to run it ("Permission denied", exit 126) — the first v0.6.12
+      # build.
+      - name: Bundle the tools the app drives
         shell: bash
-        run: bash scripts/fetch-qemu.sh
+        run: bash scripts/bundle-tools.sh
 
       # The tag is the version. Stamping it here means a release is one
       # gesture — the tag — not a version-bump commit plus a matching tag.
