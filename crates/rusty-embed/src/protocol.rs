@@ -117,7 +117,7 @@ pub fn parse_i2c_report(line: &str) -> Option<I2cReport> {
     let address = u8::from_str_radix(parts.next()?, 16).ok()?;
     let verb = parts.next()?.to_string();
     let hex = parts.next().unwrap_or("");
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);
@@ -127,6 +127,43 @@ pub fn parse_i2c_report(line: &str) -> Option<I2cReport> {
     Some(I2cReport {
         at_us,
         address,
+        verb,
+        bytes,
+    })
+}
+
+/// One `[rusty:spi]` line: a transfer on the emulator's SPI2.
+///
+/// The wire's answer to [`I2cReport`], and simpler because SPI is: a chip
+/// select instead of an address, and no acknowledgement to report. `verb` is
+/// `w` for what went out and `r` for what came back; a full-duplex transfer
+/// produces one of each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpiReport {
+    pub at_us: Option<u64>,
+    pub select: u8,
+    pub verb: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Parse `[rusty:spi@1234] 0 w aea501`.
+pub fn parse_spi_report(line: &str) -> Option<SpiReport> {
+    let rest = line.trim().strip_prefix("[rusty:spi")?;
+    let (at_us, rest) = split_stamp(rest)?;
+    let mut parts = rest.split_whitespace();
+    let select = parts.next()?.parse().ok()?;
+    let verb = parts.next()?.to_string();
+    let hex = parts.next().unwrap_or("");
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks(2) {
+        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+    }
+    Some(SpiReport {
+        at_us,
+        select,
         verb,
         bytes,
     })
@@ -711,6 +748,32 @@ mod tests {
         );
         assert_eq!(parse_i2c_report("[rusty:adc@10] 3=2048"), None);
         assert_eq!(parse_i2c_report("I (44) boot: Loaded app"), None);
+    }
+
+    /// A transfer on the wire: a chip select in decimal, because it is a
+    /// line number, and the bytes in hex like everything else.
+    #[test]
+    fn a_spi_report_carries_the_chip_select_and_the_bytes() {
+        assert_eq!(
+            parse_spi_report("[rusty:spi@2233716] 0 w aea501"),
+            Some(SpiReport {
+                at_us: Some(2_233_716),
+                select: 0,
+                verb: "w".into(),
+                bytes: vec![0xae, 0xa5, 0x01],
+            })
+        );
+        assert_eq!(
+            parse_spi_report("[rusty:spi@10] 2 r 1a68"),
+            Some(SpiReport {
+                at_us: Some(10),
+                select: 2,
+                verb: "r".into(),
+                bytes: vec![0x1a, 0x68],
+            })
+        );
+        assert_eq!(parse_spi_report("[rusty:spi@10] 0 w aea50"), None);
+        assert_eq!(parse_spi_report("[rusty:i2c@10] 68 r 68"), None);
     }
 
     #[test]

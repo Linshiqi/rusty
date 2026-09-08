@@ -283,6 +283,11 @@ pub enum Warning {
     /// A part with an address whose `SDA` or `SCL` reaches no GPIO. The
     /// emulator would answer it anyway; the desk would not.
     BusNotWired { part: String },
+    /// A part carrying a `cs` that is not a chip select this part has, or a
+    /// `miso` that is not hex bytes.
+    WireSelectUnreadable { part: String, value: String },
+    /// A part on a chip select whose `SCK` or `MOSI` reaches no GPIO.
+    WireNotWired { part: String },
 }
 
 impl std::fmt::Display for Warning {
@@ -322,8 +327,100 @@ impl std::fmt::Display for Warning {
                 f,
                 "{part} has an address but its SDA or SCL reaches no GPIO: the emulator would answer it and the board on your desk would not"
             ),
+            Warning::WireSelectUnreadable { part, value } => write!(
+                f,
+                "{part}'s chip select {value:?} is not a line this part has, or its answer is not hex bytes"
+            ),
+            Warning::WireNotWired { part } => write!(
+                f,
+                "{part} is on a chip select but its SCK or MOSI reaches no GPIO: the emulator would talk to it and the board on your desk would not"
+            ),
         }
     }
+}
+
+/// A part the sheet puts on a chip select, and the bytes it answers with.
+///
+/// The SPI half of [`BusDevice`], and deliberately simpler because SPI is:
+/// there is no addressing to key an answer on, so what a device says is one
+/// buffer read from its start on every transfer. A display declares nothing
+/// and is written to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireDevice {
+    pub part: String,
+    pub select: u8,
+    pub miso: Vec<u8>,
+}
+
+/// How many chip selects the peripheral has. Beyond this a `cs` is a typo,
+/// not a line.
+const WIRE_SELECTS: u8 = 6;
+
+/// Every device the sheet puts on a chip select, and what it wants said
+/// about the ones it could not.
+///
+/// The same two rules as the I2C half: a `cs` prop is what puts a part on
+/// the wire, and its `SCK` and `MOSI` have to reach GPIOs or it is named and
+/// left off — the emulator does not route through the GPIO matrix, so an
+/// unwired device would work there and be dead on the desk.
+pub fn wire_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<WireDevice>, Vec<Warning>) {
+    let mut devices = Vec::new();
+    let mut warnings = Vec::new();
+
+    for part in &sheet.parts {
+        let Some(select) = part.props.get("cs") else {
+            continue;
+        };
+        let select = select.trim();
+        if select.is_empty() {
+            continue;
+        }
+        let miso = part.props.get("miso").map(String::as_str).unwrap_or("");
+        let bytes = parse_hex(miso.trim());
+        let Some((select, bytes)) = select
+            .parse::<u8>()
+            .ok()
+            .filter(|n| *n < WIRE_SELECTS)
+            .zip(bytes)
+        else {
+            warnings.push(Warning::WireSelectUnreadable {
+                part: part.reference.clone(),
+                value: format!("{select} / {miso}"),
+            });
+            continue;
+        };
+        if gpio_of(sheet, rows, &part.reference, "SCK").is_none()
+            || gpio_of(sheet, rows, &part.reference, "MOSI").is_none()
+        {
+            warnings.push(Warning::WireNotWired {
+                part: part.reference.clone(),
+            });
+            continue;
+        }
+        devices.push(WireDevice {
+            part: part.reference.clone(),
+            select,
+            miso: bytes,
+        });
+    }
+    (devices, warnings)
+}
+
+/// A run of hex pairs, or nothing when it is not one. Empty is empty, not a
+/// refusal: a display answers with nothing and says so by saying nothing.
+fn parse_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect()
 }
 
 /// A part the sheet puts on the I2C bus: an address and what it answers.
@@ -355,16 +452,7 @@ fn parse_regs(text: &str) -> Option<Vec<(u8, Vec<u8>)>> {
     for run in text.split(',').map(str::trim).filter(|r| !r.is_empty()) {
         let (at, bytes) = run.split_once('=')?;
         let at = u8::from_str_radix(at.trim(), 16).ok()?;
-        let bytes = bytes.trim();
-        if bytes.len() % 2 != 0 {
-            return None;
-        }
-        let mut out = Vec::with_capacity(bytes.len() / 2);
-        for pair in bytes.as_bytes().chunks(2) {
-            let pair = std::str::from_utf8(pair).ok()?;
-            out.push(u8::from_str_radix(pair, 16).ok()?);
-        }
-        runs.push((at, out));
+        runs.push((at, parse_hex(bytes.trim())?));
     }
     Some(runs)
 }
@@ -1610,5 +1698,73 @@ mod tests {
             ),
             "SDA alone is not a bus"
         );
+    }
+
+    /// The SPI half, by the same two rules: a `cs` prop puts a part on the
+    /// wire, and its clock and data have to reach GPIOs.
+    #[test]
+    fn a_part_with_a_chip_select_and_wires_is_a_device_on_the_wire() {
+        let mut s = sheet();
+        s.symbols.push(symbol(
+            "Device",
+            "Display",
+            "U",
+            &[("1", "SCK"), ("2", "MOSI"), ("3", "MISO"), ("4", "CS")],
+        ));
+        let place_wired = |s: &mut Sheet, props: &[(&str, &str)]| {
+            place(s, "U2", "Device:Display");
+            wire(s, "U2.1", "U1.GPIO6");
+            wire(s, "U2.2", "U1.GPIO7");
+            if let Some(part) = s.parts.iter_mut().find(|p| p.reference == "U2") {
+                for (key, value) in props {
+                    part.props.insert((*key).into(), (*value).into());
+                }
+            }
+        };
+
+        let mut wired = s.clone();
+        place_wired(&mut wired, &[("cs", "0"), ("miso", "1a68")]);
+        let (devices, warnings) = wire_devices(&wired, &rows());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(devices[0].select, 0);
+        assert_eq!(devices[0].miso, vec![0x1a, 0x68]);
+
+        // A display: on a select, answering nothing.
+        let mut quiet = s.clone();
+        place_wired(&mut quiet, &[("cs", "1")]);
+        let (devices, warnings) = wire_devices(&quiet, &rows());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(devices[0].select, 1);
+        assert!(devices[0].miso.is_empty());
+
+        // No `cs` is not chip select zero.
+        let mut none = s.clone();
+        place_wired(&mut none, &[("miso", "1a68")]);
+        assert!(wire_devices(&none, &rows()).0.is_empty());
+
+        // A select the peripheral does not have, and half a byte.
+        let mut wrong = s.clone();
+        place_wired(&mut wrong, &[("cs", "9")]);
+        assert!(matches!(
+            &wire_devices(&wrong, &rows()).1[..],
+            [Warning::WireSelectUnreadable { .. }]
+        ));
+        let mut odd = s.clone();
+        place_wired(&mut odd, &[("cs", "0"), ("miso", "1a6")]);
+        assert!(matches!(
+            &wire_devices(&odd, &rows()).1[..],
+            [Warning::WireSelectUnreadable { .. }]
+        ));
+
+        // And wired to nothing.
+        let mut loose = s.clone();
+        place(&mut loose, "U2", "Device:Display");
+        if let Some(part) = loose.parts.iter_mut().find(|p| p.reference == "U2") {
+            part.props.insert("cs".into(), "0".into());
+        }
+        assert!(matches!(
+            &wire_devices(&loose, &rows()).1[..],
+            [Warning::WireNotWired { .. }]
+        ));
     }
 }

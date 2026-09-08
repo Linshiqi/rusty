@@ -1186,6 +1186,9 @@ pub struct Sim {
     /// build of QEMU fills it, so empty means either an idle bus or an
     /// emulator that has none.
     pub i2c: RwSignal<Vec<rusty_embed::I2cReport>>,
+    /// The same for SPI2, from `[rusty:spi]`: what went out on each chip
+    /// select and what came back.
+    pub spi: RwSignal<Vec<rusty_embed::SpiReport>>,
     /// Raw ADC counts the firmware's own converter has *read* off each pin,
     /// from `[rusty:adc]` — the return half of [`Self::analog`].
     ///
@@ -1534,6 +1537,7 @@ impl AppState {
                 analog: RwSignal::new(std::collections::HashMap::new()),
                 adc: RwSignal::new(std::collections::HashMap::new()),
                 i2c: RwSignal::new(Vec::new()),
+                spi: RwSignal::new(Vec::new()),
                 plant: RwSignal::new(rusty_embed::Plant::default()),
                 plant_closed: RwSignal::new(false),
                 plant_gen: RwSignal::new(0),

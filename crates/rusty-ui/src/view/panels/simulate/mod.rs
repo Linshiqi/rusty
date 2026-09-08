@@ -232,6 +232,10 @@ fn warning_text(warning: &Warning) -> String {
             t!("simulate.warning-bus-registers", part = part, value = value)
         }
         Warning::BusNotWired { part } => t!("simulate.warning-bus-wiring", part = part),
+        Warning::WireSelectUnreadable { part, value } => {
+            t!("simulate.warning-wire-select", part = part, value = value)
+        }
+        Warning::WireNotWired { part } => t!("simulate.warning-wire-wiring", part = part),
     }
 }
 
@@ -2862,6 +2866,35 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                             16,
                         )
                         .ok();
+                        // The wire's half of the same idea, offered to a part
+                        // that has a clock pin.
+                        let on_a_wire = part
+                            .pins()
+                            .iter()
+                            .any(|pin| pin.name.eq_ignore_ascii_case("SCK"));
+                        let wire_select = part.inst.props.get("cs").cloned().unwrap_or_default();
+                        let wire_miso = part.inst.props.get("miso").cloned().unwrap_or_default();
+                        let wire_line = wire_select.trim().parse::<u8>().ok();
+                        let wire_traffic = move || {
+                            let Some(select) = wire_line else {
+                                return Vec::new();
+                            };
+                            state.sim.spi.with(|wire| {
+                                wire.iter()
+                                    .filter(|report| report.select == select)
+                                    .rev()
+                                    .take(6)
+                                    .map(|report| {
+                                        let bytes: String = report
+                                            .bytes
+                                            .iter()
+                                            .map(|b| format!("{b:02x}"))
+                                            .collect();
+                                        format!("{} {bytes}", report.verb)
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                        };
                         let bus_traffic = move || {
                             let Some(address) = bus_address else {
                                 return Vec::new();
@@ -3017,6 +3050,60 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     <div class="flex flex-col gap-0.5">
                                                         <span class="text-caption text-label-4">
                                                             {t!("simulate.bus-traffic")}
+                                                        </span>
+                                                        {traffic
+                                                            .into_iter()
+                                                            .map(|line| view! {
+                                                                <p class="font-mono text-caption text-label-3">{line}</p>
+                                                            })
+                                                            .collect_view()}
+                                                    </div>
+                                                }
+                                            })
+                                        }}
+                                    }
+                                })}
+                                {on_a_wire.then(|| {
+                                    view! {
+                                        <label class="flex items-center gap-2 text-footnote text-label-2">
+                                            <span class="shrink-0">{t!("simulate.wire-select")}</span>
+                                            <input
+                                                type="text"
+                                                title=t!("simulate.wire-select-hint")
+                                                placeholder="0"
+                                                prop:value=wire_select.clone()
+                                                on:change=move |event| {
+                                                    checkpoint();
+                                                    let text = event_target_value(&event);
+                                                    parts.update(|list| edit::set_prop(list, index, "cs", &text));
+                                                    dirty.set(true);
+                                                }
+                                                class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            />
+                                        </label>
+                                        <label class="flex items-center gap-2 text-footnote text-label-2">
+                                            <span class="shrink-0">{t!("simulate.wire-answer")}</span>
+                                            <input
+                                                type="text"
+                                                title=t!("simulate.wire-answer-hint")
+                                                placeholder="1a68"
+                                                prop:value=wire_miso.clone()
+                                                on:change=move |event| {
+                                                    checkpoint();
+                                                    let text = event_target_value(&event);
+                                                    parts.update(|list| edit::set_prop(list, index, "miso", &text));
+                                                    dirty.set(true);
+                                                }
+                                                class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            />
+                                        </label>
+                                        {move || {
+                                            let traffic = wire_traffic();
+                                            (!traffic.is_empty()).then(|| {
+                                                view! {
+                                                    <div class="flex flex-col gap-0.5">
+                                                        <span class="text-caption text-label-4">
+                                                            {t!("simulate.wire-traffic")}
                                                         </span>
                                                         {traffic
                                                             .into_iter()

@@ -1,0 +1,134 @@
+//! Does an SPI transfer reach a device, and does what the host declared come
+//! back?
+//!
+//! Espressif's QEMU models `SPI1`, the flash controller the machine boots
+//! through, and nothing at `SPI2` — the one a project puts a display or a
+//! sensor on. So a driver's first transfer sets the start bit and polls it
+//! for ever: the third hang of this shape, inside the user's own call, after
+//! the converter's and the bus's.
+//!
+//! Two assertions, and they are different questions:
+//!
+//! - A **write** completes and its bytes reach the host. That is the whole
+//!   of what a display needs, and it is the case where nothing comes back.
+//! - A **transfer** returns the bytes the host declared for that chip
+//!   select. SPI has no addressing, so what a model can honestly answer is
+//!   a buffer read from its start — and a driver that sends a command byte
+//!   and reads the reply out of the same transfer gets it where full duplex
+//!   puts it.
+//!
+//! Printed on change, like every other probe here, so the log says what the
+//! wire did rather than how often the loop ran.
+
+#![no_std]
+#![no_main]
+
+use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
+use esp_hal::main;
+use esp_hal::spi::Mode;
+use esp_hal::spi::master::{Config, Spi};
+use esp_hal::time::Rate;
+use esp_println::println;
+
+/// What a driver sends to ask an imaginary sensor who it is: a register
+/// number with the read bit set, then a byte of nothing to clock the answer
+/// out.
+const ASK: [u8; 2] = [0xf5, 0x00];
+/// And what a display gets sent, which nobody answers.
+const TELL: [u8; 3] = [0xae, 0xa5, 0x01];
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    println!("[spi] panic: {info}");
+    loop {}
+}
+
+esp_bootloader_esp_idf::esp_app_desc!();
+
+fn hex(bytes: &[u8], out: &mut [u8; 32]) -> usize {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut at = 0;
+    for byte in bytes {
+        if at + 2 > out.len() {
+            break;
+        }
+        out[at] = DIGITS[(byte >> 4) as usize];
+        out[at + 1] = DIGITS[(byte & 0xf) as usize];
+        at += 2;
+    }
+    at
+}
+
+fn say(label: &str, bytes: &[u8]) {
+    let mut buffer = [0u8; 32];
+    let at = hex(bytes, &mut buffer);
+    println!(
+        "[spi] {label}{}",
+        core::str::from_utf8(&buffer[..at]).unwrap_or("?")
+    );
+}
+
+#[main]
+fn main() -> ! {
+    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+
+    // The peripheral's own chip select, so the model sees which line is
+    // asserted rather than a GPIO the driver waggles itself. GPIO2, 6, 7 and
+    // 10 because the flash has 12..17, the native USB 18/19 and the console
+    // 20/21; the model does not route through the GPIO matrix, so the choice
+    // is about not colliding.
+    let config = Config::default()
+        .with_frequency(Rate::from_khz(100))
+        .with_mode(Mode::_0);
+    let mut spi = match Spi::new(peripherals.SPI2, config) {
+        Ok(spi) => spi
+            .with_sck(peripherals.GPIO6)
+            .with_mosi(peripherals.GPIO7)
+            .with_miso(peripherals.GPIO2)
+            .with_cs(peripherals.GPIO10),
+        Err(error) => {
+            println!("[spi] the driver would not start: {error:?}");
+            loop {}
+        }
+    };
+
+    println!("[spi] listening on SPI2");
+
+    let delay = Delay::new();
+    let mut last_answer = [0u8; 2];
+    let mut told = false;
+
+    loop {
+        delay.delay_millis(100);
+
+        // The write first, and once: a display is written to and never read,
+        // and the host has to see the bytes to know the transfer happened at
+        // all.
+        if !told {
+            match spi.write(&TELL) {
+                Ok(()) => {
+                    say("wrote ", &TELL);
+                    told = true;
+                }
+                Err(error) => {
+                    println!("[spi] the write failed: {error:?}");
+                    // Said once, then wait: a failing transfer every hundred
+                    // milliseconds is a log nobody can read.
+                    told = true;
+                }
+            }
+        }
+
+        let mut answer = ASK;
+        match spi.transfer(&mut answer) {
+            Ok(()) => {
+                if answer != last_answer {
+                    say("read ", &answer);
+                    last_answer = answer;
+                }
+            }
+            Err(error) => println!("[spi] the transfer failed: {error:?}"),
+        }
+    }
+}

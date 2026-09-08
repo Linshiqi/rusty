@@ -34,10 +34,10 @@ pub use plant::{Plant, PlantConfig};
 // only under `protocol::`, which is how the same file ended up importing the
 // two halves two ways.
 pub use protocol::{
-    AdcReport, GpioReport, I2cReport, Param, PinSource, PwmReport, SensorDef, Telemetry,
+    AdcReport, GpioReport, I2cReport, Param, PinSource, PwmReport, SensorDef, SpiReport, Telemetry,
     analog_line, parse_adc_report, parse_display_report, parse_gpio_report, parse_i2c_report,
-    parse_param, parse_pin_source, parse_pwm_report, parse_sensor_def, parse_telemetry,
-    sensor_line, set_param_line, to_vcd,
+    parse_param, parse_pin_source, parse_pwm_report, parse_sensor_def, parse_spi_report,
+    parse_telemetry, sensor_line, set_param_line, to_vcd,
 };
 
 #[cfg(feature = "backend")]

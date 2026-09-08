@@ -28,11 +28,11 @@ honestly claim:
 - **And it can never interrupt.** Firmware that asks to be woken by an edge
   — how nearly every real button is read — waits for ever, which looks like
   a hang in the user's own code rather than a hole in the emulator.
-- **And there is no analog side, and no bus.** Nothing answers at the SAR
-  ADC's registers or the I2C master's either, so `adc.read_oneshot()` polls a
-  done bit nothing can set and a driver's first transaction waits on an
-  interrupt nothing can raise. Same shape of failure, in the user's own
-  `read` call.
+- **And there is no analog side, and no buses.** Nothing answers at the SAR
+  ADC's registers, the I2C master's, or `SPI2`'s, so `adc.read_oneshot()`
+  polls a done bit nothing can set and a driver's first transaction waits for
+  a peripheral that is not there. Same shape of failure three times over, in
+  the user's own `read` call.
 
 `esp32_gpio.c` here fills in the model: the output and enable registers,
 their set/clear aliases, the input register, and the interrupt half — the
@@ -119,6 +119,25 @@ reports what was taken off it — per *change*, because a driver polling in a
 loop converts thousands of times a second and a line each would drown the
 channel the console and the board share.
 
+## And the wire
+
+`SPI1` is the flash controller the machine boots through and upstream models
+it. `SPI2` — the one a project puts a display or a sensor on — is not mapped
+at all, so a driver's first transfer sets the start bit and polls it for
+ever. The fourth region on the same device answers for it.
+
+Simpler than the bus, because SPI is: bytes out and bytes in at once, and no
+addressing. **What comes back is a buffer the host declares per chip select**
+(`spi 0=1a68`), read from its start on every transfer. No register convention
+is assumed, because SPI has none — any other rule would be one this model
+invented. Past what the host declared is zero, which is what an undriven MISO
+line reads as and what every transfer to a display gets.
+
+`[rusty:spi@<us>] 0 w aea501` is what went out and `... 0 r 1a68` what came
+back, with the same repeat rule as the bus — *per verb*, because a
+full-duplex transfer alternates a write and a read and one shared slot would
+suppress neither.
+
 ## And the bus
 
 Almost every real board has something on I2C: a display, an IMU, a
@@ -126,8 +145,8 @@ temperature sensor. Nothing was mapped at the C3's I2C master either, so the
 first transaction a driver ran waited on an interrupt nothing could raise —
 the same shape of failure as the converter, inside the user's own `read`.
 
-The master is modelled as a third region on the same device, and its bus is
-**register files the host declares**. A sensor is a set of registers a driver
+The master is a third region on the same device, and its bus is **register
+files the host declares**. A sensor is a set of registers a driver
 reads and a display is a stream of bytes somebody wants to see; 256 bytes and
 a pointer serve both. `i2c 68:75=68` puts a byte behind an address,
 `i2c 3c=+` declares one with nothing to read, `i2c 3c=-` takes it off.
@@ -157,7 +176,7 @@ platform as an artifact.
 
 ## What it is proven to do
 
-Nine gates, each able to fail:
+Ten gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -255,6 +274,14 @@ the two and reports the lead.
    Its `SoftwareTimeout` is there for the same reason the analog probe's
    poll is bounded: without it the driver's first transaction hung, and the
    probe reported the hole as silence.
+
+10. An **SPI transfer** reaches a device and brings back what the host said.
+    `spi-probe/` writes three bytes with nothing declared — which is exactly
+    a display, and the case where an undriven MISO must read as zeros rather
+    than hang — and then reads the two bytes the host puts on chip select 0.
+    The second of those is the one a driver reads: it sends a command byte
+    and takes the answer out of the same transfer, which is what full duplex
+    means and why the buffer is read from its start.
 
 
 ## What each desktop needed

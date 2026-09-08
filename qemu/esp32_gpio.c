@@ -20,18 +20,24 @@
  * the firmware is using — and can drive the input register back, which is
  * what lets unmodified firmware read a button.
  *
- * **Three peripherals, one file, one channel.** The GPIO is the first; the
- * SAR ADC and the I2C master follow it as further MMIO regions on the same
- * device. That is a decision and not an accident. Everything here exists to
- * carry the host's view of one board — what is on a pin, what is on the bus
- * — and they share the socket that carries it, so keeping them together is
- * what makes "one channel, one protocol, one reader" true on the emulator's
- * side as well as rusty's. Separate devices would each need a chardev of
- * their own or a link back to this one for every access; separate *files*
- * would each need an entry in upstream's build system, and every one of
- * those is a way for a build to fail that has nothing to do with what is
- * being modelled. The file keeps upstream's name because it replaces
- * upstream's file, not because the GPIO is all it holds.
+ * **Four peripherals, one file, one channel.** The GPIO is the first; the
+ * SAR ADC, the I2C master and the SPI master follow it as further MMIO
+ * regions on the same device. That is a decision and not an accident.
+ * Everything here exists to carry the host's view of one board — what is on
+ * a pin, what is on a bus — and they share the socket that carries it, so
+ * keeping them together is what makes "one channel, one protocol, one
+ * reader" true on the emulator's side as well as rusty's. Separate devices
+ * would each need a chardev of their own or a link back to this one for
+ * every access; separate *files* would each need an entry in upstream's
+ * build system, and every one of those is a way for a build to fail that has
+ * nothing to do with what is being modelled. The file keeps upstream's name
+ * because it replaces upstream's file, not because the GPIO is all it holds.
+ *
+ * Every register name here is prefixed `RUSTY_`. Upstream has its own
+ * `esp32_i2c.h` and `esp32c3_spi.h` whose `REG32(I2C_CTR, …)` expands to the
+ * same enumerator, and `hw/xtensa/esp32.c` includes both that header and
+ * this one — so unprefixed names are a redeclaration error in a file neither
+ * of us wrote.
  */
 
 #include "qemu/osdep.h"
@@ -311,17 +317,20 @@ static unsigned esp32_hex_bytes(const char *text, uint8_t *out, unsigned max)
 }
 
 /*
- * An I2C device the host is putting on the bus, or taking off it.
+ * What the host puts on the two buses.
  *
  *   i2c 68:75=68     device 0x68, register 0x75 onwards, one byte 0x68
  *   i2c 3c=+         declare it with every register zero
  *   i2c 3c=-         take it off the bus, so an address stops answering
+ *   spi 0=68010203   what chip select 0 answers with, from the start of
+ *                    every transfer; anything that is not hex clears it
  *
- * Hex throughout, because an I2C address is written in hex everywhere else
- * a person will have read it. Declaring is what makes an address answer at
- * all — see the note on the engine about why an undeclared one must NACK.
+ * Hex for the bytes and for an I2C address, because that is how a datasheet
+ * writes both. The chip select is decimal, because it is a line number.
+ * Declaring is what makes an I2C address answer at all — see the note on
+ * the engine about why an undeclared one must NACK.
  */
-static void esp32_gpio_host_i2c(Esp32GpioState *s)
+static void esp32_gpio_host_bus(Esp32GpioState *s)
 {
     unsigned address, reg;
     char payload[ESP32_GPIO_HOST_LINE];
@@ -346,6 +355,12 @@ static void esp32_gpio_host_i2c(Esp32GpioState *s)
         }
         return;
     }
+    if (sscanf(s->host_line, "spi %u=%500s", &address, payload) == 2
+        && address < ESP32_SPI_SELECTS) {
+        s->spi_miso_len[address] =
+            esp32_hex_bytes(payload, s->spi_miso[address], ESP32_SPI_BUFFER);
+        return;
+    }
     if (sscanf(s->host_line, "i2c %x=%c", &address, &sign) == 2 && address <= 0x7f) {
         if (sign == '-') {
             Esp32I2cDevice *device = esp32_i2c_device(s, (int)address);
@@ -362,13 +377,13 @@ static void esp32_gpio_host_i2c(Esp32GpioState *s)
 /*
  * Host input, a line at a time: `<pin>=<level>` drives the input register,
  * `A<pin>=<counts>` puts an analog value on the pin for the converter, and
- * `i2c …` puts a device on the bus.
+ * `i2c …` / `spi …` put devices on the two buses.
  *
  * This is the half that lets firmware read a button through the GPIO it
  * actually reads, a knob through the ADC it actually reads, and a sensor
  * through the bus it actually reads, instead of through a side channel each
  * had to be written to expect. The forms cannot be confused: a decimal pin
- * number begins with neither `A` nor `i`.
+ * number begins with none of `A`, `i` or `s`.
  *
  * A line that matches none of them is dropped. There is one writer on the
  * other end of this socket and its spellings are under test; a malformed
@@ -383,8 +398,8 @@ static void esp32_gpio_host_read(void *opaque, const uint8_t *buf, int size)
             unsigned pin, level;
 
             s->host_line[s->host_at] = '\0';
-            if (s->host_line[0] == 'i') {
-                esp32_gpio_host_i2c(s);
+            if (s->host_line[0] == 'i' || s->host_line[0] == 's') {
+                esp32_gpio_host_bus(s);
             } else if (sscanf(s->host_line, "A%u=%u", &pin, &level) == 2
                 && pin < ESP32_GPIO_PINS) {
                 /* Stored and nothing more: an ADC reads when it is told to,
@@ -706,7 +721,7 @@ static void esp32_saradc_convert(Esp32GpioState *s, uint32_t onetime)
     moved = pin != s->adc_pin[unit] || counts != s->adc_data[unit];
     s->adc_pin[unit] = pin;
     s->adc_data[unit] = counts;
-    s->adc_reg[R_SARADC_INT_RAW] |= unit == 0 ? ESP32_SARADC_DONE_ADC1
+    s->adc_reg[R_RUSTY_SARADC_INT_RAW] |= unit == 0 ? ESP32_SARADC_DONE_ADC1
                                               : ESP32_SARADC_DONE_ADC2;
     if (moved) {
         esp32_gpio_say_adc(s, unit, channel, pin, counts);
@@ -722,16 +737,16 @@ static uint64_t esp32_saradc_read(void *opaque, hwaddr addr, unsigned int size)
         return 0;
     }
     switch (addr) {
-    case A_SARADC_1_DATA:
+    case A_RUSTY_SARADC_1_DATA:
         return s->adc_data[0];
 
-    case A_SARADC_2_DATA:
+    case A_RUSTY_SARADC_2_DATA:
         return s->adc_data[1];
 
     /* The masked view beside the raw one. A polling driver reads the raw
      * bit; a driver using the interrupt reads this. */
-    case A_SARADC_INT_ST:
-        return s->adc_reg[R_SARADC_INT_RAW] & s->adc_reg[R_SARADC_INT_ENA];
+    case A_RUSTY_SARADC_INT_ST:
+        return s->adc_reg[R_RUSTY_SARADC_INT_RAW] & s->adc_reg[R_RUSTY_SARADC_INT_ENA];
 
     default:
         return s->adc_reg[word];
@@ -751,19 +766,19 @@ static void esp32_saradc_write(void *opaque, hwaddr addr, uint64_t value,
     switch (addr) {
     /* A conversion's result and the fact that it happened are the model's
      * to say; a driver writing them would be telling itself a story. */
-    case A_SARADC_1_DATA:
-    case A_SARADC_2_DATA:
-    case A_SARADC_INT_RAW:
-    case A_SARADC_INT_ST:
+    case A_RUSTY_SARADC_1_DATA:
+    case A_RUSTY_SARADC_2_DATA:
+    case A_RUSTY_SARADC_INT_RAW:
+    case A_RUSTY_SARADC_INT_ST:
         break;
 
-    case A_SARADC_INT_CLR:
-        s->adc_reg[R_SARADC_INT_RAW] &= ~(uint32_t)value;
+    case A_RUSTY_SARADC_INT_CLR:
+        s->adc_reg[R_RUSTY_SARADC_INT_RAW] &= ~(uint32_t)value;
         break;
 
-    case A_SARADC_ONETIME:
-        before = s->adc_reg[R_SARADC_ONETIME];
-        s->adc_reg[R_SARADC_ONETIME] = (uint32_t)value;
+    case A_RUSTY_SARADC_ONETIME:
+        before = s->adc_reg[R_RUSTY_SARADC_ONETIME];
+        s->adc_reg[R_RUSTY_SARADC_ONETIME] = (uint32_t)value;
         /* On the *rising* edge of START and only there. A driver that
          * leaves the bit set and writes the register again for another
          * reason — changing the channel, say — would otherwise convert
@@ -807,6 +822,20 @@ static const MemoryRegionOps saradc_ops = {
  * and quiet". Answering zeros instead would make every scan find every
  * address, which is worse than finding none.
  */
+
+/* Which slot of the last-report memory a verb uses: a write, a read, and
+ * everything else. See the note beside `ESP32_BUS_VERBS`. */
+static unsigned esp32_bus_verb(const char *verb)
+{
+    switch (verb[0]) {
+    case 'w':
+        return 0;
+    case 'r':
+        return 1;
+    default:
+        return 2;
+    }
+}
 
 /* The device at an address, or NULL. Linear over sixteen entries: the list
  * is short and the alternative is a 128-entry table mostly full of nothing. */
@@ -872,13 +901,14 @@ static void esp32_gpio_say_i2c(Esp32GpioState *s, int address, const char *verb,
     for (unsigned i = 0; i < count && at < (int)sizeof(body) - 4; i++) {
         at += snprintf(body + at, sizeof(body) - at, "%02x", bytes[i]);
     }
-    if (strcmp(body, s->i2c_last_report) == 0) {
+    if (strcmp(body, s->i2c_last_report[esp32_bus_verb(verb)]) == 0) {
         return;
     }
     /* `snprintf` rather than a copy: `pstrcpy` lives in `qemu/cutils.h`,
      * which `osdep.h` does not pull in, and `strcpy` into a fixed field is
      * the wrong habit to reach for even when the source is known short. */
-    snprintf(s->i2c_last_report, sizeof(s->i2c_last_report), "%s", body);
+    snprintf(s->i2c_last_report[esp32_bus_verb(verb)],
+             sizeof(s->i2c_last_report[0]), "%s", body);
 
     at = snprintf(line, sizeof(line), "[rusty:i2c@%" PRId64 "] %s\n",
                   qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), body);
@@ -923,12 +953,12 @@ static bool esp32_i2c_write_step(Esp32GpioState *s, unsigned bytes)
         bytes--;
 
         if (!esp32_i2c_device(s, s->i2c_address)) {
-            s->i2c_reg[R_I2C_INT_RAW] |= ESP32_I2C_INT_NACK;
-            s->i2c_reg[R_I2C_SR] &= ~ESP32_I2C_SR_RESP_REC;
+            s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_NACK;
+            s->i2c_reg[R_RUSTY_I2C_SR] &= ~ESP32_I2C_SR_RESP_REC;
             esp32_gpio_say_i2c(s, s->i2c_address, "nak", NULL, 0);
             return false;
         }
-        s->i2c_reg[R_I2C_SR] |= ESP32_I2C_SR_RESP_REC;
+        s->i2c_reg[R_RUSTY_I2C_SR] |= ESP32_I2C_SR_RESP_REC;
     }
 
     device = esp32_i2c_device(s, s->i2c_address);
@@ -964,8 +994,8 @@ static bool esp32_i2c_read_step(Esp32GpioState *s, unsigned bytes)
     Esp32I2cDevice *device = esp32_i2c_device(s, s->i2c_address);
 
     if (!device) {
-        s->i2c_reg[R_I2C_INT_RAW] |= ESP32_I2C_INT_NACK;
-        s->i2c_reg[R_I2C_SR] &= ~ESP32_I2C_SR_RESP_REC;
+        s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_NACK;
+        s->i2c_reg[R_RUSTY_I2C_SR] &= ~ESP32_I2C_SR_RESP_REC;
         esp32_gpio_say_i2c(s, s->i2c_address, "nak", NULL, 0);
         return false;
     }
@@ -974,7 +1004,7 @@ static bool esp32_i2c_read_step(Esp32GpioState *s, unsigned bytes)
         esp32_i2c_give(s, data[given]);
         given++;
     }
-    s->i2c_reg[R_I2C_SR] |= ESP32_I2C_SR_RESP_REC;
+    s->i2c_reg[R_RUSTY_I2C_SR] |= ESP32_I2C_SR_RESP_REC;
     esp32_gpio_say_i2c(s, s->i2c_address, "r", data, given);
     return true;
 }
@@ -989,7 +1019,7 @@ static bool esp32_i2c_read_step(Esp32GpioState *s, unsigned bytes)
 static void esp32_i2c_run(Esp32GpioState *s)
 {
     for (int i = 0; i < ESP32_I2C_COMMANDS; i++) {
-        uint32_t command = s->i2c_reg[R_I2C_COMD0 + i];
+        uint32_t command = s->i2c_reg[R_RUSTY_I2C_COMD0 + i];
         unsigned op = (command >> ESP32_I2C_CMD_OP_SHIFT) & ESP32_I2C_CMD_OP_MASK;
         unsigned bytes = command & ESP32_I2C_CMD_BYTES_MASK;
 
@@ -999,7 +1029,7 @@ static void esp32_i2c_run(Esp32GpioState *s)
         if ((command & ~ESP32_I2C_CMD_DONE) == 0) {
             break;
         }
-        s->i2c_reg[R_I2C_COMD0 + i] = command | ESP32_I2C_CMD_DONE;
+        s->i2c_reg[R_RUSTY_I2C_COMD0 + i] = command | ESP32_I2C_CMD_DONE;
 
         switch (op) {
         case ESP32_I2C_OP_RSTART:
@@ -1019,13 +1049,13 @@ static void esp32_i2c_run(Esp32GpioState *s)
             break;
 
         case ESP32_I2C_OP_STOP:
-            s->i2c_reg[R_I2C_INT_RAW] |= ESP32_I2C_INT_TRANS_COMPLETE;
+            s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_TRANS_COMPLETE;
             s->i2c_expect_address = false;
             s->i2c_address = -1;
             return;
 
         case ESP32_I2C_OP_END:
-            s->i2c_reg[R_I2C_INT_RAW] |= ESP32_I2C_INT_END_DETECT;
+            s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_END_DETECT;
             return;
 
         default:
@@ -1034,7 +1064,7 @@ static void esp32_i2c_run(Esp32GpioState *s)
     }
     /* A list that ran off its end without a stop still completed: the
      * driver is waiting on the interrupt and nothing else will set it. */
-    s->i2c_reg[R_I2C_INT_RAW] |= ESP32_I2C_INT_TRANS_COMPLETE;
+    s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_TRANS_COMPLETE;
 }
 
 static uint64_t esp32_i2c_read(void *opaque, hwaddr addr, unsigned int size)
@@ -1046,12 +1076,12 @@ static uint64_t esp32_i2c_read(void *opaque, hwaddr addr, unsigned int size)
         return 0;
     }
     switch (addr) {
-    case A_I2C_DATA:
+    case A_RUSTY_I2C_DATA:
         return s->i2c_rx_at < s->i2c_rx_len ? s->i2c_rx[s->i2c_rx_at++] : 0;
 
     /* What is *left* in each FIFO, which is what the driver counts. */
-    case A_I2C_SR: {
-        uint32_t status = s->i2c_reg[R_I2C_SR]
+    case A_RUSTY_I2C_SR: {
+        uint32_t status = s->i2c_reg[R_RUSTY_I2C_SR]
                           & ~((0x3fu << ESP32_I2C_SR_RXFIFO_CNT_SHIFT)
                               | (0x3fu << ESP32_I2C_SR_TXFIFO_CNT_SHIFT)
                               | ESP32_I2C_SR_BUS_BUSY);
@@ -1063,8 +1093,8 @@ static uint64_t esp32_i2c_read(void *opaque, hwaddr addr, unsigned int size)
         return status;
     }
 
-    case A_I2C_INT_STATUS:
-        return s->i2c_reg[R_I2C_INT_RAW] & s->i2c_reg[R_I2C_INT_ENA];
+    case A_RUSTY_I2C_INT_STATUS:
+        return s->i2c_reg[R_RUSTY_I2C_INT_RAW] & s->i2c_reg[R_RUSTY_I2C_INT_ENA];
 
     default:
         return s->i2c_reg[word];
@@ -1081,23 +1111,23 @@ static void esp32_i2c_write(void *opaque, hwaddr addr, uint64_t value,
         return;
     }
     switch (addr) {
-    case A_I2C_DATA:
+    case A_RUSTY_I2C_DATA:
         if (s->i2c_tx_len < ESP32_I2C_FIFO) {
             s->i2c_tx[s->i2c_tx_len++] = (uint8_t)value;
         }
         return;
 
     /* Read-only: what the bus did is the model's to say. */
-    case A_I2C_SR:
-    case A_I2C_INT_STATUS:
+    case A_RUSTY_I2C_SR:
+    case A_RUSTY_I2C_INT_STATUS:
         return;
 
-    case A_I2C_INT_CLR:
-        s->i2c_reg[R_I2C_INT_RAW] &= ~(uint32_t)value;
+    case A_RUSTY_I2C_INT_CLR:
+        s->i2c_reg[R_RUSTY_I2C_INT_RAW] &= ~(uint32_t)value;
         return;
 
-    case A_I2C_FIFO_CONF:
-        s->i2c_reg[R_I2C_FIFO_CONF] = (uint32_t)value;
+    case A_RUSTY_I2C_FIFO_CONF:
+        s->i2c_reg[R_RUSTY_I2C_FIFO_CONF] = (uint32_t)value;
         /* The driver sets each reset bit and clears it again, so the act is
          * the bit going up. */
         if (value & ESP32_I2C_TX_FIFO_RST) {
@@ -1110,8 +1140,8 @@ static void esp32_i2c_write(void *opaque, hwaddr addr, uint64_t value,
         }
         return;
 
-    case A_I2C_CTR:
-        s->i2c_reg[R_I2C_CTR] = (uint32_t)value & ~ESP32_I2C_TRANS_START;
+    case A_RUSTY_I2C_CTR:
+        s->i2c_reg[R_RUSTY_I2C_CTR] = (uint32_t)value & ~ESP32_I2C_TRANS_START;
         if (value & ESP32_I2C_TRANS_START) {
             /* Each start reads the FIFO the driver has just filled, from
              * the beginning, and produces a fresh answer. */
@@ -1133,6 +1163,163 @@ static void esp32_i2c_write(void *opaque, hwaddr addr, uint64_t value,
 static const MemoryRegionOps i2c_ops = {
     .read =  esp32_i2c_read,
     .write = esp32_i2c_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+/*
+ * ============================= the SPI master =============================
+ *
+ * Upstream models `SPI1`, the flash controller the machine boots through,
+ * and nothing at `SPI2` — the one a project puts a display or a sensor on.
+ * So a driver's first transfer sets `USR` and polls it for ever, which is
+ * the same hang the converter and the bus had before they were modelled.
+ *
+ * Bytes out of the sixteen data words and bytes back into them, in one
+ * step. No timing and no clock: a CPU-driven transfer is over before the
+ * driver's next instruction either way, and a delay here would only be
+ * another way to lose a byte.
+ */
+
+/* Which chip select is asserted: `MISC` bits 0..5 *disable* each one, so
+ * the active line is the lowest bit that is clear. Zero when the driver has
+ * disabled them all, which is a transfer to nothing in particular — still
+ * worth reporting, since the bytes went out. */
+static unsigned esp32_spi_select(Esp32GpioState *s)
+{
+    uint32_t misc = s->spi_reg[R_RUSTY_SPI_MISC];
+
+    for (unsigned cs = 0; cs < ESP32_SPI_SELECTS; cs++) {
+        if ((misc & (1u << cs)) == 0) {
+            return cs;
+        }
+    }
+    return 0;
+}
+
+/* One byte of the data words, which are little-endian as the bus is. */
+static uint8_t esp32_spi_byte(Esp32GpioState *s, unsigned at)
+{
+    uint32_t word = s->spi_reg[R_RUSTY_SPI_W0 + at / 4];
+
+    return (uint8_t)(word >> (8 * (at % 4)));
+}
+
+static void esp32_spi_put(Esp32GpioState *s, unsigned at, uint8_t byte)
+{
+    unsigned shift = 8 * (at % 4);
+    uint32_t *word = &s->spi_reg[R_RUSTY_SPI_W0 + at / 4];
+
+    *word = (*word & ~(0xffu << shift)) | ((uint32_t)byte << shift);
+}
+
+/* What crossed the wire, with the same one-deep repeat rule the bus has and
+ * for the same reason: a display refreshing at sixty hertz is a transfer a
+ * frame, and a driver polling a sensor is far more. */
+static void esp32_gpio_say_spi(Esp32GpioState *s, unsigned cs, const char *verb,
+                               const uint8_t *bytes, unsigned count)
+{
+    char body[ESP32_I2C_REPORT];
+    char line[ESP32_I2C_REPORT + 40];
+    int at;
+
+    if (!qemu_chr_fe_backend_connected(&s->pins)) {
+        return;
+    }
+    at = snprintf(body, sizeof(body), "%u %s ", cs, verb);
+    for (unsigned i = 0; i < count && at < (int)sizeof(body) - 4; i++) {
+        at += snprintf(body + at, sizeof(body) - at, "%02x", bytes[i]);
+    }
+    if (strcmp(body, s->spi_last_report[esp32_bus_verb(verb)]) == 0) {
+        return;
+    }
+    snprintf(s->spi_last_report[esp32_bus_verb(verb)],
+             sizeof(s->spi_last_report[0]), "%s", body);
+
+    at = snprintf(line, sizeof(line), "[rusty:spi@%" PRId64 "] %s\n",
+                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), body);
+    qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
+}
+
+/*
+ * One transfer: the bytes the driver put in the data words go out, and what
+ * the host declared for this chip select comes back into the same words.
+ *
+ * From the start of the buffer every time, deliberately. SPI has no
+ * addressing to key an answer on, so any other rule would be a convention
+ * this model invented — and a driver that sends a command byte and reads the
+ * reply in the same transfer gets it at the offset it expects, which is what
+ * full duplex means.
+ */
+static void esp32_spi_transfer(Esp32GpioState *s)
+{
+    uint32_t user = s->spi_reg[R_RUSTY_SPI_USER];
+    unsigned bits = (s->spi_reg[R_RUSTY_SPI_MS_DLEN] & ESP32_SPI_DLEN_MASK) + 1;
+    unsigned bytes = MIN((bits + 7) / 8, (unsigned)ESP32_SPI_BUFFER);
+    unsigned cs = esp32_spi_select(s);
+    uint8_t moving[ESP32_SPI_BUFFER];
+
+    if (user & ESP32_SPI_USER_MOSI) {
+        for (unsigned i = 0; i < bytes; i++) {
+            moving[i] = esp32_spi_byte(s, i);
+        }
+        esp32_gpio_say_spi(s, cs, "w", moving, bytes);
+    }
+    if (user & ESP32_SPI_USER_MISO) {
+        for (unsigned i = 0; i < bytes; i++) {
+            /* Past what the host declared is zero, which is what an
+             * undriven MISO line reads as. Not an error: a display has
+             * nothing to say and every transfer to one lands here. */
+            moving[i] = i < s->spi_miso_len[cs] ? s->spi_miso[cs][i] : 0;
+            esp32_spi_put(s, i, moving[i]);
+        }
+        esp32_gpio_say_spi(s, cs, "r", moving, bytes);
+    }
+    s->spi_reg[R_RUSTY_SPI_DMA_INT_RAW] |= ESP32_SPI_INT_TRANS_DONE;
+}
+
+static uint64_t esp32_spi_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+    unsigned word = addr / 4;
+
+    return word < ESP32_SPI_WORDS ? s->spi_reg[word] : 0;
+}
+
+static void esp32_spi_write(void *opaque, hwaddr addr, uint64_t value,
+                            unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+    unsigned word = addr / 4;
+
+    if (word >= ESP32_SPI_WORDS) {
+        return;
+    }
+    switch (addr) {
+    case A_RUSTY_SPI_CMD:
+        /* Both bits are self-clearing: `UPDATE` latches the configuration
+         * and `USR` runs the transfer. Storing either would leave the
+         * driver polling a bit that never falls, which is the hang this
+         * whole model exists to remove. */
+        s->spi_reg[R_RUSTY_SPI_CMD] =
+            (uint32_t)value & ~(ESP32_SPI_CMD_USR | ESP32_SPI_CMD_UPDATE);
+        if (value & ESP32_SPI_CMD_USR) {
+            esp32_spi_transfer(s);
+        }
+        return;
+
+    case A_RUSTY_SPI_DMA_INT_CLR:
+        s->spi_reg[R_RUSTY_SPI_DMA_INT_RAW] &= ~(uint32_t)value;
+        return;
+
+    default:
+        s->spi_reg[word] = (uint32_t)value;
+        return;
+    }
+}
+
+static const MemoryRegionOps spi_ops = {
+    .read =  esp32_spi_read,
+    .write = esp32_spi_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
@@ -1171,7 +1358,11 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
     s->i2c_rx_at = 0;
     s->i2c_address = -1;
     s->i2c_expect_address = false;
-    s->i2c_last_report[0] = '\0';
+    memset(s->i2c_last_report, 0, sizeof(s->i2c_last_report));
+    memset(s->spi_reg, 0, sizeof(s->spi_reg));
+    memset(s->spi_miso, 0, sizeof(s->spi_miso));
+    memset(s->spi_miso_len, 0, sizeof(s->spi_miso_len));
+    memset(s->spi_last_report, 0, sizeof(s->spi_last_report));
     if (s->irq_level) {
         s->irq_level = false;
         qemu_set_irq(s->irq, false);
@@ -1223,6 +1414,11 @@ static void esp32_gpio_init(Object *obj)
     memory_region_init_io(&s->i2c_iomem, obj, &i2c_ops, s,
                           TYPE_ESP32_GPIO ".i2c", ESP32_I2C_REGION);
     sysbus_init_mmio(sbd, &s->i2c_iomem);
+    /* And region 3 is SPI2 — the one a project puts a display on. SPI1 is
+     * the flash controller and stays upstream's. */
+    memory_region_init_io(&s->spi_iomem, obj, &spi_ops, s,
+                          TYPE_ESP32_GPIO ".spi", ESP32_SPI_REGION);
+    sysbus_init_mmio(sbd, &s->spi_iomem);
     sysbus_init_irq(sbd, &s->irq);
 }
 

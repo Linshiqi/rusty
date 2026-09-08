@@ -219,6 +219,12 @@ impl PinChannel {
         }
     }
 
+    /// What a chip select answers with. Nothing declared is a device that is
+    /// written to and says nothing back, which is what a display is.
+    pub fn wire_device(&self, device: &rusty_embed::nets::WireDevice) {
+        self.say(&wire_device_line(device));
+    }
+
     fn say(&self, line: &str) {
         use std::io::Write;
         if let Ok(mut socket) = self.out.lock()
@@ -259,6 +265,20 @@ fn analog_pin_line(pin: u32, count: u16) -> String {
 /// A device that only ever appeared through a register write would not exist
 /// until it had one, and a display — which nobody reads from — would then
 /// never be on the bus at all.
+fn wire_device_line(device: &rusty_embed::nets::WireDevice) -> String {
+    let mut line = format!("spi {}=", device.select);
+    for byte in &device.miso {
+        line.push_str(&format!("{byte:02x}"));
+    }
+    // A device with nothing to say still needs a token the model can read:
+    // `-` is not hex, and anything that is not hex clears the buffer.
+    if device.miso.is_empty() {
+        line.push('-');
+    }
+    line.push('\n');
+    line
+}
+
 fn bus_device_lines(device: &rusty_embed::nets::BusDevice) -> Vec<String> {
     let address = device.address;
     let mut lines = vec![format!("i2c {address:02x}=+\n")];
@@ -312,6 +332,7 @@ fn open_pin_channel(
     low_when_pressed: std::collections::HashSet<u32>,
     analog_start: Vec<(u32, u16)>,
     bus_start: Vec<rusty_embed::nets::BusDevice>,
+    wire_start: Vec<rusty_embed::nets::WireDevice>,
 ) -> PinChannel {
     use std::io::{BufRead, BufReader};
 
@@ -354,6 +375,9 @@ fn open_pin_channel(
         }
         for device in &bus_start {
             handle_for_start.bus_device(device);
+        }
+        for device in &wire_start {
+            handle_for_start.wire_device(device);
         }
 
         let mut lines = BufReader::new(reader)
@@ -619,6 +643,14 @@ pub async fn run_simulation(
             nets::bus_devices(sheet, &rows).0
         })
         .unwrap_or_default();
+    let wire_start: Vec<nets::WireDevice> = plan
+        .board
+        .as_ref()
+        .map(|sheet| {
+            let rows = simulate::kit_rows_for(&root, &sheet.chip);
+            nets::wire_devices(sheet, &rows).0
+        })
+        .unwrap_or_default();
 
     // A debug run freezes the CPU at reset so breakpoints can be placed before
     // the first instruction. With no gdb to place them, that freeze is
@@ -746,6 +778,7 @@ pub async fn run_simulation(
                     low_when_pressed.clone(),
                     analog_start.clone(),
                     bus_start.clone(),
+                    wire_start.clone(),
                 )))
                 .await;
         }
@@ -906,6 +939,26 @@ mod tests {
             regs: Vec::new(),
         };
         assert_eq!(bus_device_lines(&display), vec!["i2c 3c=+\n".to_string()]);
+    }
+
+    /// A chip select with nothing to say still has to send a token: the
+    /// model reads a run of hex and clears the buffer on anything else, so
+    /// an empty line would be a device that kept the previous run's answer.
+    #[test]
+    fn a_chip_select_with_no_answer_still_says_so() {
+        let sensor = rusty_embed::nets::WireDevice {
+            part: "U2".into(),
+            select: 0,
+            miso: vec![0x1a, 0x68],
+        };
+        assert_eq!(wire_device_line(&sensor), "spi 0=1a68\n");
+
+        let display = rusty_embed::nets::WireDevice {
+            part: "U3".into(),
+            select: 1,
+            miso: Vec::new(),
+        };
+        assert_eq!(wire_device_line(&display), "spi 1=-\n");
     }
 
     /// One value said twice, to two readers that must not be shown

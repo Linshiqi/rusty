@@ -138,13 +138,13 @@ REG32(GPIO_STATUS1_W1TC, 0x0058)
  * remove a class of bug where a driver's `modify()` silently drops bits. */
 #define ESP32_SARADC_WORDS (ESP32_SARADC_REGION / 4)
 
-REG32(SARADC_ONETIME, 0x0020)
-REG32(SARADC_1_DATA, 0x002c)
-REG32(SARADC_2_DATA, 0x0030)
-REG32(SARADC_INT_ENA, 0x0040)
-REG32(SARADC_INT_RAW, 0x0044)
-REG32(SARADC_INT_ST, 0x0048)
-REG32(SARADC_INT_CLR, 0x004c)
+REG32(RUSTY_SARADC_ONETIME, 0x0020)
+REG32(RUSTY_SARADC_1_DATA, 0x002c)
+REG32(RUSTY_SARADC_2_DATA, 0x0030)
+REG32(RUSTY_SARADC_INT_ENA, 0x0040)
+REG32(RUSTY_SARADC_INT_RAW, 0x0044)
+REG32(RUSTY_SARADC_INT_ST, 0x0048)
+REG32(RUSTY_SARADC_INT_CLR, 0x004c)
 
 /* `ONETIME_SAMPLE`: which unit is being asked, the channel, and the edge
  * that starts a conversion. `ATTEN` is stored and ignored — attenuation
@@ -169,10 +169,10 @@ REG32(SARADC_INT_CLR, 0x004c)
 /*
  * The I2C master, which this device also answers for.
  *
- * The third peripheral in this file and the last that belongs here, for the
- * reason the second does: everything in it exists to carry the host's view
- * of the board, and they share one socket. Three peripherals would otherwise
- * mean three chardevs, three protocols and three readers on rusty's side —
+ * The third peripheral in this file, for the reason the second is here:
+ * everything in it exists to carry the host's view of the board, and they
+ * share one socket. Four peripherals would otherwise mean four chardevs,
+ * four protocols and four readers on rusty's side —
  * and the one rule that keeps the simulator honest is that the board's
  * traffic is parsed in exactly one place.
  *
@@ -188,15 +188,15 @@ REG32(SARADC_INT_CLR, 0x004c)
 #define ESP32_I2C_REGION 0x1000
 #define ESP32_I2C_WORDS (ESP32_I2C_REGION / 4)
 
-REG32(I2C_CTR, 0x0004)
-REG32(I2C_SR, 0x0008)
-REG32(I2C_FIFO_CONF, 0x0018)
-REG32(I2C_DATA, 0x001c)
-REG32(I2C_INT_RAW, 0x0020)
-REG32(I2C_INT_CLR, 0x0024)
-REG32(I2C_INT_ENA, 0x0028)
-REG32(I2C_INT_STATUS, 0x002c)
-REG32(I2C_COMD0, 0x0058)
+REG32(RUSTY_I2C_CTR, 0x0004)
+REG32(RUSTY_I2C_SR, 0x0008)
+REG32(RUSTY_I2C_FIFO_CONF, 0x0018)
+REG32(RUSTY_I2C_DATA, 0x001c)
+REG32(RUSTY_I2C_INT_RAW, 0x0020)
+REG32(RUSTY_I2C_INT_CLR, 0x0024)
+REG32(RUSTY_I2C_INT_ENA, 0x0028)
+REG32(RUSTY_I2C_INT_STATUS, 0x002c)
+REG32(RUSTY_I2C_COMD0, 0x0058)
 
 /* Eight command slots, each holding one step of a transaction. */
 #define ESP32_I2C_COMMANDS 8
@@ -248,6 +248,65 @@ REG32(I2C_COMD0, 0x0058)
 /* Longest report a transaction produces: an address, a verb and two
  * characters for each of the FIFO's bytes. */
 #define ESP32_I2C_REPORT (2 * ESP32_I2C_FIFO + 16)
+
+/* The last report is remembered *per verb* — a write, a read, and
+ * everything else. One slot for all of them looked like it would quieten a
+ * polling driver and does not: `write_read` alternates a write and a read,
+ * so each line differs from the one before it and nothing is ever
+ * suppressed. Three slots, and a driver reading the same register in a loop
+ * says so once. */
+#define ESP32_BUS_VERBS 3
+
+/*
+ * The SPI master, the fourth and last of the peripherals here.
+ *
+ * Upstream models `SPI1` — the flash controller, which the machine needs to
+ * boot — and nothing at `SPI2`, the one a project puts a display or a sensor
+ * on. So a driver's first transfer sets `USR` and polls it for ever.
+ *
+ * Simpler than the bus above, because SPI is: bytes out and bytes in at the
+ * same time, and no addressing at all. **What comes back is a buffer the
+ * host declares per chip select**, read from its start on every transfer.
+ * No register convention is assumed — SPI has none. A display, which is
+ * written to and never read, needs nothing declared and its bytes are
+ * reported; a sensor's driver sends a command byte and reads the answer out
+ * of the same transfer, which is what a full-duplex buffer gives it.
+ *
+ * Offsets from esp-idf's soc/esp32c3/spi_reg.h.
+ */
+#define ESP32_SPI_REGION 0x1000
+#define ESP32_SPI_WORDS (ESP32_SPI_REGION / 4)
+
+REG32(RUSTY_SPI_CMD, 0x0000)
+REG32(RUSTY_SPI_USER, 0x0010)
+REG32(RUSTY_SPI_MS_DLEN, 0x001c)
+REG32(RUSTY_SPI_MISC, 0x0020)
+REG32(RUSTY_SPI_DMA_INT_CLR, 0x0038)
+REG32(RUSTY_SPI_DMA_INT_RAW, 0x003c)
+REG32(RUSTY_SPI_W0, 0x0098)
+
+/* `CMD`: `USR` starts a transfer and the model clears it when the transfer
+ * is over, which is exactly what the driver polls. `UPDATE` latches the
+ * configuration and clears itself. */
+#define ESP32_SPI_CMD_USR (1u << 24)
+#define ESP32_SPI_CMD_UPDATE (1u << 23)
+
+/* `USER`: which phases this transfer has. */
+#define ESP32_SPI_USER_MISO (1u << 28)
+#define ESP32_SPI_USER_MOSI (1u << 27)
+
+/* `MS_DLEN` holds the length in bits, less one. */
+#define ESP32_SPI_DLEN_MASK 0x3ffff
+
+/* `DMA_INT_RAW`: the done flag an interrupt-driven driver waits on. */
+#define ESP32_SPI_INT_TRANS_DONE (1u << 12)
+
+/* `MISC` bits 0..5 *disable* each chip select, so the active one is the
+ * lowest bit that is clear. */
+#define ESP32_SPI_SELECTS 6
+
+/* Sixteen 32-bit words, which is the whole of a CPU-driven transfer. */
+#define ESP32_SPI_BUFFER 64
 
 /* One device: an address and the 256 registers behind it.
  *
@@ -339,7 +398,14 @@ typedef struct Esp32GpioState {
     bool i2c_expect_address;
     /* The last transaction reported, without its timestamp, so the same one
      * repeated is said once. */
-    char i2c_last_report[ESP32_I2C_REPORT];
+    char i2c_last_report[ESP32_BUS_VERBS][ESP32_I2C_REPORT];
+
+    /* The SPI master, and what each chip select answers with. */
+    MemoryRegion spi_iomem;
+    uint32_t spi_reg[ESP32_SPI_WORDS];
+    uint8_t spi_miso[ESP32_SPI_SELECTS][ESP32_SPI_BUFFER];
+    unsigned spi_miso_len[ESP32_SPI_SELECTS];
+    char spi_last_report[ESP32_BUS_VERBS][ESP32_I2C_REPORT];
 } Esp32GpioState;
 
 typedef struct Esp32GpioClass {

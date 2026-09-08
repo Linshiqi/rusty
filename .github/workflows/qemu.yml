@@ -1191,6 +1191,122 @@ jobs:
           finally:
               qemu.kill()
 
+      - name: Build the wire probe and make its image
+        working-directory: qemu/spi-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/spi-probe \
+            target/sim/flash.bin
+
+      # The last of the four peripherals, and the third hang of the same
+      # shape: upstream models SPI1, the flash controller the machine boots
+      # through, and nothing at SPI2 — the one a project puts a display on.
+      #
+      # Two assertions, and they are different questions. A **write**
+      # completes and its bytes reach the host, which is the whole of what a
+      # display needs and the case where nothing comes back. A **transfer**
+      # returns the bytes the host declared for that chip select, read from
+      # the start of its buffer — SPI has no addressing, so any other rule
+      # would be a convention this model invented.
+      - name: An SPI transfer reaches a device and brings back what it said
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/spi-probe/target/sim/flash.bin"
+          SERIAL = "spi-serial.log"
+          PORT = 5559
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[spi]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::wire: {line.replace('%', '%25')[:900]}")
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("spi-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              settle("[spi] listening on SPI2", 60, "the wire probe never booted")
+              # The write completes with nothing declared — which is exactly
+              # a display — and an undriven MISO reads as zeros rather than
+              # hanging.
+              settle("[spi] wrote aea501", 30,
+                     "the firmware could not write to the wire")
+              settle("[spi] read f500", 30,
+                     "an undriven MISO did not read as zeros; a transfer with "
+                     "nothing declared must still complete")
+              print("booted, writing to a device that says nothing back")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:spi"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              # Two bytes for chip select 0. The driver sends a command byte
+              # and reads the reply out of the same transfer, so the second
+              # byte is the answer — which is what full duplex means and why
+              # the buffer is read from its start.
+              link.sendall(b"spi 0=1a68\n")
+              settle("[spi] read 1a68", 30,
+                     "the host declared what chip select 0 answers with and "
+                     "the firmware read something else")
+
+              if not any(re.search(r"\] 0 w aea501$", line) for line in traffic):
+                  stop("the firmware wrote to the wire and the model never said "
+                       "it carried the bytes — one of the two accounts is wrong")
+              print(f"the wire works both ways; the model reported "
+                    f"{len(traffic)} transfers")
+          finally:
+              qemu.kill()
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -1207,5 +1323,9 @@ jobs:
             irq-qemu.out
             adc-serial.log
             adc-qemu.out
+            i2c-serial.log
+            i2c-qemu.out
+            spi-serial.log
+            spi-qemu.out
             board-probe.log
           if-no-files-found: warn

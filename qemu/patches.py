@@ -81,7 +81,11 @@ EDITS = [
         "        memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_SARADC_BASE,\n"
         "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 1), 0);\n"
         "        memory_region_add_subregion_overlap(sys_mem, DR_REG_I2C_EXT_BASE,\n"
-        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 2), 0);\n",
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 2), 0);\n"
+        "        /* And SPI2, the one a project puts a display on. SPI1 is the\n"
+        "         * flash controller and stays upstream's. */\n"
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI2_BASE,\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 3), 0);\n",
     ),
     (
         "hw/riscv/esp32c3_intmatrix.c",

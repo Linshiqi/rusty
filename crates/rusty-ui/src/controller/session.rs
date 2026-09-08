@@ -116,6 +116,7 @@ pub(super) fn clear_capture(state: AppState) {
     state.sim.analog.set(std::collections::HashMap::new());
     state.sim.adc.set(std::collections::HashMap::new());
     state.sim.i2c.set(Vec::new());
+    state.sim.spi.set(Vec::new());
     // The declarations go too: they belong to the run that made them, and
     // offering a sensor the next firmware never asked for is the invented
     // range in another costume.
@@ -210,6 +211,15 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
             if bus.len() > BUS_KEPT {
                 let over = bus.len() - BUS_KEPT;
                 bus.drain(..over);
+            }
+        });
+    } else if let Some(report) = rusty_embed::parse_spi_report(&line.text) {
+        const WIRE_KEPT: usize = 500;
+        state.sim.spi.update(|wire| {
+            wire.push(report);
+            if wire.len() > WIRE_KEPT {
+                let over = wire.len() - WIRE_KEPT;
+                wire.drain(..over);
             }
         });
     } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
