@@ -1500,6 +1500,15 @@ usty`) holds `location.toml`
   with no acknowledgement, every address on the bus looked absent, and not
   one byte was reported. It reads exactly like a bus with nothing on it,
   which is the hardest kind of wrong answer to tell from a right one.
+- **A write-triggered bit must come back clear.** `CTR.TRANS_START`,
+  `CTR.CONF_UPGATE`, `CTR.FSM_RST`, `SPI_CMD.USR`, `SPI_CMD.UPDATE` and
+  `SCL_SP_CONF.SCL_RST_SLV_EN` are all `WT` or `R/W/SC` in the register maps:
+  the guest sets one, the hardware acts and clears it, and the driver reads it
+  back to find out that it has. A model that *stores* them is a driver polling
+  a bit that can never fall — `Spi::update()` and `ClearBusFuture` both wait
+  on exactly that, and esp-hal runs the second after every NACK, which is once
+  per address of a bus scan. Read the map's access column, not just the bit
+  position.
 - **Renaming a script means changing the line that runs it.** `interrupts.py`
   became `patches.py`; the workflow step's name and its comment were updated
   and the `run:` line was not, so every platform stopped at `can't open file`

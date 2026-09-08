@@ -1147,8 +1147,24 @@ static void esp32_i2c_write(void *opaque, hwaddr addr, uint64_t value,
         }
         return;
 
+    /* The bus-clear a driver runs after a NACK: nine SCL pulses to unstick a
+     * slave that is holding SDA down. There is no bus here to unstick, so it
+     * is over the moment it is asked for — and the bit has to come back
+     * clear, because that is what `ClearBusFuture` waits on. Left set, every
+     * recovery costs the driver's fifty-millisecond timeout, and esp-hal
+     * recovers after every NACK. */
+    case A_RUSTY_I2C_SCL_SP_CONF:
+        s->i2c_reg[R_RUSTY_I2C_SCL_SP_CONF] =
+            (uint32_t)value & ~ESP32_I2C_SCL_RST_SLV_EN;
+        return;
+
     case A_RUSTY_I2C_CTR:
-        s->i2c_reg[R_RUSTY_I2C_CTR] = (uint32_t)value & ~ESP32_I2C_TRANS_START;
+        /* All three of `CTR`'s write-triggered bits come back clear: the
+         * hardware acts on them and clears them, and a driver reads them
+         * back to find out that it has. Storing them is a bit that never
+         * falls. */
+        s->i2c_reg[R_RUSTY_I2C_CTR] =
+            (uint32_t)value & ~ESP32_I2C_CTR_SELF_CLEARING;
         if (value & ESP32_I2C_TRANS_START) {
             /* Each start reads the FIFO the driver has just filled, from
              * the beginning, and produces a fresh answer. */

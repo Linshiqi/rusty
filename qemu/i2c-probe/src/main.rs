@@ -45,6 +45,26 @@ const DISPLAY_BYTES: [u8; 2] = [0x00, 0xae];
 /// The address nobody declared.
 const ABSENT: u8 = 0x50;
 
+/// The peripheral's own registers, read as raw words.
+///
+/// A probe that only reports *changes* cannot tell "the bus is quiet" from
+/// "the loop stopped", and this one ended two rounds on exactly that
+/// ambiguity: three lines of output and then nothing, which was read as a
+/// stalled guest and was in fact a working guest finding an empty bus. So it
+/// counts its scans aloud, and says what the controller looked like the first
+/// time a read failed. Addresses from esp-idf's soc/esp32c3/i2c_reg.h.
+mod reg {
+    pub const I2C: usize = 0x6001_3000;
+    pub const CTR: usize = I2C + 0x04;
+    pub const SR: usize = I2C + 0x08;
+    pub const INT_RAW: usize = I2C + 0x20;
+    pub const COMD0: usize = I2C + 0x58;
+}
+
+fn peek(address: usize) -> u32 {
+    unsafe { core::ptr::read_volatile(address as *const u32) }
+}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("[i2c] panic: {info}");
@@ -110,6 +130,8 @@ fn main() -> ! {
     let mut last_burst = [0u8; 6];
     let mut wrote = false;
     let mut said_absent = false;
+    let mut scans: u32 = 0;
+    let mut said_registers = false;
     // A rate, because a driver has one. Spinning the bus flat out is not
     // something firmware does and it would put thousands of transactions a
     // second down the channel the console shares.
@@ -117,6 +139,13 @@ fn main() -> ! {
 
     loop {
         delay.delay_millis(100);
+        scans += 1;
+        // Aloud, every second or so. Without it a loop that stopped and a bus
+        // with nothing on it produce the same log — no output — and telling
+        // those two apart is the whole difficulty of this gate.
+        if scans % 10 == 0 {
+            println!("[i2c] alive scans={scans}");
+        }
         // Present is "it acknowledged its address", which is the only
         // question a scan can ask. One byte, because a zero-length read is
         // not a transaction on this bus.
@@ -124,6 +153,25 @@ fn main() -> ! {
         for (slot, address) in [DISPLAY, ABSENT, SENSOR].into_iter().enumerate() {
             let mut one = [0u8; 1];
             present[slot] = i2c.read(address, &mut one).is_ok();
+            // The controller's own account, once, the first time a read does
+            // not succeed. What the command list held and what the status
+            // register says about it is the difference between "the model ran
+            // the wrong steps" and "the model ran the right ones and answered
+            // nothing" — and no amount of staring at the driver settles that.
+            if !present[slot] && !said_registers {
+                said_registers = true;
+                println!(
+                    "[i2c] regs ctr={:#010x} sr={:#010x} int={:#010x} \
+                     cmd={:#010x},{:#010x},{:#010x},{:#010x}",
+                    peek(reg::CTR),
+                    peek(reg::SR),
+                    peek(reg::INT_RAW),
+                    peek(reg::COMD0),
+                    peek(reg::COMD0 + 4),
+                    peek(reg::COMD0 + 8),
+                    peek(reg::COMD0 + 12),
+                );
+            }
         }
         if last_present != Some(present) {
             let mut buffer = [0u8; 32];

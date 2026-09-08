@@ -201,8 +201,27 @@ REG32(RUSTY_I2C_COMD0, 0x0058)
 /* Eight command slots, each holding one step of a transaction. */
 #define ESP32_I2C_COMMANDS 8
 
-/* `CTR`: `TRANS_START` is write-triggered and runs the command list. */
+/*
+ * `CTR`'s three write-triggered bits. Every one of them is `WT` in the
+ * register map: the guest sets it, the hardware acts and clears it, and a
+ * read never shows it set. A model that stored them instead would leave a
+ * driver polling a bit that can never fall — which is not hypothetical, it
+ * is how `Spi`'s `update()` hangs, and `ClearBusFuture` waits on the same
+ * shape in `SCL_SP_CONF` below.
+ */
 #define ESP32_I2C_TRANS_START (1u << 5)
+#define ESP32_I2C_FSM_RST (1u << 10)
+#define ESP32_I2C_CONF_UPGATE (1u << 11)
+#define ESP32_I2C_CTR_SELF_CLEARING \
+    (ESP32_I2C_TRANS_START | ESP32_I2C_FSM_RST | ESP32_I2C_CONF_UPGATE)
+
+/* `SCL_SP_CONF`, and the bit a driver clearing a stuck bus waits on. The
+ * hardware pulses SCL nine times and clears it; here there is no bus to
+ * unstick, so it clears at once. Left set, it is fifty milliseconds of
+ * timeout on every recovery — and esp-hal recovers after every NACK, which
+ * is once per address of a bus scan. */
+REG32(RUSTY_I2C_SCL_SP_CONF, 0x0080)
+#define ESP32_I2C_SCL_RST_SLV_EN (1u << 0)
 
 /* `FIFO_CONF`: the two resets, both of which the driver sets and clears
  * again — so the model acts on the bit going up. */
