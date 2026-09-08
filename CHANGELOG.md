@@ -9,6 +9,19 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## Unreleased
+
+**Changed — the sheet's parts look like the parts.** A 5 mm LED with its
+flat and its long anode leg, a resistor wearing the colour bands of its own
+value, a capacitor, a tactile switch whose cap sinks when it is pressed, a
+screen on a carrier board that shows what the firmware prints on the screen
+itself, a motor in its can — beside a devkit that is already drawn as the
+board on the desk. Wires attach to the end of a leg, where they do on the
+bench. A part imported from LCSC that says what it is — `LED`, `R`, `SW` —
+is drawn as that part; anything else is drawn as a package with its pins
+down both sides and its name on the body. Placing a part now shows the part
+under the cursor rather than an empty rectangle.
+
 ## v0.6.12
 
 **Added — the board is a schematic.** Parts on the Simulate sheet are KiCad

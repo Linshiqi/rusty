@@ -15,6 +15,8 @@
 //! circle and the wire that leaves it come to disagree.
 
 use rusty_embed::nets::Row;
+
+use super::art;
 use rusty_embed::{Fill, Graphic, Instance, KIT_REFERENCE, Pin, PinRef, Sheet, Symbol, Wire};
 
 pub(super) const SNAP: f64 = 8.0;
@@ -460,30 +462,36 @@ pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
     svg
 }
 
-/// Where a pin's connection point is on the sheet — where a wire lands.
+/// The part's drawing, in its own frame — `None` for a part whose symbol
+/// no library has, which is drawn as a labelled box instead.
+pub(super) fn part_layout(part: &EditPart) -> Option<art::Layout> {
+    part.symbol.as_ref().map(art::layout)
+}
+
+/// One of the drawing's leads on the sheet: where the wire attaches, and
+/// the direction it runs away from the body, after the part's turn and
+/// mirror. Takes the layout, so a caller looking at every pin builds it
+/// once — this is the inner loop of a drag.
+pub(super) fn spot_on_sheet(part: &EditPart, spot: &art::Spot) -> ((f64, f64), (f64, f64)) {
+    let (dx, dy) = orient(spot.at, part.inst.rot, part.inst.mirror);
+    let (ox, oy) = orient(spot.out, part.inst.rot, part.inst.mirror);
+    ((part.inst.x + dx, part.inst.y + dy), (ox, oy))
+}
+
+/// Where a pin's wire lands on the sheet — the end of its lead.
 pub(super) fn pin_point(part: &EditPart, pin: &Pin) -> (f64, f64) {
-    let (dx, dy) = orient(local(pin.at), part.inst.rot, part.inst.mirror);
-    (part.inst.x + dx, part.inst.y + dy)
+    lead_of(part, pin).map_or((part.inst.x, part.inst.y), |(at, _)| at)
 }
 
-/// The unit vector a wire leaves a pin along: away from the body, on the
-/// sheet, after the part's turn and mirror.
+/// The unit vector a wire leaves a pin along: away from the body.
 pub(super) fn pin_out(part: &EditPart, pin: &Pin) -> (f64, f64) {
-    let (dx, dy) = pin.direction();
-    let (ox, oy) = orient(local((dx, dy)), part.inst.rot, part.inst.mirror);
-    let len = ox.hypot(oy);
-    if len < 1e-9 {
-        return (0.0, 0.0);
-    }
-    (-ox / len, -oy / len)
+    lead_of(part, pin).map_or((0.0, 0.0), |(_, out)| out)
 }
 
-/// The far end of the pin's line, at the body.
-pub(super) fn pin_body_end(part: &EditPart, pin: &Pin) -> (f64, f64) {
-    let (px, py) = pin_point(part, pin);
-    let (ox, oy) = pin_out(part, pin);
-    let len = pin.length * MM_PX;
-    (px - ox * len, py - oy * len)
+fn lead_of(part: &EditPart, pin: &Pin) -> Option<((f64, f64), (f64, f64))> {
+    let plan = part_layout(part)?;
+    let spot = plan.spot(&pin.number)?;
+    Some(spot_on_sheet(part, spot))
 }
 
 /// The spelling a wire uses for a pin: its name when no other pin of the
@@ -499,25 +507,30 @@ pub(super) fn pin_key(symbol: &Symbol, pin: &Pin) -> String {
     }
 }
 
-/// The box a part occupies on the sheet, `(x0, y0, x1, y1)`: the symbol's
-/// bounds, turned and mirrored, or the unknown-symbol box.
+/// The box a part occupies on the sheet, `(x0, y0, x1, y1)`: the drawing's
+/// box, turned and mirrored, or the unknown-symbol box.
 pub(super) fn part_box(part: &EditPart) -> (f64, f64, f64, f64) {
     let (x, y) = (part.inst.x, part.inst.y);
-    let Some((x0, y0, x1, y1)) = part.symbol.as_ref().and_then(Symbol::bounds) else {
+    let Some(plan) = part_layout(part) else {
         let (w, h) = UNKNOWN_BOX;
         return (x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0);
     };
-    let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)];
+    box_on_sheet(part, plan.bounds)
+}
+
+/// A box in the drawing's frame, turned and mirrored onto the sheet.
+pub(super) fn box_on_sheet(part: &EditPart, rect: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+    let (x0, y0, x1, y1) = rect;
     let mut acc: Option<(f64, f64, f64, f64)> = None;
-    for corner in corners {
-        let (dx, dy) = orient(local(corner), part.inst.rot, part.inst.mirror);
-        let (px, py) = (x + dx, y + dy);
+    for corner in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+        let (dx, dy) = orient(corner, part.inst.rot, part.inst.mirror);
+        let (px, py) = (part.inst.x + dx, part.inst.y + dy);
         acc = Some(match acc {
             None => (px, py, px, py),
             Some((a, b, c, d)) => (a.min(px), b.min(py), c.max(px), d.max(py)),
         });
     }
-    acc.unwrap_or((x, y, x, y))
+    acc.unwrap_or((part.inst.x, part.inst.y, part.inst.x, part.inst.y))
 }
 
 /// The pin within `radius` of `point`, nearest first: `(part, pin number)`.
@@ -531,11 +544,14 @@ pub(super) fn pin_under(
 ) -> Option<(usize, String)> {
     let mut best: Option<((usize, String), f64)> = None;
     for (index, part) in parts.iter().enumerate() {
-        for pin in part.pins().iter().filter(|p| !p.hidden) {
-            let (px, py) = pin_point(part, pin);
+        let Some(plan) = part_layout(part) else {
+            continue;
+        };
+        for spot in &plan.spots {
+            let ((px, py), _) = spot_on_sheet(part, spot);
             let distance = (px - point.0).hypot(py - point.1);
             if distance <= radius && best.as_ref().is_none_or(|(_, nearest)| distance < *nearest) {
-                best = Some(((index, pin.number.clone()), distance));
+                best = Some(((index, spot.number.clone()), distance));
             }
         }
     }
@@ -742,145 +758,6 @@ pub(super) fn rgb_color(r: bool, g: bool, b: bool) -> &'static str {
     }
 }
 
-/// The colours a symbol is drawn in on the dark sheet: KiCad's dark theme,
-/// near enough — a warm body outline, a soft red for pins.
-pub(super) const BODY_STROKE: &str = "#d8a24b";
-pub(super) const BODY_FILL: &str = "#3a2f1a";
-pub(super) const PIN_STROKE: &str = "#d97c6c";
-
-/// A three-point arc as the points along it, sixteen steps — no sweep flags
-/// to get wrong under a flipped axis.
-pub(super) fn arc_points(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> Vec<(f64, f64)> {
-    let (ax, ay) = start;
-    let (bx, by) = mid;
-    let (cx, cy) = end;
-    let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-    if d.abs() < 1e-9 {
-        return vec![start, mid, end];
-    }
-    let ux = ((ax * ax + ay * ay) * (by - cy)
-        + (bx * bx + by * by) * (cy - ay)
-        + (cx * cx + cy * cy) * (ay - by))
-        / d;
-    let uy = ((ax * ax + ay * ay) * (cx - bx)
-        + (bx * bx + by * by) * (ax - cx)
-        + (cx * cx + cy * cy) * (bx - ax))
-        / d;
-    let r = (ax - ux).hypot(ay - uy);
-    let angle = |(x, y): (f64, f64)| (y - uy).atan2(x - ux);
-    let (sa, ma, ea) = (angle(start), angle(mid), angle(end));
-    // Walk counter-clockwise from the start; if the mid point is not on
-    // that way to the end, walk the other way round.
-    let ccw = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
-    let (sweep, sign) = if ccw(sa, ma) <= ccw(sa, ea) {
-        (ccw(sa, ea), 1.0)
-    } else {
-        (ccw(ea, sa), -1.0)
-    };
-    (0..=16)
-        .map(|i| {
-            let t = sa + sign * sweep * f64::from(i) / 16.0;
-            (ux + r * t.cos(), uy + r * t.sin())
-        })
-        .collect()
-}
-
-/// The body of a symbol as SVG markup in the symbol's own millimetres, for
-/// a `<g>` scaled by [`MM_PX`] and flipped in y. Pins are their lines; the
-/// connection dots and every piece of text are the view's, because a dot
-/// takes the pointer and text must read upright whatever the body does.
-pub(super) fn symbol_markup(symbol: &Symbol) -> String {
-    let mut svg = String::new();
-    let paint = |width: f64, fill: Fill| {
-        let fill = match fill {
-            Fill::None => "none".to_string(),
-            Fill::Outline => BODY_STROKE.to_string(),
-            Fill::Background => BODY_FILL.to_string(),
-        };
-        let px = (width * MM_PX).max(1.3);
-        format!(
-            r##"fill="{fill}" stroke="{BODY_STROKE}" stroke-width="{px:.2}" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round""##
-        )
-    };
-    let points_attr = |points: &[(f64, f64)]| {
-        points
-            .iter()
-            .map(|(x, y)| format!("{x:.4},{y:.4}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    for graphic in &symbol.graphics {
-        match graphic {
-            Graphic::Polyline {
-                points,
-                width,
-                fill,
-            } => {
-                let closed = points.len() > 2 && points.first() == points.last();
-                let tag = if closed { "polygon" } else { "polyline" };
-                let list = if closed {
-                    &points[..points.len() - 1]
-                } else {
-                    &points[..]
-                };
-                svg.push_str(&format!(
-                    r##"<{tag} points="{}" {}/>"##,
-                    points_attr(list),
-                    paint(*width, *fill)
-                ));
-            }
-            Graphic::Rectangle {
-                start,
-                end,
-                width,
-                fill,
-            } => svg.push_str(&format!(
-                r##"<rect x="{:.4}" y="{:.4}" width="{:.4}" height="{:.4}" {}/>"##,
-                start.0.min(end.0),
-                start.1.min(end.1),
-                (end.0 - start.0).abs(),
-                (end.1 - start.1).abs(),
-                paint(*width, *fill)
-            )),
-            Graphic::Circle {
-                center,
-                radius,
-                width,
-                fill,
-            } => svg.push_str(&format!(
-                r##"<circle cx="{:.4}" cy="{:.4}" r="{:.4}" {}/>"##,
-                center.0,
-                center.1,
-                radius,
-                paint(*width, *fill)
-            )),
-            Graphic::Arc {
-                start,
-                mid,
-                end,
-                width,
-                fill,
-            } => svg.push_str(&format!(
-                r##"<polyline points="{}" {}/>"##,
-                points_attr(&arc_points(*start, *mid, *end)),
-                paint(*width, *fill)
-            )),
-            Graphic::Text { .. } => {}
-        }
-    }
-    for pin in symbol.pins.iter().filter(|p| !p.hidden && p.length > 0.0) {
-        let (dx, dy) = pin.direction();
-        svg.push_str(&format!(
-            r##"<line x1="{:.4}" y1="{:.4}" x2="{:.4}" y2="{:.4}" stroke="{PIN_STROKE}" stroke-width="1.3" vector-effect="non-scaling-stroke"/>"##,
-            pin.at.0,
-            pin.at.1,
-            pin.at.0 + dx * pin.length,
-            pin.at.1 + dy * pin.length,
-        ));
-    }
-    svg
-}
-
 /// One piece of upright text beside a part: where, how anchored, what.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Label {
@@ -892,45 +769,35 @@ pub(super) struct Label {
     pub size: f64,
 }
 
-/// The pin names and numbers of a part, placed on the sheet as KiCad places
-/// them: the number beside the middle of the pin line, the name just inside
-/// the body end. Text stays upright however the part is turned; the
-/// anchor follows which way the pin points so a name never crosses its
-/// own pin. Pins with no name (`~`) and pins too short to write beside are
-/// left alone.
+/// The pin names of a part, placed just past the end of each lead. Names
+/// only: a real part has no pin numbers printed on it, and the sheet is a
+/// picture of the part. A pin the library did not name (`~`, or the number
+/// again) is left alone, which is why a resistor and a capacitor carry no
+/// writing at all. The text is placed after the part's turn, so it reads
+/// upright however the part lies.
 pub(super) fn pin_labels(part: &EditPart) -> Vec<Label> {
-    let Some(symbol) = part.symbol.as_ref() else {
+    let Some(plan) = part_layout(part) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for pin in symbol.pins.iter().filter(|p| !p.hidden && p.length > 0.0) {
-        let at = pin_point(part, pin);
-        let body = pin_body_end(part, pin);
-        let out_dir = pin_out(part, pin);
-        let horizontal = out_dir.0.abs() > out_dir.1.abs();
-        // The number, above a horizontal pin and left of a vertical one.
-        let mid = ((at.0 + body.0) / 2.0, (at.1 + body.1) / 2.0);
-        out.push(Label {
-            x: if horizontal { mid.0 } else { mid.0 - 4.0 },
-            y: if horizontal { mid.1 - 3.0 } else { mid.1 + 3.0 },
-            anchor: if horizontal { "middle" } else { "end" },
-            text: pin.number.clone(),
-            size: 7.0,
-        });
-        if pin.name == "~" || pin.name.is_empty() || pin.name == pin.number {
+    for spot in &plan.spots {
+        if spot.name == "~" || spot.name.is_empty() || spot.name == spot.number {
             continue;
         }
-        let inset = 3.0;
+        let ((x, y), (ox, oy)) = spot_on_sheet(part, spot);
+        // Beside the lead rather than beyond its tip, which is where the
+        // wire goes: a label under a wire is a label nobody can read.
+        let (dx, dy, anchor) = if ox.abs() > oy.abs() {
+            (-ox * 5.0, -7.0, "middle")
+        } else {
+            (6.0, -oy * 4.0 + 2.5, "start")
+        };
         out.push(Label {
-            x: body.0 - out_dir.0 * inset,
-            y: body.1 - out_dir.1 * inset + if horizontal { 3.0 } else { 0.0 },
-            anchor: if horizontal {
-                if out_dir.0 > 0.0 { "end" } else { "start" }
-            } else {
-                "middle"
-            },
-            text: pin.name.clone(),
-            size: 7.5,
+            x: x + dx,
+            y: y + dy,
+            anchor,
+            text: spot.name.clone(),
+            size: 7.0,
         });
     }
     out
@@ -1012,27 +879,21 @@ mod tests {
         }
     }
 
-    /// KiCad's pin pitch is one row pitch, so a symbol's pins land on the
-    /// sheet's grid — and so do the kit's, whose symbol is generated from
-    /// the row geometry and must answer with the row points exactly.
+    /// A wire lands on the end of a leg — where it does on the desk — and
+    /// the kit's pins are its header's rows, exactly.
     #[test]
-    fn pins_land_on_the_grid_and_the_kits_pins_are_its_row_points() {
+    fn a_wire_lands_on_a_leg_and_the_kits_pins_are_its_row_points() {
         let part = led(200.0, 96.0);
         let k = part.pin("K").unwrap();
         let a = part.pin("A").unwrap();
-        assert_eq!(pin_point(&part, k), (200.0 - 24.0, 96.0));
-        assert_eq!(pin_point(&part, a), (224.0, 96.0));
-        assert_eq!(
-            pin_out(&part, k),
-            (-1.0, 0.0),
-            "the cathode's wire leaves leftward"
+        assert_eq!(pin_point(&part, a), (204.0, 120.0));
+        assert_eq!(pin_point(&part, k), (196.0, 114.0));
+        assert!(
+            pin_point(&part, a).1 > pin_point(&part, k).1,
+            "the anode is the long leg, as it is in the bag"
         );
-        assert_eq!(pin_out(&part, a), (1.0, 0.0));
-        assert_eq!(
-            pin_body_end(&part, k),
-            (192.0, 96.0),
-            "2.54 mm is one pitch"
-        );
+        assert_eq!(pin_out(&part, a), (0.0, 1.0), "the legs point down");
+        assert_eq!(pin_out(&part, k), (0.0, 1.0));
 
         let kit = kit(460.0, 40.0);
         let rows = rows();
@@ -1072,18 +933,18 @@ mod tests {
         let k = part.pin("K").unwrap().clone();
         assert_eq!(
             pin_point(&part, &k),
-            (200.0, 72.0),
-            "the cathode swings to the top"
+            (182.0, 92.0),
+            "a quarter turn lays the legs to the left"
         );
-        assert_eq!(pin_out(&part, &k), (0.0, -1.0));
+        assert_eq!(pin_out(&part, &k), (-1.0, 0.0));
         part.inst.rot = 0;
         part.inst.mirror = true;
         assert_eq!(
             pin_point(&part, &k),
-            (224.0, 96.0),
-            "mirrored: the cathode is on the right"
+            (204.0, 114.0),
+            "mirrored: the cathode's leg is on the right"
         );
-        assert_eq!(pin_out(&part, &k), (1.0, 0.0));
+        assert_eq!(pin_out(&part, &k), (0.0, 1.0), "and still points down");
         assert_eq!(orient((1.0, 0.0), 180, false), (-1.0, 0.0));
         assert_eq!(orient((1.0, 0.0), 270, false), (0.0, -1.0));
         assert_eq!(rotate_about((10.0, 0.0), (0.0, 0.0), 90), (0.0, 10.0));
@@ -1100,7 +961,7 @@ mod tests {
         let ends = wire_ends(&parts, &wire).expect("both pins exist");
         let path = wire_path(&ends, &wire.bends);
         assert_eq!(path[0], ends[0].0);
-        assert_eq!(*path.last().unwrap(), (224.0, 96.0));
+        assert_eq!(*path.last().unwrap(), (204.0, 120.0));
         for pair in path.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             assert!(
@@ -1127,25 +988,25 @@ mod tests {
         let wires = vec![Wire {
             from: PinRef::new("D1", "A"),
             to: PinRef::new("U1", "GPIO2"),
-            bends: vec![(300.0, 96.0), (300.0, 200.0)],
+            bends: vec![(300.0, 120.0), (300.0, 200.0)],
         }];
         let legs = wire_legs(&parts, &wires, &[1]);
         assert_eq!(
             legs,
             vec![(0, Some(true), None)],
-            "the anode's leg is horizontal; the kit is not moving"
+            "the anode's leg runs across; the kit is not moving"
         );
         let mut bend = wires[0].bends[0];
         follow_bend((230.0, 140.0), Some(true), &mut bend);
         assert_eq!(bend, (300.0, 140.0), "slid along its own axis");
 
         let mut wire = wires[0].clone();
-        wire.bends = vec![(240.0, 96.0), (300.0, 96.0), (300.0, 200.0)];
+        wire.bends = vec![(240.0, 120.0), (300.0, 120.0), (300.0, 200.0)];
         let ends = wire_ends(&parts, &wire).unwrap();
         retidy(&mut wire, &ends);
         assert_eq!(
             wire.bends,
-            vec![(300.0, 96.0), (300.0, 200.0)],
+            vec![(300.0, 120.0), (300.0, 200.0)],
             "the bend on the straight run folds away"
         );
     }
@@ -1154,8 +1015,9 @@ mod tests {
     fn pins_and_parts_are_found_within_reach_and_nowhere_else() {
         let parts = vec![kit(460.0, 40.0), led(200.0, 96.0)];
         assert_eq!(
-            pin_under(&parts, (222.0, 98.0), 10.0),
-            Some((1, "2".to_string()))
+            pin_under(&parts, (206.0, 122.0), 10.0),
+            Some((1, "2".to_string())),
+            "the anode's leg end"
         );
         assert_eq!(pin_under(&parts, (222.0, 140.0), 10.0), None);
         let (kx, ky) = row_offset(rows().len(), 3);
@@ -1171,37 +1033,41 @@ mod tests {
         assert_eq!(parts_in_box(&parts, (0.0, 0.0), (700.0, 400.0)), vec![0, 1]);
         assert!(parts_in_box(&parts, (0.0, 0.0), (100.0, 50.0)).is_empty());
         let (min, max) = bounds(&parts);
-        assert!(min.0 <= 176.0 && max.0 >= 610.0);
+        assert!(min.0 <= 190.0 && max.0 >= 610.0, "{min:?} {max:?}");
     }
 
+    /// The pin names sit beside the leads, and a pin the library never
+    /// named — a resistor's, a capacitor's — carries no writing at all: a
+    /// real part has nothing printed on its legs.
     #[test]
-    fn the_symbol_markup_draws_every_shape_and_labels_read_upright() {
+    fn the_pin_names_are_written_beside_the_leads_and_nothing_else_is() {
         let part = led(200.0, 96.0);
-        let markup = symbol_markup(part.symbol.as_ref().unwrap());
-        assert!(markup.contains("<polyline"), "{markup}");
-        assert!(
-            markup.matches("<line").count() == 2,
-            "two pin lines: {markup}"
-        );
-        assert!(markup.contains("non-scaling-stroke"));
-        // The arc passes through its mid point.
-        let arc = arc_points((0.0, 1.0), (1.0, 0.0), (0.0, -1.0));
-        assert_eq!(arc.len(), 17);
-        assert!(
-            arc.iter()
-                .any(|(x, y)| (x - 1.0).abs() < 1e-6 && y.abs() < 1e-6),
-            "{arc:?}"
-        );
-        assert!((arc[16].1 - -1.0).abs() < 1e-6);
         let labels = pin_labels(&part);
         let names: Vec<&str> = labels.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(names, vec!["1", "K", "2", "A"]);
-        let k = &labels[1];
-        assert_eq!(
-            k.anchor, "start",
-            "the cathode's name sits inside, to the right of its pin"
+        assert_eq!(names, vec!["A", "K"], "names, and no pin numbers");
+        let anode = &labels[0];
+        assert_eq!(anode.anchor, "start");
+        assert!(
+            anode.x > 204.0 && (anode.y - 120.0).abs() < 6.0,
+            "beside the leg, not under the wire: {anode:?}"
         );
-        assert!(k.x > 192.0 && k.x < 200.0, "{k:?}");
+
+        // A turned part's writing moves with it and stays the same words;
+        // the view never rotates it.
+        let mut turned = part.clone();
+        turned.inst.rot = 90;
+        let moved = pin_labels(&turned);
+        assert_eq!(moved.len(), labels.len());
+        assert_ne!(moved[0].x, labels[0].x);
+        assert_eq!(moved[0].text, "A");
+
+        let mut bare = part.clone();
+        if let Some(symbol) = bare.symbol.as_mut() {
+            for pin in &mut symbol.pins {
+                pin.name = "~".into();
+            }
+        }
+        assert!(pin_labels(&bare).is_empty(), "an unnamed pin says nothing");
     }
 
     #[test]

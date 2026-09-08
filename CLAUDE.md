@@ -1916,13 +1916,36 @@ proof of the import.
 - **The fetch goes through `net`'s ladder**, both hosts (`easyeda.com`,
   then `lceda.cn`), and the failure names the last route tried. It reached
   the service from a machine where `curl` and Python could not.
-- **Text is never turned.** The symbol's body is one `<g>` scaled from
-  millimetres and flipped upright, then rotated and mirrored as the part
-  is; pin names and numbers, the reference and the value are placed in
-  sheet coordinates *after* the turn (`pin_labels`), with the anchor
-  following which way the pin points, so nothing on the sheet is ever
-  drawn mirrored. Arcs are sampled into polylines rather than emitted as
-  SVG arcs: a sweep flag under a flipped axis is a flag to get wrong.
+- **The parts are drawn as the components on the desk, and the drawing
+  decides where the pins are** (`view/panels/simulate/art.rs`). A 5 mm lamp
+  with its flat and its long anode leg, a resistor with the colour bands of
+  its own value, a tactile switch whose cap sinks, a screen on a carrier
+  board — beside a devkit drawn as a photograph of one, a KiCad line
+  drawing read as two pictures of two different things. So a wire lands on
+  the end of a leg, where it does on the bench: `art::layout` answers where
+  every lead ends, cheaply and with no markup, and every geometric question
+  goes through it; `art::markup` draws the same shapes from the same
+  constants, so the leg a wire lands on and the leg that is drawn cannot
+  drift apart. A symbol's own coordinates are used for one part only — the
+  devkit, whose pins are its header's rows.
+- **What the firmware is doing is painted over the drawing, never baked
+  into it.** `Layout::lens` is a lamp's dome or a button's cap and
+  `Layout::face` a screen, both in the part's own frame; the view paints
+  them, so the markup is a pure function of the symbol and its value and
+  can be memoised. A lit lamp is its own colour with a drop shadow, a dark
+  one that colour dimmed — a red LED is red on the desk with the power off.
+- **A part rusty has never heard of is a package**: pins down the two long
+  sides, numbered as a DIP is, with its name on the body. An import whose
+  reference prefix says what it is — `LED`, `R`, `SW` — gets that part's
+  drawing instead, which is what makes importing from LCSC worth doing.
+- **Text is never turned.** The body is one `<g>` rotated and mirrored as
+  the part is; pin names, the reference and the value are placed in sheet
+  coordinates *after* the turn (`pin_labels`), beside the lead rather than
+  beyond its tip, where the wire goes. Numbers are not drawn at all: a real
+  part has none printed on its legs. `every_part_can_be_drawn_to_a_sheet_
+  for_looking_at` writes every part into one SVG when `RUSTY_ART_SVG` names
+  a file — the check a unit test cannot be, since whether a drawing looks
+  like the thing needs eyes.
 - **A part's group takes the pointer; the SVG around it does not.** The
   parts layer is `pointer-events: none` and each part, pin dot and wire
   grab handle opts back in, so a press on empty sheet still reaches the

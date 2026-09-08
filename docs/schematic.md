@@ -169,12 +169,17 @@ rotating, deleting, duplicating and undoing do to the parts and the wires),
 `library.rs` (the palette, grouped by library, with the LCSC import box),
 `mod.rs` (the canvas and the properties panel).
 
-A symbol's graphics become one SVG group scaled from millimetres and
-flipped upright, then turned and mirrored as the part is; text — pin
-names and numbers, the reference above, the value below — is placed in
-sheet coordinates after the turn, so it always reads upright. Pins are
-gold dots that pulse until something reaches them; a wire is pulled from
-any pin to any other, in either direction, and lands only within reach.
+Parts are drawn as the components they are (`art.rs`): a 5 mm lamp with
+its flat and its long anode leg, a resistor with the colour bands of its
+value, a tactile switch with a cap, a screen on a carrier board, and a
+package for anything rusty has never heard of. **The drawing decides where
+the pins are** — a wire lands on the end of a leg, as it does on the bench
+— and the symbol's own coordinates are used only for the devkit, whose
+pins are its header's rows. Text — pin names, the reference above, the
+value below — is placed after the turn, so it always reads upright. Pins
+are gold dots that pulse until something reaches them; a wire is pulled
+from any pin to any other, in either direction, and lands only within
+reach.
 Wires are orthogonal polylines through the author's bends, with KiCad's
 semantics: moving a part stretches only the leg beside its pin, a
 dragged segment pushes its neighbours, aligned segments merge. Lamps glow,

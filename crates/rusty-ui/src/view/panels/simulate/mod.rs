@@ -17,6 +17,7 @@ use std::collections::HashSet;
 
 use leptos::{ev, prelude::*};
 
+mod art;
 mod edit;
 mod geometry;
 mod library;
@@ -1185,7 +1186,15 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                             symbol.with(|s| s.as_ref().map(behaviour_of))
                                         });
                                         let markup = Memo::new(move |_| {
-                                            symbol.with(|s| s.as_ref().map(symbol_markup).unwrap_or_default())
+                                            let value = value.get();
+                                            symbol.with(|s| {
+                                                s.as_ref().map(|s| art::markup(s, &value)).unwrap_or_default()
+                                            })
+                                        });
+                                        // Where the drawing puts the leads,
+                                        // the light and the screen.
+                                        let plan = Memo::new(move |_| {
+                                            symbol.with(|s| s.as_ref().map(art::layout))
                                         });
                                         let bbox = Memo::new(move |_| {
                                             this.with(|p| p.as_ref().map(part_box).unwrap_or((0.0, 0.0, 0.0, 0.0)))
@@ -1211,12 +1220,14 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 let Some(p) = p.as_ref() else {
                                                     return Vec::new();
                                                 };
-                                                p.pins()
+                                                let Some(plan) = part_layout(p) else {
+                                                    return Vec::new();
+                                                };
+                                                plan.spots
                                                     .iter()
-                                                    .filter(|pin| !pin.hidden)
-                                                    .map(|pin| {
-                                                        let (x, y) = pin_point(p, pin);
-                                                        (pin.number.clone(), x - p.inst.x, y - p.inst.y)
+                                                    .map(|spot| {
+                                                        let ((x, y), _) = spot_on_sheet(p, spot);
+                                                        (spot.number.clone(), x - p.inst.x, y - p.inst.y)
                                                     })
                                                     .collect::<Vec<_>>()
                                             })
@@ -1394,11 +1405,8 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 let (_, _, rot, mirror) = place.get();
                                                 let flip = if mirror { -1 } else { 1 };
                                                 let transform = format!("rotate({rot}) scale({flip} 1)");
-                                                let inner = format!("scale({MM_PX} {})", -MM_PX);
                                                 view! {
-                                                    <g transform=transform>
-                                                        <g transform=inner inner_html=move || markup.get()></g>
-                                                    </g>
+                                                    <g transform=transform inner_html=move || markup.get()></g>
                                                 }
                                                     .into_any()
                                             }
@@ -1410,51 +1418,86 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         // lens, the lit segments of a digit,
                                         // the sunk cap of a pressed switch.
                                         let face = move || {
-                                            let (x0, y0, x1, y1) = bbox.get();
-                                            let (px, py, _, _) = place.get();
-                                            let (cx, cy) = ((x0 + x1) / 2.0 - px, (y0 + y1) / 2.0 - py);
+                                            let Some(plan) = plan.get() else {
+                                                return ().into_any();
+                                            };
+                                            let (_, _, rot, mirror) = place.get();
+                                            // The drawing turns with the part;
+                                            // what is written on it does not.
+                                            let turned = move |point: (f64, f64)| orient(point, rot, mirror);
                                             match behaviour.get() {
-                                                Some(Behaviour::Led) => {
-                                                    let (on, _) = lamp_colors(&value.get());
-                                                    let lit = is_lit.get();
-                                                    let opacity = if lit { "0.85" } else { "0" };
-                                                    let glow = if lit {
-                                                        format!("filter: drop-shadow(0 0 5px {on}) drop-shadow(0 0 12px {on}); pointer-events: none")
-                                                    } else {
-                                                        "pointer-events: none".to_string()
+                                                Some(Behaviour::Led | Behaviour::Rgb) => {
+                                                    let Some((lx, ly, r)) = plan.lens else {
+                                                        return ().into_any();
                                                     };
-                                                    view! {
-                                                        <circle cx=cx cy=cy r="9" fill=on fill-opacity=opacity style=glow />
-                                                    }
-                                                        .into_any()
-                                                }
-                                                Some(Behaviour::Rgb) => {
+                                                    let (cx, cy) = turned((lx, ly));
                                                     let reference = reference.get();
-                                                    let channel = |name: &str| {
-                                                        eval.with(|e| e.is_pin_lit(&reference, name))
+                                                    let rgb = behaviour.get() == Some(Behaviour::Rgb);
+                                                    let (colour, lit) = if rgb {
+                                                        let channel = |name: &str| {
+                                                            eval.with(|e| e.is_pin_lit(&reference, name))
+                                                        };
+                                                        let (r, g, b) =
+                                                            (channel("R"), channel("G"), channel("B"));
+                                                        (rgb_color(r, g, b), r || g || b)
+                                                    } else {
+                                                        let (on, off) = lamp_colors(&value.get());
+                                                        let lit = is_lit.get();
+                                                        (if lit { on } else { off }, lit)
                                                     };
-                                                    let (r, g, b) = (channel("R"), channel("G"), channel("B"));
-                                                    let color = rgb_color(r, g, b);
-                                                    let lit = r || g || b;
+                                                    // A dark lamp is its own
+                                                    // colour dimmed, not grey:
+                                                    // a red LED is red on the
+                                                    // desk with the power off.
                                                     let glow = if lit {
-                                                        format!("filter: drop-shadow(0 0 5px {color}) drop-shadow(0 0 12px {color}); pointer-events: none")
+                                                        format!(
+                                                            "filter: drop-shadow(0 0 5px {colour}) drop-shadow(0 0 13px {colour}); pointer-events: none",
+                                                        )
                                                     } else {
                                                         "pointer-events: none".to_string()
                                                     };
                                                     view! {
-                                                        <circle cx=cx cy=cy r="11" fill=color fill-opacity=if lit { "0.85" } else { "0.25" } style=glow />
+                                                        <circle
+                                                            cx=cx
+                                                            cy=cy
+                                                            r=r
+                                                            fill=colour
+                                                            fill-opacity=if lit { "0.95" } else { "0.5" }
+                                                            stroke="#0b0e12"
+                                                            stroke-opacity="0.55"
+                                                            stroke-width="0.9"
+                                                            style=glow
+                                                        />
+                                                        <ellipse
+                                                            cx=cx - r * 0.3
+                                                            cy=cy - r * 0.35
+                                                            rx=r * 0.28
+                                                            ry=r * 0.42
+                                                            fill="#ffffff"
+                                                            fill-opacity=if lit { "0.5" } else { "0.16" }
+                                                            style="pointer-events: none"
+                                                        />
                                                     }
                                                         .into_any()
                                                 }
                                                 Some(Behaviour::Seven) => {
-                                                    let reference = reference.get();
-                                                    let seg = |name: &str| {
-                                                        if eval.with(|e| e.is_pin_lit(&reference, name)) { "#ff5c5c" } else { "#3a2323" }
+                                                    let Some((fx, fy, fw, fh)) = plan.face else {
+                                                        return ().into_any();
                                                     };
-                                                    let transform = format!("translate({} {})", cx - 13.0, cy - 21.0);
+                                                    let (cx, cy) =
+                                                        turned((fx + fw / 2.0, fy + fh / 2.0));
+                                                    let reference = reference.get();
+                                                    let seg = move |name: &str| {
+                                                        if eval.with(|e| e.is_pin_lit(&reference, name)) {
+                                                            "#ff5c5c"
+                                                        } else {
+                                                            "#3a2323"
+                                                        }
+                                                    };
+                                                    let transform =
+                                                        format!("translate({} {})", cx - 13.0, cy - 21.0);
                                                     view! {
                                                         <g transform=transform style="pointer-events: none">
-                                                            <rect x="0" y="0" width="26" height="42" rx="3" fill="#1a1114" />
                                                             <rect x="6" y="2" width="14" height="4" rx="2" fill=seg("a") />
                                                             <rect x="19" y="5" width="4" height="13" rx="2" fill=seg("b") />
                                                             <rect x="19" y="23" width="4" height="13" rx="2" fill=seg("c") />
@@ -1466,12 +1509,58 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     }
                                                         .into_any()
                                                 }
-                                                Some(Behaviour::Switch) => {
-                                                    let down = is_pressed.get();
-                                                    let r = if down { 5.0 } else { 6.5 };
-                                                    let fill = if down { "#e05d38" } else { "#3a404a" };
+                                                // What the firmware prints,
+                                                // on the screen it prints it
+                                                // to — upright, whichever way
+                                                // the module is turned.
+                                                Some(Behaviour::Display) => {
+                                                    let Some((fx, fy, fw, fh)) = plan.face else {
+                                                        return ().into_any();
+                                                    };
+                                                    let (cx, cy) =
+                                                        turned((fx + fw / 2.0, fy + fh / 2.0));
                                                     view! {
-                                                        <circle cx=cx cy=cy r=r fill=fill stroke="#5a626e" stroke-width="1" style="pointer-events: none" />
+                                                        <text
+                                                            x=cx
+                                                            y=cy + 3.0
+                                                            text-anchor="middle"
+                                                            font-family="ui-monospace"
+                                                            font-size="8.5"
+                                                            fill="#3ddc84"
+                                                            style="pointer-events: none"
+                                                        >
+                                                            {move || {
+                                                                let text = state.sim.display.get();
+                                                                if text.is_empty() {
+                                                                    "········".to_string()
+                                                                } else {
+                                                                    text
+                                                                }
+                                                            }}
+                                                        </text>
+                                                    }
+                                                        .into_any()
+                                                }
+                                                // The cap sinks as well as
+                                                // colouring: a tactile switch
+                                                // moves, and the eye reads the
+                                                // movement before the colour.
+                                                Some(Behaviour::Switch) => {
+                                                    let Some((lx, ly, r)) = plan.lens else {
+                                                        return ().into_any();
+                                                    };
+                                                    let (cx, cy) = turned((lx, ly));
+                                                    let down = is_pressed.get();
+                                                    view! {
+                                                        <circle
+                                                            cx=cx
+                                                            cy=cy
+                                                            r=if down { r - 1.2 } else { r }
+                                                            fill=if down { "#e05d38" } else { "#39404a" }
+                                                            stroke="#5a626e"
+                                                            stroke-width="1"
+                                                            style="pointer-events: none"
+                                                        />
                                                     }
                                                         .into_any()
                                                 }
@@ -1770,16 +1859,6 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 </div>
                                             }.into_any())
                                         }
-                                        Some(Behaviour::Display) => Some(view! {
-                                            <div class="pointer-events-none absolute" style=style>
-                                                <span class="grid min-h-[30px] min-w-[96px] place-items-center rounded-[4px] bg-[#0d1a12] px-2 py-1 font-mono text-caption text-[#3ddc84] ring-1 ring-[#1d4a2f]">
-                                                    {move || {
-                                                        let text = state.sim.display.get();
-                                                        if text.is_empty() { "········".to_string() } else { text }
-                                                    }}
-                                                </span>
-                                            </div>
-                                        }.into_any()),
                                         Some(Behaviour::Motor) => {
                                             let duty = move || {
                                                 gpio_at("PWM").and_then(|gpio| state.sim.pwm.with(|pwm| pwm.get(&gpio).copied()))
@@ -2053,27 +2132,35 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     dots.collect_view()
                                 }}
 
-                                // The armed part's ghost: where a click would
-                                // plant it, at its real footprint.
+                                // The armed part's ghost: the part itself,
+                                // where a click would plant it. A bare
+                                // rectangle said only "something goes here".
                                 {move || {
                                     let symbol = placing.get()?;
                                     let (x, y) = place_at.get()?;
-                                    let (x0, y0, x1, y1) = symbol.bounds().unwrap_or((-2.0, -2.0, 2.0, 2.0));
-                                    let (a, b) = (local((x0, y0)), local((x1, y1)));
-                                    let (w, h) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
+                                    let plan = art::layout(&symbol);
+                                    let (x0, y0, x1, y1) = plan.bounds;
+                                    let drawn = art::markup(&symbol, "");
                                     Some(view! {
-                                        <rect
-                                            x=x + a.0.min(b.0)
-                                            y=y + a.1.min(b.1)
-                                            width=w
-                                            height=h
-                                            rx="4"
-                                            fill="#e05d38"
-                                            fill-opacity="0.15"
-                                            stroke="#e05d38"
-                                            stroke-width="1.2"
+                                        <g
+                                            transform=format!("translate({x} {y})")
+                                            opacity="0.7"
                                             style="pointer-events: none"
-                                        />
+                                        >
+                                            <rect
+                                                x=x0 - 5.0
+                                                y=y0 - 5.0
+                                                width=x1 - x0 + 10.0
+                                                height=y1 - y0 + 10.0
+                                                rx="4"
+                                                fill="#e05d38"
+                                                fill-opacity="0.10"
+                                                stroke="#e05d38"
+                                                stroke-width="1.2"
+                                                stroke-dasharray="4 3"
+                                            />
+                                            <g inner_html=drawn></g>
+                                        </g>
                                     })
                                 }}
 
