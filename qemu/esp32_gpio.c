@@ -875,7 +875,10 @@ static void esp32_gpio_say_i2c(Esp32GpioState *s, int address, const char *verb,
     if (strcmp(body, s->i2c_last_report) == 0) {
         return;
     }
-    pstrcpy(s->i2c_last_report, sizeof(s->i2c_last_report), body);
+    /* `snprintf` rather than a copy: `pstrcpy` lives in `qemu/cutils.h`,
+     * which `osdep.h` does not pull in, and `strcpy` into a fixed field is
+     * the wrong habit to reach for even when the source is known short. */
+    snprintf(s->i2c_last_report, sizeof(s->i2c_last_report), "%s", body);
 
     at = snprintf(line, sizeof(line), "[rusty:i2c@%" PRId64 "] %s\n",
                   qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), body);
