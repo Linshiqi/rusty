@@ -218,6 +218,13 @@ static void esp32_gpio_report(Esp32GpioState *s, uint64_t changed)
  * `[rusty:irq@<us>] <pins>` names every pin currently asking, or nothing
  * after the last one is cleared. It is a report, not a protocol the guest
  * can see: firmware learns about its interrupts by being interrupted.
+ *
+ * `unconnected` when nothing is on the other end of the line. A machine
+ * that never called `sysbus_connect_irq` leaves `s->irq` null, and
+ * `qemu_set_irq` on a null line returns without doing anything — so the
+ * model would go on reporting interrupts it raised into nothing, and a
+ * firmware that was never interrupted would look identical to a firmware
+ * that ignored one. Said here because this is the only place that can.
  */
 static void esp32_gpio_say_irq(Esp32GpioState *s, bool raised)
 {
@@ -230,6 +237,9 @@ static void esp32_gpio_say_irq(Esp32GpioState *s, bool raised)
     }
     at = snprintf(line, sizeof(line), "[rusty:irq@%" PRId64 "] ",
                   qemu_clock_get_us(QEMU_CLOCK_VIRTUAL));
+    if (!s->irq) {
+        at += snprintf(line + at, sizeof(line) - at, "unconnected ");
+    }
     if (!raised) {
         at += snprintf(line + at, sizeof(line) - at, "-");
     }

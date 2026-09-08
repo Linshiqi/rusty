@@ -189,13 +189,15 @@ jobs:
           cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
           cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
 
-      # The model raises an interrupt when a pin fires, and `sysbus_init_irq`
-      # gives it a line — but neither machine connects that line, because the
-      # stock model never raised it. Two lines, inserted after text the script
-      # insists on seeing exactly once; the machine files are pinned in
-      # upstream.sha256 above, so a rewrite fails loudly rather than here.
-      - name: Wire the GPIO interrupt to the interrupt matrix
-        run: python qemu/wire-gpio-irq.py qemu-src
+      # Two holes in the interrupt path, both silent: neither machine
+      # connects the GPIO device's interrupt line, and the C3's interrupt
+      # matrix never says which *source* is asserting — the two registers
+      # esp-hal reads on every interrupt to find out what to call. Anchored
+      # insertions after text the script insists on seeing exactly once; all
+      # three files are pinned in upstream.sha256 above, so a rewrite
+      # upstream fails loudly rather than quietly doing nothing.
+      - name: Give the interrupt path what upstream is missing
+        run: python qemu/interrupts.py qemu-src
 
       # Espressif's fork asks pkg-config for slirp with `static: true`, which
       # upstream QEMU 9.2 does not:
@@ -781,11 +783,19 @@ jobs:
           raised = []
 
           def stop(why):
+              # The probe's own lines first, then the log. Annotations are
+              # capped at ten per step, and a cap that ate the probe's
+              # account of what it programmed is why two rounds of this said
+              # nothing but bootloader chatter. The whole tail travels as one
+              # annotation with its newlines encoded, so the cap cannot cut
+              # it in the middle either.
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[irq]")]
               print(f"::error::{why} | edges={edges()} | the model raised: {raised}")
-              tail = read()[-1200:].replace("%", "%25")
-              for chunk in tail.split("\n"):
-                  if chunk.strip():
-                      print(f"::error::serial: {chunk[:300]}")
+              for line in said[-6:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
               sys.exit(1)
 
           def settle(count, seconds, why):

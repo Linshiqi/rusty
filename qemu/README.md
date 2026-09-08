@@ -33,17 +33,11 @@ honestly claim:
 their set/clear aliases, the input register, and the interrupt half — the
 status register, its set/clear aliases, the CPU's pending view and each
 pin's trigger configuration, with the edge types latched and the level
-types following the level, as the silicon does. Nothing upstream wired the
-device's interrupt line to the interrupt matrix, because the stub never
-raised it, so `wire-gpio-irq.py` inserts that one line into each machine
-(`hw/riscv/esp32c3.c`, `hw/xtensa/esp32.c`) — an anchored insertion rather
-than a patch, because two lines inside functions of a thousand would make a
-diff that is mostly context and line numbers. Both files are pinned in
-`upstream.sha256` for the same reason the GPIO ones are — for all forty pins, since
-the original ESP32 keeps GPIO32..39 in a second bank and that is where its
-input-only pins live. Pin changes leave on their
-own chardev — not the UART, which belongs to the firmware — and input can be
-driven back in, so unmodified firmware reads a real pin.
+types following the level, as the silicon does. All forty pins, since the
+original ESP32 keeps GPIO32..39 in a second bank and that is where its
+input-only pins live. Pin changes leave on their own chardev — not the
+UART, which belongs to the firmware — and input can be driven back in, so
+unmodified firmware reads a real pin.
 
 Replacement files rather than a patch: what is being replaced is a stub, so
 almost every line changes and a unified diff's line numbers would be the
@@ -51,15 +45,51 @@ fragile part of an otherwise total substitution. `upstream.sha256` does the
 job a patch's context would — if Espressif edits either file, the build stops
 and says so rather than silently discarding their change.
 
+## Two holes between the pin and the handler
+
+A model that raises an interrupt is not yet an interrupt the firmware takes,
+and both of the things in the way fail *silently* — the firmware simply
+never runs its handler, which reads as a hang in the user's own code.
+`interrupts.py` fills them, as anchored insertions after text it insists on
+seeing exactly once; the files are pinned in `upstream.sha256` like the GPIO
+ones.
+
+- **Neither machine connects the device's interrupt line.** `sysbus_init_irq`
+  gives the model a line, and nothing was ever on the other end of it,
+  because the stub never raised one. `qemu_set_irq` on an unconnected line
+  returns without doing anything, so the peripheral reports into nothing.
+  Two lines, one per machine (`hw/riscv/esp32c3.c`, `hw/xtensa/esp32.c`).
+- **The C3's interrupt matrix does not say which source is asserting.**
+  `INTERRUPT_CORE0_INTR_STATUS_0/1` are the two registers a dispatcher reads
+  to find out what to call, and `hw/riscv/esp32c3_intmatrix.c` answers zero
+  for both. ESP-IDF gives each source its own CPU line and dispatches on the
+  line number, so it never reads them and upstream never needed them;
+  esp-hal shares one CPU line between sources and reads them on every
+  interrupt. The state is already there in `irq_levels` — only the two
+  registers reading it were missing. Until they answered, the CPU took the
+  interrupt, esp-hal found nothing pending, and returned: from the
+  firmware's side, identical to a line that was never raised. That is what
+  gate 6 caught, with the model's own witness insisting it had raised it.
+
+**The ESP32 gets the first fix and not the second, and its interrupts are
+therefore unproven.** `hw/xtensa/esp32_intc.c` keeps no level state at all —
+it forwards straight to the CPU's external lines — and its status registers
+live in DPORT, a different device, so answering them needs new state and a
+link between two upstream models. There is no gate here that could prove
+that, and a release note claiming it would be exactly the confident wrong
+answer this emulator exists to stop giving. ESP-IDF-style firmware, which
+dispatches on the CPU line, has what it needs on that machine.
+
 ## Building it
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
 (read out of `QEMU_RELEASE`, wherever in `rusty-embed` it lives — searched
 for rather than named, because naming it is how this workflow sat broken
-through a refactor that moved the file), verifies the checksums, copies these two files in and builds both
-`riscv32-softmmu` and `xtensa-softmmu` — the C3 and C6 on one, the ESP32 and
-S3 on the other. Run it from the Actions tab; it packages each platform as an
-artifact.
+through a refactor that moved the file), verifies the checksums, copies the
+two model files in, runs `interrupts.py` over the three it patches, and
+builds both `riscv32-softmmu` and `xtensa-softmmu` — the C3 and C6 on one,
+the ESP32 and S3 on the other. Run it from the Actions tab; it packages each
+platform as an artifact.
 
 ## What it is proven to do
 
@@ -78,16 +108,26 @@ Seven gates, each able to fail:
 
 5. A level driven **from the host** reaches the firmware's `is_high()`.
 
-6. A pin edge **interrupts** the firmware, and the model's own account of
-   the line agrees. The device announces every change of its interrupt line
-   on the pin channel (`[rusty:irq@<us>] 4`), so a failure says which half
-   is wrong: the peripheral never raised it, or it raised it and the CPU
-   never took it. `irq-probe/` asks to be woken by
-   both edges of GPIO4 and never reads the pin outside its handler, so a
-   printed count is an interrupt the peripheral raised and the CPU took —
-   the one thing polling cannot fake. It must also be *quiet* until the pin
-   moves, and fire once per edge: a model that raised the line on
-   configuration, or raised it and left it raised, passes neither.
+6. A pin edge **interrupts** the firmware, on the C3. `irq-probe/` asks to
+   be woken by both edges of GPIO4 and never reads the pin outside its
+   handler, so a printed count is an interrupt the peripheral raised and the
+   CPU took — the one thing polling cannot fake. It must also be *quiet*
+   until the pin moves, and fire once per edge: a model that raised the line
+   on configuration, or raised it and left it raised, passes neither.
+
+   Three independent accounts, because "nothing happened" is the least
+   useful sentence a gate can end on and this one ended on it twice. The
+   device announces every change of its interrupt line on the pin channel
+   (`[rusty:irq@<us>] 4`, or `unconnected` when nothing is on the other end
+   of the line). The probe prints what it programmed — the pin's
+   configuration, the matrix's routing and enables, the machine CSRs — and
+   the interrupt latch again whenever it moves. And it counts the handler's
+   *entry* separately from its completion, so a handler that ran and died is
+   not reported as one that never ran. Its panic handler talks, for the same
+   reason. Each of those was added the round after a failure that could not
+   say which half was broken; the second of them is what found the interrupt
+   matrix's missing status registers, with the model insisting it had raised
+   the line and the firmware insisting it had never been interrupted.
 
 Gate 4 is what makes 3 mean something: a model reporting a stuck level, or
 the wrong pin, passes everything above it. The two accounts are independent —
