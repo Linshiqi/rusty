@@ -312,6 +312,32 @@ fn open_pin_channel(
     handle
 }
 
+/// Stop the emulator's clock, or start it again.
+///
+/// QEMU's own machine protocol, on the socket the run opened: the monitor
+/// is otherwise multiplexed onto the console the firmware reads, and a
+/// `stop` typed there is a line the firmware might have wanted. Each call
+/// is its own connection — QMP wants a capabilities handshake before it
+/// takes a command, so a held socket saves nothing.
+///
+/// Refused, with the reason, when no emulator is running or the build has
+/// no monitor: a Pause button that quietly did nothing would read as a
+/// simulation that ignores you.
+#[tauri::command]
+pub async fn sim_pause(pause: bool, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let Some(port) = state.qmp().await else {
+        return Err(CommandError::new(
+            "nothing is running that can be paused — the emulator opens its monitor when a \
+             simulation starts",
+        ));
+    };
+    let verb = if pause { "stop" } else { "cont" };
+    blocking("pausing the simulation", move || simulate::qmp(port, verb))
+        .await?
+        .map(|_| ())
+        .map_err(CommandError::new)
+}
+
 /// A line into the running simulation — how a button press on the board view
 /// reaches the firmware.
 ///
@@ -539,6 +565,14 @@ pub async fn run_simulation(
         // caches on path, size and mtime, so this costs one scan per install
         // — a scan, so off the async thread.
         let mut pins_port = None;
+        // The monitor, so the run can be stopped and started again. Opened
+        // for the emulator only: there is nothing to pause about a build.
+        if is_emulator && let Some(port) = free_port() {
+            let extra = simulate::qmp_args(port);
+            step.display = format!("{} {}", step.display, extra.join(" "));
+            step.args.extend(extra);
+            state.set_qmp(Some(port)).await;
+        }
         if is_emulator {
             let program = step.program.clone();
             let has_model = blocking("inspecting the emulator", move || {
@@ -611,8 +645,10 @@ pub async fn run_simulation(
     if let Some(ours) = current {
         state.release_session(&ours).await;
     }
-    // QEMU has exited; there is no longer anything to attach to.
+    // QEMU has exited; there is no longer anything to attach to, and
+    // nothing to pause.
     state.set_attach(None).await;
+    state.set_qmp(None).await;
     Ok(last_code)
 }
 

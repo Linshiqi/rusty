@@ -349,6 +349,29 @@ pub fn save_sim_board(state: AppState, board: rusty_embed::Sheet, dirty: RwSigna
     });
 }
 
+/// Stop the emulator's clock, or start it again.
+///
+/// The flag is set before the call and put back if the call fails: a paused
+/// simulation is a claim about what the emulator is doing, and a button
+/// that waited a round trip to change would read as a click that missed.
+pub fn sim_pause(state: AppState, pause: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        pause: bool,
+    }
+    let args = Args { pause };
+    let was = state.sim.paused.get_untracked();
+    state.sim.paused.set(pause);
+    let future = async move {
+        let answer = ipc::call::<_, ()>(cmd::sim::PAUSE, &args).await;
+        if answer.is_err() {
+            state.sim.paused.set(was);
+        }
+        answer
+    };
+    track(state, future, |()| {});
+}
+
 /// Fetch an LCSC part's symbol through the backend, which keeps it in the
 /// data directory's library. `done` hears the symbol, or `None` when the
 /// import failed — the failure itself goes to the banner like any other.

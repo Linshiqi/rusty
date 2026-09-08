@@ -571,6 +571,76 @@ pub fn pins_args(port: u16) -> Vec<String> {
     ]
 }
 
+/// Where QEMU listens for its machine protocol, so a running simulation can
+/// be stopped and started again.
+///
+/// A socket of its own rather than the monitor multiplexed onto the console:
+/// `-serial mon:stdio` puts the monitor on the same stdin the firmware reads,
+/// and a `stop` typed there would be a line the firmware might have wanted.
+/// `wait=off` because the emulator must boot whether or not anybody is
+/// listening — a simulation that waited for a debugger nobody attached is a
+/// window that never fills.
+pub fn qmp_args(port: u16) -> Vec<String> {
+    vec![
+        "-qmp".to_string(),
+        format!("tcp:127.0.0.1:{port},server=on,wait=off"),
+    ]
+}
+
+/// One exchange with a running emulator's machine protocol: the greeting,
+/// the handshake, one command, its answer.
+///
+/// A connection per call. QMP wants `qmp_capabilities` before it takes
+/// anything, so a held socket saves nothing and gives a run one more thing
+/// to leak; and each answer is read before the next line goes out, so a
+/// refusal is attributed to the command that caused it rather than to
+/// whichever came after.
+pub fn qmp(port: u16, verb: &str) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write};
+
+    let socket = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|error| format!("the emulator's monitor did not answer on {port}: {error}"))?;
+    socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok();
+    let mut writer = socket
+        .try_clone()
+        .map_err(|error| format!("could not talk to the monitor: {error}"))?;
+    let mut reader = BufReader::new(socket);
+
+    let mut exchange = |request: Option<String>| -> Result<String, String> {
+        if let Some(request) = request {
+            writeln!(writer, "{request}")
+                .map_err(|error| format!("could not write to the monitor: {error}"))?;
+            writer
+                .flush()
+                .map_err(|error| format!("could not write to the monitor: {error}"))?;
+        }
+        loop {
+            let mut line = String::new();
+            let read = reader
+                .read_line(&mut line)
+                .map_err(|error| format!("the monitor stopped answering: {error}"))?;
+            if read == 0 {
+                return Err("the monitor closed while we were talking to it".to_string());
+            }
+            // Events arrive unasked; the answer is the line that is not one.
+            if line.contains("\"event\"") {
+                continue;
+            }
+            return Ok(line);
+        }
+    };
+
+    exchange(None)?;
+    exchange(Some("{\"execute\":\"qmp_capabilities\"}".to_string()))?;
+    let answer = exchange(Some(format!("{{\"execute\":\"{verb}\"}}")))?;
+    if answer.contains("\"error\"") {
+        return Err(format!("the emulator refused to {verb}: {}", answer.trim()));
+    }
+    Ok(answer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,11 +694,20 @@ mod tests {
         }
     }
 
-    /// A debug run is a different build, not just different QEMU flags.
-    ///
-    /// Dropping `--release` would not be enough: esp-generate's template
-    /// sets `[profile.dev] opt-level = "s"`, so the dev profile optimises
-    /// too and breakpoints still move off the line they were set on.
+    /// Both sockets are the emulator's own, and neither waits for anybody:
+    /// a board that only booted when something was listening would be a
+    /// window that never fills.
+    #[test]
+    fn the_emulators_two_sockets_are_named_and_neither_waits() {
+        let pins = pins_args(5555).join(" ");
+        assert!(pins.contains("id=pins"), "{pins}");
+        assert!(pins.contains("server=on,wait=off"), "{pins}");
+        assert!(pins.contains("driver=esp32.gpio,property=pins"), "{pins}");
+
+        let qmp = qmp_args(5556).join(" ");
+        assert_eq!(qmp, "-qmp tcp:127.0.0.1:5556,server=on,wait=off");
+    }
+
     /// The plan names the emulator it will boot and whether it models the
     /// pins — read off the binary, so a stock copy dropped over rusty's (or
     /// the reverse) answers for itself.
@@ -653,6 +732,11 @@ mod tests {
         assert!(plan.missing.iter().any(|t| t.name == "qemu-system-riscv32"));
     }
 
+    /// A debug run is a different build, not just different QEMU flags.
+    ///
+    /// Dropping `--release` would not be enough: esp-generate's template
+    /// sets `[profile.dev] opt-level = "s"`, so the dev profile optimises
+    /// too and breakpoints still move off the line they were set on.
     #[test]
     fn a_debug_run_builds_unoptimised_and_takes_that_elf() {
         let dir = firmware(BLINKY);

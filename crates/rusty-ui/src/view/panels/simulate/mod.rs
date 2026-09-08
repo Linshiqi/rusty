@@ -1054,6 +1054,35 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                         >
                             "↷"
                         </button>
+                        // Only while something is running: a Pause on a
+                        // sheet with no emulator behind it is a button that
+                        // can only refuse.
+                        {move || {
+                            running
+                                .get()
+                                .then(|| {
+                                    let paused = state.sim.paused;
+                                    view! {
+                                        <span class="mx-0.5 h-4 w-px bg-line" />
+                                        <button
+                                            type="button"
+                                            title=move || {
+                                                if paused.get() {
+                                                    t!("simulate.resume")
+                                                } else {
+                                                    t!("simulate.pause")
+                                                }
+                                            }
+                                            on:click=move |_| {
+                                                controller::sim_pause(state, !paused.get_untracked())
+                                            }
+                                            class=SHEET_BUTTON
+                                        >
+                                            {move || if paused.get() { "▶" } else { "❚❚" }}
+                                        </button>
+                                    }
+                                })
+                        }}
                         <span class="mx-0.5 h-4 w-px bg-line" />
                         <button
                             type="button"

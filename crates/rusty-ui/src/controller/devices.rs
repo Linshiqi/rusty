@@ -133,6 +133,9 @@ pub(super) fn stream_to_terminal(state: AppState) -> ipc::Channel {
 /// Note how a spawned tool ended, in the terminal where its output is.
 pub(super) fn note_exit(state: AppState, code: Option<i32>) {
     state.app.session_running.set(false);
+    // Nothing is running, so nothing is paused. Left set, the next run
+    // would start with a Resume button over a simulation nobody stopped.
+    state.sim.paused.set(false);
     let source = state.dock.source;
     set_timeout(move || source.set("app"), std::time::Duration::ZERO);
     let text = match code {

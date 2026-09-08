@@ -64,6 +64,11 @@ pub struct AppState {
     /// absent, the board falls back to the `B14=1` message over the UART that
     /// firmware has to be written to expect. Cleared with the session.
     pins: Mutex<Option<crate::simulate::PinChannel>>,
+    /// Where the running emulator listens for its machine protocol, so it
+    /// can be stopped and started again. A port rather than an open socket:
+    /// QMP wants a capabilities handshake per connection anyway, so holding
+    /// one open buys nothing and gives the run something else to leak.
+    qmp: Mutex<Option<u16>>,
     /// Where a debugger should attach, recorded by the run that armed it.
     attach: Mutex<Option<Attach>>,
     /// Chips and boards, after layering in the user's and the project's files.
@@ -422,6 +427,14 @@ impl AppState {
 
     pub async fn pins(&self) -> Option<crate::simulate::PinChannel> {
         self.pins.lock().await.clone()
+    }
+
+    pub async fn set_qmp(&self, port: Option<u16>) {
+        *self.qmp.lock().await = port;
+    }
+
+    pub async fn qmp(&self) -> Option<u16> {
+        *self.qmp.lock().await
     }
 
     /// Record where the debugger should attach. Set by the run that built the

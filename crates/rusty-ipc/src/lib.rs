@@ -204,6 +204,9 @@ pub mod sim {
     pub const INSTALL: &str = "install_sim_tool";
     /// An LCSC part number, answered with its symbol and kept in the library.
     pub const IMPORT_SYMBOL: &str = "sim_import_symbol";
+    /// Stop the emulator's clock, or start it again. The session stays: a
+    /// paused simulation is one you can look at, not one you have lost.
+    pub const PAUSE: &str = "sim_pause";
 }
 
 pub mod features {

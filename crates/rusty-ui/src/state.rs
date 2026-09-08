@@ -1149,6 +1149,10 @@ pub struct Sim {
     /// session and cannot be written to, and a tunable that silently went
     /// nowhere would read as firmware ignoring it.
     pub link_port: RwSignal<Option<String>>,
+    /// Whether the running simulation's clock is stopped. Optimistic — the
+    /// button sets it and the command may still refuse — because the
+    /// alternative is a button that does nothing for a round trip.
+    pub paused: RwSignal<bool>,
     /// Pin levels for the board view, from whichever source [`sim_pin_source`]
     /// names.
     pub gpio: RwSignal<HashMap<u8, bool>>,
@@ -1512,6 +1516,7 @@ impl AppState {
                 plant: RwSignal::new(rusty_embed::Plant::default()),
                 plant_closed: RwSignal::new(false),
                 plant_gen: RwSignal::new(0),
+                paused: RwSignal::new(false),
                 pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
                 plan: RwSignal::new(None),
                 install_failed: RwSignal::new(Vec::new()),

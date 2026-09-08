@@ -119,10 +119,12 @@ fn main() {
     }
 
     let port = free_port().unwrap_or_else(|| usage("no free port for the pin channel"));
+    let monitor = free_port().unwrap_or_else(|| usage("no free port for the monitor"));
     let total = plan.steps.len();
     let mut steps = std::mem::take(&mut plan.steps);
     if let Some(boot) = steps.last_mut() {
-        let extra = rusty_embed::simulate::pins_args(port);
+        let mut extra = rusty_embed::simulate::pins_args(port);
+        extra.extend(rusty_embed::simulate::qmp_args(monitor));
         boot.display = format!("{} {}", boot.display, extra.join(" "));
         boot.args.extend(extra);
     }
@@ -135,6 +137,8 @@ fn main() {
     };
     let mut pressed_ok: Vec<String> = Vec::new();
     let mut pressed_failed: Vec<String> = Vec::new();
+    // (nothing was reported while stopped, something was after starting)
+    let mut paused: Option<(bool, bool)> = None;
 
     for (index, step) in steps.into_iter().enumerate() {
         println!("\n$ {}", step.display);
@@ -191,6 +195,25 @@ fn main() {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => break,
             }
+        }
+
+        // Pausing, before the buttons: a stopped emulator must stop
+        // reporting, and start again when told to. Both halves, because a
+        // `stop` that did nothing and a `cont` that was never needed look
+        // the same from one side.
+        match rusty_embed::simulate::qmp(monitor, "stop") {
+            Ok(_) => {
+                let quiet = still(&rx, &mut order, &mut seen, Duration::from_millis(1200));
+                match rusty_embed::simulate::qmp(monitor, "cont") {
+                    Ok(_) => {
+                        let moving =
+                            !still(&rx, &mut order, &mut seen, Duration::from_millis(1200));
+                        paused = Some((quiet, moving));
+                    }
+                    Err(why) => eprintln!("the emulator would not start again: {why}"),
+                }
+            }
+            Err(why) => eprintln!("the emulator would not pause: {why}"),
         }
 
         // Then press every button the sheet has, and require the pin it
@@ -270,7 +293,40 @@ fn main() {
         stopper.stop();
     }
 
-    report(&sheet, &rows, &seen, &order, &pressed_ok, &pressed_failed);
+    report(
+        &sheet,
+        &rows,
+        &seen,
+        &order,
+        &pressed_ok,
+        &pressed_failed,
+        paused,
+    );
+}
+
+/// Whether nothing at all was reported for a while — what a stopped
+/// emulator looks like from the pin channel. Everything that does arrive is
+/// kept: it is still the run's history.
+fn still(
+    rx: &std::sync::mpsc::Receiver<(u8, bool)>,
+    order: &mut Vec<(u8, bool)>,
+    seen: &mut Seen,
+    within: Duration,
+) -> bool {
+    let deadline = Instant::now() + within;
+    let mut quiet = true;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(150)) {
+            Ok((pin, level)) => {
+                order.push((pin, level));
+                seen.levels.entry(pin).or_default().push(level);
+                quiet = false;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => break,
+        }
+    }
+    quiet
 }
 
 /// What the sheet says before anything runs — the half a person reads.
@@ -309,6 +365,7 @@ fn report(
     order: &[(u8, bool)],
     pressed_ok: &[String],
     pressed_failed: &[String],
+    paused: Option<(bool, bool)>,
 ) {
     println!("\n─── what the emulator reported ───");
     if order.is_empty() {
@@ -401,6 +458,21 @@ fn report(
         }
     }
 
+    match paused {
+        Some((true, true)) => {
+            println!("  the run stopped when told to, and started again");
+        }
+        Some((quiet, moving)) => {
+            eprintln!(
+                "pausing did not work: while stopped the pins were {}, and after starting \
+                 again they were {}",
+                if quiet { "quiet" } else { "still moving" },
+                if moving { "moving" } else { "still quiet" }
+            );
+        }
+        None => eprintln!("the emulator's monitor never answered, so pausing is unproven"),
+    }
+
     let mut failed = false;
     if !dark.is_empty() {
         eprintln!(
@@ -414,10 +486,16 @@ fn report(
         eprintln!("{line}");
         failed = true;
     }
+    if paused != Some((true, true)) {
+        failed = true;
+    }
     if failed {
         std::process::exit(1);
     }
-    println!("\nthe board is proven: every lamp on a pin lit, every button moved its pin");
+    println!(
+        "\nthe board is proven: every lamp on a pin lit, every button moved its pin, and \
+         the run stopped and started when asked"
+    );
 }
 
 /// Wait for one pin to reach a level, keeping everything that arrives on
