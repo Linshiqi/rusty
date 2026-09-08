@@ -67,6 +67,9 @@ static uint64_t esp32_gpio_cpu_mask(Esp32GpioState *s)
     return mask;
 }
 
+/* Defined below, beside the other thing that writes to the pin channel. */
+static void esp32_gpio_say_irq(Esp32GpioState *s, bool raised);
+
 /*
  * Latch what has fired, drop what no longer holds, and tell the interrupt
  * matrix — the whole of GPIO interrupts.
@@ -137,6 +140,11 @@ static void esp32_gpio_int_update(Esp32GpioState *s, uint64_t edges)
     if (raise != s->irq_level || s->status != before) {
         s->irq_level = raise;
         qemu_set_irq(s->irq, raise);
+        /* Said on the pin channel, so a host watching the board can tell
+         * "the peripheral raised the line" from "the firmware ran its
+         * handler" — two accounts of one interrupt, and the only way a
+         * test can name which half is broken when nothing happens. */
+        esp32_gpio_say_irq(s, raise);
     }
 }
 
@@ -200,6 +208,40 @@ static void esp32_gpio_report(Esp32GpioState *s, uint64_t changed)
         first = false;
     }
 
+    at += snprintf(line + at, sizeof(line) - at, "\n");
+    qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
+}
+
+/*
+ * What the interrupt line is doing, on the same channel the pins travel.
+ *
+ * `[rusty:irq@<us>] <pins>` names every pin currently asking, or nothing
+ * after the last one is cleared. It is a report, not a protocol the guest
+ * can see: firmware learns about its interrupts by being interrupted.
+ */
+static void esp32_gpio_say_irq(Esp32GpioState *s, bool raised)
+{
+    char line[256];
+    int at;
+    bool first = true;
+
+    if (!qemu_chr_fe_backend_connected(&s->pins)) {
+        return;
+    }
+    at = snprintf(line, sizeof(line), "[rusty:irq@%" PRId64 "] ",
+                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL));
+    if (!raised) {
+        at += snprintf(line + at, sizeof(line) - at, "-");
+    }
+    for (int pin = 0; raised && pin < ESP32_GPIO_PINS; pin++) {
+        uint64_t bit = 1ULL << pin;
+
+        if ((s->status & bit) == 0 || at > (int)sizeof(line) - 8) {
+            continue;
+        }
+        at += snprintf(line + at, sizeof(line) - at, "%s%d", first ? "" : ",", pin);
+        first = false;
+    }
     at += snprintf(line + at, sizeof(line) - at, "\n");
     qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
 }

@@ -57,6 +57,11 @@ pub enum Behaviour {
     Buzzer,
     /// A hobby servo: the angle follows the duty on its signal pin.
     Servo,
+    /// A sensor module. Its value names the channel the firmware declared
+    /// with `[rusty:sensor]`, and the panel feeds that channel — never one
+    /// the firmware never asked for, which is the tunables' rule pointed
+    /// at the other half of the loop.
+    Sensor,
     /// Drawn and wired, and nothing more is known about it.
     Other,
 }
@@ -73,6 +78,7 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
         ("rusty", "Label") => return Behaviour::Label,
         ("rusty", "Buzzer") => return Behaviour::Buzzer,
         ("rusty", "Servo") => return Behaviour::Servo,
+        ("rusty", "Sensor") => return Behaviour::Sensor,
         _ => {}
     }
     let prefix = symbol.reference.trim_end_matches(['?', '_']);

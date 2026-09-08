@@ -78,7 +78,11 @@ Seven gates, each able to fail:
 
 5. A level driven **from the host** reaches the firmware's `is_high()`.
 
-6. A pin edge **interrupts** the firmware. `irq-probe/` asks to be woken by
+6. A pin edge **interrupts** the firmware, and the model's own account of
+   the line agrees. The device announces every change of its interrupt line
+   on the pin channel (`[rusty:irq@<us>] 4`), so a failure says which half
+   is wrong: the peripheral never raised it, or it raised it and the CPU
+   never took it. `irq-probe/` asks to be woken by
    both edges of GPIO4 and never reads the pin outside its handler, so a
    printed count is an interrupt the peripheral raised and the CPU took —
    the one thing polling cannot fake. It must also be *quiet* until the pin

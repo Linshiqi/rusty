@@ -753,7 +753,7 @@ jobs:
       - name: A pin edge interrupts the firmware
         shell: python
         run: |
-          import re, socket, subprocess, sys, time
+          import re, socket, subprocess, sys, threading, time
 
           IMAGE = "qemu/irq-probe/target/sim/flash.bin"
           SERIAL = "irq-serial.log"
@@ -774,10 +774,18 @@ jobs:
               """
               return [int(m) for m in re.findall(r"\[irq\] edges=(\d+)", read())]
 
+          # What the *model* says it did, read off the pin channel: the
+          # device announces every change of the interrupt line. Two
+          # accounts of one interrupt, so a failure names which half is
+          # broken instead of saying nothing happened.
+          raised = []
+
           def stop(why):
-              print(f"::error::{why} | edges={edges()}")
-              print("--- serial ---")
-              print(read()[-1500:])
+              print(f"::error::{why} | edges={edges()} | the model raised: {raised}")
+              tail = read()[-1200:].replace("%", "%25")
+              for chunk in tail.split("\n"):
+                  if chunk.strip():
+                      print(f"::error::serial: {chunk[:300]}")
               sys.exit(1)
 
           def settle(count, seconds, why):
@@ -816,6 +824,27 @@ jobs:
 
               link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
 
+              # Everything the device says, in the background: pin reports
+              # and the interrupt line's own account.
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:irq"):
+                              raised.append(text)
+                              print(f"    {text}")
+
+              threading.Thread(target=listen, daemon=True).start()
+
               link.sendall(b"4=1\n")
               settle(1, 25, "the host drove GPIO4 high and the firmware was "
                             "never interrupted")
@@ -831,7 +860,11 @@ jobs:
               seen = edges()[:2]
               if seen != [1, 2]:
                   stop(f"expected the handler to run once per edge; got {seen}")
-              print("both edges interrupted the firmware, once each")
+              if not raised:
+                  stop("the firmware was interrupted, but the model never said "
+                       "it raised the line — one of the two accounts is wrong")
+              print(f"both edges interrupted the firmware, once each; the model "
+                    f"raised the line {len(raised)} times")
           finally:
               qemu.kill()
 

@@ -76,6 +76,7 @@ enum Look {
     Label,
     Buzzer,
     Servo,
+    Sensor,
     /// Two leads and a body: an unknown two-pin part.
     Axial,
     /// Pins down two sides.
@@ -102,6 +103,7 @@ fn look(symbol: &Symbol) -> Look {
         Behaviour::Label => Look::Label,
         Behaviour::Buzzer => Look::Buzzer,
         Behaviour::Servo => Look::Servo,
+        Behaviour::Sensor => Look::Sensor,
         Behaviour::Other if visible(symbol).len() == 2 => Look::Axial,
         Behaviour::Other => Look::Package,
     }
@@ -453,6 +455,28 @@ pub(super) fn layout(symbol: &Symbol) -> Layout {
             }
         }
 
+        // A sensor board: a small module with its header down one side and
+        // the die in the middle, which is what most of them look like.
+        Look::Sensor => {
+            let ys = spread(pins.len().max(1), 8.0);
+            let spots = pins
+                .iter()
+                .zip(&ys)
+                .map(|(pin, y)| Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at: (-34.0, *y),
+                    out: (-1.0, 0.0),
+                })
+                .collect();
+            Layout {
+                spots,
+                bounds: (-34.0, -18.0, 26.0, 18.0),
+                lens: None,
+                face: Some((-20.0, -12.0, 44.0, 24.0)),
+            }
+        }
+
         // Anything else: a package, pins down the two long sides in the
         // order the library lists them — a chip, which is what most parts
         // rusty has never heard of actually are.
@@ -683,6 +707,16 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
             ));
         }
 
+        Look::Sensor => {
+            legs(&mut out, (22.0, 0.0));
+            out.push_str(&format!(
+                r##"<rect x="-22" y="-18" width="48" height="36" rx="2.5" fill="{PCB}" stroke="#0d2436" stroke-width="1"/>
+<rect x="-8" y="-8" width="18" height="16" rx="1.5" fill="{PLASTIC}" stroke="{PLASTIC_EDGE}" stroke-width="1"/>
+<circle cx="-16" cy="-12" r="1.6" fill="#0d2436"/>
+<circle cx="20" cy="12" r="1.6" fill="#0d2436"/>"##
+            ));
+        }
+
         Look::Package => {
             legs(&mut out, (22.0, 0.0));
             let (_, y0, _, y1) = plan.bounds;
@@ -888,6 +922,12 @@ mod tests {
                 "Servo",
                 "M",
                 &[("1", "SIG"), ("2", "VCC"), ("3", "GND")],
+            ),
+            sym(
+                "rusty",
+                "Sensor",
+                "U",
+                &[("1", "SDA"), ("2", "SCL"), ("3", "VCC"), ("4", "GND")],
             ),
         ]
     }
