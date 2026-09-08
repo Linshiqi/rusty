@@ -25,9 +25,21 @@ honestly claim:
   false in the simulator, which is why a button press has to be injected as
   `B14=1` over the UART instead of through the GPIO the firmware actually
   reads.
+- **And it can never interrupt.** Firmware that asks to be woken by an edge
+  — how nearly every real button is read — waits for ever, which looks like
+  a hang in the user's own code rather than a hole in the emulator.
 
 `esp32_gpio.c` here fills in the model: the output and enable registers,
-their set/clear aliases, and the input register — for all forty pins, since
+their set/clear aliases, the input register, and the interrupt half — the
+status register, its set/clear aliases, the CPU's pending view and each
+pin's trigger configuration, with the edge types latched and the level
+types following the level, as the silicon does. Nothing upstream wired the
+device's interrupt line to the interrupt matrix, because the stub never
+raised it, so `wire-gpio-irq.py` inserts that one line into each machine
+(`hw/riscv/esp32c3.c`, `hw/xtensa/esp32.c`) — an anchored insertion rather
+than a patch, because two lines inside functions of a thousand would make a
+diff that is mostly context and line numbers. Both files are pinned in
+`upstream.sha256` for the same reason the GPIO ones are — for all forty pins, since
 the original ESP32 keeps GPIO32..39 in a second bank and that is where its
 input-only pins live. Pin changes leave on their
 own chardev — not the UART, which belongs to the firmware — and input can be
@@ -50,7 +62,7 @@ artifact.
 
 ## What it is proven to do
 
-Five gates, each able to fail:
+Six gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -64,6 +76,13 @@ Five gates, each able to fail:
    own** `[rusty:gpio]` narration of the same pin, in order.
 
 5. A level driven **from the host** reaches the firmware's `is_high()`.
+
+6. A pin edge **interrupts** the firmware. `irq-probe/` asks to be woken by
+   both edges of GPIO4 and never reads the pin outside its handler, so a
+   printed count is an interrupt the peripheral raised and the CPU took —
+   the one thing polling cannot fake. It must also be *quiet* until the pin
+   moves, and fire once per edge: a model that raised the line on
+   configuration, or raised it and left it raised, passes neither.
 
 Gate 4 is what makes 3 mean something: a model reporting a stuck level, or
 the wrong pin, passes everything above it. The two accounts are independent —

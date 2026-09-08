@@ -51,6 +51,54 @@ REG32(GPIO_ENABLE1_W1TS, 0x0030)
 REG32(GPIO_ENABLE1_W1TC, 0x0034)
 REG32(GPIO_IN1, 0x0040)
 
+/* The interrupt registers.
+ *
+ * `STATUS` is the latched pending set — one bit per pin, written back with
+ * a 1 to clear — and it is the same offset on every part in this family.
+ * Where a pin's *configuration* lives is not: the original ESP32 puts
+ * `GPIO_PIN0` at 0x88 and the CPU's own pending view at 0x68, while the C3
+ * and the S3 put them at 0x74 and 0x5c. Those two are held in the device
+ * rather than fixed here, because one model answers for both parts. */
+REG32(GPIO_STATUS, 0x0044)
+REG32(GPIO_STATUS_W1TS, 0x0048)
+REG32(GPIO_STATUS_W1TC, 0x004c)
+REG32(GPIO_STATUS1, 0x0050)
+REG32(GPIO_STATUS1_W1TS, 0x0054)
+REG32(GPIO_STATUS1_W1TC, 0x0058)
+
+/* Where the per-pin configuration and the CPU's pending view sit, by part. */
+#define ESP32_GPIO_PIN0_ESP32       0x0088
+#define ESP32_GPIO_PIN0_MODERN      0x0074
+#define ESP32_GPIO_PCPU_INT_ESP32   0x0068
+#define ESP32_GPIO_PCPU_INT_MODERN  0x005c
+
+/* From a part's first CPU-pending register to its second bank's: 0x68 to
+   0x7c on the ESP32, 0x5c to 0x70 on the parts that have a second bank. */
+#define ESP32_GPIO_PCPU_INT1_STRIDE 0x14
+
+/* A `GPIO_PINn` register: how the pin triggers, and which CPU lines it
+ * feeds. Both fields sit in the same bits on every part here. */
+#define ESP32_GPIO_PIN_INT_TYPE_SHIFT 7
+#define ESP32_GPIO_PIN_INT_TYPE_MASK  0x7
+#define ESP32_GPIO_PIN_INT_ENA_SHIFT  13
+#define ESP32_GPIO_PIN_INT_ENA_MASK   0x1f
+
+/* `INT_TYPE`: what the pin fires on. The two level types are not latched —
+ * silicon holds them while the level holds — and the edge types are, until
+ * the firmware writes the bit back. */
+#define ESP32_GPIO_INT_OFF     0
+#define ESP32_GPIO_INT_RISING  1
+#define ESP32_GPIO_INT_FALLING 2
+#define ESP32_GPIO_INT_ANYEDGE 3
+#define ESP32_GPIO_INT_LOW     4
+#define ESP32_GPIO_INT_HIGH    5
+
+/* `INT_ENA`: bit 0 is the CPU's ordinary interrupt and bit 2 the second
+ * core's on the parts that have one; bits 1 and 3 are the NMI lines, which
+ * go to a source this device is not wired to. Raising the ordinary line for
+ * an NMI-only pin would be inventing an interrupt nobody asked for. */
+#define ESP32_GPIO_INT_ENA_CPU 0x5
+
 #define ESP32_STRAP_MODE_FLASH_BOOT 0x12
 #define ESP32_STRAP_MODE_UART_BOOT  0x0f
 
@@ -80,6 +128,16 @@ typedef struct Esp32GpioState {
     uint64_t out;
     uint64_t enable;
     uint64_t in;
+
+    /* The interrupt half: what has fired and is waiting to be read, how
+     * each pin is configured to fire, and where this part keeps those
+     * registers. `irq_level` is what was last put on the line, so the
+     * device only ever tells the interrupt matrix about a change. */
+    uint64_t status;
+    uint32_t pin_cfg[ESP32_GPIO_PINS];
+    hwaddr pin0_reg;
+    hwaddr pcpu_int_reg;
+    bool irq_level;
 
     /* Pin changes out, host-driven levels in. Its own chardev on purpose —
      * the UART belongs to the firmware, and interleaving the two would make

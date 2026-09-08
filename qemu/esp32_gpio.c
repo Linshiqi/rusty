@@ -44,6 +44,102 @@ static inline int esp32_gpio_level(Esp32GpioState *s, uint64_t bit)
     return (source & bit) ? 1 : 0;
 }
 
+/*
+ * Which pins are asking the CPU for an interrupt right now.
+ *
+ * A pin reaches the line the interrupt matrix carries only if its
+ * `INT_ENA` names one of the CPU sources; the NMI bits go to a source this
+ * device is not wired to, and raising the ordinary line for them would be
+ * inventing an interrupt nobody asked for.
+ */
+static uint64_t esp32_gpio_cpu_mask(Esp32GpioState *s)
+{
+    uint64_t mask = 0;
+
+    for (int pin = 0; pin < ESP32_GPIO_PINS; pin++) {
+        unsigned ena = (s->pin_cfg[pin] >> ESP32_GPIO_PIN_INT_ENA_SHIFT)
+                       & ESP32_GPIO_PIN_INT_ENA_MASK;
+
+        if (ena & ESP32_GPIO_INT_ENA_CPU) {
+            mask |= 1ULL << pin;
+        }
+    }
+    return mask;
+}
+
+/*
+ * Latch what has fired, drop what no longer holds, and tell the interrupt
+ * matrix — the whole of GPIO interrupts.
+ *
+ * `edges` names the pins whose level moved since the last call, which is
+ * what tells the two edge types from the two level types: an edge is a
+ * moment and stays latched until the firmware writes the bit back, a level
+ * is a state and follows it. Silicon does exactly this, and the difference
+ * is the one a driver notices — a level interrupt that latched would go on
+ * firing after the button came back up.
+ *
+ * Called after anything that can change the answer: a host-driven pin, a
+ * write to OUT or ENABLE, a write to a pin's configuration, and the
+ * firmware clearing a bit. Missing one of those is an interrupt that only
+ * arrives when something else happens to move.
+ */
+static void esp32_gpio_int_update(Esp32GpioState *s, uint64_t edges)
+{
+    uint64_t before = s->status;
+    bool raise;
+
+    for (int pin = 0; pin < ESP32_GPIO_PINS; pin++) {
+        uint64_t bit = 1ULL << pin;
+        unsigned type = (s->pin_cfg[pin] >> ESP32_GPIO_PIN_INT_TYPE_SHIFT)
+                        & ESP32_GPIO_PIN_INT_TYPE_MASK;
+        int level = esp32_gpio_level(s, bit);
+
+        switch (type) {
+        case ESP32_GPIO_INT_RISING:
+            if ((edges & bit) && level) {
+                s->status |= bit;
+            }
+            break;
+
+        case ESP32_GPIO_INT_FALLING:
+            if ((edges & bit) && !level) {
+                s->status |= bit;
+            }
+            break;
+
+        case ESP32_GPIO_INT_ANYEDGE:
+            if (edges & bit) {
+                s->status |= bit;
+            }
+            break;
+
+        /* Not latched: the bit is the level, so a firmware that clears it
+         * while the button is still down sees it come straight back — which
+         * is what a level interrupt is, and why drivers mask it instead. */
+        case ESP32_GPIO_INT_LOW:
+            s->status = level ? (s->status & ~bit) : (s->status | bit);
+            break;
+
+        case ESP32_GPIO_INT_HIGH:
+            s->status = level ? (s->status | bit) : (s->status & ~bit);
+            break;
+
+        /* Turned off: nothing new latches, and anything already pending on
+         * this pin goes — a pin somebody stopped listening to would
+         * otherwise hold the line down for ever. */
+        default:
+            s->status &= ~bit;
+            break;
+        }
+    }
+
+    raise = (s->status & esp32_gpio_cpu_mask(s)) != 0;
+    if (raise != s->irq_level || s->status != before) {
+        s->irq_level = raise;
+        qemu_set_irq(s->irq, raise);
+    }
+}
+
 /* Fold a 32-bit register write into one half of a 64-bit field.
  *
  * `bank` is 0 for pins 0..31 and 1 for 32..39. Doing it here rather than at
@@ -133,6 +229,11 @@ static void esp32_gpio_host_read(void *opaque, const uint8_t *buf, int size)
                 /* Only a real change is reported, so a host holding a button
                  * down does not fill the channel with one repeated line. */
                 esp32_gpio_report(s, before ^ s->in);
+                /* And it is an edge on that pin, so firmware waiting on an
+                 * interrupt runs — a button that worked only when polled
+                 * was the gap this closes. Masked by `enable`, because a
+                 * pin the guest is driving does not hear the host. */
+                esp32_gpio_int_update(s, (before ^ s->in) & ~s->enable);
             }
             s->host_at = 0;
         } else if (s->host_at < sizeof(s->host_line) - 1) {
@@ -186,7 +287,32 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
         r = (uint32_t)(((s->in & ~s->enable) | (s->out & s->enable)) >> 32);
         break;
 
+    case A_GPIO_STATUS:
+    case A_GPIO_STATUS_W1TS:
+    case A_GPIO_STATUS_W1TC:
+        r = (uint32_t)s->status;
+        break;
+
+    case A_GPIO_STATUS1:
+    case A_GPIO_STATUS1_W1TS:
+    case A_GPIO_STATUS1_W1TC:
+        r = (uint32_t)(s->status >> 32);
+        break;
+
     default:
+        /* The CPU's own pending view and the per-pin configuration, whose
+         * offsets differ between the original ESP32 and everything after
+         * it. A `switch` cannot hold an address that is not a constant, so
+         * they are answered here. */
+        if (addr == s->pcpu_int_reg) {
+            r = (uint32_t)(s->status & esp32_gpio_cpu_mask(s));
+        } else if (addr == s->pcpu_int_reg + ESP32_GPIO_PCPU_INT1_STRIDE) {
+            /* The second bank's view, on the part that has one. */
+            r = (uint32_t)((s->status & esp32_gpio_cpu_mask(s)) >> 32);
+        } else if (addr >= s->pin0_reg
+                   && addr < s->pin0_reg + 4 * ESP32_GPIO_PINS) {
+            r = s->pin_cfg[(addr - s->pin0_reg) / 4];
+        }
         break;
     }
     return r;
@@ -253,13 +379,51 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
         s->enable = esp32_gpio_half(s->enable, 1, word, 2);
         break;
 
+    /* Clearing a pending interrupt is a write of the bit back. `STATUS`
+     * itself is writable too, and a bit the firmware sets by hand is
+     * honoured: that is a driver asking for its own handler to run. */
+    case A_GPIO_STATUS:
+        s->status = esp32_gpio_half(s->status, 0, word, 0);
+        break;
+
+    case A_GPIO_STATUS_W1TS:
+        s->status = esp32_gpio_half(s->status, 0, word, 1);
+        break;
+
+    case A_GPIO_STATUS_W1TC:
+        s->status = esp32_gpio_half(s->status, 0, word, 2);
+        break;
+
+    case A_GPIO_STATUS1:
+        s->status = esp32_gpio_half(s->status, 1, word, 0);
+        break;
+
+    case A_GPIO_STATUS1_W1TS:
+        s->status = esp32_gpio_half(s->status, 1, word, 1);
+        break;
+
+    case A_GPIO_STATUS1_W1TC:
+        s->status = esp32_gpio_half(s->status, 1, word, 2);
+        break;
+
     default:
+        /* A pin's own configuration — how it triggers, and which CPU line
+         * it feeds. Storing it is what makes the type mean anything, and a
+         * level type can be true the moment it is written. */
+        if (addr >= s->pin0_reg && addr < s->pin0_reg + 4 * ESP32_GPIO_PINS) {
+            s->pin_cfg[(addr - s->pin0_reg) / 4] = word;
+            esp32_gpio_int_update(s, 0);
+        }
         return;
     }
 
     /* A direction change alters what a pin reports even when its level did
      * not move, so both registers decide what counts as changed. */
     esp32_gpio_report(s, (before_out ^ s->out) | (before_enable ^ s->enable));
+    /* A pin the guest drives is a pin that can interrupt the guest — the
+     * loopback silicon has, and what firmware testing its own handler
+     * depends on. The clear path lands here too, with no edges at all. */
+    esp32_gpio_int_update(s, (before_out ^ s->out) & s->enable);
 }
 
 static const MemoryRegionOps uart_ops = {
@@ -276,11 +440,28 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
     s->enable = 0;
     s->in = 0;
     s->host_at = 0;
+    s->status = 0;
+    memset(s->pin_cfg, 0, sizeof(s->pin_cfg));
+    if (s->irq_level) {
+        s->irq_level = false;
+        qemu_set_irq(s->irq, false);
+    }
 }
 
 static void esp32_gpio_realize(DeviceState *dev, Error **errp)
 {
     Esp32GpioState *s = ESP32_GPIO(dev);
+
+    /* Which part this is, asked of the object rather than passed in: the
+     * C3 and the S3 subclass this device, and their interrupt registers sit
+     * at different offsets from the original ESP32's. Getting it wrong is
+     * silent — the firmware would write its configuration into nothing and
+     * wait for an interrupt that could never be raised. */
+    bool base = strcmp(object_get_typename(OBJECT(s)), TYPE_ESP32_GPIO) == 0;
+
+    s->pin0_reg = base ? ESP32_GPIO_PIN0_ESP32 : ESP32_GPIO_PIN0_MODERN;
+    s->pcpu_int_reg = base ? ESP32_GPIO_PCPU_INT_ESP32
+                           : ESP32_GPIO_PCPU_INT_MODERN;
 
     /* With no chardev attached this does nothing and the device behaves as
      * it did before — the model is still correct, it simply has nobody to

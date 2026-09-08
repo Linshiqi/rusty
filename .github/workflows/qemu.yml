@@ -175,6 +175,14 @@ jobs:
           cp qemu/esp32_gpio.c qemu-src/hw/gpio/esp32_gpio.c
           cp qemu/esp32_gpio.h qemu-src/include/hw/gpio/esp32_gpio.h
 
+      # The model raises an interrupt when a pin fires, and `sysbus_init_irq`
+      # gives it a line — but neither machine connects that line, because the
+      # stock model never raised it. Two lines, inserted after text the script
+      # insists on seeing exactly once; the machine files are pinned in
+      # upstream.sha256 above, so a rewrite fails loudly rather than here.
+      - name: Wire the GPIO interrupt to the interrupt matrix
+        run: python qemu/wire-gpio-irq.py qemu-src
+
       # Espressif's fork asks pkg-config for slirp with `static: true`, which
       # upstream QEMU 9.2 does not:
       #
@@ -714,6 +722,105 @@ jobs:
           finally:
               qemu.kill()
 
+      # Polling is not the whole of reading a pin. Firmware that asks to be
+      # *interrupted* by a button — which is how nearly every real button is
+      # read — sat in its loop for ever while the pin moved underneath it,
+      # because the GPIO peripheral raised no interrupt and no machine had
+      # wired the line it would have raised.
+      - name: Build the interrupt probe and make its image
+        working-directory: qemu/irq-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/irq-probe \
+            target/sim/flash.bin
+
+      - name: A pin edge interrupts the firmware
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, time
+
+          IMAGE = "qemu/irq-probe/target/sim/flash.bin"
+          SERIAL = "irq-serial.log"
+          PORT = 5556
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def edges():
+              """Every count the handler has printed, in order.
+
+              The probe never reads the pin outside its handler, so a number
+              here is an interrupt the peripheral raised and the CPU took —
+              nothing else in that firmware can produce one.
+              """
+              return [int(m) for m in re.findall(r"\[irq\] edges=(\d+)", read())]
+
+          def stop(why):
+              print(f"::error::{why} | edges={edges()}")
+              print("--- serial ---")
+              print(read()[-1500:])
+              sys.exit(1)
+
+          def settle(count, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if len(edges()) >= count:
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("irq-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              deadline = time.time() + 60
+              while time.time() < deadline and "listening on GPIO4" not in read():
+                  time.sleep(0.25)
+              if "listening on GPIO4" not in read():
+                  stop("the interrupt probe never booted")
+
+              # Nothing has moved the pin, so nothing may have fired. An
+              # interrupt here would mean the model raises the line on
+              # configuration, and every count after it would be noise.
+              time.sleep(2)
+              if edges():
+                  stop("an interrupt arrived before the pin was ever driven")
+              print("booted, and quiet until the pin moves")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              link.sendall(b"4=1\n")
+              settle(1, 25, "the host drove GPIO4 high and the firmware was "
+                            "never interrupted")
+
+              # And back down, because a model that latched the first edge and
+              # never cleared would pass everything above this line — and so
+              # would one that raised the line and left it raised, which is a
+              # handler re-entering rather than a second edge.
+              link.sendall(b"4=0\n")
+              settle(2, 25, "the pin came back down and the firmware was not "
+                            "interrupted again")
+
+              seen = edges()[:2]
+              if seen != [1, 2]:
+                  stop(f"expected the handler to run once per edge; got {seen}")
+              print("both edges interrupted the firmware, once each")
+          finally:
+              qemu.kill()
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -726,4 +833,6 @@ jobs:
             serial.log
             probe-serial.log
             probe-qemu.out
+            irq-serial.log
+            irq-qemu.out
           if-no-files-found: warn
