@@ -966,6 +966,12 @@ static bool esp32_i2c_write_step(Esp32GpioState *s, unsigned bytes)
         data[taken++] = esp32_i2c_take(s);
     }
     if (!device) {
+        /* Data with nobody addressed. On a real bus that is a driver fault;
+         * here it was the model's, and returning quietly is what made a
+         * transaction that did nothing look like a bus with nothing on it. */
+        esp32_gpio_say_i2c(s, s->i2c_address < 0 ? 0 : s->i2c_address,
+                           s->i2c_address < 0 ? "?unaddressed" : "nak",
+                           NULL, 0);
         return false;
     }
     /* The first data byte of a write moves the register pointer and the
@@ -1065,8 +1071,18 @@ static void esp32_i2c_run(Esp32GpioState *s)
             s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_END_DETECT;
             return;
 
-        default:
+        /* A step this model does not know says so, rather than being
+         * skipped. Skipping is how the op codes being wrong stayed
+         * invisible: the transaction ran, did nothing, reported nothing,
+         * and the bus read as empty. */
+        default: {
+            char unknown[12];
+
+            snprintf(unknown, sizeof(unknown), "?op%u", op);
+            esp32_gpio_say_i2c(s, s->i2c_address < 0 ? 0 : s->i2c_address,
+                               unknown, NULL, 0);
             break;
+        }
         }
     }
     /* A list that ran off its end without a stop still completed: the

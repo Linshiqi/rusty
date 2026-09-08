@@ -249,10 +249,25 @@ REG32(RUSTY_I2C_SCL_SP_CONF, 0x0080)
 #define ESP32_I2C_CMD_OP_MASK 0x7
 #define ESP32_I2C_CMD_BYTES_MASK 0xff
 
-#define ESP32_I2C_OP_RSTART 0
+/*
+ * The op codes, from esp-idf's hal/esp32c3/i2c_ll.h. They are *not*
+ * consecutive and they are not in the order a driver's `Command` enum lists
+ * them — which is exactly the mistake that was here: 0, 1, 2, 3, 4, read off
+ * esp-hal's Rust enum instead of the hardware.
+ *
+ * What that produced is worth remembering, because it looked like nothing at
+ * all. A `Start` (6) fell through to the default case and set no address; the
+ * `Write` (1) after it then had no device to talk to and returned before it
+ * could even report a NACK. So every transaction completed having done
+ * nothing, no byte was ever reported on the channel, and the bus read as
+ * empty — indistinguishable, from outside, from a model that had never been
+ * asked. It took a register dump from the firmware to see the four command
+ * words and decode them.
+ */
+#define ESP32_I2C_OP_RSTART 6
 #define ESP32_I2C_OP_WRITE 1
-#define ESP32_I2C_OP_READ 2
-#define ESP32_I2C_OP_STOP 3
+#define ESP32_I2C_OP_READ 3
+#define ESP32_I2C_OP_STOP 2
 #define ESP32_I2C_OP_END 4
 
 /* The hardware FIFOs are 32 bytes each on this part. Modelling the depth

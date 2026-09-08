@@ -1500,6 +1500,23 @@ usty`) holds `location.toml`
   with no acknowledgement, every address on the bus looked absent, and not
   one byte was reported. It reads exactly like a bus with nothing on it,
   which is the hardest kind of wrong answer to tell from a right one.
+- **The I2C command op codes are not consecutive and are not the order a
+  driver's enum lists them.** The hardware's are `RESTART` 6, `WRITE` 1,
+  `READ` 3, `STOP` 2, `END` 4 (esp-idf's `hal/esp32c3/i2c_ll.h`); reading
+  them off esp-hal's Rust `Command` enum gives 0..4 and is wrong for three of
+  the five. What that produced is the thing worth remembering: a `Start` fell
+  through to the default case and addressed nobody, the `Write` after it had
+  no device and returned before it could even report a NACK, so every
+  transaction completed having done nothing and **not one byte was reported**
+  — a bus that read as empty, indistinguishable from a model that was never
+  asked. Three rounds of CI said "the firmware did not find them" and nothing
+  else. What broke it open was the *firmware* dumping the four command words
+  and the status register; decoding them took a minute. When a peripheral
+  model appears to do nothing, have the guest read its registers back rather
+  than reasoning about the driver.
+- **A step a model does not recognise must say so, not be skipped.** The
+  `default:` arm that quietly did nothing is what made the above invisible
+  for three rounds. It reports `?op<N>` on the channel now.
 - **A write-triggered bit must come back clear.** `CTR.TRANS_START`,
   `CTR.CONF_UPGATE`, `CTR.FSM_RST`, `SPI_CMD.USR`, `SPI_CMD.UPDATE` and
   `SCL_SP_CONF.SCL_RST_SLV_EN` are all `WT` or `R/W/SC` in the register maps:
