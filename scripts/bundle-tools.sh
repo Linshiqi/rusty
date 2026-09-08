@@ -63,6 +63,30 @@ else
   TAR=tar
 fi
 
+# Unpack whatever this is, whatever it is called.
+#
+# The format is read off the file rather than its name — a zip begins `PK` —
+# because `fetch` names its download after the family and keeps no extension.
+# And it has to be read, because the three tools here publish three formats
+# and only *some* tars read all of them: bsdtar does (Windows' System32 copy,
+# and macOS's own `tar`), GNU tar does not read a zip at all. espflash
+# publishes a zip for every platform, so the Linux release build stopped at
+# "This does not look like a tar archive" — after the app itself had built,
+# which is the same shape of late failure the updater config once had.
+unpack() {
+  local archive="$1" into="$2"
+  if [ "$(head -c 2 "$archive")" = PK ] \
+     && ! "$TAR" --version 2>/dev/null | grep -qi bsdtar; then
+    if ! command -v unzip >/dev/null 2>&1; then
+      echo "::error::bundle-tools: $archive is a zip and $TAR is GNU tar, which cannot read one; install unzip" >&2
+      exit 1
+    fi
+    unzip -q -o "$archive" -d "$into"
+  else
+    "$TAR" -xf "$archive" -C "$into"
+  fi
+}
+
 # Fetch a URL, telling "this platform has no such build" from "the download
 # failed". A 404 leaves an empty file and succeeds; anything else that does
 # not arrive intact fails, after retrying — including transfer errors, which
@@ -102,7 +126,7 @@ fetch() {
   mkdir -p "$dest/$family"
   # Every archive unpacks *into* its family directory, which is the shape
   # `tools::find` walks: `<family>/bin/<exe>` and `<family>/<exe>`.
-  "$TAR" -xf "$archive" -C "$dest/$family"
+  unpack "$archive" "$dest/$family"
   rm -f "$archive"
   if [ ! -e "$dest/$family/$proof" ]; then
     # A directory-level archive unpacks one level deep; flatten it so the
@@ -118,6 +142,15 @@ fetch() {
     echo "bundle-tools: $family unpacked without $proof — the archive is not the shape this expects" >&2
     exit 1
   fi
+  # Insurance, not the load-bearing part: espflash's zips do record a Unix
+  # mode (`-rwxr-xr-x`, host `unx`), so unzip restores it. But a zip carries
+  # one only if whoever built it put it there, and a binary shipped without
+  # its execute bit is a tool rusty finds and cannot run — a failure at the
+  # far end, in the dock, reading as a broken espflash rather than as a
+  # broken installer.
+  if [ -f "$dest/$family/$proof" ]; then
+    chmod +x "$dest/$family/$proof"
+  fi
   echo "bundle-tools: $family ready"
 }
 
@@ -129,7 +162,7 @@ qemu_url="https://github.com/Linshiqi/rusty/releases/download/$qemu_tag/$qemu_as
 echo "bundle-tools: qemu <- $qemu_url"
 curl -fsSL --retry 3 -o "$dest/$qemu_asset" "$qemu_url"
 rm -rf "$dest/qemu"
-"$TAR" -xf "$dest/$qemu_asset" -C "$dest"
+unpack "$dest/$qemu_asset" "$dest"
 rm -f "$dest/$qemu_asset"
 
 # Only the ESP ROMs travel. QEMU's share directory carries firmware for
@@ -217,7 +250,7 @@ if curl -fsSL --retry 3 -o "$dest/.codelldb.vsix" \
      "https://github.com/vadimcn/codelldb/releases/download/$codelldb_version/$codelldb_asset"; then
   rm -rf "$dest/codelldb"
   mkdir -p "$dest/codelldb"
-  "$TAR" -xf "$dest/.codelldb.vsix" -C "$dest/codelldb"
+  unpack "$dest/.codelldb.vsix" "$dest/codelldb"
   rm -f "$dest/.codelldb.vsix"
   echo "bundle-tools: codelldb ready"
 else

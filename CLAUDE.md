@@ -1934,6 +1934,18 @@ usty`) holds `location.toml`
   inside the archive fail on an existing file (`Can't create …
   esp32s3_rev0_rom.bin: File exists`, exit 1) — every binary replaced, the
   install reported as failed.
+- **And the tar that reads a zip is not on every runner.** Windows' System32
+  tar and macOS's own `tar` are bsdtar, which reads `.zip`, `.tar.gz` and
+  `.tar.xz` alike; the `tar` on a Linux runner is GNU tar, which cannot read
+  a zip at all. espflash publishes a zip for *every* platform, so
+  `bundle-tools.sh` unpacked it perfectly on the two desktops it was written
+  on and stopped the Linux release build with `This does not look like a tar
+  archive` — after the app itself had built, the same late shape the updater
+  config once failed in. `unpack` reads the format off the file (a zip
+  begins `PK`) rather than off a name the download does not carry, and
+  reaches for `unzip` only where the tar is GNU's. Both branches are proven
+  against the real archives, because reasoning about which `tar` a platform
+  has is precisely what produced the bug.
 - **A Windows verbatim path (`\\?\E:\…`) cannot be handed to a tool that
   appends to it.** Tauri's `resource_dir()` comes back canonicalised under
   `cargo tauri dev`, and QEMU joins `-L <dir>` to `esp32c3-rom.bin` with a
