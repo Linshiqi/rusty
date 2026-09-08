@@ -1265,7 +1265,7 @@ jobs:
               # hanging.
               settle("[spi] wrote aea501", 30,
                      "the firmware could not write to the wire")
-              settle("[spi] read f500", 30,
+              settle("[spi] read 0000", 30,
                      "an undriven MISO did not read as zeros; a transfer with "
                      "nothing declared must still complete")
               print("booted, writing to a device that says nothing back")

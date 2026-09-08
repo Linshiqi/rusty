@@ -96,7 +96,11 @@ fn main() -> ! {
     println!("[spi] listening on SPI2");
 
     let delay = Delay::new();
-    let mut last_answer = [0u8; 2];
+    // `Option`, so the first answer is a change and gets printed. Starting
+    // it at zeros would make "nothing is driving MISO" — the state of every
+    // run before the host has declared anything, and the one this probe most
+    // needs to report — silent.
+    let mut last_answer: Option<[u8; 2]> = None;
     let mut told = false;
 
     loop {
@@ -123,9 +127,9 @@ fn main() -> ! {
         let mut answer = ASK;
         match spi.transfer(&mut answer) {
             Ok(()) => {
-                if answer != last_answer {
+                if last_answer != Some(answer) {
                     say("read ", &answer);
-                    last_answer = answer;
+                    last_answer = Some(answer);
                 }
             }
             Err(error) => println!("[spi] the transfer failed: {error:?}"),
