@@ -243,9 +243,15 @@ code in rusty to exist, which is why a KiCad `.kicad_sym` under
 `.rusty/symbols/` — or an LCSC part number typed into the library panel — can
 add one.
 
-That ceiling is now the *fallback*, not the roof. `qemu/` holds a real GPIO
-model — Espressif's stub replaced — and `qemu-release.yml` builds it for four
-platforms and publishes it. **The installer ships it**: `scripts/fetch-qemu.sh`
+That ceiling is now the *fallback*, not the roof. `qemu/` holds real device
+models — Espressif's GPIO stub replaced, and beside it the SAR ADC and the
+I2C master neither of which upstream maps at all — and `qemu-release.yml`
+builds them for four platforms and publishes them. Three peripherals in one
+file (`esp32_gpio.c`, which keeps upstream's name because it replaces
+upstream's file) on purpose: all three carry the host's view of one board and
+share its socket, so "one channel, one protocol, one reader" stays true on
+the emulator's side as well as rusty's, and a new file would mean a new entry
+in upstream's build system for each. **The installer ships it**: `scripts/fetch-qemu.sh`
 unpacks the `qemu-v*` asset into `crates/rusty-app/bundled/`, `bundle.resources`
 packages that directory, and the app hands Tauri's resource directory to
 `tools::set_bundled_dir` at setup, so a fresh install simulates with ours and
@@ -284,9 +290,31 @@ the machine creates the GPIO device and there is no `-device` to hang it off),
 and the backend feeds its lines into **the same** stream the serial console
 uses — rule 5 above, one `absorb`. A button press goes both ways when both
 exist: `B14=1` on the console for firmware reading rusty's text protocol, and
-`14=1` on the pin channel for firmware reading `Input::is_high()`. The
-potentiometer stays console-only, because a GPIO carries one bit and there is
-no ADC model to put an analog value into.
+`14=1` on the pin channel for firmware reading `Input::is_high()`.
+
+**That one channel now carries three peripherals**, because all three are the
+host's view of one board. `A<pin>=<counts>` puts an analog value on a pin and
+`adc.read_oneshot()` returns it; `i2c 68:75=68` puts a byte behind an I2C
+address, `i2c 3c=+` declares a device with nothing to read and `i2c 3c=-`
+takes one off. Back the other way, `[rusty:adc@<us>] <pin>=<counts>` says what
+the converter handed over and `[rusty:i2c@<us>] 3c w 00ae` what crossed the
+bus. Both are reported per *change* — a driver polling a sensor converts
+thousands of times a second — and both go through the same `absorb`.
+
+The potentiometer's `P34=128` stays console-only, deliberately: what a wiper
+converts to depends on what its two ends are wired to, and turning 128 into
+counts would assert a rail-to-rail divider nobody stated. `A` already carries
+the number the firmware's own ADC would have produced, so it needs no
+conversion to reach the model — which is why it is the message that travels
+down the channel.
+
+**A part is on the I2C bus because it carries an `addr` prop and is wired to
+one**, not because of its kind: a sensor, a display and a breakout imported
+from LCSC all reach it the same way (`nets::bus_devices`). The wiring is
+checked rather than assumed — the emulator's bus does not route through the
+GPIO matrix, so a device with no wires would answer there and be dead on the
+desk, which is the confident wrong answer in miniature. No address is not an
+address of zero: absence refuses.
 
 ### 6. Extensibility is data first
 
@@ -1382,6 +1410,34 @@ usty`) holds `location.toml`
   "a session is running": a slider that silently does nothing reads as
   firmware ignoring the change. The trade is explicit — rusty's own link is
   plain text, and defmt decoding stays espflash's.
+- **esp-hal dispatches interrupts by reading the matrix's per-source status
+  registers; ESP-IDF does not, so upstream's QEMU never modelled them.**
+  `INTERRUPT_CORE0_INTR_STATUS_0/1` answered zero, so the peripheral raised
+  its line, the matrix carried it, the CPU took the interrupt, and esp-hal's
+  handler found nothing pending and returned — from the firmware's side
+  identical to a line that was never raised. ESP-IDF gives each source its
+  own CPU line and dispatches on the line number, which is why it works
+  there and why the hole survived. Two rounds of CI said only "nothing
+  happened" before a witness in the model itself named the half that was
+  working.
+- **`qemu_set_irq` on an unconnected line returns without doing anything.**
+  A device whose `sysbus_init_irq` line no machine ever connected reports
+  interrupts into nothing, silently. The model says `unconnected` on its own
+  channel now, because that is the only place that can tell the difference.
+- **A missing peripheral is a hang inside the user's own call, not a wrong
+  answer.** With nothing mapped at the SAR ADC's registers,
+  `adc.read_oneshot()` polls a done bit nothing can set; with nothing at the
+  I2C master's, a driver's first transaction waits on an interrupt nothing
+  can raise. Both look like the firmware hanging in `read`. So every probe
+  here **bounds its own wait** and prints what it found — a bounded poll for
+  the ADC, esp-hal's `SoftwareTimeout` for the bus. A witness that reports a
+  hang as silence is no witness, and both of these were measured on the
+  stock build before either model was written.
+- **Renaming a script means changing the line that runs it.** `interrupts.py`
+  became `patches.py`; the workflow step's name and its comment were updated
+  and the `run:` line was not, so every platform stopped at `can't open file`
+  with exit 2, before a single file was compiled. Grep for the old name, not
+  for the old description.
 - **An ESP32 cannot be simulated once it does floating point.** Espressif's
   QEMU dies — `Fatal error: divide by zero`, taking the emulator with it, so
   the guest's buffered console output is lost too and the log ends mid-boot —
