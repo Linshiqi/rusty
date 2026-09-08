@@ -519,7 +519,14 @@ jobs:
       - name: Unpack exactly as a user's install would
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
+          # QEMU's runtime libraries, and `libudev-dev` for rusty-embed's
+          # serial support: `serialport` links it on Linux to read a port's
+          # USB vendor and product ids, which is how a board is recognised
+          # rather than guessed at. The board probe below is the first thing
+          # in this workflow to build rusty's own crates, and it failed here
+          # on `libudev-sys` — a missing header, reported as a build script
+          # exiting 101, which reads as nothing to do with the gate.
+          sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0 libudev-dev
           mkdir -p tools
           tar -C tools -xf package/*.tar.xz
           tools/qemu/bin/qemu-system-riscv32 --version
@@ -903,6 +910,144 @@ jobs:
             }
           tail -30 board-probe.log
 
+      - name: Build the analog probe and make its image
+        working-directory: qemu/adc-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/adc-probe \
+            target/sim/flash.bin
+
+      # Everything above is a pin that is high or low. This is the other
+      # half of a board: a knob, a divider, a light sensor — an analog value
+      # the firmware reads with `adc.read_oneshot()` and not through any
+      # channel it had to be written to expect.
+      #
+      # The failure this gate exists for is worse than a wrong number. With
+      # nothing mapped at the converter's registers the driver polls a done
+      # bit nothing can set, and the firmware hangs inside the user's own
+      # `read` call. Measured on the stock build before the model was
+      # written: `[adc] the conversion never finished`, which is the probe
+      # refusing to spin rather than reporting the hang as silence.
+      - name: An analog value on a pin reaches the firmware's ADC
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/adc-probe/target/sim/flash.bin"
+          SERIAL = "adc-serial.log"
+          PORT = 5557
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def counts():
+              """Every reading the firmware has printed, in order."""
+              return [int(m) for m in re.findall(r"\[adc\] gpio3=(\d+)", read())]
+
+          # What the *model* says it converted, off the pin channel. Two
+          # accounts of one reading: the host said what was on the pin, the
+          # emulator says what it handed over, and the firmware says what it
+          # got. A gate that read only the last of those cannot tell a
+          # converter that ignored the host from a driver that ignored the
+          # converter.
+          converted = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[adc]")]
+              print(f"::error::{why} | firmware read {counts()} | "
+                    f"the model converted {converted}")
+              for line in said[-6:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in counts():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("adc-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              deadline = time.time() + 60
+              while time.time() < deadline and "listening on GPIO3" not in read():
+                  time.sleep(0.25)
+              if "listening on GPIO3" not in read():
+                  stop("the analog probe never booted")
+
+              # An undriven pin converts to zero, and the conversion has to
+              # *finish*: this is the assertion the stock emulator fails, and
+              # it fails it by never printing anything at all.
+              settle(0, 20, "the firmware never completed a conversion")
+              print("booted, and reading zero on an undriven pin")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:adc"):
+                              converted.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              # Two values, because a converter returning a constant passes
+              # any single one of them, and then a third that is out of range
+              # — a slider dragged past full scale must read as full scale,
+              # not wrap to nothing.
+              for drive, want in ((1234, 1234), (3000, 3000), (99999, 4095)):
+                  link.sendall(f"A3={drive}\n".encode())
+                  settle(want, 20,
+                         f"the host put {drive} on GPIO3 and the firmware "
+                         f"read {counts()[-1:]}")
+
+              seen = counts()
+              if seen[:4] != [0, 1234, 3000, 4095]:
+                  stop(f"expected the readings to follow the pin; got {seen[:6]}")
+
+              # And the emulator's own account has to carry the same numbers.
+              # Independent: one is a register the model latched, the other a
+              # `println!` from the driver that read it.
+              theirs = [int(m) for m in
+                        re.findall(r"\[rusty:adc@\d+\] 3=(\d+)", "\n".join(converted))]
+              for want in (1234, 3000, 4095):
+                  if want not in theirs:
+                      stop(f"the firmware read {want} and the model never said "
+                           f"it converted it — one of the two accounts is wrong")
+              print(f"the firmware read {seen[:4]}; the model converted "
+                    f"{len(theirs)} samples and agrees on every one")
+          finally:
+              qemu.kill()
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -917,5 +1062,7 @@ jobs:
             probe-qemu.out
             irq-serial.log
             irq-qemu.out
+            adc-serial.log
+            adc-qemu.out
             board-probe.log
           if-no-files-found: warn

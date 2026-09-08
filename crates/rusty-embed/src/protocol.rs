@@ -60,6 +60,39 @@ pub fn parse_gpio_report(line: &str) -> Option<GpioReport> {
     (!pins.is_empty()).then_some(GpioReport { at_us, pins })
 }
 
+/// One `[rusty:adc]` line: what the firmware's converter actually took off
+/// a pin, in the converter's own counts.
+///
+/// The emulator says this; no firmware does. It is the return half of
+/// `A<pin>=<counts>` — the host said what was on the pin, and this says what
+/// was read from it and when — and it is what tells "the slider does
+/// nothing" from "the firmware is not reading". Only rusty's build of QEMU
+/// emits it, so its absence is the ordinary state of a run on Espressif's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdcReport {
+    /// Microseconds on the emulator's virtual clock.
+    pub at_us: Option<u64>,
+    pub pin: u8,
+    pub counts: u16,
+}
+
+/// Parse `[rusty:adc@1234] 3=2048`.
+///
+/// A conversion of a channel with no pin behind it is reported as
+/// `adc1ch7=?`, which this refuses rather than inventing a pin for — the
+/// line exists to be read by a human in the dock, and a panel has nothing
+/// to do with it.
+pub fn parse_adc_report(line: &str) -> Option<AdcReport> {
+    let rest = line.trim().strip_prefix("[rusty:adc")?;
+    let (at_us, rest) = split_stamp(rest)?;
+    let (pin, counts) = rest.trim().split_once('=')?;
+    Some(AdcReport {
+        at_us,
+        pin: pin.trim().parse().ok()?,
+        counts: counts.trim().parse().ok()?,
+    })
+}
+
 /// One `[rusty:pwm]` line: how hard a pin is being driven, not merely
 /// whether it is high.
 ///
@@ -567,6 +600,37 @@ mod tests {
         assert_eq!(parse_gpio_report("[rusty:pwm] 5=0.5"), None);
         assert_eq!(parse_pwm_report("[rusty:pwm] nonsense"), None);
         assert_eq!(parse_pwm_report("I (44) boot: Loaded app"), None);
+    }
+
+    /// The emulator's account of what its converter handed the firmware.
+    /// Counts, so it can be compared with the counts the host sent; and a
+    /// channel with no pin behind it is refused rather than given one, since
+    /// there is no pin the panel could put it on.
+    #[test]
+    fn an_adc_report_carries_the_pin_and_the_counts_it_read() {
+        assert_eq!(
+            parse_adc_report("[rusty:adc@2233716] 3=2048"),
+            Some(AdcReport {
+                at_us: Some(2_233_716),
+                pin: 3,
+                counts: 2048,
+            })
+        );
+        assert_eq!(
+            parse_adc_report("[rusty:adc] 0=0"),
+            Some(AdcReport {
+                at_us: None,
+                pin: 0,
+                counts: 0,
+            })
+        );
+        assert_eq!(
+            parse_adc_report("[rusty:adc@10] adc1ch7=?"),
+            None,
+            "a channel with no pin is not a pin"
+        );
+        assert_eq!(parse_adc_report("[rusty:gpio] 3=1"), None);
+        assert_eq!(parse_adc_report("I (44) boot: Loaded app"), None);
     }
 
     #[test]

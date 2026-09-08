@@ -2035,10 +2035,18 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                             // not print a voltage it cannot
                                             // stand behind.
                                             let max = this.with(|p| p.as_ref().and_then(|p| p.inst.prop::<u16>("max"))).unwrap_or(4095);
+                                            // Where the sheet says this source
+                                            // starts, until somebody moves it.
+                                            // The backend sends the same value
+                                            // down the pin channel as soon as
+                                            // a run connects, so the slider and
+                                            // the converter agree before the
+                                            // first drag rather than after it.
+                                            let start = this.with(|p| p.as_ref().and_then(|p| p.inst.prop::<u16>("start"))).unwrap_or(0);
                                             let held = move || {
                                                 gpio_at("OUT")
-                                                    .map(|gpio| state.sim.analog.with(|a| a.get(&gpio).copied().unwrap_or(0)))
-                                                    .unwrap_or(0)
+                                                    .map(|gpio| state.sim.analog.with(|a| a.get(&gpio).copied().unwrap_or(start)))
+                                                    .unwrap_or(start)
                                             };
                                             Some(view! {
                                                 <div class="pointer-events-none absolute flex items-center gap-2" style=style>
@@ -2057,7 +2065,26 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                         }
                                                         class="pointer-events-auto w-[68px] accent-[#4aa8ff]"
                                                     />
-                                                    <span class="w-[4ch] text-right font-mono text-caption text-label-2">
+                                                    // What the firmware's own
+                                                    // converter last took off
+                                                    // this pin, which is the
+                                                    // difference between a
+                                                    // slider that does nothing
+                                                    // and firmware that is not
+                                                    // reading. Only rusty's
+                                                    // emulator can say, so no
+                                                    // claim when it has not.
+                                                    <span
+                                                        class="w-[4ch] text-right font-mono text-caption text-label-2"
+                                                        title=move || {
+                                                            match gpio_at("OUT")
+                                                                .and_then(|gpio| state.sim.adc.with(|a| a.get(&gpio).copied()))
+                                                            {
+                                                                Some(counts) => t!("simulate.adc-read", counts = counts),
+                                                                None => t!("simulate.adc-unread"),
+                                                            }
+                                                        }
+                                                    >
                                                         {held}
                                                     </span>
                                                 </div>

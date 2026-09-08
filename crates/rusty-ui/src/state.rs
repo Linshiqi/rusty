@@ -1177,6 +1177,16 @@ pub struct Sim {
     pub sensor_values: RwSignal<HashMap<String, Vec<f32>>>,
     /// Raw ADC counts the panel is holding on each pin.
     pub analog: RwSignal<HashMap<u8, u16>>,
+    /// Raw ADC counts the firmware's own converter has *read* off each pin,
+    /// from `[rusty:adc]` — the return half of [`Self::analog`].
+    ///
+    /// Two maps and not one, deliberately. One is what the host is driving
+    /// and the other what the guest took; when they agree the loop is closed,
+    /// and when they do not the panel can say which end is not moving.
+    /// Merged, a slider that moved firmware which never read it would look
+    /// exactly like one that worked. Only rusty's build of QEMU fills this,
+    /// so empty is the ordinary state of a run on Espressif's.
+    pub adc: RwSignal<HashMap<u8, u16>>,
     /// The simulated aircraft, when the physical loop is closed.
     ///
     /// Injecting a rate proves the controller *responds*; it cannot show
@@ -1513,6 +1523,7 @@ impl AppState {
                 sensors: RwSignal::new(Vec::new()),
                 sensor_values: RwSignal::new(std::collections::HashMap::new()),
                 analog: RwSignal::new(std::collections::HashMap::new()),
+                adc: RwSignal::new(std::collections::HashMap::new()),
                 plant: RwSignal::new(rusty_embed::Plant::default()),
                 plant_closed: RwSignal::new(false),
                 plant_gen: RwSignal::new(0),

@@ -187,6 +187,16 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
                 pwm.insert(*pin, *duty);
             }
         });
+    } else if let Some(report) = rusty_embed::parse_adc_report(&line.text) {
+        // What the firmware's converter took, which is the return half of the
+        // slider. Kept apart from `sim.analog`, which is what the *host* is
+        // driving: the two agreeing is the interesting fact, and folding them
+        // into one map would make disagreement unrepresentable — a slider
+        // that moved a firmware which never read it would look identical to
+        // one that worked.
+        state.sim.adc.update(|adc| {
+            adc.insert(report.pin, report.counts);
+        });
     } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
         state.sim.display.set(text);
     } else {

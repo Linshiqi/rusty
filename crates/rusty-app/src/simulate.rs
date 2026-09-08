@@ -201,11 +201,22 @@ impl PinChannel {
     /// through `GPIO_IN` rather than through a message it had to be written
     /// to expect.
     pub fn drive(&self, pin: u32, level: u8) {
+        self.say(&pin_line(pin, level));
+    }
+
+    /// Put an analog value on a pin, in the converter's own counts, so
+    /// `adc.read_oneshot()` returns it. The same refusal as everywhere else:
+    /// counts and not volts, because rusty does not know the divider.
+    pub fn analog(&self, pin: u32, count: u16) {
+        self.say(&analog_pin_line(pin, count));
+    }
+
+    fn say(&self, line: &str) {
         use std::io::Write;
         if let Ok(mut socket) = self.out.lock()
             && let Some(stream) = socket.as_mut()
         {
-            let _ = stream.write_all(pin_line(pin, level).as_bytes());
+            let _ = stream.write_all(line.as_bytes());
             let _ = stream.flush();
         }
     }
@@ -220,6 +231,17 @@ impl PinChannel {
 /// the outbound half already is; they are here, tested, until that move.
 fn pin_line(pin: u32, level: u8) -> String {
     format!("{pin}={level}\n")
+}
+
+/// The pin channel's analog line, `A<pin>=<counts>\n`.
+///
+/// Deliberately the same spelling as the console's [`rusty_embed::analog_line`]
+/// and the same number: one value, said twice to two readers, so a firmware
+/// reading rusty's text protocol and a firmware reading its own ADC cannot be
+/// shown different worlds. The console's is a message; this one reaches the
+/// converter the firmware actually samples.
+fn analog_pin_line(pin: u32, count: u16) -> String {
+    format!("A{pin}={count}\n")
 }
 
 /// The pin level a button state means: pressed is high, unless the board
@@ -259,6 +281,7 @@ fn open_pin_channel(
     port: u16,
     feed: Channel<LogLine>,
     low_when_pressed: std::collections::HashSet<u32>,
+    analog_start: Vec<(u32, u16)>,
 ) -> PinChannel {
     use std::io::{BufRead, BufReader};
 
@@ -267,6 +290,7 @@ fn open_pin_channel(
         out: out.clone(),
         low_when_pressed: std::sync::Arc::new(low_when_pressed),
     };
+    let handle_for_start = handle.clone();
 
     std::thread::spawn(move || {
         // QEMU has to get as far as opening its listening socket, which is
@@ -291,6 +315,12 @@ fn open_pin_channel(
         };
         if let Ok(mut slot) = out.lock() {
             *slot = Some(socket);
+        }
+        // The first thing said down the channel, before any line is read:
+        // what the sheet says is on each analog pin. The emulator starts with
+        // nothing on them and no way to find out.
+        for (pin, count) in &analog_start {
+            handle_for_start.analog(*pin, *count);
         }
 
         let mut lines = BufReader::new(reader)
@@ -353,23 +383,39 @@ pub async fn sim_send(text: String, state: State<'_, AppState>) -> Result<(), Co
     if let Some(input) = state.session_input().await {
         input.send_line(&text);
     }
-    if let (Some(pins), Some((pin, pressed))) = (state.pins().await, button_press(&text)) {
-        pins.drive(pin, pins.level_for(pin, pressed));
+    if let Some(pins) = state.pins().await {
+        if let Some((pin, pressed)) = button_press(&text) {
+            pins.drive(pin, pins.level_for(pin, pressed));
+        } else if let Some((pin, count)) = analog_set(&text) {
+            pins.analog(pin, count);
+        }
     }
     Ok(())
 }
 
 /// `B<pin>=<pressed>` — the board's button message, and nothing else.
 ///
-/// Deliberately not the potentiometer's `P34=128`: a GPIO carries one bit,
-/// and squeezing an analog value into it would put a pin somewhere between
-/// the two levels it can have. That needs the ADC modelled, which it is not.
 /// Any non-zero value is pressed, because the message is a state and not a
 /// count.
 fn button_press(text: &str) -> Option<(u32, u8)> {
     let (pin, level) = text.trim().strip_prefix('B')?.split_once('=')?;
     let level: u8 = level.trim().parse().ok()?;
     Some((pin.trim().parse().ok()?, u8::from(level != 0)))
+}
+
+/// `A<pin>=<counts>` — an analog source on the board, in the converter's own
+/// counts.
+///
+/// Deliberately not the potentiometer's `P34=128`. That message is rusty's
+/// own eight-bit convention, and what a wiper at a given position converts to
+/// depends on what its two ends are connected to; turning 128 into counts
+/// would be asserting a rail-to-rail divider nobody stated. `A` already
+/// carries the number the firmware's own ADC would have produced, so it needs
+/// no conversion to reach the model — which is why it is the one that goes
+/// down this channel.
+fn analog_set(text: &str) -> Option<(u32, u16)> {
+    let (pin, count) = text.trim().strip_prefix('A')?.split_once('=')?;
+    Some((pin.trim().parse().ok()?, count.trim().parse().ok()?))
 }
 
 /// QEMU: in-process download with a mirror fallback, then tar extraction.
@@ -498,6 +544,35 @@ pub async fn run_simulation(
         })
         .unwrap_or_default();
 
+    // And where each analog source starts, so a run begins in the state the
+    // sheet describes rather than at zero.
+    //
+    // The device clears its analog values on reset like every other register,
+    // which makes the host the one authority on what is on a pin — so the
+    // host has to say, once, as soon as there is anything listening. The
+    // slider reads the same `start` prop, so the panel and the converter
+    // cannot disagree before anybody has touched anything.
+    let analog_start: Vec<(u32, u16)> = plan
+        .board
+        .as_ref()
+        .map(|sheet| {
+            let rows = simulate::kit_rows_for(&root, &sheet.chip);
+            sheet
+                .parts
+                .iter()
+                .filter(|part| {
+                    sheet
+                        .symbol_of(&part.reference)
+                        .is_some_and(|s| nets::behaviour_of(s) == nets::Behaviour::Analog)
+                })
+                .filter_map(|part| {
+                    let gpio = nets::gpio_of(sheet, &rows, &part.reference, "OUT")?;
+                    Some((u32::from(gpio), part.prop::<u16>("start").unwrap_or(0)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // A debug run freezes the CPU at reset so breakpoints can be placed before
     // the first instruction. With no gdb to place them, that freeze is
     // permanent: a blank board, a live QEMU, and nothing anywhere saying why.
@@ -622,6 +697,7 @@ pub async fn run_simulation(
                     port,
                     on_line.clone(),
                     low_when_pressed.clone(),
+                    analog_start.clone(),
                 )))
                 .await;
         }
@@ -735,5 +811,35 @@ mod tests {
             "to ground with a pull-up: pressed is low"
         );
         assert_eq!(pin_level(0, true), 1, "and released rests high");
+    }
+
+    /// The two messages that reach the emulator's pins are told apart by
+    /// their first letter and by nothing else, so each has to refuse the
+    /// other's traffic — and both have to refuse the potentiometer's `P`,
+    /// which stays on the console because what a wiper converts to depends
+    /// on what its ends are wired to.
+    #[test]
+    fn the_pin_channel_takes_buttons_and_analog_sources_and_nothing_else() {
+        assert_eq!(button_press("B14=1"), Some((14, 1)));
+        assert_eq!(button_press("B14=7"), Some((14, 1)), "any non-zero is down");
+        assert_eq!(button_press("A3=2048"), None);
+
+        assert_eq!(analog_set("A3=2048"), Some((3, 2048)));
+        assert_eq!(analog_set(" A3=0 \n"), Some((3, 0)));
+        assert_eq!(analog_set("B14=1"), None);
+        assert_eq!(analog_set("P34=128"), None, "the pot stays on the console");
+        assert_eq!(analog_set("A3=notanumber"), None);
+        assert_eq!(analog_set("A3"), None);
+    }
+
+    /// One value said twice, to two readers that must not be shown
+    /// different worlds: the console's message and the pin channel's line
+    /// carry the same number for the same pin.
+    #[test]
+    fn the_console_and_the_pin_channel_agree_about_an_analog_value() {
+        let console = rusty_embed::analog_line(3, 2048);
+        assert_eq!(console, "A3=2048");
+        assert_eq!(analog_pin_line(3, 2048), format!("{console}\n"));
+        assert_eq!(analog_set(&console), Some((3, 2048)));
     }
 }

@@ -1,4 +1,11 @@
-"""Everything the interrupt path needs that Espressif's QEMU does not have.
+"""The source edits rusty's emulator needs beyond the two files it replaces.
+
+Three of them today: two on the interrupt path, and one line that maps the
+SAR ADC. Each is small enough that a patch file's line numbers would be the
+fragile part, and each is silent when missing — the reason every one of them
+insists on seeing its anchor exactly once.
+
+## The interrupt path
 
 Two holes, both silent, and firmware waiting on a GPIO edge falls into
 whichever it reaches first.
@@ -20,23 +27,25 @@ interrupt, esp-hal finds nothing pending, and returns — indistinguishable,
 from the firmware's side, from a line that was never raised. That was this
 gate failing while the model's own witness said it had raised the line.
 
-Anchored insertions rather than patch files: what changes here is a handful
-of lines inside functions of hundreds, so a unified diff would be mostly
-context and its line numbers the fragile part. Each edit finds the text it
-is inserting after, insists on seeing it exactly once, and stops otherwise —
-the same discipline as `upstream.sha256`, which pins all three files so a
-rewrite upstream fails loudly here rather than quietly doing nothing.
-
-The ESP32's matrix has the same hole and is not fixed here: it keeps no
-level state at all (`hw/xtensa/esp32_intc.c` forwards straight to the CPU's
-external lines), and its status registers live in a different device
+The ESP32's matrix has the same second hole and is not fixed here: it keeps
+no level state at all (`hw/xtensa/esp32_intc.c` forwards straight to the
+CPU's external lines), and its status registers live in a different device
 altogether, so answering them means new state and a link between two
 upstream models — with no gate in this repository that could prove it. The
 line is still wired on that machine, which is what ESP-IDF-style firmware
 dispatching on the CPU line needs. `qemu/README.md` says so rather than
 letting the release imply otherwise.
 
-    python qemu/interrupts.py <path to the qemu source tree>
+## The analog one
+
+**Nothing is mapped at the C3's SAR ADC.** `esp32_gpio.c` answers for it —
+the analog value on a pin and its digital level are two readings of one
+wire, arriving on one channel — as a second MMIO region, so the machine
+needs one line to map it. Until it was mapped, `adc.read_blocking` did not
+return a wrong number: it polled a done bit nothing could set, and the
+firmware hung in the user's own code.
+
+    python qemu/patches.py <path to the qemu source tree>
 """
 
 import sys
@@ -58,6 +67,18 @@ EDITS = [
         "    esp32_soc_add_periph_device(sys_mem, &s->gpio, DR_REG_GPIO_BASE);\n",
         "    sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio), 0,\n"
         "                       qdev_get_gpio_in(intmatrix_dev, ETS_GPIO_INTR_SOURCE));\n",
+    ),
+    # Anchored on the same upstream line as the wiring above, not on the
+    # wiring's own text, so the two are independent: an edit that anchored on
+    # another edit's output would break the moment somebody reordered this
+    # list, and break by silently doing nothing.
+    (
+        "hw/riscv/esp32c3.c",
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);\n",
+        "        /* The same device's second region is the SAR ADC: one model\n"
+        "         * for the digital and analog readings of one pin. */\n"
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_SARADC_BASE,\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 1), 0);\n",
     ),
     (
         "hw/riscv/esp32c3_intmatrix.c",

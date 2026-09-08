@@ -110,6 +110,59 @@ REG32(GPIO_STATUS1_W1TC, 0x0058)
  * fewer simply never touch the ones above their count. */
 #define ESP32_GPIO_PINS 40
 
+/*
+ * The SAR ADC, which this device also answers for.
+ *
+ * A second peripheral in the GPIO model's file, deliberately. The analog
+ * value on a pin and its digital level are two readings of the same wire,
+ * they arrive on the same channel from the same host, and a separate device
+ * would need a link back to this one for every conversion. Keeping them
+ * together is what makes "one channel, one protocol" true on the emulator's
+ * side as well as rusty's. It is a second MMIO region rather than a second
+ * device for the same reason it is not a new file: a new file means a new
+ * entry in upstream's build system, and every one of those is a way for a
+ * build to fail that has nothing to do with what is being modelled.
+ *
+ * `esp32.gpio` is instantiated on every part in the family and only the
+ * machines that map region 1 get an ADC — which today is the C3, the part
+ * whose registers these are. Offsets from esp-idf's
+ * soc/esp32c3/apb_saradc_reg.h.
+ */
+#define ESP32_SARADC_REGION 0x1000
+
+/* Shadowed as a whole, so a read-modify-write of a register this model has
+ * no opinion about keeps what the firmware put there. Four kilobytes to
+ * remove a class of bug where a driver's `modify()` silently drops bits. */
+#define ESP32_SARADC_WORDS (ESP32_SARADC_REGION / 4)
+
+REG32(SARADC_ONETIME, 0x0020)
+REG32(SARADC_1_DATA, 0x002c)
+REG32(SARADC_2_DATA, 0x0030)
+REG32(SARADC_INT_ENA, 0x0040)
+REG32(SARADC_INT_RAW, 0x0044)
+REG32(SARADC_INT_ST, 0x0048)
+REG32(SARADC_INT_CLR, 0x004c)
+
+/* `ONETIME_SAMPLE`: which unit is being asked, the channel, and the edge
+ * that starts a conversion. `ATTEN` is stored and ignored — attenuation
+ * scales a real voltage onto the converter's range, and this model is
+ * handed counts rather than volts precisely so it never has to guess at
+ * anybody's divider. */
+#define ESP32_SARADC_ONETIME_ADC1  (1u << 31)
+#define ESP32_SARADC_ONETIME_ADC2  (1u << 30)
+#define ESP32_SARADC_ONETIME_START (1u << 29)
+#define ESP32_SARADC_ONETIME_CHANNEL_SHIFT 25
+#define ESP32_SARADC_ONETIME_CHANNEL_MASK  0xf
+
+/* The done bits, one per unit, in `INT_RAW`/`INT_ST`/`INT_CLR`. */
+#define ESP32_SARADC_DONE_ADC1 (1u << 31)
+#define ESP32_SARADC_DONE_ADC2 (1u << 30)
+
+/* The converter is twelve bits. A host that sends more is clamped rather
+ * than wrapped: a slider dragged past full scale must read as full scale,
+ * not as zero. */
+#define ESP32_SARADC_FULL_SCALE 0xfff
+
 typedef struct Esp32GpioState {
     SysBusDevice parent_obj;
 
@@ -145,6 +198,22 @@ typedef struct Esp32GpioState {
     CharBackend pins;
     char host_line[ESP32_GPIO_HOST_LINE];
     unsigned host_at;
+
+    /* The analog half, on the same pins and the same channel.
+     *
+     * `analog` is what the host says is on each pin, in the converter's own
+     * counts. Counts and not volts, the same refusal rusty makes on its own
+     * side: the emulator does not know anybody's divider or reference, and a
+     * voltage it converted itself would be a confident number the firmware's
+     * arithmetic disagreed with. */
+    MemoryRegion adc_iomem;
+    uint16_t analog[ESP32_GPIO_PINS];
+    uint32_t adc_reg[ESP32_SARADC_WORDS];
+    /* The last conversion each unit finished, and which pin it read — kept
+     * apart from the shadow so a read of the data register cannot be
+     * satisfied by whatever a driver happened to write there. */
+    uint16_t adc_data[2];
+    int adc_pin[2];
 } Esp32GpioState;
 
 typedef struct Esp32GpioClass {

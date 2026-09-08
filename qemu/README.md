@@ -28,6 +28,9 @@ honestly claim:
 - **And it can never interrupt.** Firmware that asks to be woken by an edge
   — how nearly every real button is read — waits for ever, which looks like
   a hang in the user's own code rather than a hole in the emulator.
+- **And there is no analog side at all.** Nothing answers at the SAR ADC's
+  registers either, so `adc.read_oneshot()` polls a done bit nothing can set
+  and never returns. Same shape of failure, in the user's own `read` call.
 
 `esp32_gpio.c` here fills in the model: the output and enable registers,
 their set/clear aliases, the input register, and the interrupt half — the
@@ -50,7 +53,7 @@ and says so rather than silently discarding their change.
 A model that raises an interrupt is not yet an interrupt the firmware takes,
 and both of the things in the way fail *silently* — the firmware simply
 never runs its handler, which reads as a hang in the user's own code.
-`interrupts.py` fills them, as anchored insertions after text it insists on
+`patches.py` fills them, as anchored insertions after text it insists on
 seeing exactly once; the files are pinned in `upstream.sha256` like the GPIO
 ones.
 
@@ -80,20 +83,54 @@ that, and a release note claiming it would be exactly the confident wrong
 answer this emulator exists to stop giving. ESP-IDF-style firmware, which
 dispatches on the CPU line, has what it needs on that machine.
 
+## And the analog half
+
+A pin is not only high or low. A knob, a divider, a light sensor and a
+battery are all read through the SAR ADC, and **nothing is mapped at its
+registers on the C3** — so `adc.read_oneshot()` does not return a wrong
+number, it waits: the driver polls a done bit that nothing can set, and the
+firmware hangs inside the user's own `read` call with nothing anywhere to
+say why. Measured, not feared: the analog probe on the stock build prints
+`the conversion never finished` and stops, which is the only reason it is
+visible at all.
+
+`esp32_gpio.c` answers for it as a second MMIO region, and `patches.py` maps
+that region. Deliberately the same device: the analog value on a pin and its
+digital level are two readings of one wire, they arrive on the same channel
+from the same host, and a separate device would need a link back to this one
+for every conversion. A second *file* would also mean a new entry in
+upstream's build system, and every one of those is a way for a build to fail
+that has nothing to do with what is being modelled.
+
+What it models is one-shot conversion and nothing else: the channel and start
+bits, the two data registers, the done bit and its clear. Everything else in
+the window is shadowed, so a driver's read-modify-write of a register this
+has no opinion about keeps what it put there. A conversion is instant —
+the silicon takes microseconds and the driver waits for the bit either way,
+so a timer here would only add a way to lose one.
+
+**Counts, not volts**, on the host's side and the model's. rusty does not
+know anybody's divider or reference, and a voltage the emulator converted
+itself would be a confident number the firmware's arithmetic disagreed with.
+`A<pin>=<counts>` puts a value on a pin, `[rusty:adc@<us>] <pin>=<counts>`
+reports what was taken off it — per *change*, because a driver polling in a
+loop converts thousands of times a second and a line each would drown the
+channel the console and the board share.
+
 ## Building it
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
 (read out of `QEMU_RELEASE`, wherever in `rusty-embed` it lives — searched
 for rather than named, because naming it is how this workflow sat broken
 through a refactor that moved the file), verifies the checksums, copies the
-two model files in, runs `interrupts.py` over the three it patches, and
+two model files in, runs `patches.py` over the three it patches, and
 builds both `riscv32-softmmu` and `xtensa-softmmu` — the C3 and C6 on one,
 the ESP32 and S3 on the other. Run it from the Actions tab; it packages each
 platform as an artifact.
 
 ## What it is proven to do
 
-Seven gates, each able to fail:
+Eight gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -160,6 +197,23 @@ the two and reports the lead.
    emulator reports, and requires every lamp wired to a GPIO to have lit
    and gone out. That is the panel's whole claim — this LED is on that pin
    — checked by a machine instead of by somebody looking at it.
+
+8. An **analog value** on a pin reaches `adc.read_oneshot()`. `adc-probe/`
+   configures ADC1 channel 3 and prints every reading that changes; the test
+   drives `A3=1234`, then `3000`, then `99999`, and requires the firmware to
+   have read 1234, 3000 and 4095 — two values because a converter answering
+   with a constant passes any single one, and a third out of range because a
+   slider dragged past full scale must read as full scale rather than wrap
+   to nothing. The emulator's own `[rusty:adc]` account has to carry the same
+   numbers.
+
+   The failure it exists for is worse than a wrong reading. With nothing
+   mapped at the converter's registers the driver polls a done bit nothing
+   can set, and the firmware hangs inside the user's own `read` call. That
+   is what the stock build does, measured before the model was written —
+   which is why the probe's poll is bounded and prints `the conversion never
+   finished` instead of spinning: a witness that reports a hang as silence
+   is no witness.
 
 
 ## What each desktop needed
