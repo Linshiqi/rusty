@@ -73,20 +73,31 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// Bytes as hex, into a fixed buffer, so the two accounts of one transaction
-/// are spelled the same way and can be compared character for character.
-fn hex(bytes: &[u8], out: &mut [u8; 32]) -> usize {
+/// Bytes as hex from an offset, answering with the new offset — so the two
+/// accounts of one transaction are spelled the same way and can be compared
+/// character for character.
+///
+/// The offset is the whole point and the first version did not have it: it
+/// always wrote from the start, so building a list of two addresses put the
+/// second one on top of the first and advanced the length anyway. `3c,68`
+/// came out as `68,` followed by two NUL bytes, which prints as `68,` and
+/// reads as a scan that found one device and a stray comma.
+fn hex_at(bytes: &[u8], out: &mut [u8; 32], at: usize) -> usize {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut at = 0;
+    let mut n = at;
     for byte in bytes {
-        if at + 2 > out.len() {
+        if n + 2 > out.len() {
             break;
         }
-        out[at] = DIGITS[(byte >> 4) as usize];
-        out[at + 1] = DIGITS[(byte & 0xf) as usize];
-        at += 2;
+        out[n] = DIGITS[(byte >> 4) as usize];
+        out[n + 1] = DIGITS[(byte & 0xf) as usize];
+        n += 2;
     }
-    at
+    n
+}
+
+fn hex(bytes: &[u8], out: &mut [u8; 32]) -> usize {
+    hex_at(bytes, out, 0)
 }
 
 fn say(label: &str, bytes: &[u8]) {
@@ -99,11 +110,6 @@ fn say(label: &str, bytes: &[u8]) {
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
-    // GPIO5 and GPIO6 because nothing else here wants them: 0 is blinky's
-    // LED, 3 the analog probe's, 4 the interrupt probe's, 2/8/9 are
-    // strapping pins and 12..21 the flash, the native USB and the console.
-    // The model does not route through the GPIO matrix, so the choice is
-    // about not colliding rather than about the bus.
     // A software timeout, for the same reason the analog probe bounds its
     // poll: with nothing at the peripheral's registers the driver waits on
     // an interrupt that can never arrive, and a probe that waits with it
@@ -111,6 +117,11 @@ fn main() -> ! {
     // do — that is a register a missing model does not have either.
     let config = Config::default()
         .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(200)));
+    // GPIO5 and GPIO6 because nothing else here wants them: 0 is blinky's
+    // LED, 3 the analog probe's, 4 the interrupt probe's, 2/8/9 are
+    // strapping pins and 12..21 the flash, the native USB and the console.
+    // The model does not route through the GPIO matrix, so the choice is
+    // about not colliding rather than about the bus.
     let mut i2c = match I2c::new(peripherals.I2C0, config) {
         Ok(i2c) => i2c.with_sda(peripherals.GPIO5).with_scl(peripherals.GPIO6),
         Err(error) => {
@@ -140,10 +151,10 @@ fn main() -> ! {
     loop {
         delay.delay_millis(100);
         scans += 1;
-        // Aloud, every second or so. Without it a loop that stopped and a bus
+        // Aloud, every few seconds. Without it a loop that stopped and a bus
         // with nothing on it produce the same log — no output — and telling
         // those two apart is the whole difficulty of this gate.
-        if scans % 10 == 0 {
+        if scans % 50 == 0 {
             println!("[i2c] alive scans={scans}");
         }
         // Present is "it acknowledged its address", which is the only
@@ -178,9 +189,10 @@ fn main() -> ! {
             let mut at = 0;
             for (slot, address) in [DISPLAY, ABSENT, SENSOR].into_iter().enumerate() {
                 if present[slot] {
-                    at += hex(&[address], &mut buffer);
-                    // A separator only between entries, so the line is a
-                    // list and not a list with a trailing comma.
+                    at = hex_at(&[address], &mut buffer, at);
+                    // A separator after each, and the last one is dropped
+                    // below — so the line is a list and not a list with a
+                    // trailing comma.
                     if at < buffer.len() {
                         buffer[at] = b',';
                         at += 1;

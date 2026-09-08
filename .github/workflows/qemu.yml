@@ -1095,8 +1095,14 @@ jobs:
               # loop got, ahead of the rest: the annotation budget is small
               # and a scan count buried under boot chatter is a scan count
               # nobody reads.
-              for line in [l for l in said if l.startswith(("[i2c] regs", "[i2c] alive"))][-3:]:
+              # The controller's registers, and how far the loop got — one
+              # heartbeat, not twenty-eight of them crowding out the lines
+              # that say what the bus did.
+              for line in [l for l in said if l.startswith("[i2c] regs")][-2:]:
                   print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in [l for l in said if l.startswith("[i2c] alive")][-1:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              said = [l for l in said if not l.startswith("[i2c] alive")]
               for line in said[-8:]:
                   print(f"::error::probe: {line.replace('%', '%25')[:900]}")
               for line in traffic[-8:]:
