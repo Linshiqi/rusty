@@ -1876,6 +1876,98 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     let (cx, cy) = anchor.get();
                                     let style = format!("left: {cx}px; top: {cy}px; transform: translateX(-50%)");
                                     match behaviour.get() {
+                                        // The module the firmware asked to be
+                                        // fed. Its value names the channel;
+                                        // a channel the firmware never
+                                        // declared gets no slider, for the
+                                        // reason the tunables get none — a
+                                        // range rusty invented is how
+                                        // somebody injects 2000 deg/s into a
+                                        // loop written for 250.
+                                        Some(Behaviour::Sensor) => {
+                                            let wanted = this
+                                                .with(|p| p.as_ref().map(|p| p.inst.value.trim().to_string()))
+                                                .unwrap_or_default();
+                                            let declared = state
+                                                .sim
+                                                .sensors
+                                                .with(|all| all.iter().find(|s| s.name == wanted).cloned());
+                                            let Some(def) = declared else {
+                                                return Some(view! {
+                                                    <div class="pointer-events-none absolute max-w-[190px]" style=style>
+                                                        <span class="rounded-[4px] bg-raised px-1.5 py-1 text-caption leading-snug text-label-4 ring-1 ring-line">
+                                                            {if wanted.is_empty() {
+                                                                t!("simulate.sensor-unnamed")
+                                                            } else {
+                                                                t!("simulate.sensor-undeclared", name = wanted.clone())
+                                                            }}
+                                                        </span>
+                                                    </div>
+                                                }
+                                                    .into_any());
+                                            };
+                                            let count = def.components.max(1) as usize;
+                                            let min = def.min.unwrap_or(-1.0);
+                                            let max = def.max.unwrap_or(1.0);
+                                            let unit = def.unit.clone().unwrap_or_default();
+                                            let name = def.name.clone();
+                                            let held = {
+                                                let name = name.clone();
+                                                move || {
+                                                    state.sim.sensor_values.with(|all| {
+                                                        all.get(&name).cloned().unwrap_or_else(|| vec![0.0; count])
+                                                    })
+                                                }
+                                            };
+                                            Some(view! {
+                                                <div class="pointer-events-none absolute flex flex-col gap-0.5" style=style>
+                                                    <span class="font-mono text-caption text-label-3">
+                                                        {format!("{name} {unit}")}
+                                                    </span>
+                                                    {(0..count)
+                                                        .map(|axis| {
+                                                            let name = name.clone();
+                                                            let held = held.clone();
+                                                            // A `Copy` handle, so the slider and the number beside it
+                                                            // can both read the sample.
+                                                            let sample = StoredValue::new(held.clone());
+                                                            let shown = move || {
+                                                                sample.with_value(|held| held().get(axis).copied().unwrap_or(0.0))
+                                                            };
+                                                            view! {
+                                                                <span class="flex items-center gap-1.5">
+                                                                    <input
+                                                                        type="range"
+                                                                        min=min
+                                                                        max=max
+                                                                        step=(max - min) / 200.0
+                                                                        prop:value=move || shown().to_string()
+                                                                        on:pointerdown=move |event: ev::PointerEvent| {
+                                                                            event.stop_propagation()
+                                                                        }
+                                                                        on:input=move |event: ev::Event| {
+                                                                            let Ok(value) = event_target_value(&event).parse::<f32>()
+                                                                            else {
+                                                                                return;
+                                                                            };
+                                                                            let mut sample = held();
+                                                                            sample.resize(count, 0.0);
+                                                                            sample[axis] = value;
+                                                                            controller::sim_sensor(state, name.clone(), sample);
+                                                                        }
+                                                                        class="pointer-events-auto w-[70px] accent-[#5fd0c8]"
+                                                                    />
+                                                                    <span class="w-[5ch] text-right font-mono text-caption text-label-2">
+                                                                        {move || format!("{:.2}", shown())}
+                                                                    </span>
+                                                                </span>
+                                                            }
+                                                        })
+                                                        .collect_view()}
+                                                </div>
+                                            }
+                                                .into_any())
+                                        }
                                         Some(Behaviour::Pot) => {
                                             let turned = RwSignal::new(128u8);
                                             let angle = move || -135.0 + f64::from(turned.get()) / 255.0 * 270.0;
