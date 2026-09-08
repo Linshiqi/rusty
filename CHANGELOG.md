@@ -11,6 +11,19 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Added — a sensor on the board, and a probe on every wire.** A sensor
+module can be placed and wired like anything else; its value names the
+channel the firmware declared with `[rusty:sensor]`, and the sliders under
+it feed that channel. Selecting a wire now says what net it is on — high,
+low, or floating with nothing driving it — and lists every pin joined to
+it.
+
+**Added — a pin edge interrupts the firmware in the simulator.** rusty's
+emulator keeps the GPIO interrupt registers now and raises the line the
+interrupt matrix carries, so firmware that asks to be woken by a button —
+how nearly every real button is read — runs its handler instead of waiting
+for ever. Polling worked before; interrupts did not, and nothing said so.
+
 **Added — rails, net labels, a buzzer and a servo.** A ground or supply
 symbol is that rail wherever it is drawn, so a lamp's cathode no longer
 needs a wire across the whole sheet; two labels carrying the same name are

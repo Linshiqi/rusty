@@ -1871,10 +1871,41 @@ proof of the import.
   rails shorted, GPIOs fighting, a switch that reaches nothing, a wire to a
   pin that is not there — are `Warning`s with a stable kind, translated by
   the frontend and printed in English by the CLI.
+- **A rail is a rail wherever it is drawn, and a name is a wire.**
+  `rusty:GND` and `rusty:Supply` put their net at a level without a wire
+  running back to the devkit, and two `rusty:Label` parts carrying the same
+  value are one net — the two things a schematic uses instead of drawing a
+  wire across the whole sheet. Both live in `nets`, so the rules, the probe
+  and the backend's button polarity all read them the same way. A label with
+  no name joins nothing: an empty tag is one somebody has not written on.
+- **`Evaluation` carries the nets themselves**, not only the levels, so a
+  pin can be asked what it is joined to. That is the probe: selecting a wire
+  says high, low or floating, and lists every pin in its net. The union-find
+  was computing it already and throwing it away.
+- **A sensor is a part.** `rusty:Sensor`'s value names the channel the
+  firmware declared with `[rusty:sensor]`; the sliders under it on the sheet
+  feed that channel through the same `sim_sensor` the Flight panel uses, and
+  a channel the firmware never declared gets no slider at all — the
+  tunables' rule, for the same reason. A buzzer is read by the lamp's rule
+  and exempted from the missing-resistor finding, because asking a sounder
+  for a series resistor teaches the wrong thing.
+- **The board is checked by a machine, twice.** `examples/board_probe.rs`
+  boots a project with the pin channel attached, replays the sheet's rules
+  over the pins the *emulator* reports, and says what each part did — then
+  presses every button and requires the pin it reaches to move. It exits
+  non-zero when a lamp wired to a GPIO never lights, which is how a rewired
+  sheet and a broken rule both look; `qemu.yml`'s gate 7 runs it on
+  `examples/blink-rust` with `RUSTY_CONFIG_DIR` pointed at the workspace so
+  the tool ladder finds the emulator that job just built. Pressing drives
+  the *released* level first: the emulator models no pull resistor, so a
+  pull-up button's press is only an edge if something put the pin high
+  beforehand — the first version reported "the button does nothing" about a
+  model that was working.
 - **The library is three layers, later ones winning by `library:name`**:
   the built-in `Device.kicad_sym` (R, C, LED, SW_Push in KiCad's own shapes)
   and `rusty.kicad_sym` (the parts with a behaviour of their own: pot,
-  analog source, display, RGB lens, digit, motor — `behaviour_of` keys on
+  analog source, display, RGB lens, digit, motor, ground, supply, net
+  label, buzzer, servo, sensor — `behaviour_of` keys on
   the id for these and on the reference prefix and pin names for the rest),
   the data directory's `symbols/` — where `lcsc.kicad_sym` holds every
   imported part, one file KiCad itself can open — and the project's

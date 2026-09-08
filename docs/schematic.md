@@ -150,6 +150,16 @@ GPIO levels; the rails are fixed; everything else follows:
   backend's pin channel read it, so the emulator is driven to the level the
   wiring means. A switch that reaches no GPIO, or no rail, is
   `SwitchDrivesNothing`.
+- **A rail symbol** (`rusty:GND`, `rusty:Supply`) puts its net at that
+  level wherever it is drawn, and **a net label** (`rusty:Label`) joins
+  every label carrying the same value into one net. A label with no value
+  joins nothing.
+- **A buzzer** is on by the lamp's rule — its `+` high and its `-` low —
+  and is not asked for a series resistor, because a sounder does not want
+  one. **A servo's** horn follows the duty on its signal pin. **A sensor**
+  (`rusty:Sensor`) names, in its value, the channel the firmware declared
+  with `[rusty:sensor]`; the sheet feeds that channel and refuses to invent
+  one the firmware never asked for.
 - **A knob, a source, a motor** are *on* whatever GPIO their pin reaches
   through the wires and the resistors (`gpio_of`): the pot's wiper sends
   `P<gpio>=`, the analog source `A<gpio>=`, the motor reads its duty from
@@ -159,6 +169,25 @@ GPIO levels; the rails are fixed; everything else follows:
 Every rule is under a test that names the circuit it checks, and the
 findings are `Warning`s with a stable kind: the frontend translates them,
 the CLI prints them.
+
+`Evaluation` also carries the nets themselves — which pins the current
+joins — so a wire can be asked what it is on. That is the probe in the
+properties panel: high, low or floating, and every pin in the net.
+
+## Proving a board without eyes
+
+```bash
+cargo run -p rusty-embed --example board_probe -- <project> [seconds]
+```
+
+Boots the project in the emulator with the pin channel attached, replays
+the sheet's rules over the pins the emulator actually reports, and says
+what each part did — a lamp that lit *and went out* is one the firmware is
+driving. Then it presses every button on the sheet and requires the pin it
+reaches to move. It exits non-zero when a lamp wired to a GPIO never
+lights, when a press moves nothing, or when the emulator reports no pins at
+all, so a board can be kept working by a machine. `qemu.yml` runs it on
+`examples/blink-rust` as gate 7 of every emulator build.
 
 ## The editor
 
@@ -189,8 +218,13 @@ rules' findings sit in the sheet's corner.
 
 ## Not yet
 
-Net labels and power symbols (every rail is a wire to the devkit); symbols
-with several units; turning the devkit; an unwired pin marked on the sheet
-beyond its pulse; a broader ERC than the five findings; EasyEDA's text
-records beyond plain labels; the I2C decode the display's SDA/SCL pins are
-waiting for.
+A wire that ends on another wire (a T junction) — today a net is joined at
+pins, or by a label. Symbols with several units. Turning the devkit. A
+broader ERC than the five findings. EasyEDA's text records beyond plain
+labels. The I2C decode the display's and the sensor's SDA/SCL pins are
+waiting for, and with it a screen that shows what the firmware *drew*
+rather than what it printed. An ADC model, so `adc.read()` returns the
+value the sheet's analog source is set to instead of the firmware having
+to read `A<pin>=` off the console. Quantities: the rules are DC on and off,
+so a resistor's value changes nothing, a capacitor never charges, and
+nothing is measured in volts or amps.
