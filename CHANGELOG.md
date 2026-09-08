@@ -11,6 +11,22 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Added — rails, net labels, a buzzer and a servo.** A ground or supply
+symbol is that rail wherever it is drawn, so a lamp's cathode no longer
+needs a wire across the whole sheet; two labels carrying the same name are
+one net, which is what a schematic uses instead of a long wire. A buzzer
+sounds by the same rule a lamp lights by — and, unlike a lamp, is not asked
+for a series resistor. A servo's horn follows the duty on its signal pin.
+
+**Added — `rusty-cli`'s board probe.** `cargo run -p rusty-embed --example
+board_probe -- <project>` boots the project in the emulator with the pin
+channel attached, replays the sheet's rules over the pins the emulator
+actually reports, and says what each part did: a lamp that lit and went out
+is a lamp the firmware is driving. Then it presses every button on the
+sheet and requires the pin it reaches to move. It exits non-zero when a lamp
+wired to a GPIO never lights or a button moves nothing, so a board can be
+kept working by a machine rather than by somebody looking at it.
+
 **Changed — the sheet's parts look like the parts.** A 5 mm LED with its
 flat and its long anode leg, a resistor wearing the colour bands of its own
 value, a capacitor, a tactile switch whose cap sinks when it is pressed, a

@@ -45,6 +45,18 @@ pub enum Behaviour {
     Analog,
     /// Duty on `PWM`, direction on `IN1`/`IN2`.
     Motor,
+    /// A rail on the sheet: `rusty:GND` or `rusty:Supply`, which puts its
+    /// net at a level without a wire running all the way to the devkit.
+    Power,
+    /// A name for a net (`rusty:Label`): every label carrying the same
+    /// value is one net, however far apart they are drawn. What a
+    /// schematic uses instead of a wire across the whole sheet.
+    Label,
+    /// A sounder on one pin: it is on while its net is driven the way its
+    /// polarity says, and the panel says so rather than making a noise.
+    Buzzer,
+    /// A hobby servo: the angle follows the duty on its signal pin.
+    Servo,
     /// Drawn and wired, and nothing more is known about it.
     Other,
 }
@@ -57,6 +69,10 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
         ("rusty", "RGB_LED") => return Behaviour::Rgb,
         ("rusty", "7SEG") => return Behaviour::Seven,
         ("rusty", "Motor") => return Behaviour::Motor,
+        ("rusty", "GND" | "Supply") => return Behaviour::Power,
+        ("rusty", "Label") => return Behaviour::Label,
+        ("rusty", "Buzzer") => return Behaviour::Buzzer,
+        ("rusty", "Servo") => return Behaviour::Servo,
         _ => {}
     }
     let prefix = symbol.reference.trim_end_matches(['?', '_']);
@@ -71,6 +87,21 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
         "D" if has("A") && has("K") || symbol.name.to_uppercase().contains("LED") => Behaviour::Led,
         _ => Behaviour::Other,
     }
+}
+
+/// The rail a power symbol puts on its net, or `None` for a symbol that
+/// is not one. Ground is ground; everything else is a supply, whatever
+/// voltage its value names — the rules are DC on and off, and a symbol
+/// claiming to know 3.3 V from 5 V would be claiming more than they read.
+pub fn power_rail(symbol: &Symbol) -> Option<Rail> {
+    if behaviour_of(symbol) != Behaviour::Power {
+        return None;
+    }
+    Some(if symbol.name == "GND" {
+        Rail::Ground
+    } else {
+        Rail::Supply
+    })
 }
 
 /// What a rail is at: the two levels a supply pin can have.
@@ -278,6 +309,12 @@ pub struct Evaluation {
     pub lit: BTreeMap<PinRef, bool>,
     /// The DC level at every wired pin — `None` for a floating net.
     pub levels: BTreeMap<PinRef, Option<bool>>,
+    /// Which net each pin belongs to, as the conducting rules join them:
+    /// through wires, through resistors, through a closed switch, and
+    /// between labels that share a name. Two pins with the same number are
+    /// the same node — which is what a probe on the sheet asks, and what
+    /// tells a wire that goes somewhere from one that goes nowhere.
+    pub nets: BTreeMap<PinRef, usize>,
     pub warnings: Vec<Warning>,
 }
 
@@ -296,6 +333,20 @@ impl Evaluation {
 
     pub fn level(&self, part: &str, pin: &str) -> Option<bool> {
         self.levels.get(&PinRef::new(part, pin)).copied().flatten()
+    }
+
+    /// The net a pin sits in.
+    pub fn net_of(&self, pin: &PinRef) -> Option<usize> {
+        self.nets.get(pin).copied()
+    }
+
+    /// Every pin in a net, in a stable order — what a probe lists.
+    pub fn members(&self, net: usize) -> Vec<PinRef> {
+        self.nets
+            .iter()
+            .filter(|(_, at)| **at == net)
+            .map(|(pin, _)| pin.clone())
+            .collect()
     }
 }
 
@@ -449,6 +500,33 @@ impl<'a> Graph<'a> {
     /// joined always and all four while pressed.
     fn conducting(&mut self, wired: &UnionFind, pressed: &HashSet<String>) -> UnionFind {
         let mut uf = UnionFind(wired.0.clone());
+        // Labels first: a name is a wire drawn in words, and everything
+        // after this treats the joined pins as the one node they are.
+        let mut by_name: HashMap<String, Node> = HashMap::new();
+        for part in &self.sheet.parts {
+            if self.behaviours.get(part.reference.as_str()) != Some(&Behaviour::Label) {
+                continue;
+            }
+            let name = part.value.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let Some(symbol) = self.sheet.symbol_of(&part.reference) else {
+                continue;
+            };
+            let Some(first) = symbol.pins.first() else {
+                continue;
+            };
+            let Some(node) = self.pin_node(&part.reference, &first.number) else {
+                continue;
+            };
+            match by_name.get(name) {
+                Some(other) => uf.union(*other, node),
+                None => {
+                    by_name.insert(name.to_string(), node);
+                }
+            }
+        }
         for part in &self.sheet.parts {
             let reference = part.reference.as_str();
             match self.behaviours.get(reference) {
@@ -485,6 +563,27 @@ impl<'a> Graph<'a> {
     /// What drives each net: the rails and the reported GPIOs in it.
     fn drivers(&self, uf: &mut UnionFind, gpio: &HashMap<u8, bool>) -> HashMap<Node, Drivers> {
         let mut out: HashMap<Node, Drivers> = HashMap::new();
+        // A power symbol is a rail wherever it is drawn: the same thing the
+        // devkit's own GND pin is, without a wire across the whole sheet.
+        for part in &self.sheet.parts {
+            let Some(symbol) = self.sheet.symbol_of(&part.reference) else {
+                continue;
+            };
+            let Some(rail) = power_rail(symbol) else {
+                continue;
+            };
+            let Some(first) = symbol.pins.first() else {
+                continue;
+            };
+            let Some(node) = self.pin_node(&part.reference, &first.number) else {
+                continue;
+            };
+            let root = uf.find(node);
+            out.entry(root)
+                .or_default()
+                .rails
+                .push((rail, PinRef::new(&part.reference, &first.number)));
+        }
         for (node, pin) in self.nodes.iter().enumerate() {
             if pin.part != KIT_REFERENCE {
                 continue;
@@ -556,6 +655,7 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     let mut dc = graph.conducting(&wired, inputs.pressed);
     let drivers = graph.drivers(&mut dc, inputs.gpio);
 
+    let mut nets: BTreeMap<PinRef, usize> = BTreeMap::new();
     let mut levels: BTreeMap<PinRef, Option<bool>> = BTreeMap::new();
     let mut level_warnings: HashMap<Node, Warning> = HashMap::new();
     for node in 0..graph.nodes.len() {
@@ -568,6 +668,7 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
             level_warnings.entry(root).or_insert(warning);
         }
         levels.insert(graph.nodes[node].clone(), level);
+        nets.insert(graph.nodes[node].clone(), root);
     }
     let level_at = |pin: Option<Node>| -> Option<bool> {
         pin.and_then(|n| levels.get(&graph.nodes[n]).copied().flatten())
@@ -619,7 +720,11 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     for part in &inputs.sheet.parts {
         let reference = part.reference.as_str();
         match graph.behaviours.get(reference) {
-            Some(Behaviour::Led) => {
+            // A buzzer is a lamp that makes a noise: current one way
+            // through it and it is on. Reading it by the same rule is what
+            // lets the sheet say "sounding" without a second set of
+            // opinions about which way round the part is.
+            Some(Behaviour::Led | Behaviour::Buzzer) => {
                 let Some(symbol) = inputs.sheet.symbol_of(reference) else {
                     continue;
                 };
@@ -627,10 +732,12 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
                 // pin 2 the anode — for a diode that names neither.
                 let anode = symbol
                     .pin("A")
+                    .or_else(|| symbol.pin("+"))
                     .or_else(|| symbol.pins.get(1))
                     .map(|p| p.number.clone());
                 let cathode = symbol
                     .pin("K")
+                    .or_else(|| symbol.pin("-"))
                     .or_else(|| symbol.pins.first())
                     .map(|p| p.number.clone());
                 let (Some(anode), Some(cathode)) = (anode, cathode) else {
@@ -640,10 +747,11 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
                 let k = graph.pin_node(reference, &cathode);
                 let on = level_at(a) == Some(true) && level_at(k) == Some(false);
                 lit.insert(PinRef::new(reference, &anode), on);
-                if [a, k]
-                    .into_iter()
-                    .flatten()
-                    .any(|n| gpio_directly_on(&mut wired, n))
+                if graph.behaviours.get(reference) == Some(&Behaviour::Led)
+                    && [a, k]
+                        .into_iter()
+                        .flatten()
+                        .any(|n| gpio_directly_on(&mut wired, n))
                 {
                     warnings.push(Warning::LedWithoutResistor {
                         part: reference.to_string(),
@@ -690,9 +798,33 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     levels.extend(aliases);
     lit.extend(lit_aliases);
 
+    // The name half of the nets: a pin found by name answers with the same
+    // net as the same pin found by number.
+    let mut net_aliases: Vec<(PinRef, usize)> = Vec::new();
+    for (pin, net) in &nets {
+        if let Some(symbol) = inputs.sheet.symbol_of(&pin.part)
+            && let Some(named) = symbol.pins.iter().find(|p| p.number == pin.pin)
+            && named.name != named.number
+        {
+            net_aliases.push((PinRef::new(&pin.part, &named.name), *net));
+        }
+    }
+    for (row, spec) in inputs.rows.iter().enumerate() {
+        let by_number = PinRef::new(KIT_REFERENCE, (row + 1).to_string());
+        let by_name = PinRef::new(KIT_REFERENCE, &spec.name);
+        if let Some(net) = nets.get(&by_number)
+            && !nets.contains_key(&by_name)
+            && !net_aliases.iter().any(|(p, _)| *p == by_name)
+        {
+            net_aliases.push((by_name, *net));
+        }
+    }
+    nets.extend(net_aliases);
+
     Evaluation {
         lit,
         levels,
+        nets,
         warnings,
     }
 }
@@ -831,8 +963,20 @@ mod tests {
                 &[("1", "R"), ("2", "G"), ("3", "B"), ("4", "COM")],
             ),
             symbol("rusty", "Pot", "RV", &[("1", "1"), ("2", "W"), ("3", "3")]),
+            symbol("rusty", "GND", "#PWR", &[("1", "GND")]),
+            symbol("rusty", "Supply", "#PWR", &[("1", "VCC")]),
+            symbol("rusty", "Label", "#LBL", &[("1", "~")]),
+            symbol("rusty", "Buzzer", "BZ", &[("1", "+"), ("2", "-")]),
         ];
         sheet
+    }
+
+    /// Place a part carrying a value — a rail's name, a label's net.
+    fn place_with(sheet: &mut Sheet, reference: &str, symbol: &str, value: &str) {
+        place(sheet, reference, symbol);
+        if let Some(part) = sheet.parts.iter_mut().find(|p| p.reference == reference) {
+            part.value = value.to_string();
+        }
     }
 
     fn rows() -> Vec<Row> {
@@ -1032,6 +1176,157 @@ mod tests {
                 from: "U1.GPIO2".into(),
                 to: "D9.A".into()
             }]
+        );
+    }
+
+    /// A rail drawn on the sheet is the rail: a lamp whose cathode goes to
+    /// a ground symbol lights exactly as one wired all the way back to the
+    /// devkit's own GND pin does. That is what the symbol is for — a wire
+    /// across the whole sheet is what everybody draws it to avoid.
+    #[test]
+    fn a_power_symbol_is_a_rail_wherever_it_is_drawn() {
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R");
+        place(&mut s, "D1", "Device:LED");
+        place_with(&mut s, "GND1", "rusty:GND", "GND");
+        wire(&mut s, "U1.GPIO2", "R1.1");
+        wire(&mut s, "R1.2", "D1.A");
+        wire(&mut s, "D1.K", "GND1.GND");
+
+        let on = eval(&s, &[(2, true)], &[]);
+        assert!(on.is_lit("D1"), "the ground symbol grounds the cathode");
+        assert_eq!(on.level("D1", "K"), Some(false));
+        assert!(on.warnings.is_empty(), "{:?}", on.warnings);
+        assert!(!eval(&s, &[(2, false)], &[]).is_lit("D1"));
+
+        // And the other way up: the anode on a supply symbol, the GPIO
+        // sinking the cathode — a devkit's onboard lamp, drawn in full.
+        let mut s = sheet();
+        place(&mut s, "D2", "Device:LED");
+        place_with(&mut s, "PWR1", "rusty:Supply", "3V3");
+        wire(&mut s, "PWR1.VCC", "D2.A");
+        wire(&mut s, "D2.K", "U1.GPIO8");
+        assert!(eval(&s, &[(8, false)], &[]).is_lit("D2"));
+        assert!(!eval(&s, &[(8, true)], &[]).is_lit("D2"));
+
+        // A supply and a ground on one net is the short it always was,
+        // whether the rails come from the devkit or from symbols.
+        let mut s = sheet();
+        place(&mut s, "R2", "Device:R");
+        place_with(&mut s, "GND2", "rusty:GND", "GND");
+        place_with(&mut s, "PWR2", "rusty:Supply", "5V");
+        wire(&mut s, "GND2.GND", "R2.1");
+        wire(&mut s, "R2.2", "PWR2.VCC");
+        assert!(
+            matches!(&eval(&s, &[], &[]).warnings[..], [Warning::Short { .. }]),
+            "{:?}",
+            eval(&s, &[], &[]).warnings
+        );
+    }
+
+    /// Two labels carrying the same name are one net, however far apart
+    /// they are drawn — and two different names are two nets, which is the
+    /// half that makes the first mean anything.
+    #[test]
+    fn labels_of_the_same_name_are_one_net_and_other_names_are_not() {
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R");
+        place(&mut s, "D1", "Device:LED");
+        place_with(&mut s, "L1", "rusty:Label", "SIG");
+        place_with(&mut s, "L2", "rusty:Label", "SIG");
+        wire(&mut s, "U1.GPIO2", "L1.1");
+        wire(&mut s, "L2.1", "R1.1");
+        wire(&mut s, "R1.2", "D1.A");
+        wire(&mut s, "D1.K", "U1.GND");
+
+        let on = eval(&s, &[(2, true)], &[]);
+        assert!(on.is_lit("D1"), "the name carries the pin across the sheet");
+        assert_eq!(
+            on.net_of(&PinRef::new("L1", "1")),
+            on.net_of(&PinRef::new("L2", "1"))
+        );
+
+        // Rename one of them and the two halves are two nets again.
+        if let Some(part) = s.parts.iter_mut().find(|p| p.reference == "L2") {
+            part.value = "OTHER".to_string();
+        }
+        let split = eval(&s, &[(2, true)], &[]);
+        assert!(!split.is_lit("D1"), "a different name is a different net");
+        assert_ne!(
+            split.net_of(&PinRef::new("L1", "1")),
+            split.net_of(&PinRef::new("L2", "1"))
+        );
+
+        // A label with no name joins nothing — an empty tag is a tag
+        // somebody has not written on yet, not a net called "".
+        for part in s.parts.iter_mut() {
+            if part.reference.starts_with('L') {
+                part.value = String::new();
+            }
+        }
+        assert!(!eval(&s, &[(2, true)], &[]).is_lit("D1"));
+    }
+
+    /// The nets a probe reads: every pin the current joins is one number,
+    /// and what is not joined is not.
+    /// A buzzer is on by the lamp's rule and off by it, and — unlike a
+    /// lamp — wants no series resistor, so the sheet does not ask for one.
+    #[test]
+    fn a_buzzer_sounds_the_way_a_lamp_lights_and_needs_no_resistor() {
+        let mut s = sheet();
+        place(&mut s, "BZ1", "rusty:Buzzer");
+        wire(&mut s, "U1.GPIO4", "BZ1.+");
+        wire(&mut s, "BZ1.-", "U1.GND");
+
+        let on = eval(&s, &[(4, true)], &[]);
+        assert!(on.is_lit("BZ1"), "driven the right way round, it sounds");
+        assert!(
+            on.warnings.is_empty(),
+            "a buzzer is not a lamp missing its resistor: {:?}",
+            on.warnings
+        );
+        assert!(!eval(&s, &[(4, false)], &[]).is_lit("BZ1"));
+
+        // The other way round it is silent, which is the finding.
+        let mut s = sheet();
+        place(&mut s, "BZ2", "rusty:Buzzer");
+        wire(&mut s, "U1.GPIO4", "BZ2.-");
+        wire(&mut s, "BZ2.+", "U1.GND");
+        assert!(!eval(&s, &[(4, true)], &[]).is_lit("BZ2"));
+    }
+
+    #[test]
+    fn a_net_holds_every_pin_the_current_reaches() {
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R");
+        place(&mut s, "D1", "Device:LED");
+        place(&mut s, "C1", "Device:C");
+        wire(&mut s, "U1.GPIO2", "R1.1");
+        wire(&mut s, "R1.2", "D1.A");
+        wire(&mut s, "D1.K", "U1.GND");
+        wire(&mut s, "C1.1", "D1.A");
+
+        let e = eval(&s, &[(2, true)], &[]);
+        let net = e
+            .net_of(&PinRef::new("D1", "A"))
+            .expect("the anode is in a net");
+        let members: Vec<String> = e.members(net).iter().map(PinRef::to_string).collect();
+        // Through the resistor, and through the wire to the capacitor's
+        // near plate — but never through the capacitor itself.
+        for wanted in ["D1.A", "R1.2", "R1.1", "C1.1", "U1.GPIO2"] {
+            assert!(
+                members.contains(&wanted.to_string()),
+                "{wanted} in {members:?}"
+            );
+        }
+        assert!(
+            !members.contains(&"C1.2".to_string()),
+            "a capacitor does not join its plates: {members:?}"
+        );
+        assert_ne!(
+            e.net_of(&PinRef::new("D1", "K")),
+            Some(net),
+            "the cathode is the other side of the lamp"
         );
     }
 

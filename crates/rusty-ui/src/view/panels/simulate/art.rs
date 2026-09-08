@@ -69,6 +69,13 @@ enum Look {
     Analog,
     Display,
     Motor,
+    /// A rail: the ground symbol, or the supply arrow.
+    Ground,
+    Supply,
+    /// A name for a net, drawn as the tag a schematic uses.
+    Label,
+    Buzzer,
+    Servo,
     /// Two leads and a body: an unknown two-pin part.
     Axial,
     /// Pins down two sides.
@@ -90,6 +97,11 @@ fn look(symbol: &Symbol) -> Look {
         Behaviour::Analog => Look::Analog,
         Behaviour::Display => Look::Display,
         Behaviour::Motor => Look::Motor,
+        Behaviour::Power if symbol.name == "GND" => Look::Ground,
+        Behaviour::Power => Look::Supply,
+        Behaviour::Label => Look::Label,
+        Behaviour::Buzzer => Look::Buzzer,
+        Behaviour::Servo => Look::Servo,
         Behaviour::Other if visible(symbol).len() == 2 => Look::Axial,
         Behaviour::Other => Look::Package,
     }
@@ -361,6 +373,86 @@ pub(super) fn layout(symbol: &Symbol) -> Layout {
             }
         }
 
+        // A rail. The wire comes down into ground and up out of a supply,
+        // which is how every schematic draws them and which way round tells
+        // one from the other at a glance.
+        Look::Ground => Layout {
+            spots: pins
+                .iter()
+                .map(|pin| Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at: (0.0, -14.0),
+                    out: (0.0, -1.0),
+                })
+                .collect(),
+            bounds: (-11.0, -14.0, 11.0, 8.0),
+            lens: None,
+            face: None,
+        },
+
+        Look::Supply => Layout {
+            spots: pins
+                .iter()
+                .map(|pin| Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at: (0.0, 14.0),
+                    out: (0.0, 1.0),
+                })
+                .collect(),
+            bounds: (-11.0, -8.0, 11.0, 14.0),
+            lens: None,
+            face: None,
+        },
+
+        // A tag with the net's name in it, pointing back at the wire.
+        Look::Label => Layout {
+            spots: pins
+                .iter()
+                .map(|pin| Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at: (-16.0, 0.0),
+                    out: (-1.0, 0.0),
+                })
+                .collect(),
+            bounds: (-16.0, -9.0, 46.0, 9.0),
+            lens: None,
+            face: Some((-8.0, -8.0, 54.0, 16.0)),
+        },
+
+        // A sounder: a can with two legs, and a ring the view lights while
+        // it is being driven.
+        Look::Buzzer => Layout {
+            spots: legs_down(&pins, &spread(pins.len().max(1), 10.0), 26.0),
+            bounds: (-14.0, -16.0, 14.0, 26.0),
+            lens: Some((0.0, -3.0, 11.0)),
+            face: None,
+        },
+
+        // A servo: the case, its three wires out of the left, and a horn
+        // the view turns.
+        Look::Servo => {
+            let ys = spread(pins.len().max(1), 8.0);
+            let spots = pins
+                .iter()
+                .zip(&ys)
+                .map(|(pin, y)| Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at: (-40.0, *y),
+                    out: (-1.0, 0.0),
+                })
+                .collect();
+            Layout {
+                spots,
+                bounds: (-40.0, -20.0, 30.0, 20.0),
+                lens: None,
+                face: Some((-16.0, -14.0, 28.0, 28.0)),
+            }
+        }
+
         // Anything else: a package, pins down the two long sides in the
         // order the library lists them — a chip, which is what most parts
         // rusty has never heard of actually are.
@@ -545,6 +637,52 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
             ));
         }
 
+        Look::Ground => {
+            legs(&mut out, (0.0, -8.0));
+            out.push_str(&format!(
+                r##"<polyline points="-9,-8 9,-8 0,2" fill="none" stroke="{LEAD}" stroke-width="1.6" stroke-linejoin="round"/>
+<path d="M -5.5 -3.5 H 5.5" stroke="{LEAD}" stroke-width="1.2"/>"##
+            ));
+        }
+
+        Look::Supply => {
+            legs(&mut out, (0.0, 8.0));
+            out.push_str(&format!(
+                r##"<polyline points="-8,2 0,-6 8,2" fill="none" stroke="{LEAD}" stroke-width="1.6" stroke-linejoin="round"/>
+<text x="0" y="-9" text-anchor="middle" font-family="ui-monospace" font-size="8" fill="{LEAD}">{}</text>"##,
+                escape(&short(value))
+            ));
+        }
+
+        Look::Label => {
+            legs(&mut out, (-8.0, 0.0));
+            out.push_str(&format!(
+                r##"<polygon points="-8,0 -2,-8 46,-8 46,8 -2,8" fill="#1d2733" stroke="#5fd0c8" stroke-width="1"/>
+<text x="4" y="3" font-family="ui-monospace" font-size="9" fill="#5fd0c8">{}</text>"##,
+                escape(&short(value))
+            ));
+        }
+
+        Look::Buzzer => {
+            legs(&mut out, (0.0, 6.0));
+            out.push_str(&format!(
+                r##"<circle cx="0" cy="-3" r="13" fill="{PLASTIC}" stroke="{PLASTIC_EDGE}" stroke-width="1"/>
+<circle cx="0" cy="-3" r="3" fill="#0d1014"/>
+<text x="-9" y="-9" font-family="ui-monospace" font-size="7" fill="#98a1ae">+</text>"##
+            ));
+        }
+
+        Look::Servo => {
+            legs(&mut out, (24.0, 0.0));
+            out.push_str(&format!(
+                r##"<rect x="-24" y="-14" width="42" height="28" rx="2" fill="{PLASTIC}" stroke="{PLASTIC_EDGE}" stroke-width="1"/>
+<rect x="-24" y="-18" width="10" height="36" rx="2" fill="#2b3038"/>
+<rect x="8" y="-18" width="10" height="36" rx="2" fill="#2b3038"/>
+<circle cx="18" cy="0" r="10" fill="#2b3038" stroke="{PLASTIC_EDGE}" stroke-width="1"/>
+<rect x="18" y="-16" width="12" height="4" rx="2" fill="#4a515c"/>"##
+            ));
+        }
+
         Look::Package => {
             legs(&mut out, (22.0, 0.0));
             let (_, y0, _, y1) = plan.bounds;
@@ -561,6 +699,13 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
         }
     }
     out
+}
+
+/// Whether the drawing already carries the part's value, so the sheet
+/// does not print it underneath as well: a rail and a label are their
+/// value, and a second copy of it under the symbol reads as a mistake.
+pub(super) fn draws_own_value(symbol: &Symbol) -> bool {
+    matches!(look(symbol), Look::Supply | Look::Label | Look::Ground)
 }
 
 /// A value trimmed to what fits on a small body.
@@ -734,6 +879,16 @@ mod tests {
                 &[("1", "PWM"), ("2", "IN1"), ("3", "IN2")],
             ),
             sym("lcsc", "C2286", "LED", &[("1", "A"), ("2", "K")]),
+            sym("rusty", "GND", "#PWR", &[("1", "GND")]),
+            sym("rusty", "Supply", "#PWR", &[("1", "VCC")]),
+            sym("rusty", "Label", "#LBL", &[("1", "~")]),
+            sym("rusty", "Buzzer", "BZ", &[("1", "+"), ("2", "-")]),
+            sym(
+                "rusty",
+                "Servo",
+                "M",
+                &[("1", "SIG"), ("2", "VCC"), ("3", "GND")],
+            ),
         ]
     }
 
@@ -823,7 +978,7 @@ mod tests {
             return;
         };
         let mut svg = String::from(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="320" viewBox="0 0 1180 320"><rect width="1180" height="320" fill="#101216"/>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="480" viewBox="0 0 1180 480"><rect width="1180" height="480" fill="#101216"/>"##,
         );
         for (index, symbol) in every_part().into_iter().enumerate() {
             let x = 70.0 + (index % 6) as f64 * 185.0;

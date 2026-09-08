@@ -30,6 +30,10 @@ fn glyph(symbol: &Symbol) -> &'static str {
         Behaviour::Pot => "size-3.5 rounded-full bg-line-strong ring-2 ring-[#c9a227]",
         Behaviour::Analog => "h-3.5 w-3 rounded-[2px] border border-line-strong",
         Behaviour::Motor => "size-3.5 rounded-full border border-line-strong",
+        Behaviour::Power => "h-3.5 w-3.5 border-b-2 border-[#9aa2ae]",
+        Behaviour::Label => "h-2.5 w-4 rounded-[2px] border border-[#5fd0c8]",
+        Behaviour::Buzzer => "size-3.5 rounded-full bg-[#20242b] ring-1 ring-line-strong",
+        Behaviour::Servo => "h-3 w-4 rounded-[2px] bg-[#20242b] ring-1 ring-line-strong",
         Behaviour::Other => "h-3 w-3.5 rounded-[2px] border border-[#d8a24b]",
     }
 }

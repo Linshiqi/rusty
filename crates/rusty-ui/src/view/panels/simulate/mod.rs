@@ -1541,6 +1541,76 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     }
                                                         .into_any()
                                                 }
+                                                // A sounder says it is
+                                                // sounding: rings rather than
+                                                // a noise nobody asked their
+                                                // machine to make.
+                                                Some(Behaviour::Buzzer) => {
+                                                    let Some((lx, ly, r)) = plan.lens else {
+                                                        return ().into_any();
+                                                    };
+                                                    let (cx, cy) = turned((lx, ly));
+                                                    let on = is_lit.get();
+                                                    view! {
+                                                        <circle
+                                                            cx=cx
+                                                            cy=cy
+                                                            r=r
+                                                            fill="none"
+                                                            stroke=if on { "#ffd75c" } else { "#4a515c" }
+                                                            stroke-width=if on { "2.4" } else { "1" }
+                                                            stroke-dasharray="3 3"
+                                                            style="pointer-events: none"
+                                                        >
+                                                            {on
+                                                                .then(|| {
+                                                                    view! {
+                                                                        <animate
+                                                                            attributeName="r"
+                                                                            values=format!("{};{}", r * 0.6, r)
+                                                                            dur="0.5s"
+                                                                            repeatCount="indefinite"
+                                                                        />
+                                                                    }
+                                                                })}
+                                                        </circle>
+                                                    }
+                                                        .into_any()
+                                                }
+                                                // The horn follows the duty on
+                                                // the signal pin, which is what
+                                                // a servo is told and all a
+                                                // sheet can honestly show.
+                                                Some(Behaviour::Servo) => {
+                                                    let Some((fx, fy, fw, fh)) = plan.face else {
+                                                        return ().into_any();
+                                                    };
+                                                    let (cx, cy) =
+                                                        turned((fx + fw / 2.0 + 18.0, fy + fh / 2.0));
+                                                    let reference = reference.get();
+                                                    let duty = gpio_for(&reference, "SIG").and_then(|gpio| {
+                                                        state.sim.pwm.with(|pwm| pwm.get(&gpio).copied())
+                                                    });
+                                                    let angle = duty.map(|d| -90.0 + f64::from(d) * 180.0);
+                                                    let transform = format!(
+                                                        "translate({cx} {cy}) rotate({:.1})",
+                                                        angle.unwrap_or(0.0)
+                                                    );
+                                                    view! {
+                                                        <g transform=transform style="pointer-events: none">
+                                                            <rect
+                                                                x="-2"
+                                                                y="-16"
+                                                                width="4"
+                                                                height="18"
+                                                                rx="2"
+                                                                fill=if angle.is_some() { "#e3e7ec" } else { "#5a626e" }
+                                                            />
+                                                            <circle cx="0" cy="0" r="3" fill="#9aa2ae" />
+                                                        </g>
+                                                    }
+                                                        .into_any()
+                                                }
                                                 // The cap sinks as well as
                                                 // colouring: a tactile switch
                                                 // moves, and the eye reads the
@@ -1662,14 +1732,27 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     <text x="0" y="3" text-anchor="middle" font-family="ui-monospace" font-size="7" fill="#e05d38" style="pointer-events: none">{id}</text>
                                                 }
                                             });
+                                            // A rail and a label are their
+                                            // own value, printed inside the
+                                            // drawing; a second copy under it
+                                            // reads as a mistake. Their
+                                            // reference is `#PWR`, which
+                                            // nobody needs to see either.
+                                            let own = symbol
+                                                .with(|s| s.as_ref().is_some_and(art::draws_own_value));
                                             view! {
                                                 {missing}
-                                                <text x=cx y=top text-anchor="middle" font-family="ui-monospace" font-size="9" fill="#5fd0c8" style="pointer-events: none">
-                                                    {move || reference.get()}
-                                                </text>
-                                                <text x=cx y=bottom text-anchor="middle" font-family="ui-monospace" font-size="8" fill="#d7dce3" style="pointer-events: none">
-                                                    {move || value.get()}
-                                                </text>
+                                                {(!own)
+                                                    .then(|| {
+                                                        view! {
+                                                            <text x=cx y=top text-anchor="middle" font-family="ui-monospace" font-size="9" fill="#5fd0c8" style="pointer-events: none">
+                                                                {move || reference.get()}
+                                                            </text>
+                                                            <text x=cx y=bottom text-anchor="middle" font-family="ui-monospace" font-size="8" fill="#d7dce3" style="pointer-events: none">
+                                                                {move || value.get()}
+                                                            </text>
+                                                        }
+                                                    })}
                                             }
                                                 .into_any()
                                         };
