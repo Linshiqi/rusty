@@ -28,9 +28,11 @@ honestly claim:
 - **And it can never interrupt.** Firmware that asks to be woken by an edge
   — how nearly every real button is read — waits for ever, which looks like
   a hang in the user's own code rather than a hole in the emulator.
-- **And there is no analog side at all.** Nothing answers at the SAR ADC's
-  registers either, so `adc.read_oneshot()` polls a done bit nothing can set
-  and never returns. Same shape of failure, in the user's own `read` call.
+- **And there is no analog side, and no bus.** Nothing answers at the SAR
+  ADC's registers or the I2C master's either, so `adc.read_oneshot()` polls a
+  done bit nothing can set and a driver's first transaction waits on an
+  interrupt nothing can raise. Same shape of failure, in the user's own
+  `read` call.
 
 `esp32_gpio.c` here fills in the model: the output and enable registers,
 their set/clear aliases, the input register, and the interrupt half — the
@@ -117,6 +119,31 @@ reports what was taken off it — per *change*, because a driver polling in a
 loop converts thousands of times a second and a line each would drown the
 channel the console and the board share.
 
+## And the bus
+
+Almost every real board has something on I2C: a display, an IMU, a
+temperature sensor. Nothing was mapped at the C3's I2C master either, so the
+first transaction a driver ran waited on an interrupt nothing could raise —
+the same shape of failure as the converter, inside the user's own `read`.
+
+The master is modelled as a third region on the same device, and its bus is
+**register files the host declares**. A sensor is a set of registers a driver
+reads and a display is a stream of bytes somebody wants to see; 256 bytes and
+a pointer serve both. `i2c 68:75=68` puts a byte behind an address,
+`i2c 3c=+` declares one with nothing to read, `i2c 3c=-` takes it off.
+
+**An address nobody declared is not answered.** The transaction NACKs, which
+is what a bus scan needs and what tells "the part is not on this board" from
+"the part is there and quiet". Answering zeros instead would make every scan
+find every address — worse than finding none, because firmware that probes
+for an optional device would find it every time.
+
+`[rusty:i2c@<us>] 3c w 00ae` reports a write, `… 68 r 68` a read and
+`… 68 nak` an address that answered nothing. The same transaction twice in a
+row is said once: a driver reading an accelerometer at a kilohertz is the
+ordinary case, and a line each would put twenty kilobytes a second down the
+channel the console and the board share.
+
 ## Building it
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
@@ -130,7 +157,7 @@ platform as an artifact.
 
 ## What it is proven to do
 
-Eight gates, each able to fail:
+Nine gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -214,6 +241,20 @@ the two and reports the lead.
    which is why the probe's poll is bounded and prints `the conversion never
    finished` instead of spinning: a witness that reports a hang as silence
    is no witness.
+
+9. A **device on the I2C bus** answers the firmware's driver. `i2c-probe/`
+   watches three addresses, each carrying its own assertion: a sensor whose
+   registers the host loaded, which must answer *those bytes* and answer six
+   of them from one register onwards; a display, whose writes must reach the
+   host; and an address nobody declared, which must **not** answer. The last
+   is the one the others cannot make — a bus where every address
+   acknowledges is a bus where a missing part looks exactly like a present
+   one. Then the sensor is taken off the bus and must stop answering, which
+   a scan that remembered rather than asked would fail.
+
+   Its `SoftwareTimeout` is there for the same reason the analog probe's
+   poll is bounded: without it the driver's first transaction hung, and the
+   probe reported the hole as silence.
 
 
 ## What each desktop needed

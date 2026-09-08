@@ -93,6 +93,45 @@ pub fn parse_adc_report(line: &str) -> Option<AdcReport> {
     })
 }
 
+/// One `[rusty:i2c]` line: a transaction on the emulator's bus.
+///
+/// The emulator says this; no firmware does. It is what turns "the driver
+/// returned an error" into "the address never acknowledged", and what lets
+/// a panel show a display's traffic without the firmware being written to
+/// narrate it. `verb` is `w`, `r`, `nak` or `full`, kept as text because
+/// the set is the emulator's to grow and an unknown one should reach the
+/// dock unchanged rather than be dropped as unparseable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct I2cReport {
+    pub at_us: Option<u64>,
+    pub address: u8,
+    pub verb: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Parse `[rusty:i2c@1234] 3c w 00ae`.
+pub fn parse_i2c_report(line: &str) -> Option<I2cReport> {
+    let rest = line.trim().strip_prefix("[rusty:i2c")?;
+    let (at_us, rest) = split_stamp(rest)?;
+    let mut parts = rest.split_whitespace();
+    let address = u8::from_str_radix(parts.next()?, 16).ok()?;
+    let verb = parts.next()?.to_string();
+    let hex = parts.next().unwrap_or("");
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks(2) {
+        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+    }
+    Some(I2cReport {
+        at_us,
+        address,
+        verb,
+        bytes,
+    })
+}
+
 /// One `[rusty:pwm]` line: how hard a pin is being driven, not merely
 /// whether it is high.
 ///
@@ -631,6 +670,47 @@ mod tests {
         );
         assert_eq!(parse_adc_report("[rusty:gpio] 3=1"), None);
         assert_eq!(parse_adc_report("I (44) boot: Loaded app"), None);
+    }
+
+    /// A transaction on the bus, hex throughout, with the verb kept as text
+    /// so a new one reaches the dock rather than being dropped.
+    #[test]
+    fn an_i2c_report_carries_the_address_the_verb_and_the_bytes() {
+        assert_eq!(
+            parse_i2c_report("[rusty:i2c@2233716] 3c w 00ae"),
+            Some(I2cReport {
+                at_us: Some(2_233_716),
+                address: 0x3c,
+                verb: "w".into(),
+                bytes: vec![0x00, 0xae],
+            })
+        );
+        assert_eq!(
+            parse_i2c_report("[rusty:i2c@10] 68 nak"),
+            Some(I2cReport {
+                at_us: Some(10),
+                address: 0x68,
+                verb: "nak".into(),
+                bytes: Vec::new(),
+            }),
+            "an address that answered nothing carries no bytes"
+        );
+        assert_eq!(
+            parse_i2c_report("[rusty:i2c@10] 68 r 0102030405"),
+            Some(I2cReport {
+                at_us: Some(10),
+                address: 0x68,
+                verb: "r".into(),
+                bytes: vec![1, 2, 3, 4, 5],
+            })
+        );
+        assert_eq!(
+            parse_i2c_report("[rusty:i2c@10] 68 r 010"),
+            None,
+            "half a byte is not a byte"
+        );
+        assert_eq!(parse_i2c_report("[rusty:adc@10] 3=2048"), None);
+        assert_eq!(parse_i2c_report("I (44) boot: Loaded app"), None);
     }
 
     #[test]

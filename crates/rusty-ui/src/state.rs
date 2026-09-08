@@ -1177,6 +1177,15 @@ pub struct Sim {
     pub sensor_values: RwSignal<HashMap<String, Vec<f32>>>,
     /// Raw ADC counts the panel is holding on each pin.
     pub analog: RwSignal<HashMap<u8, u16>>,
+    /// The last transactions on the emulator's I2C bus, oldest first and
+    /// capped, from `[rusty:i2c]`.
+    ///
+    /// A list and not a map: what a bus is worth showing is its *traffic* —
+    /// a display's stream of bytes, a driver's probe that got no answer —
+    /// and the last state per address would lose exactly that. Only rusty's
+    /// build of QEMU fills it, so empty means either an idle bus or an
+    /// emulator that has none.
+    pub i2c: RwSignal<Vec<rusty_embed::I2cReport>>,
     /// Raw ADC counts the firmware's own converter has *read* off each pin,
     /// from `[rusty:adc]` — the return half of [`Self::analog`].
     ///
@@ -1524,6 +1533,7 @@ impl AppState {
                 sensor_values: RwSignal::new(std::collections::HashMap::new()),
                 analog: RwSignal::new(std::collections::HashMap::new()),
                 adc: RwSignal::new(std::collections::HashMap::new()),
+                i2c: RwSignal::new(Vec::new()),
                 plant: RwSignal::new(rusty_embed::Plant::default()),
                 plant_closed: RwSignal::new(false),
                 plant_gen: RwSignal::new(0),

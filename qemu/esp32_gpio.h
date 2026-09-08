@@ -102,9 +102,12 @@ REG32(GPIO_STATUS1_W1TC, 0x0058)
 #define ESP32_STRAP_MODE_FLASH_BOOT 0x12
 #define ESP32_STRAP_MODE_UART_BOOT  0x0f
 
-/* Longest host line worth accepting: "39=1\n" and slack. Anything longer is
- * garbage and gets dropped rather than truncated into a different command. */
-#define ESP32_GPIO_HOST_LINE 32
+/* Longest host line worth accepting. A pin or an analog value needs a
+ * handful of characters; an I2C device declaring a run of registers needs
+ * two characters a byte, so the buffer is sized for a page of them. Anything
+ * longer is dropped rather than truncated into a different command — a
+ * truncated hex string is a valid, wrong one. */
+#define ESP32_GPIO_HOST_LINE 512
 
 /* Highest pin number any part in this family has, plus one. The parts with
  * fewer simply never touch the ones above their count. */
@@ -163,6 +166,102 @@ REG32(SARADC_INT_CLR, 0x004c)
  * not as zero. */
 #define ESP32_SARADC_FULL_SCALE 0xfff
 
+/*
+ * The I2C master, which this device also answers for.
+ *
+ * The third peripheral in this file and the last that belongs here, for the
+ * reason the second does: everything in it exists to carry the host's view
+ * of the board, and they share one socket. Three peripherals would otherwise
+ * mean three chardevs, three protocols and three readers on rusty's side —
+ * and the one rule that keeps the simulator honest is that the board's
+ * traffic is parsed in exactly one place.
+ *
+ * A master and no bus. The devices on it are a register file each, declared
+ * by the host over the same channel: a sensor is a set of registers a
+ * driver reads, a display is a stream of bytes somebody wants to see, and
+ * both are served by 256 bytes and a pointer. An address the host never
+ * declared is *not* answered — the transaction NACKs, which is what a bus
+ * scan needs and what tells a missing part from a silent one.
+ *
+ * Offsets from esp-idf's soc/esp32c3/i2c_reg.h.
+ */
+#define ESP32_I2C_REGION 0x1000
+#define ESP32_I2C_WORDS (ESP32_I2C_REGION / 4)
+
+REG32(I2C_CTR, 0x0004)
+REG32(I2C_SR, 0x0008)
+REG32(I2C_FIFO_CONF, 0x0018)
+REG32(I2C_DATA, 0x001c)
+REG32(I2C_INT_RAW, 0x0020)
+REG32(I2C_INT_CLR, 0x0024)
+REG32(I2C_INT_ENA, 0x0028)
+REG32(I2C_INT_STATUS, 0x002c)
+REG32(I2C_COMD0, 0x0058)
+
+/* Eight command slots, each holding one step of a transaction. */
+#define ESP32_I2C_COMMANDS 8
+
+/* `CTR`: `TRANS_START` is write-triggered and runs the command list. */
+#define ESP32_I2C_TRANS_START (1u << 5)
+
+/* `FIFO_CONF`: the two resets, both of which the driver sets and clears
+ * again — so the model acts on the bit going up. */
+#define ESP32_I2C_RX_FIFO_RST (1u << 12)
+#define ESP32_I2C_TX_FIFO_RST (1u << 13)
+
+/* `SR`: what the driver reads to find out how the transaction went.
+ * `RESP_REC` *set* is an ACK — a transaction that completed with it clear
+ * is how esp-hal reports a device that did not answer its data. */
+#define ESP32_I2C_SR_RESP_REC (1u << 0)
+#define ESP32_I2C_SR_BUS_BUSY (1u << 4)
+#define ESP32_I2C_SR_RXFIFO_CNT_SHIFT 8
+#define ESP32_I2C_SR_TXFIFO_CNT_SHIFT 18
+
+/* The interrupt bits, shared by `INT_RAW`, `INT_CLR`, `INT_ENA` and
+ * `INT_STATUS`. */
+#define ESP32_I2C_INT_END_DETECT (1u << 3)
+#define ESP32_I2C_INT_TRANS_COMPLETE (1u << 7)
+#define ESP32_I2C_INT_NACK (1u << 10)
+
+/* A command word: an op code, how many bytes it moves, and a done bit the
+ * driver waits on. */
+#define ESP32_I2C_CMD_DONE (1u << 31)
+#define ESP32_I2C_CMD_OP_SHIFT 11
+#define ESP32_I2C_CMD_OP_MASK 0x7
+#define ESP32_I2C_CMD_BYTES_MASK 0xff
+
+#define ESP32_I2C_OP_RSTART 0
+#define ESP32_I2C_OP_WRITE 1
+#define ESP32_I2C_OP_READ 2
+#define ESP32_I2C_OP_STOP 3
+#define ESP32_I2C_OP_END 4
+
+/* The hardware FIFOs are 32 bytes each on this part. Modelling the depth
+ * rather than an unbounded queue is deliberate: a driver that queued more
+ * than the silicon holds would work here and fail on the desk. */
+#define ESP32_I2C_FIFO 32
+
+/* How many devices the host may put on the bus. Sixteen is more than any
+ * board here has and keeps the whole thing a few kilobytes. */
+#define ESP32_I2C_DEVICES 16
+
+/* Longest report a transaction produces: an address, a verb and two
+ * characters for each of the FIFO's bytes. */
+#define ESP32_I2C_REPORT (2 * ESP32_I2C_FIFO + 16)
+
+/* One device: an address and the 256 registers behind it.
+ *
+ * A pointer, because that is what an I2C sensor is: a write of one byte
+ * moves it, and a read takes bytes from there onwards. A display ignores
+ * the pointer and cares only that its writes were seen, which the same
+ * model gives for free. */
+typedef struct Esp32I2cDevice {
+    bool present;
+    uint8_t address;
+    uint8_t pointer;
+    uint8_t regs[256];
+} Esp32I2cDevice;
+
 typedef struct Esp32GpioState {
     SysBusDevice parent_obj;
 
@@ -214,6 +313,33 @@ typedef struct Esp32GpioState {
      * satisfied by whatever a driver happened to write there. */
     uint16_t adc_data[2];
     int adc_pin[2];
+
+    /* The I2C master, and the devices the host has put on its bus. */
+    MemoryRegion i2c_iomem;
+    uint32_t i2c_reg[ESP32_I2C_WORDS];
+    Esp32I2cDevice i2c_devices[ESP32_I2C_DEVICES];
+    uint8_t i2c_tx[ESP32_I2C_FIFO];
+    uint8_t i2c_rx[ESP32_I2C_FIFO];
+    /* Written by the guest and taken by the engine; produced by the engine
+     * and read by the guest. Two indices each, because the count the status
+     * register reports is what is *left*, not what was put in. */
+    unsigned i2c_tx_len;
+    unsigned i2c_tx_at;
+    unsigned i2c_rx_len;
+    unsigned i2c_rx_at;
+    /* Held across an `END`, which pauses a transaction rather than ending
+     * it: the bus is still held and the next start carries no address, so a
+     * read longer than the FIFO continues to the same device. Losing this is
+     * a long read that silently addresses nobody after its first thirty-two
+     * bytes. The *direction* is not kept, because the command list says it —
+     * a `READ` step reads and a `WRITE` step writes, and the address byte's
+     * low bit is the driver telling the bus what its own next command
+     * already says. */
+    int i2c_address;
+    bool i2c_expect_address;
+    /* The last transaction reported, without its timestamp, so the same one
+     * repeated is said once. */
+    char i2c_last_report[ESP32_I2C_REPORT];
 } Esp32GpioState;
 
 typedef struct Esp32GpioClass {

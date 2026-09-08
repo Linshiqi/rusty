@@ -1048,6 +1048,149 @@ jobs:
           finally:
               qemu.kill()
 
+      - name: Build the bus probe and make its image
+        working-directory: qemu/i2c-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/i2c-probe \
+            target/sim/flash.bin
+
+      # The bus almost every real board has something on. Three addresses,
+      # each carrying its own assertion: a sensor whose registers the host
+      # loaded, a display whose writes the host must see, and an address
+      # nobody declared, which must **not** answer. The last is the one the
+      # others cannot make — a bus where every address acknowledges is a bus
+      # where a missing part looks exactly like a present one.
+      #
+      # Measured on the stock build before the model existed: `scan -`, and
+      # the driver's transactions timing out. Without the software timeout
+      # the probe sets, it hung instead, silently, inside `i2c.read`.
+      - name: A device on the bus answers the firmware's driver
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/i2c-probe/target/sim/flash.bin"
+          SERIAL = "i2c-serial.log"
+          PORT = 5558
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          # What the model says happened on the bus, off the pin channel.
+          # The firmware's own account is the serial log; agreement between
+          # the two is the evidence, as everywhere else here.
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[i2c]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::bus: {line.replace('%', '%25')[:900]}")
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("i2c-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              settle("[i2c] listening on the bus", 60, "the bus probe never booted")
+
+              # Before anything is declared the bus is empty, and the probe
+              # has to say so: an empty scan is the state every run starts in
+              # and the one a model that answered everything would never
+              # report.
+              settle("[i2c] scan -", 30, "the probe found something on an empty bus")
+              settle("[i2c] 50 did not answer, which is right", 30,
+                     "an address nobody declared answered anyway")
+              print("booted, with nothing on the bus")
+
+              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:i2c"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              # A sensor with an identity byte and six bytes of sample, and a
+              # display with nothing to read. 0x50 stays undeclared.
+              link.sendall(b"i2c 68:75=68\n")
+              link.sendall(b"i2c 68:3b=010203040506\n")
+              link.sendall(b"i2c 3c=+\n")
+
+              settle("[i2c] scan 3c,68", 30,
+                     "the host put two devices on the bus and the firmware did "
+                     "not find them")
+              settle("[i2c] who=68", 30,
+                     "the sensor answered its identity register with something "
+                     "other than what the host put there")
+              settle("[i2c] burst=010203040506", 30,
+                     "a six-byte read did not return the six bytes the host "
+                     "loaded — a model answering one byte six times fails here "
+                     "and passes every shorter read")
+              settle("[i2c] wrote 00ae", 30,
+                     "the firmware could not write to the display")
+
+              # And taken off the bus, it stops answering. A scan that
+              # remembered rather than asked would pass everything above.
+              link.sendall(b"i2c 68=-\n")
+              settle("[i2c] scan 3c", 30,
+                     "the host took the sensor off the bus and the firmware "
+                     "still found it")
+
+              if "answered and nobody put it there" in read():
+                  stop("an address nobody declared acknowledged at some point")
+
+              # The model's own account has to carry the display's bytes: the
+              # firmware saying it wrote them and the emulator saying it
+              # carried them are two different claims.
+              if not any(re.search(r"\] 3c w 00ae$", line) for line in traffic):
+                  stop("the firmware wrote to the display and the model never "
+                       "said it carried the bytes — one of the two accounts is "
+                       "wrong")
+              print(f"the bus works both ways; the model reported "
+                    f"{len(traffic)} transactions")
+          finally:
+              qemu.kill()
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run

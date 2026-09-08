@@ -225,6 +225,13 @@ fn warning_text(warning: &Warning) -> String {
         Warning::Short { pins } => t!("simulate.warning-short", pins = pins.join(", ")),
         Warning::Conflict { pins } => t!("simulate.warning-conflict", pins = pins.join(", ")),
         Warning::SwitchDrivesNothing { part } => t!("simulate.warning-switch", part = part),
+        Warning::BusAddressUnreadable { part, value } => {
+            t!("simulate.warning-bus-address", part = part, value = value)
+        }
+        Warning::BusRegistersUnreadable { part, value } => {
+            t!("simulate.warning-bus-registers", part = part, value = value)
+        }
+        Warning::BusNotWired { part } => t!("simulate.warning-bus-wiring", part = part),
     }
 }
 
@@ -2836,6 +2843,45 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                 .collect()
                         });
                         let analog_max = part.inst.props.get("max").cloned().unwrap_or_default();
+                        // The bus fields are offered to a part that has the
+                        // pins for it and to no other: a lamp with an I2C
+                        // address is a claim about a part that cannot carry
+                        // one, and the emulator would honour it.
+                        let on_a_bus = part
+                            .pins()
+                            .iter()
+                            .any(|pin| pin.name.eq_ignore_ascii_case("SDA"));
+                        let bus_addr = part.inst.props.get("addr").cloned().unwrap_or_default();
+                        let bus_regs = part.inst.props.get("regs").cloned().unwrap_or_default();
+                        // What this address has actually done on the bus, most
+                        // recent last. The point of showing it beside the
+                        // fields is that "the slider does nothing" and "the
+                        // firmware never asked" look identical without it.
+                        let bus_address = u8::from_str_radix(
+                            bus_addr.trim().trim_start_matches("0x"),
+                            16,
+                        )
+                        .ok();
+                        let bus_traffic = move || {
+                            let Some(address) = bus_address else {
+                                return Vec::new();
+                            };
+                            state.sim.i2c.with(|bus| {
+                                bus.iter()
+                                    .filter(|report| report.address == address)
+                                    .rev()
+                                    .take(6)
+                                    .map(|report| {
+                                        let bytes: String = report
+                                            .bytes
+                                            .iter()
+                                            .map(|b| format!("{b:02x}"))
+                                            .collect();
+                                        format!("{} {bytes}", report.verb)
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                        };
 
                         view! {
                             <div class="flex flex-col gap-2 p-3">
@@ -2928,6 +2974,60 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
                                             />
                                         </label>
+                                    }
+                                })}
+                                {on_a_bus.then(|| {
+                                    view! {
+                                        <label class="flex items-center gap-2 text-footnote text-label-2">
+                                            <span class="shrink-0">{t!("simulate.bus-address")}</span>
+                                            <input
+                                                type="text"
+                                                title=t!("simulate.bus-address-hint")
+                                                placeholder="68"
+                                                prop:value=bus_addr.clone()
+                                                on:change=move |event| {
+                                                    checkpoint();
+                                                    let text = event_target_value(&event);
+                                                    parts.update(|list| edit::set_prop(list, index, "addr", &text));
+                                                    dirty.set(true);
+                                                }
+                                                class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            />
+                                        </label>
+                                        <label class="flex items-center gap-2 text-footnote text-label-2">
+                                            <span class="shrink-0">{t!("simulate.bus-registers")}</span>
+                                            <input
+                                                type="text"
+                                                title=t!("simulate.bus-registers-hint")
+                                                placeholder="75=68,3b=010203040506"
+                                                prop:value=bus_regs.clone()
+                                                on:change=move |event| {
+                                                    checkpoint();
+                                                    let text = event_target_value(&event);
+                                                    parts.update(|list| edit::set_prop(list, index, "regs", &text));
+                                                    dirty.set(true);
+                                                }
+                                                class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            />
+                                        </label>
+                                        {move || {
+                                            let traffic = bus_traffic();
+                                            (!traffic.is_empty()).then(|| {
+                                                view! {
+                                                    <div class="flex flex-col gap-0.5">
+                                                        <span class="text-caption text-label-4">
+                                                            {t!("simulate.bus-traffic")}
+                                                        </span>
+                                                        {traffic
+                                                            .into_iter()
+                                                            .map(|line| view! {
+                                                                <p class="font-mono text-caption text-label-3">{line}</p>
+                                                            })
+                                                            .collect_view()}
+                                                    </div>
+                                                }
+                                            })
+                                        }}
                                     }
                                 })}
                                 <div class="flex flex-col gap-1">

@@ -211,6 +211,14 @@ impl PinChannel {
         self.say(&analog_pin_line(pin, count));
     }
 
+    /// Put a device on the emulator's I2C bus: the address first so it
+    /// acknowledges even with nothing behind it, then each run of registers.
+    pub fn bus_device(&self, device: &rusty_embed::nets::BusDevice) {
+        for line in bus_device_lines(device) {
+            self.say(&line);
+        }
+    }
+
     fn say(&self, line: &str) {
         use std::io::Write;
         if let Ok(mut socket) = self.out.lock()
@@ -242,6 +250,27 @@ fn pin_line(pin: u32, level: u8) -> String {
 /// converter the firmware actually samples.
 fn analog_pin_line(pin: u32, count: u16) -> String {
     format!("A{pin}={count}\n")
+}
+
+/// The pin channel's lines for one I2C device: `i2c 68=+` and then
+/// `i2c 68:75=68` per run of registers.
+///
+/// The bare declaration first and always, even for a device with registers.
+/// A device that only ever appeared through a register write would not exist
+/// until it had one, and a display — which nobody reads from — would then
+/// never be on the bus at all.
+fn bus_device_lines(device: &rusty_embed::nets::BusDevice) -> Vec<String> {
+    let address = device.address;
+    let mut lines = vec![format!("i2c {address:02x}=+\n")];
+    for (at, bytes) in &device.regs {
+        let mut line = format!("i2c {address:02x}:{at:02x}=");
+        for byte in bytes {
+            line.push_str(&format!("{byte:02x}"));
+        }
+        line.push('\n');
+        lines.push(line);
+    }
+    lines
 }
 
 /// The pin level a button state means: pressed is high, unless the board
@@ -282,6 +311,7 @@ fn open_pin_channel(
     feed: Channel<LogLine>,
     low_when_pressed: std::collections::HashSet<u32>,
     analog_start: Vec<(u32, u16)>,
+    bus_start: Vec<rusty_embed::nets::BusDevice>,
 ) -> PinChannel {
     use std::io::{BufRead, BufReader};
 
@@ -321,6 +351,9 @@ fn open_pin_channel(
         // nothing on them and no way to find out.
         for (pin, count) in &analog_start {
             handle_for_start.analog(*pin, *count);
+        }
+        for device in &bus_start {
+            handle_for_start.bus_device(device);
         }
 
         let mut lines = BufReader::new(reader)
@@ -573,6 +606,20 @@ pub async fn run_simulation(
         })
         .unwrap_or_default();
 
+    // And what is on the I2C bus. Same reason and same moment: the emulator
+    // starts with an empty bus and only the host knows what the sheet says
+    // is on it. Every device is declared even when it answers zeros — being
+    // *there* is what a driver probes for, and an address that acknowledges
+    // is a different fact from one that has registers.
+    let bus_start: Vec<nets::BusDevice> = plan
+        .board
+        .as_ref()
+        .map(|sheet| {
+            let rows = simulate::kit_rows_for(&root, &sheet.chip);
+            nets::bus_devices(sheet, &rows).0
+        })
+        .unwrap_or_default();
+
     // A debug run freezes the CPU at reset so breakpoints can be placed before
     // the first instruction. With no gdb to place them, that freeze is
     // permanent: a blank board, a live QEMU, and nothing anywhere saying why.
@@ -698,6 +745,7 @@ pub async fn run_simulation(
                     on_line.clone(),
                     low_when_pressed.clone(),
                     analog_start.clone(),
+                    bus_start.clone(),
                 )))
                 .await;
         }
@@ -830,6 +878,34 @@ mod tests {
         assert_eq!(analog_set("P34=128"), None, "the pot stays on the console");
         assert_eq!(analog_set("A3=notanumber"), None);
         assert_eq!(analog_set("A3"), None);
+    }
+
+    /// A device is announced before its registers, always. Something that
+    /// only appeared through a register write would not be on the bus until
+    /// it had one — and a display, which nobody reads from, would never be
+    /// on it at all.
+    #[test]
+    fn a_bus_device_is_declared_before_the_registers_behind_it() {
+        let device = rusty_embed::nets::BusDevice {
+            part: "U2".into(),
+            address: 0x68,
+            regs: vec![(0x75, vec![0x68]), (0x3b, vec![0x01, 0x02])],
+        };
+        assert_eq!(
+            bus_device_lines(&device),
+            vec![
+                "i2c 68=+\n".to_string(),
+                "i2c 68:75=68\n".to_string(),
+                "i2c 68:3b=0102\n".to_string(),
+            ]
+        );
+
+        let display = rusty_embed::nets::BusDevice {
+            part: "U3".into(),
+            address: 0x3c,
+            regs: Vec::new(),
+        };
+        assert_eq!(bus_device_lines(&display), vec!["i2c 3c=+\n".to_string()]);
     }
 
     /// One value said twice, to two readers that must not be shown

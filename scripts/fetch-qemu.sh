@@ -7,11 +7,11 @@
 # ours too; without it the app falls back to the data directory and then to
 # the download ladder, exactly as before.
 #
-# A no-op, said aloud, on a platform the qemu-v1 release has no build for
+# A no-op, said aloud, on a platform the qemu-v3 release has no build for
 # (Intel macOS today): the app then fetches Espressif's on demand.
 set -euo pipefail
 
-tag="${RUSTY_QEMU_TAG:-qemu-v1}"
+tag="${RUSTY_QEMU_TAG:-qemu-v3}"
 case "$(uname -s)-$(uname -m)" in
   MINGW*|MSYS*|CYGWIN*|Windows*) platform=x86_64-w64-mingw32 ;;
   Darwin-arm64)                  platform=aarch64-apple-darwin ;;

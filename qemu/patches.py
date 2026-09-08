@@ -75,10 +75,13 @@ EDITS = [
     (
         "hw/riscv/esp32c3.c",
         "        memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);\n",
-        "        /* The same device's second region is the SAR ADC: one model\n"
-        "         * for the digital and analog readings of one pin. */\n"
+        "        /* The same device's other regions: the SAR ADC and the I2C\n"
+        "         * master. One model, because all three carry the host's view\n"
+        "         * of the board and they share its channel. */\n"
         "        memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_SARADC_BASE,\n"
-        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 1), 0);\n",
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 1), 0);\n"
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_I2C_EXT_BASE,\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 2), 0);\n",
     ),
     (
         "hw/riscv/esp32c3_intmatrix.c",

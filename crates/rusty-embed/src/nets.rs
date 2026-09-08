@@ -276,6 +276,13 @@ pub enum Warning {
     /// A switch with fewer than two wired sides, or with no GPIO on one side
     /// and no rail on the other: pressing it changes nothing.
     SwitchDrivesNothing { part: String },
+    /// A part carrying an `addr` that is not a 7-bit hex address.
+    BusAddressUnreadable { part: String, value: String },
+    /// A part carrying a `regs` that is not `<reg>=<hex>` pairs.
+    BusRegistersUnreadable { part: String, value: String },
+    /// A part with an address whose `SDA` or `SCL` reaches no GPIO. The
+    /// emulator would answer it anyway; the desk would not.
+    BusNotWired { part: String },
 }
 
 impl std::fmt::Display for Warning {
@@ -303,8 +310,124 @@ impl std::fmt::Display for Warning {
                 f,
                 "{part} reaches no GPIO on one side and no rail on the other, so pressing it changes nothing"
             ),
+            Warning::BusAddressUnreadable { part, value } => write!(
+                f,
+                "{part}'s address {value:?} is not a 7-bit I2C address in hex, so it is not put on the bus"
+            ),
+            Warning::BusRegistersUnreadable { part, value } => write!(
+                f,
+                "{part}'s registers {value:?} are not <reg>=<hex bytes> pairs, so it answers with zeros"
+            ),
+            Warning::BusNotWired { part } => write!(
+                f,
+                "{part} has an address but its SDA or SCL reaches no GPIO: the emulator would answer it and the board on your desk would not"
+            ),
         }
     }
+}
+
+/// A part the sheet puts on the I2C bus: an address and what it answers.
+///
+/// Declared by the part's own properties rather than by its kind, so a
+/// sensor, a display and a breakout imported from LCSC all reach the bus
+/// the same way. **No address, no device** — the absence refuses rather
+/// than guessing one, for the reason the tunables and the sensors do: an
+/// address rusty invented is a bus scan finding a part nobody fitted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusDevice {
+    pub part: String,
+    pub address: u8,
+    /// Where each run of bytes starts, and the bytes. Empty is a device
+    /// that acknowledges and answers zeros — a display, which is read from
+    /// by nobody.
+    pub regs: Vec<(u8, Vec<u8>)>,
+}
+
+/// `75=68,3b=010203040506` — where each run starts and what is in it.
+///
+/// Hex throughout, because a datasheet's register map is written in hex and
+/// retyping it in decimal is where the transcription errors come from. An
+/// odd number of digits is refused rather than rounded: a truncated hex
+/// string is a valid, wrong one.
+fn parse_regs(text: &str) -> Option<Vec<(u8, Vec<u8>)>> {
+    let mut runs = Vec::new();
+    for run in text.split(',').map(str::trim).filter(|r| !r.is_empty()) {
+        let (at, bytes) = run.split_once('=')?;
+        let at = u8::from_str_radix(at.trim(), 16).ok()?;
+        let bytes = bytes.trim();
+        if bytes.len() % 2 != 0 {
+            return None;
+        }
+        let mut out = Vec::with_capacity(bytes.len() / 2);
+        for pair in bytes.as_bytes().chunks(2) {
+            let pair = std::str::from_utf8(pair).ok()?;
+            out.push(u8::from_str_radix(pair, 16).ok()?);
+        }
+        runs.push((at, out));
+    }
+    Some(runs)
+}
+
+/// Every device the sheet puts on the bus, and what it wants said about the
+/// ones it could not.
+///
+/// The wiring is checked, not assumed. The emulator's bus does not route
+/// through the GPIO matrix, so a device with no wires at all would answer
+/// there and be silent on the desk — the confident wrong answer this
+/// workbench exists to avoid. A part with an address whose `SDA` or `SCL`
+/// reaches no GPIO is named and left off.
+pub fn bus_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<BusDevice>, Vec<Warning>) {
+    let mut devices = Vec::new();
+    let mut warnings = Vec::new();
+
+    for part in &sheet.parts {
+        let Some(address) = part.props.get("addr") else {
+            continue;
+        };
+        let address = address.trim();
+        if address.is_empty() {
+            continue;
+        }
+        let Some(parsed) = u8::from_str_radix(address.trim_start_matches("0x"), 16)
+            .ok()
+            .filter(|a| *a <= 0x7f)
+        else {
+            warnings.push(Warning::BusAddressUnreadable {
+                part: part.reference.clone(),
+                value: address.to_string(),
+            });
+            continue;
+        };
+        if gpio_of(sheet, rows, &part.reference, "SDA").is_none()
+            || gpio_of(sheet, rows, &part.reference, "SCL").is_none()
+        {
+            warnings.push(Warning::BusNotWired {
+                part: part.reference.clone(),
+            });
+            continue;
+        }
+        let regs = match part.props.get("regs").map(String::as_str) {
+            None => Vec::new(),
+            Some(text) if text.trim().is_empty() => Vec::new(),
+            Some(text) => match parse_regs(text) {
+                Some(regs) => regs,
+                None => {
+                    warnings.push(Warning::BusRegistersUnreadable {
+                        part: part.reference.clone(),
+                        value: text.to_string(),
+                    });
+                    Vec::new()
+                }
+            },
+        };
+        devices.push(BusDevice {
+            part: part.reference.clone(),
+            address: parsed,
+            regs,
+        });
+    }
+    (devices, warnings)
 }
 
 /// The whole reading of one sheet at one moment.
@@ -973,8 +1096,26 @@ mod tests {
             symbol("rusty", "Supply", "#PWR", &[("1", "VCC")]),
             symbol("rusty", "Label", "#LBL", &[("1", "~")]),
             symbol("rusty", "Buzzer", "BZ", &[("1", "+"), ("2", "-")]),
+            symbol(
+                "rusty",
+                "Sensor",
+                "U",
+                &[("1", "SDA"), ("2", "SCL"), ("3", "VCC"), ("4", "GND")],
+            ),
         ];
         sheet
+    }
+
+    /// A sensor wired to the bus, with whatever properties the test wants.
+    fn place_on_bus(sheet: &mut Sheet, reference: &str, props: &[(&str, &str)]) {
+        place(sheet, reference, "rusty:Sensor");
+        wire(sheet, &format!("{reference}.1"), "U1.GPIO5");
+        wire(sheet, &format!("{reference}.2"), "U1.GPIO6");
+        if let Some(part) = sheet.parts.iter_mut().find(|p| p.reference == reference) {
+            for (key, value) in props {
+                part.props.insert((*key).into(), (*value).into());
+            }
+        }
     }
 
     /// Place a part carrying a value — a rail's name, a label's net.
@@ -1364,5 +1505,110 @@ mod tests {
             "through the resistor"
         );
         assert_eq!(gpio_of(&s, &rows, "RV1", "1"), None);
+    }
+
+    /// A part reaches the bus by carrying an address and by being wired to
+    /// one, and by nothing else. Its kind does not decide: a sensor, a
+    /// display and a breakout imported from LCSC all get there the same way.
+    #[test]
+    fn a_part_with_an_address_and_wires_is_a_device_on_the_bus() {
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "68"), ("regs", "75=68,3b=0102")]);
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].address, 0x68);
+        assert_eq!(
+            devices[0].regs,
+            vec![(0x75, vec![0x68]), (0x3b, vec![0x01, 0x02])]
+        );
+
+        // 0x prefixed, and a device that answers zeros because nobody reads
+        // from it — a display.
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "0x3C")]);
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(devices[0].address, 0x3c);
+        assert!(devices[0].regs.is_empty());
+    }
+
+    /// No address is not an address of zero. A part without one is the part
+    /// it always was and the bus never hears of it.
+    #[test]
+    fn a_part_without_an_address_is_not_on_the_bus() {
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[]);
+        assert_eq!(bus_devices(&s, &rows()).0.len(), 0);
+
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "  ")]);
+        assert_eq!(bus_devices(&s, &rows()).0.len(), 0, "blank is absent");
+    }
+
+    /// Each refusal names the part, because the alternative is a device that
+    /// silently is not there. The wiring one is the load-bearing case: the
+    /// emulator's bus does not route through the GPIO matrix, so an
+    /// unwired device would answer in the simulator and be dead on the desk.
+    #[test]
+    fn a_bus_device_that_cannot_be_read_is_named_rather_than_dropped() {
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "zz")]);
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert!(devices.is_empty());
+        assert!(
+            matches!(&warnings[..], [Warning::BusAddressUnreadable { part, value }]
+                     if part == "U2" && value == "zz"),
+            "{warnings:?}"
+        );
+
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "90")]);
+        assert!(
+            matches!(
+                &bus_devices(&s, &rows()).1[..],
+                [Warning::BusAddressUnreadable { .. }]
+            ),
+            "0x90 is an eight-bit address written where a seven-bit one goes"
+        );
+
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "68"), ("regs", "75=6")]);
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert_eq!(devices.len(), 1, "it is still on the bus");
+        assert!(devices[0].regs.is_empty(), "and answers zeros");
+        assert!(
+            matches!(&warnings[..], [Warning::BusRegistersUnreadable { .. }]),
+            "half a byte is not a byte: {warnings:?}"
+        );
+
+        // Wired to nothing at all.
+        let mut s = sheet();
+        place(&mut s, "U2", "rusty:Sensor");
+        if let Some(part) = s.parts.iter_mut().find(|p| p.reference == "U2") {
+            part.props.insert("addr".into(), "68".into());
+        }
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert!(devices.is_empty());
+        assert!(
+            matches!(&warnings[..], [Warning::BusNotWired { part }] if part == "U2"),
+            "{warnings:?}"
+        );
+
+        // And wired on one side only, which is the mistake somebody actually
+        // makes.
+        let mut s = sheet();
+        place(&mut s, "U2", "rusty:Sensor");
+        wire(&mut s, "U2.1", "U1.GPIO5");
+        if let Some(part) = s.parts.iter_mut().find(|p| p.reference == "U2") {
+            part.props.insert("addr".into(), "68".into());
+        }
+        assert!(
+            matches!(
+                &bus_devices(&s, &rows()).1[..],
+                [Warning::BusNotWired { .. }]
+            ),
+            "SDA alone is not a bus"
+        );
     }
 }

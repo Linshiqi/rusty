@@ -114,6 +114,8 @@ pub(super) fn clear_capture(state: AppState) {
     state.sim.gpio.set(std::collections::HashMap::new());
     state.sim.pwm.set(std::collections::HashMap::new());
     state.sim.analog.set(std::collections::HashMap::new());
+    state.sim.adc.set(std::collections::HashMap::new());
+    state.sim.i2c.set(Vec::new());
     // The declarations go too: they belong to the run that made them, and
     // offering a sensor the next firmware never asked for is the invented
     // range in another costume.
@@ -196,6 +198,19 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
         // one that worked.
         state.sim.adc.update(|adc| {
             adc.insert(report.pin, report.counts);
+        });
+    } else if let Some(report) = rusty_embed::parse_i2c_report(&line.text) {
+        // Traffic, kept in order and capped. The cap is what stops a display
+        // refreshing for an hour from eating the tab, and dropping the
+        // *oldest* is right for a stream: what a bus just did is what
+        // somebody is looking at.
+        const BUS_KEPT: usize = 500;
+        state.sim.i2c.update(|bus| {
+            bus.push(report);
+            if bus.len() > BUS_KEPT {
+                let over = bus.len() - BUS_KEPT;
+                bus.drain(..over);
+            }
         });
     } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
         state.sim.display.set(text);
