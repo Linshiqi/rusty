@@ -25,7 +25,7 @@ mod library;
 use geometry::*;
 use library::Library;
 use rusty_embed::nets::{self, Behaviour, Evaluation, Row, Warning, behaviour_of};
-use rusty_embed::{Sheet, Symbol, Wire};
+use rusty_embed::{PinRef, Sheet, Symbol, Wire};
 
 use rusty_i18n::t;
 
@@ -2533,6 +2533,44 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     <p class="text-footnote text-label-4">
                                         {t!("simulate.wire-bends", bends = bends.to_string())}
                                     </p>
+                                    // The probe. A wire on a sheet is a
+                                    // question — what is this actually
+                                    // joined to, and what is it sitting at
+                                    // — and the answer was only ever the
+                                    // colour of the line while it ran.
+                                    {move || {
+                                        let reading = eval.get();
+                                        let Some(net) = reading.net_of(&wire.from) else {
+                                            return ().into_any();
+                                        };
+                                        let level = reading
+                                            .levels
+                                            .get(&wire.from)
+                                            .copied()
+                                            .flatten();
+                                        let (word, tone) = match level {
+                                            Some(true) => (t!("simulate.net-high"), "text-[#5ecf7a]"),
+                                            Some(false) => (t!("simulate.net-low"), "text-label-2"),
+                                            None => (t!("simulate.net-floating"), "text-label-4"),
+                                        };
+                                        let members: Vec<String> = reading
+                                            .members(net)
+                                            .iter()
+                                            .map(PinRef::to_string)
+                                            .collect();
+                                        view! {
+                                            <div class="flex flex-col gap-1 border-t border-line pt-2">
+                                                <span class="text-caption text-label-4">
+                                                    {t!("simulate.net")}
+                                                </span>
+                                                <p class=format!("font-mono text-footnote {tone}")>{word}</p>
+                                                <p class="font-mono text-caption leading-snug text-label-3 select-text">
+                                                    {members.join("  ")}
+                                                </p>
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }}
                                     <button
                                         type="button"
                                         on:click=move |_| straighten_wire(index)
