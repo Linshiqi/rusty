@@ -216,15 +216,37 @@ a digit lights segment by segment, a pressed switch sinks its cap, wires
 take the colour of their net's level while the firmware runs, and the
 rules' findings sit in the sheet's corner.
 
+## What the parts are plugged into
+
+Three of the things this section used to list as missing are here, and they
+are the emulator's rather than the sheet's — `qemu/README.md` has the whole
+of it. What the sheet contributes is the *declaration*:
+
+- **An analog source reaches the converter.** `A<pin>=<counts>` goes down
+  the pin channel as well as the console, so `adc.read_oneshot()` returns
+  what the slider is set to. The source's `start` prop is where the slider
+  sits and what the run puts on the pin as it begins, so the two agree
+  before the first drag.
+- **A part with an `addr` prop is on the I2C bus**, and `regs` is what it
+  answers: `75=68,3b=010203040506`. Its kind does not decide — a sensor, a
+  display and a breakout imported from LCSC all reach the bus the same way.
+- **A part with a `cs` prop is on SPI2**, and `miso` is what it answers
+  with, read from the start of every transfer.
+
+Both are checked rather than assumed: a part with an address whose `SDA` and
+`SCL` reach no GPIO is named and left off the bus, because the emulator does
+not route through the GPIO matrix and a device wired to nothing would answer
+there and be dead on the desk. `examples/sense-board` is the worked end.
+
 ## Not yet
 
 A wire that ends on another wire (a T junction) — today a net is joined at
 pins, or by a label. Symbols with several units. Turning the devkit. A
-broader ERC than the five findings. EasyEDA's text records beyond plain
-labels. The I2C decode the display's and the sensor's SDA/SCL pins are
-waiting for, and with it a screen that shows what the firmware *drew*
-rather than what it printed. An ADC model, so `adc.read()` returns the
-value the sheet's analog source is set to instead of the firmware having
-to read `A<pin>=` off the console. Quantities: the rules are DC on and off,
-so a resistor's value changes nothing, a capacitor never charges, and
-nothing is measured in volts or amps.
+broader ERC than the findings listed above. EasyEDA's text records beyond
+plain labels. A screen that shows what the firmware *drew*: the bus carries
+a display's bytes now and is reported, but nothing decodes an SSD1306's
+command stream into pixels. Quantities: the rules are DC on and off, so a
+resistor's value changes nothing, a capacitor never charges, and nothing is
+measured in volts or amps — and the honest half of that is smaller than it
+looks, since the current through an LED depends on a forward voltage the
+sheet does not carry and would not be right to guess.
