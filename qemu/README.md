@@ -54,8 +54,9 @@ and says so rather than silently discarding their change.
 ## Building it
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
-(read out of `QEMU_RELEASE` in `crates/rusty-embed/src/simulate.rs`, not
-repeated), verifies the checksums, copies these two files in and builds both
+(read out of `QEMU_RELEASE`, wherever in `rusty-embed` it lives — searched
+for rather than named, because naming it is how this workflow sat broken
+through a refactor that moved the file), verifies the checksums, copies these two files in and builds both
 `riscv32-softmmu` and `xtensa-softmmu` — the C3 and C6 on one, the ESP32 and
 S3 on the other. Run it from the Actions tab; it packages each platform as an
 artifact.

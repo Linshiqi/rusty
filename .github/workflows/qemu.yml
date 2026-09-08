@@ -128,14 +128,28 @@ jobs:
       - name: Read the pinned QEMU release
         id: pin
         run: |
+          # Searched for, not read out of one path. It used to name
+          # `simulate.rs`, which became `simulate/` in a refactor and took
+          # the constant to `install.rs` with it — and `grep` on a file that
+          # is not there exits 2, which under `pipefail` killed this step
+          # before anything was built. Every qemu build since was dead, and
+          # nothing said so until one was needed.
+          #
           # `grep | cut`, not `grep -oP`: PCRE is unavailable under some
           # locales, and a step that fails for *that* reason costs a whole
           # twenty-minute round trip to find out about.
-          tag=$(grep 'QEMU_RELEASE: &str' crates/rusty-embed/src/simulate.rs | cut -d'"' -f2)
-          if [ -z "$tag" ]; then
-            echo "::error::could not read QEMU_RELEASE from simulate.rs"
+          found=$(grep -rl 'QEMU_RELEASE: &str' crates/rusty-embed/src || true)
+          count=$(printf '%s\n' "$found" | grep -c . || true)
+          if [ "$count" != "1" ]; then
+            echo "::error::expected exactly one QEMU_RELEASE in rusty-embed, found $count:%0A$found"
             exit 1
           fi
+          tag=$(grep -h 'QEMU_RELEASE: &str' "$found" | cut -d'"' -f2)
+          if [ -z "$tag" ]; then
+            echo "::error::could not read the tag out of $found"
+            exit 1
+          fi
+          echo "read $tag from $found"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "building against $tag"
 
