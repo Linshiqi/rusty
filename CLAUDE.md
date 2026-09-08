@@ -1514,6 +1514,12 @@ usty`) holds `location.toml`
   and the status register; decoding them took a minute. When a peripheral
   model appears to do nothing, have the guest read its registers back rather
   than reasoning about the driver.
+- **Connect the pin channel before the guest boots, not after.** The device
+  reports only to a channel somebody is on, so everything the firmware does in
+  its first tenth of a second is lost to a gate that waits for a serial line
+  and connects afterwards — which is how gate 10 asserted on a write it had
+  provably already missed. QEMU opens the socket during machine init, before
+  the first instruction, so the only thing to wait for is the process.
 - **A step a model does not recognise must say so, not be skipped.** The
   `default:` arm that quietly did nothing is what made the above invisible
   for three rounds. It reports `?op<N>` on the channel now.

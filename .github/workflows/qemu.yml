@@ -1143,18 +1143,20 @@ jobs:
               stdout=open("i2c-qemu.out", "w"), stderr=subprocess.STDOUT,
           )
           try:
-              settle("[i2c] listening on the bus", 60, "the bus probe never booted")
-
-              # Before anything is declared the bus is empty, and the probe
-              # has to say so: an empty scan is the state every run starts in
-              # and the one a model that answered everything would never
-              # report.
-              settle("[i2c] scan -", 30, "the probe found something on an empty bus")
-              settle("[i2c] 50 did not answer, which is right", 30,
-                     "an address nobody declared answered anyway")
-              print("booted, with nothing on the bus")
-
-              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+              # Connected before the guest boots: the device reports only to
+              # a channel somebody is on, so anything the firmware does in its
+              # first tenth of a second is lost to a gate that waits for a
+              # serial line and connects afterwards. QEMU opens this socket
+              # during machine init, before the first instruction.
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
 
               def listen():
                   buffered = b""
@@ -1173,6 +1175,17 @@ jobs:
                               traffic.append(text)
 
               threading.Thread(target=listen, daemon=True).start()
+
+              settle("[i2c] listening on the bus", 60, "the bus probe never booted")
+
+              # Before anything is declared the bus is empty, and the probe
+              # has to say so: an empty scan is the state every run starts in
+              # and the one a model that answered everything would never
+              # report.
+              settle("[i2c] scan -", 30, "the probe found something on an empty bus")
+              settle("[i2c] 50 did not answer, which is right", 30,
+                     "an address nobody declared answered anyway")
+              print("booted, with nothing on the bus")
 
               # A sensor with an identity byte and six bytes of sample, and a
               # display with nothing to read. 0x50 stays undeclared.
@@ -1290,18 +1303,23 @@ jobs:
               stdout=open("spi-qemu.out", "w"), stderr=subprocess.STDOUT,
           )
           try:
-              settle("[spi] listening on SPI2", 60, "the wire probe never booted")
-              # The write completes with nothing declared — which is exactly
-              # a display — and an undriven MISO reads as zeros rather than
-              # hanging.
-              settle("[spi] wrote aea501", 30,
-                     "the firmware could not write to the wire")
-              settle("[spi] read 0000", 30,
-                     "an undriven MISO did not read as zeros; a transfer with "
-                     "nothing declared must still complete")
-              print("booted, writing to a device that says nothing back")
-
-              link = socket.create_connection(("127.0.0.1", PORT), timeout=15)
+              # Connected before the guest has booted, not after. The device
+              # reports only to a channel somebody is on, and the firmware's
+              # one write to the display happens a tenth of a second after it
+              # starts — so a gate that waits for that line and *then*
+              # connects has already missed the report it is about to assert
+              # on. QEMU opens this socket during machine init, before the
+              # first instruction, so the only thing to wait for is the
+              # process itself.
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
 
               def listen():
                   buffered = b""
@@ -1320,6 +1338,17 @@ jobs:
                               traffic.append(text)
 
               threading.Thread(target=listen, daemon=True).start()
+
+              settle("[spi] listening on SPI2", 60, "the wire probe never booted")
+              # The write completes with nothing declared — which is exactly
+              # a display — and an undriven MISO reads as zeros rather than
+              # hanging.
+              settle("[spi] wrote aea501", 30,
+                     "the firmware could not write to the wire")
+              settle("[spi] read 0000", 30,
+                     "an undriven MISO did not read as zeros; a transfer with "
+                     "nothing declared must still complete")
+              print("booted, writing to a device that says nothing back")
 
               # Two bytes for chip select 0. The driver sends a command byte
               # and reads the reply out of the same transfer, so the second
