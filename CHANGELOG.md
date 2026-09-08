@@ -11,6 +11,34 @@ One `## v<version>` heading per release, newest first.
 
 ## Unreleased
 
+**Added — the simulator reads as well as writes: an ADC, an I2C bus and an
+SPI wire.** Firmware in the simulator can now call `adc.read_oneshot()`,
+`i2c.write_read()` and `spi.transfer()` — the ordinary drivers, written as
+they would be for the part on your desk — and get the board the sheet
+describes. Before, none of those three returned a wrong answer: they never
+returned at all, because nothing was modelled at those registers and the
+driver waited inside your own `read` call. Drag an analog source and the
+number the firmware samples moves; give a part an I2C address and the
+registers behind it, and its driver reads them; put a display on a chip
+select and the bytes it is sent are shown. `examples/sense-board` is the
+worked end of all three.
+
+**Added — a part joins a bus by saying so, and being wired to one.** An
+`addr` property puts a part on I2C and `regs` is what it answers; `cs` and
+`miso` do the same for SPI. Its kind does not decide — a sensor, a display
+and a breakout imported from LCSC all reach a bus the same way. A part with
+an address whose SDA and SCL reach no GPIO is named rather than quietly
+honoured: the emulator would answer it and the board on your desk would not.
+
+**Fixed — a bus scan finds only what is there.** An I2C address nobody
+declared does not acknowledge, so firmware probing for an optional device
+finds it exactly when the sheet says it is fitted.
+
+**Fixed — a package with several units is several parts.** A quad op-amp
+imported from KiCad came out as one symbol with every unit's pins on top of
+each other. It is now one symbol per unit, `LM324_A` and `LM324_B`, each
+placed and wired on its own.
+
 **Added — a sensor on the board, and a probe on every wire.** A sensor
 module can be placed and wired like anything else; its value names the
 channel the firmware declared with `[rusty:sensor]`, and the sliders under
