@@ -1946,6 +1946,26 @@ usty`) holds `location.toml`
   reaches for `unzip` only where the tar is GNU's. Both branches are proven
   against the real archives, because reasoning about which `tar` a platform
   has is precisely what produced the bug.
+- **linuxdeploy deploys the dependencies of every ELF among the app's
+  resources, and esp-gdb ships five it cannot resolve.** Espressif puts
+  `-3.8` … `-3.12` python-linked gdbs in each archive beside a `-no-python`
+  build; the plain name rusty asks for is a 428 KB launcher that reads
+  `python3 -V` and execs the match, falling back to `-no-python`. An
+  ubuntu-22.04 runner has no `libpython*.so.1.0` at all, so the AppImage
+  ended with `Could not find dependency: libpython3.8.so.1.0` — after the
+  deb beside it had built, the third late-failing bundle step in one
+  release. `bundle-tools.sh` drops the five on Linux only: Windows keeps
+  them, because nothing walks its resources and they are what gives gdb its
+  Rust pretty-printers. **The container is the way to settle this, not
+  reading.** `docker run ubuntu:22.04` with the workflow's own apt list
+  reproduces the failure exactly and proves the fix in four minutes, where
+  three rounds of reasoning cost three release builds — and it proves the
+  parts reading cannot reach: that QEMU and both gdbs still *run* out of the
+  AppDir once linuxdeploy has rewritten their rpaths, under the names
+  `find_gdb` asks for, with the `[rusty:gpio@` marker intact so
+  `has_gpio_model` still answers correctly. A harness that hides `apt` behind
+  `>/dev/null` under `set -e` reports all of this as an empty file; two runs
+  went that way before the output was let out.
 - **A Windows verbatim path (`\\?\E:\…`) cannot be handed to a tool that
   appends to it.** Tauri's `resource_dir()` comes back canonicalised under
   `cargo tauri dev`, and QEMU joins `-L <dir>` to `esp32c3-rom.bin` with a

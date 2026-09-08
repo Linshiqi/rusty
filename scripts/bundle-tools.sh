@@ -206,6 +206,30 @@ else
   echo "bundle-tools: Espressif publishes no esp-gdb for $platform; CodeLLDB is the debugger there"
 fi
 
+# Linux only, and it is the AppImage that forces it.
+#
+# Espressif ships five python-linked gdbs per family (`-3.8` … `-3.12`)
+# beside a `-no-python` build, and the plain name rusty asks for is a small
+# launcher that reads the system's `python3 -V` and execs the matching one,
+# falling back to `-no-python`. linuxdeploy walks every ELF among the app's
+# resources and deploys each one's dependencies — and an ubuntu-22.04 runner
+# has no `libpython*.so.1.0` at all, so every one of the five is
+# unresolvable and the AppImage ends with `Could not find dependency:
+# libpython3.8.so.1.0`, after the deb beside it has already built.
+#
+# Measured in a runner-equivalent container rather than reasoned about, the
+# third time this shape of failure cost a release: with the five removed the
+# launcher falls back to `-no-python`, gdb runs and reports its version, and
+# every other dependency in the bundle resolves (QEMU's twelve arrive with
+# libwebkit2gtk's own dependency chain). The cost is gdb's Python scripting
+# — Rust pretty-printers — which rusty's MI session does not use. Windows
+# keeps them: nothing walks its resources, and 130 MB buys a better
+# variables view there.
+if [ "$platform" = x86_64-linux-gnu ]; then
+  dropped="$(find "$dest" -type f -name '*-gdb-3.*' -print -delete | wc -l)"
+  echo "bundle-tools: dropped $dropped python-linked gdb builds — the AppImage's linuxdeploy cannot resolve their libpython"
+fi
+
 # ── the flasher ─────────────────────────────────────────────────────────────
 # `cargo install espflash` builds it in a couple of minutes on a machine that
 # has Rust; the prebuilt is here so a machine that has just been installed on
