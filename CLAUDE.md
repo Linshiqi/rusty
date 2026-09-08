@@ -244,14 +244,14 @@ code in rusty to exist, which is why a KiCad `.kicad_sym` under
 add one.
 
 That ceiling is now the *fallback*, not the roof. `qemu/` holds real device
-models — Espressif's GPIO stub replaced, and beside it the SAR ADC and the
-I2C master neither of which upstream maps at all — and `qemu-release.yml`
-builds them for four platforms and publishes them. Three peripherals in one
-file (`esp32_gpio.c`, which keeps upstream's name because it replaces
-upstream's file) on purpose: all three carry the host's view of one board and
-share its socket, so "one channel, one protocol, one reader" stays true on
-the emulator's side as well as rusty's, and a new file would mean a new entry
-in upstream's build system for each. **The installer ships it**: `scripts/fetch-qemu.sh`
+models — Espressif's GPIO stub replaced, and beside it the SAR ADC, the I2C
+master and `SPI2`, none of which upstream maps at all — and
+`qemu-release.yml` builds them for four platforms and publishes them. Four
+peripherals in one file (`esp32_gpio.c`, which keeps upstream's name because
+it replaces upstream's file) on purpose: all four carry the host's view of
+one board and share its socket, so "one channel, one protocol, one reader"
+stays true on the emulator's side as well as rusty's, and a new file would
+mean a new entry in upstream's build system for each. **The installer ships it**: `scripts/fetch-qemu.sh`
 unpacks the `qemu-v*` asset into `crates/rusty-app/bundled/`, `bundle.resources`
 packages that directory, and the app hands Tauri's resource directory to
 `tools::set_bundled_dir` at setup, so a fresh install simulates with ours and
@@ -292,14 +292,18 @@ uses — rule 5 above, one `absorb`. A button press goes both ways when both
 exist: `B14=1` on the console for firmware reading rusty's text protocol, and
 `14=1` on the pin channel for firmware reading `Input::is_high()`.
 
-**That one channel now carries three peripherals**, because all three are the
+**That one channel now carries four peripherals**, because all four are the
 host's view of one board. `A<pin>=<counts>` puts an analog value on a pin and
 `adc.read_oneshot()` returns it; `i2c 68:75=68` puts a byte behind an I2C
 address, `i2c 3c=+` declares a device with nothing to read and `i2c 3c=-`
-takes one off. Back the other way, `[rusty:adc@<us>] <pin>=<counts>` says what
-the converter handed over and `[rusty:i2c@<us>] 3c w 00ae` what crossed the
-bus. Both are reported per *change* — a driver polling a sensor converts
-thousands of times a second — and both go through the same `absorb`.
+takes one off; `spi 0=1a68` is what a chip select answers with. Back the other
+way, `[rusty:adc@<us>] <pin>=<counts>` says what the converter handed over,
+`[rusty:i2c@<us>] 3c w 00ae` what crossed the bus and `[rusty:spi@<us>] 0 w
+aea501` what crossed the wire. All are reported per *change* — a driver
+polling a sensor converts thousands of times a second — and all go through the
+same `absorb`. The buses remember their last report **per verb**: a
+`write_read` alternates a write and a read, so one shared slot suppresses
+nothing.
 
 The potentiometer's `P34=128` stays console-only, deliberately: what a wiper
 converts to depends on what its two ends are wired to, and turning 128 into
@@ -310,11 +314,12 @@ down the channel.
 
 **A part is on the I2C bus because it carries an `addr` prop and is wired to
 one**, not because of its kind: a sensor, a display and a breakout imported
-from LCSC all reach it the same way (`nets::bus_devices`). The wiring is
-checked rather than assumed — the emulator's bus does not route through the
-GPIO matrix, so a device with no wires would answer there and be dead on the
-desk, which is the confident wrong answer in miniature. No address is not an
-address of zero: absence refuses.
+from LCSC all reach it the same way (`nets::bus_devices`). `cs` and `miso` do
+the same for SPI (`nets::wire_devices`). The wiring is checked rather than
+assumed — the emulator's buses do not route through the GPIO matrix, so a
+device with no wires would answer there and be dead on the desk, which is the
+confident wrong answer in miniature. No address is not an address of zero:
+absence refuses.
 
 ### 6. Extensibility is data first
 
@@ -1433,6 +1438,11 @@ usty`) holds `location.toml`
   the ADC, esp-hal's `SoftwareTimeout` for the bus. A witness that reports a
   hang as silence is no witness, and both of these were measured on the
   stock build before either model was written.
+- **Every register name in `qemu/esp32_gpio.c` is prefixed `RUSTY_`.**
+  Upstream has its own `hw/i2c/esp32_i2c.h` and `hw/ssi/esp32c3_spi.h`, whose
+  `REG32(I2C_CTR, 0x04)` expands to the same enumerator, and
+  `hw/xtensa/esp32.c` includes both those headers and this one — so an
+  unprefixed name is a redeclaration error in a file neither of us wrote.
 - **Renaming a script means changing the line that runs it.** `interrupts.py`
   became `patches.py`; the workflow step's name and its comment were updated
   and the `run:` line was not, so every platform stopped at `can't open file`
