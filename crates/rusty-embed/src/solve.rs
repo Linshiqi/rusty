@@ -250,6 +250,27 @@ impl Transient {
         }
     }
 
+    /// Start from stated node voltages.
+    ///
+    /// What a rebuilt circuit needs: the elements have changed but the
+    /// energy in them has not, and a capacitor that forgot its charge
+    /// because a source was added elsewhere would be a discharge nothing
+    /// caused. `volts` is read by node, so it survives a renumbering.
+    pub fn carrying(circuit: Circuit, volts: &[f64]) -> Self {
+        let mut started = Transient {
+            memory: vec![0.0; circuit.elements.len()],
+            now: Solution {
+                volts: (0..circuit.nodes)
+                    .map(|node| volts.get(node).copied().unwrap_or(0.0))
+                    .collect(),
+                through: BTreeMap::new(),
+            },
+            circuit,
+        };
+        started.remember(None);
+        started
+    }
+
     /// Advance by `seconds`.
     pub fn step(&mut self, seconds: f64) -> Result<&Solution, Trouble> {
         // NaN fails the first test, so the second never sees one.

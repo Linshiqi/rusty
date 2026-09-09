@@ -59,6 +59,7 @@ pub mod flash;
 pub mod host_debug;
 #[cfg(feature = "backend")]
 pub mod install;
+pub mod live;
 #[cfg(feature = "backend")]
 pub mod memory;
 #[cfg(feature = "backend")]

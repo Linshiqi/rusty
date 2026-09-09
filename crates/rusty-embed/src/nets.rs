@@ -153,6 +153,46 @@ pub fn ohms(value: &str) -> Option<f64> {
     text.parse().ok()
 }
 
+/// A capacitance the way people write one: `100n`, `100nF`, `10u`, `10µF`,
+/// `4n7`, `1p`, `2.2u`.
+///
+/// The same shape as [`ohms`] — the multiplier standing in for the decimal
+/// point, because that is how it is written on a schematic — with the
+/// suffixes a capacitor uses. Anything else is nothing and says so: a part
+/// whose value is a part number has no capacitance the sheet can stand
+/// behind, and a transient computed from an invented one is a settling time
+/// that looks measured and is not.
+pub fn farads(value: &str) -> Option<f64> {
+    let text: String = value
+        .trim()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let text = text.trim_end_matches(['F', 'f']);
+    if text.is_empty() {
+        return None;
+    }
+    let scale = |c: char| match c {
+        'p' | 'P' => Some(1e-12),
+        'n' | 'N' => Some(1e-9),
+        'u' | 'U' | 'µ' | 'μ' => Some(1e-6),
+        'm' => Some(1e-3),
+        _ => None,
+    };
+    if let Some((index, letter)) = text.char_indices().find(|(_, c)| scale(*c).is_some()) {
+        let (head, rest) = text.split_at(index);
+        let tail = &rest[letter.len_utf8()..];
+        let head: f64 = head.parse().ok()?;
+        let factor = scale(letter)?;
+        if tail.is_empty() {
+            return Some(head * factor);
+        }
+        let digits: f64 = tail.parse().ok()?;
+        return Some((head + digits / 10f64.powi(tail.len() as i32)) * factor);
+    }
+    text.parse().ok()
+}
+
 /// A voltage from the way people write one on a rail: `3V3`, `3.3V`,
 /// `+5V`, `5`, `12`.
 ///

@@ -322,7 +322,42 @@ convergence-order test rather than a tolerance: halving the step halves the
 error, which says the method is the one it is meant to be instead of saying
 one answer happened to be close.
 
-**5 — the firmware in the loop.** This is the reason to do any of it.
+**5 — the firmware in the loop.** *The coupling is done* (`live`), and it
+is the reason for every stage before it.
+
+**It is event-driven, and that is what made it tractable.** The difficulty
+was never electrical. QEMU runs at roughly wall-clock and a transient steps
+in microseconds, so advancing the circuit a microsecond per microsecond of
+guest time would be a million solves a second, nearly all of them computing
+that nothing had changed. The circuit only has to be advanced when something
+*asks*: a pin the firmware drove — reported with the systimer's own
+microseconds, which the pin channel has carried all along as
+`[rusty:gpio@1234]` — or a converter it read. Between those it is only
+relaxing.
+
+Which is where backward Euler earns its place a second time. Over a long
+quiet gap one coarse step is not merely stable: it lands *on* the steady
+state, because the method is implicit and the steady state is its fixed
+point. A coarse step across a quiet stretch is not an approximation that
+degrades, it is the answer — and that is its own test.
+
+Two things the coupling has to get right, and both are tests:
+
+- **The edge lands where the firmware put it.** `drove` advances to the
+  reported instant *before* applying the level, which is the difference
+  between a pulse width the panel can be believed about and one it rounded
+  to the last step.
+- **Charge survives a rebuild.** A pin nobody has reported is not a source —
+  rusty does not claim to know the voltage of a pin it has heard nothing
+  about — so the first report of a pin adds an element and the circuit is
+  rebuilt. Starting the new one from rest would discharge every capacitor on
+  the sheet at the exact moment the firmware first touched a pin, so the
+  voltages are carried across by node.
+
+What is left is the wiring: the backend's pin-channel reader calling `Live`,
+and analog values going back the other way as `A<pin>=<counts>`. That last
+step needs one more thing stated — the converter's full scale, which is not
+the rail — and until it is, the honest thing is volts and no counts.
 
 ## What this is not
 

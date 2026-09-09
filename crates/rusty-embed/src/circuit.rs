@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::model::{PinRef, Sheet};
-use crate::nets::{self, Behaviour, Rail, Row, behaviour_of, ohms, power_rail, volts};
+use crate::nets::{self, Behaviour, Rail, Row, behaviour_of, farads, ohms, power_rail, volts};
 use crate::solve::{Circuit, Element};
 
 /// The circuit, and how to read an answer back onto the sheet.
@@ -52,6 +52,8 @@ pub enum Unstated {
     /// part rather than about the drawing, and a red one is not a blue one
     /// — guessing it would put the current out by a factor of two.
     ForwardVoltage { part: String },
+    /// A capacitor whose value is not a capacitance.
+    Capacitance { part: String, value: String },
     /// Nothing on the sheet is ground, so no voltage has anything to be
     /// relative to.
     NoGround,
@@ -71,6 +73,10 @@ impl std::fmt::Display for Unstated {
             Unstated::ForwardVoltage { part } => write!(
                 f,
                 "{part} has no forward voltage, and a lamp's is a fact about the part rather than the drawing — give it a `vf` of 2.0 for a red one, 3.2 for a blue"
+            ),
+            Unstated::Capacitance { part, value } => write!(
+                f,
+                "{part}'s value {value:?} is not a capacitance, so nothing can be said about how long it takes to charge — write it as 100n, 4u7 or 10uF"
             ),
             Unstated::NoGround => f.write_str(
                 "nothing on this sheet is ground, so there is nothing for a voltage to be relative to",
@@ -251,6 +257,22 @@ pub fn of(
                     saturation: lamp_saturation(forward),
                     ideality: LAMP_IDEALITY,
                 }
+            }
+            Behaviour::Capacitor => {
+                // In the circuit even though it does nothing at DC: the
+                // transient is what it is for, and a capacitor left out is
+                // a node that has no voltage while it is charging.
+                let Some((a, b)) = two() else { continue };
+                if a == b {
+                    continue;
+                }
+                let Some(farads) = farads(&part.value).filter(|f| *f > 0.0) else {
+                    return Err(Unstated::Capacitance {
+                        part: part.reference.clone(),
+                        value: part.value.clone(),
+                    });
+                };
+                Element::Capacitor { a, b, farads }
             }
             Behaviour::Switch if pressed.contains(part.reference.as_str()) => {
                 // A closed switch is already one solid node, so there is
@@ -506,13 +528,38 @@ mod tests {
         );
     }
 
-    /// A capacitor is an open circuit at DC, and that is the answer rather
-    /// than a hole in the model. The node beyond it is not *floating* — it
-    /// is not in the circuit at all, because nothing at DC attaches it, and
-    /// those two are worth telling apart: one is a finding about a drawing
-    /// somebody got wrong, the other is what a capacitor is.
+    /// A capacitor is in the circuit — the transient is what it is for —
+    /// and carries nothing at DC, which is not a hole in the model but the
+    /// answer. Where that leaves a node with no DC voltage at all, it is
+    /// reported rather than called zero: the two are different claims, and
+    /// only one of them is true.
     #[test]
-    fn a_capacitor_is_an_open_circuit_and_the_node_past_it_is_not_in_the_answer() {
+    fn a_capacitor_is_in_the_circuit_and_open_at_dc() {
+        // Across the rail, where a decoupling capacitor is.
+        let mut s = sheet();
+        place(&mut s, "C1", "Device:C", "100n");
+        place(&mut s, "R1", "Device:R", "1k");
+        place(&mut s, "PWR1", "rusty:Supply", "3V3");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        wire(&mut s, "PWR1.VCC", "C1.1");
+        wire(&mut s, "C1.2", "GND1.GND");
+        wire(&mut s, "PWR1.VCC", "R1.1");
+        wire(&mut s, "R1.2", "GND1.GND");
+
+        let bridged = build(&s).expect("built");
+        assert!(
+            bridged
+                .circuit
+                .elements
+                .iter()
+                .any(|e| matches!(e, Element::Capacitor { .. })),
+            "it is in the circuit for the transient to use"
+        );
+        let found = dc(&bridged.circuit).expect("and the DC answer is unaffected");
+        assert!((found.volts_at(bridged.node_of[&PinRef::new("R1", "1")]) - 3.3).abs() < 1e-9);
+
+        // And one with nothing on its far side: that node has no DC
+        // voltage, which is said rather than answered with a zero.
         let mut s = sheet();
         place(&mut s, "C1", "Device:C", "100n");
         place(&mut s, "R1", "Device:R", "1k");
@@ -521,17 +568,35 @@ mod tests {
         wire(&mut s, "PWR1.VCC", "C1.1");
         wire(&mut s, "PWR1.VCC", "R1.1");
         wire(&mut s, "R1.2", "GND1.GND");
-
         let bridged = build(&s).expect("built");
-        let found = dc(&bridged.circuit).expect("the rest of the sheet still solves");
-        assert!(
-            (found.volts_at(bridged.node_of[&PinRef::new("R1", "1")]) - 3.3).abs() < 1e-9,
-            "the resistor is across the rail"
-        );
-        assert!(
-            !bridged.node_of.contains_key(&PinRef::new("C1", "2")),
-            "and the far side of the capacitor has no voltage to report at DC"
-        );
+        assert!(matches!(
+            dc(&bridged.circuit),
+            Err(crate::solve::Trouble::Floating { .. })
+        ));
+    }
+
+    #[test]
+    fn a_capacitance_is_read_the_way_it_is_written() {
+        use crate::nets::farads;
+        // Relative, because `100 * 1e-9` and `1e-7` are the same number and
+        // not the same bits — the multiplier is applied, not looked up.
+        let is = |text: &str, want: f64| {
+            let got = farads(text).unwrap_or_else(|| panic!("{text} read as nothing"));
+            assert!(
+                (got - want).abs() <= 1e-12 * want,
+                "{text}: {got} against {want}"
+            );
+        };
+        is("100n", 1e-7);
+        is("100nF", 1e-7);
+        is("4n7", 4.7e-9);
+        is("10u", 1e-5);
+        is("10µF", 1e-5);
+        is("1p", 1e-12);
+        is("2.2u", 2.2e-6);
+        assert_eq!(farads("C0805"), None, "a package is not a capacitance");
+        assert_eq!(farads(""), None);
+        assert_eq!(farads("red"), None);
     }
 
     /// The three refusals, each naming the part and the property that would
