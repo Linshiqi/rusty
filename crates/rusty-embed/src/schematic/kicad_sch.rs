@@ -197,6 +197,7 @@ pub fn parse(text: &str, chip: &str) -> Result<Schematic, ParseError> {
         .collect();
 
     let junctions: Vec<(f64, f64)> = root.children("junction").filter_map(at).collect();
+    let no_connects: Vec<(f64, f64)> = root.children("no_connect").filter_map(at).collect();
     let labels: Vec<(String, (f64, f64))> = root
         .children("label")
         .chain(root.children("global_label"))
@@ -335,6 +336,18 @@ pub fn parse(text: &str, chip: &str) -> Result<Schematic, ParseError> {
             None => {
                 by_name.insert(name.as_str(), here);
             }
+        }
+    }
+
+    // A no-connect is a point in KiCad and a pin here: the flag says "this
+    // *pin* reaches nothing on purpose", and matching it to the pin under it
+    // is what turns a mark on the sheet into an answer the rules can read.
+    for spot in &no_connects {
+        if let Some((pin, _)) = placed
+            .iter()
+            .find(|(_, point)| super::place::same_point(*point, *spot))
+        {
+            sheet.no_connect.push(pin.clone());
         }
     }
 

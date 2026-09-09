@@ -228,9 +228,36 @@ imported board and exporting it again is still the identity. That is its own
 test, because without it every export of an imported board would rewrite the
 whole layout — the one thing the patching writer exists to prevent.
 
-What is left of the stage: buses, no-connect flags, ERC beyond today's
-findings, annotation, footprint fields. This is the part that will try to
-become infinite; the boundary is in "What this is not" below.
+**No-connect flags and two more findings** are in. `Sheet.no_connect` is a
+list of pins the author has answered for; a right-click on a pin toggles it
+and the pin then wears KiCad's cross instead of pulsing. It crosses both
+ways — KiCad's `(no_connect (at x y))` is a mark on a *point* and this is a
+mark on a *pin*, matched by position on the way in and written at the pin's
+position on the way out, and a set that changed rewrites those nodes and
+nothing else.
+
+The findings it makes possible:
+
+- **`PinReachesNothing`** — a pin nobody joined, on a part somebody was
+  joining. Three things keep it usable rather than noise: it waits until the
+  part has at least one wire (a symbol just dropped on the sheet has every
+  pin loose and does not want six findings), it stands down for a
+  no-connect, and it stands down where something more specific already names
+  the part. A switch with one side loose is `SwitchDrivesNothing`, which is
+  the same fault said better.
+- **`OutputsFighting`** — two pins that both drive, on one net. Not
+  `Conflict`, which is two GPIOs the firmware has driven apart while it
+  runs: this one is true of the drawing, before anything is built.
+
+What is left of the stage — **and is deliberately not being done** — is
+buses, annotation and footprint fields. A bus has no consumer here: the
+simulator does not need one and neither do the rules, so drawing one would
+be feature parity rather than gesture compatibility, and the file already
+keeps its own. Annotation is KiCad's job and an imported file arrives
+annotated. Footprints are the board's, and rusty does not lay out boards.
+This is the part of the stage that would try to become infinite; the
+boundary is in "What this is not" below, and this paragraph is where it is
+applied.
 
 **4 — Kirchhoff.** Modified nodal analysis: a DC operating point first, then
 transient. Either written here — a bounded piece of work for R/C/L/V/I plus

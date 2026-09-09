@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{KIT_REFERENCE, PinRef, Sheet, Symbol, Wire};
+use crate::model::{KIT_REFERENCE, Pin, PinKind, PinRef, Sheet, Symbol, Wire};
 
 /// What a placed symbol *does* on the sheet. Read off the symbol's library
 /// and name, then its reference prefix and pin names — so a part imported
@@ -331,6 +331,46 @@ pub enum Warning {
     WireSelectUnreadable { part: String, value: String },
     /// A part on a chip select whose `SCK` or `MOSI` reaches no GPIO.
     WireNotWired { part: String },
+    /// A pin with no wire on it, on a part that is otherwise wired, and
+    /// which the author has not marked as deliberately unconnected.
+    ///
+    /// The two conditions are what keep it usable. **Otherwise wired**,
+    /// because a part just dropped on the sheet has every pin loose and
+    /// nobody wants six findings for it; a part with three of four pins
+    /// joined is the one where the fourth is a mistake. **Not marked**,
+    /// because that is what the no-connect flag is for — a finding with no
+    /// way to be answered is one people learn to scroll past.
+    PinReachesNothing { part: String, pin: String },
+    /// Two pins that both drive, on one net. Not the same as `Conflict`,
+    /// which is two *GPIOs* the firmware has driven apart at run time: this
+    /// is true of the drawing whether or not anything is running, and it is
+    /// true before the board is built.
+    OutputsFighting { pins: Vec<String> },
+}
+
+impl Warning {
+    /// The part this finding is about, when it is about one.
+    ///
+    /// Used to keep the generic finding out of the way of a specific one:
+    /// a switch with one side loose already has `SwitchDrivesNothing` said
+    /// about it, and adding "and a pin reaches nothing" is the same problem
+    /// twice. Two findings for one fault is how a list stops being read.
+    pub fn about_part(&self) -> Option<&str> {
+        match self {
+            Warning::LedWithoutResistor { part }
+            | Warning::SwitchDrivesNothing { part }
+            | Warning::BusAddressUnreadable { part, .. }
+            | Warning::BusRegistersUnreadable { part, .. }
+            | Warning::BusNotWired { part }
+            | Warning::WireSelectUnreadable { part, .. }
+            | Warning::WireNotWired { part }
+            | Warning::PinReachesNothing { part, .. } => Some(part),
+            Warning::DanglingWire { .. }
+            | Warning::Short { .. }
+            | Warning::Conflict { .. }
+            | Warning::OutputsFighting { .. } => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Warning {
@@ -377,6 +417,15 @@ impl std::fmt::Display for Warning {
             Warning::WireNotWired { part } => write!(
                 f,
                 "{part} is on a chip select but its SCK or MOSI reaches no GPIO: the emulator would talk to it and the board on your desk would not"
+            ),
+            Warning::PinReachesNothing { part, pin } => write!(
+                f,
+                "{part}.{pin} has no wire on it while the rest of {part} is wired — join it, or mark it as not connected"
+            ),
+            Warning::OutputsFighting { pins } => write!(
+                f,
+                "two pins that both drive are wired together: {}",
+                pins.join(", ")
             ),
         }
     }
@@ -1146,6 +1195,97 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     }
     nets.extend(net_aliases);
 
+    // ── the two checks that are about the drawing rather than the run ───
+    //
+    // A pin nobody joined, on a part somebody was joining. Both halves are
+    // load-bearing: a part just dropped on the sheet has every pin loose and
+    // does not want six findings, and a pin the author has marked as
+    // deliberately unconnected has already answered the question.
+    //
+    // And it stands down where something more specific already names the
+    // part: a switch with one side loose is `SwitchDrivesNothing`, and
+    // saying "and a pin reaches nothing" beside it is the same fault twice.
+    let already: Vec<String> = warnings
+        .iter()
+        .filter_map(|w| w.about_part().map(str::to_string))
+        .collect();
+    for part in &inputs.sheet.parts {
+        if already.contains(&part.reference) {
+            continue;
+        }
+        let Some(symbol) = inputs.sheet.symbol_of(&part.reference) else {
+            continue;
+        };
+        let wired = |number: &str| {
+            let by_number = PinRef::new(&part.reference, number);
+            let named = symbol
+                .pins
+                .iter()
+                .find(|p| p.number == number)
+                .map(|p| PinRef::new(&part.reference, &p.name));
+            inputs.sheet.wires.iter().any(|w| {
+                w.from == by_number
+                    || w.to == by_number
+                    || named.as_ref().is_some_and(|n| w.from == *n || w.to == *n)
+            })
+        };
+        let visible: Vec<&Pin> = symbol.pins.iter().filter(|p| !p.hidden).collect();
+        if visible.is_empty() || !visible.iter().any(|p| wired(&p.number)) {
+            continue;
+        }
+        for pin in visible {
+            if wired(&pin.number)
+                || inputs
+                    .sheet
+                    .is_no_connect(&PinRef::new(&part.reference, &pin.number))
+                || inputs
+                    .sheet
+                    .is_no_connect(&PinRef::new(&part.reference, &pin.name))
+            {
+                continue;
+            }
+            // Named as a wire would name it: the name when it is one and
+            // no other pin of the symbol shares it, the number otherwise —
+            // the same rule the sheet spells a wire's ends by.
+            let named = pin.name != "~"
+                && !pin.name.is_empty()
+                && symbol.pins.iter().filter(|p| p.name == pin.name).count() == 1;
+            warnings.push(Warning::PinReachesNothing {
+                part: part.reference.clone(),
+                pin: if named {
+                    pin.name.clone()
+                } else {
+                    pin.number.clone()
+                },
+            });
+        }
+    }
+
+    // And two pins that both drive, joined. Not `Conflict`, which is two
+    // GPIOs the firmware has driven apart while it runs: this one is true of
+    // the drawing, before anything is built.
+    let mut driving: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for part in &inputs.sheet.parts {
+        let Some(symbol) = inputs.sheet.symbol_of(&part.reference) else {
+            continue;
+        };
+        for pin in &symbol.pins {
+            if !matches!(pin.kind, PinKind::Output | PinKind::PowerOut) {
+                continue;
+            }
+            let at = PinRef::new(&part.reference, &pin.number);
+            if let Some(net) = nets.get(&at) {
+                driving.entry(*net).or_default().push(at.to_string());
+            }
+        }
+    }
+    for (_, mut pins) in driving {
+        if pins.len() >= 2 {
+            pins.sort();
+            warnings.push(Warning::OutputsFighting { pins });
+        }
+    }
+
     Evaluation {
         lit,
         levels,
@@ -1782,6 +1922,90 @@ mod tests {
         assert_eq!(
             eval(&s, &[], &[]).warnings,
             vec![Warning::SwitchDrivesNothing { part: "SW3".into() }]
+        );
+    }
+
+    /// The two findings that are about the drawing rather than the run, and
+    /// the three things that keep the first of them usable: it waits for
+    /// the part to be otherwise wired, it stands down for a no-connect, and
+    /// it stands down where something more specific already names the part.
+    #[test]
+    fn a_loose_pin_is_named_unless_it_was_answered_for() {
+        let loose = |s: &Sheet| -> Vec<String> {
+            eval(s, &[], &[])
+                .warnings
+                .into_iter()
+                .filter_map(|w| match w {
+                    Warning::PinReachesNothing { part, pin } => Some(format!("{part}.{pin}")),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // A part nobody has started on says nothing: every pin is loose and
+        // six findings for one untouched symbol is a list people stop reading.
+        let mut fresh = sheet();
+        place(&mut fresh, "R1", "Device:R");
+        assert!(loose(&fresh).is_empty(), "{:?}", loose(&fresh));
+
+        // One side joined, and the other is the question.
+        let mut half = sheet();
+        place(&mut half, "R1", "Device:R");
+        wire(&mut half, "R1.1", "U1.GPIO2");
+        assert_eq!(loose(&half), vec!["R1.2"]);
+
+        // Answered: the author has said so.
+        let mut answered = half.clone();
+        answered.no_connect.push(PinRef::new("R1", "2"));
+        assert!(loose(&answered).is_empty());
+
+        // And a switch with one side loose is `SwitchDrivesNothing`, which
+        // is the same fault said better — so the generic one stays quiet.
+        let mut switch = sheet();
+        place(&mut switch, "SW1", "Device:SW_Push");
+        wire(&mut switch, "SW1.1", "U1.GPIO4");
+        let found = eval(&switch, &[], &[]).warnings;
+        assert!(
+            matches!(&found[..], [Warning::SwitchDrivesNothing { .. }]),
+            "one finding, the specific one: {found:?}"
+        );
+    }
+
+    /// Two pins that both drive, wired together — true of the drawing and
+    /// not of any particular moment of a run, which is what tells it from
+    /// `Conflict`.
+    #[test]
+    fn two_driving_pins_on_one_net_are_named() {
+        let mut s = sheet();
+        s.symbols.push(symbol("Reg", "LDO", "U", &[("1", "OUT")]));
+        if let Some(defined) = s.symbols.iter_mut().find(|x| x.name == "LDO") {
+            defined.pins[0].kind = PinKind::PowerOut;
+        }
+        place(&mut s, "U2", "Reg:LDO");
+        place(&mut s, "U3", "Reg:LDO");
+        wire(&mut s, "U2.1", "U3.1");
+        let found = eval(&s, &[], &[]).warnings;
+        assert!(
+            found
+                .iter()
+                .any(|w| matches!(w, Warning::OutputsFighting { pins } if pins.len() == 2)),
+            "{found:?}"
+        );
+
+        // One of them alone is not a fault, however it is wired.
+        let mut one = sheet();
+        one.symbols.push(symbol("Reg", "LDO", "U", &[("1", "OUT")]));
+        if let Some(defined) = one.symbols.iter_mut().find(|x| x.name == "LDO") {
+            defined.pins[0].kind = PinKind::PowerOut;
+        }
+        place(&mut one, "U2", "Reg:LDO");
+        wire(&mut one, "U2.1", "U1.GPIO2");
+        assert!(
+            !one.wires.is_empty()
+                && !eval(&one, &[], &[])
+                    .warnings
+                    .iter()
+                    .any(|w| matches!(w, Warning::OutputsFighting { .. }))
         );
     }
 

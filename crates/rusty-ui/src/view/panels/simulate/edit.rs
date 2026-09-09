@@ -605,7 +605,7 @@ mod tests {
         for i in 0..(HISTORY_CAP + 5) {
             let mut list = sheet();
             list[0].inst.x = i as f64;
-            remember(&mut past, (list, Vec::new()));
+            remember(&mut past, (list, Vec::new(), Vec::new()));
         }
         assert_eq!(past.len(), HISTORY_CAP);
         assert_eq!(past[0].0[0].inst.x, 5.0, "the oldest five were dropped");

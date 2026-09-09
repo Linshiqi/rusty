@@ -67,8 +67,10 @@ impl EditPart {
     }
 }
 
-/// What undo restores: the parts and the wires, as they were.
-pub(super) type Snapshot = (Vec<EditPart>, Vec<Wire>);
+/// What undo restores: the parts, the wires, and the pins the author has
+/// said reach nothing on purpose — everything the sheet holds that a
+/// gesture can change.
+pub(super) type Snapshot = (Vec<EditPart>, Vec<Wire>, Vec<PinRef>);
 
 /// Where another marked part stood when a group drag began.
 pub(super) type GroupStart = (usize, (f64, f64));
@@ -121,6 +123,11 @@ pub(super) enum Drag {
 pub(super) enum MenuTarget {
     Wire(usize),
     Part(usize),
+    /// One pin of one part, by the part's index and the pin's place in its
+    /// symbol — the only place a no-connect can go, since a no-connect is
+    /// about a pin and nothing else. Indices rather than a name because
+    /// this type is `Copy` and lives in a signal.
+    Pin(usize, usize),
     Sheet,
 }
 
@@ -227,7 +234,12 @@ pub(super) fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
 
 /// Back to the wire model, for saving. The symbols are not sent: the
 /// backend resolves them on load, and the file never carries them.
-pub(super) fn sheet_of(chip: &str, parts: &[EditPart], wires: &[Wire]) -> Sheet {
+pub(super) fn sheet_of(
+    chip: &str,
+    parts: &[EditPart],
+    wires: &[Wire],
+    no_connect: &[PinRef],
+) -> Sheet {
     let mut sheet = Sheet::empty(chip);
     for part in parts {
         if part.is_kit() {
@@ -240,6 +252,7 @@ pub(super) fn sheet_of(chip: &str, parts: &[EditPart], wires: &[Wire]) -> Sheet 
         }
     }
     sheet.wires = wires.to_vec();
+    sheet.no_connect = no_connect.to_vec();
     sheet
 }
 
@@ -1249,7 +1262,7 @@ mod tests {
             "a mirror stays put too"
         );
 
-        let saved = sheet_of("esp32c3", &parts, &[]);
+        let saved = sheet_of("esp32c3", &parts, &[], &[]);
         assert_eq!((saved.kit_rot, saved.kit_mirror), (90, true));
         let reloaded = parts_of(&saved, &rows());
         assert_eq!(
@@ -1278,7 +1291,7 @@ mod tests {
             parts[1].symbol.as_ref().map(|s| s.name.as_str()),
             Some("LED")
         );
-        let again = sheet_of("esp32c3", &parts, &sheet.wires);
+        let again = sheet_of("esp32c3", &parts, &sheet.wires, &[]);
         assert_eq!(again.kit_x, Some(300.0));
         assert_eq!((again.kit_rot, again.kit_mirror), (0, false));
         assert_eq!(again.parts, sheet.parts);

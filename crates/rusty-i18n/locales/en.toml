@@ -845,6 +845,8 @@ espup = "Installs the Xtensa compiler this chip needs. Nothing upstream ships on
 rustup = "Rust itself is not installed. Everything else here rides on it, so install rustup first — https://rustup.rs — and rusty can do the rest."
 msvc = "The Windows C++ build tools are not installed, so nothing `cargo install` compiles can be linked. Install Build Tools for Visual Studio with the “Desktop development with C++” workload — https://visualstudio.microsoft.com/visual-cpp-build-tools/ — then rusty can do the rest."
 [simulate]
+not-connected = "Not connected"
+connected-again = "Connected after all"
 kicad-import = "Import a KiCad schematic…"
 kicad-export = "Export as a KiCad schematic…"
 planning = "Working out the plan…"
@@ -933,6 +935,8 @@ warning-bus-registers = "{part}: {value} is not <reg>=<hex bytes> pairs, so it a
 warning-bus-wiring = "{part} has an I2C address but its SDA or SCL reaches no GPIO: the emulator would answer it and the board on your desk would not"
 warning-wire-select = "{part}: {value} is not a chip select this part has, or its answer is not hex bytes"
 warning-wire-wiring = "{part} is on a chip select but its SCK or MOSI reaches no GPIO: the emulator would talk to it and the board on your desk would not"
+warning-loose-pin = "{part}.{pin} has no wire on it while the rest of {part} is wired — join it, or mark it as not connected"
+warning-outputs = "two pins that both drive are wired together: {pins}"
 [parts]
 color-green = "green"
 color-blue = "blue"

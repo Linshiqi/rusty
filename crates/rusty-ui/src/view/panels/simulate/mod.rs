@@ -236,6 +236,12 @@ fn warning_text(warning: &Warning) -> String {
             t!("simulate.warning-wire-select", part = part, value = value)
         }
         Warning::WireNotWired { part } => t!("simulate.warning-wire-wiring", part = part),
+        Warning::PinReachesNothing { part, pin } => {
+            t!("simulate.warning-loose-pin", part = part, pin = pin)
+        }
+        Warning::OutputsFighting { pins } => {
+            t!("simulate.warning-outputs", pins = pins.join(", "))
+        }
     }
 }
 
@@ -341,49 +347,100 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
     // rules, so a lamp behind a pressed button lights on the sheet.
     let pressed: RwSignal<HashSet<String>> = RwSignal::new(HashSet::new());
 
+    // The pins the author has answered for: "yes, this one reaches nothing,
+    // on purpose". The rules read it, and it is what keeps the loose-pin
+    // finding from being a thing people scroll past.
+    let no_connect: RwSignal<Vec<PinRef>> = RwSignal::new(board.no_connect.clone());
+
     let history = RwSignal::new(Vec::<Snapshot>::new());
     let future = RwSignal::new(Vec::<Snapshot>::new());
     let checkpoint = move || {
-        history.update(|h| edit::remember(h, (parts.get_untracked(), wires.get_untracked())));
+        history.update(|h| {
+            edit::remember(
+                h,
+                (
+                    parts.get_untracked(),
+                    wires.get_untracked(),
+                    no_connect.get_untracked(),
+                ),
+            )
+        });
         future.set(Vec::new());
     };
     let undo = move || {
-        let Some((p, w)) = history.try_update(|h| h.pop()).flatten() else {
+        let Some((p, w, n)) = history.try_update(|h| h.pop()).flatten() else {
             return;
         };
-        future.update(|f| f.push((parts.get_untracked(), wires.get_untracked())));
+        future.update(|f| {
+            f.push((
+                parts.get_untracked(),
+                wires.get_untracked(),
+                no_connect.get_untracked(),
+            ))
+        });
         parts.set(p);
         wires.set(w);
+        no_connect.set(n);
         dirty.set(true);
     };
     let redo = move || {
-        let Some((p, w)) = future.try_update(|f| f.pop()).flatten() else {
+        let Some((p, w, n)) = future.try_update(|f| f.pop()).flatten() else {
             return;
         };
-        history.update(|h| h.push((parts.get_untracked(), wires.get_untracked())));
+        history.update(|h| {
+            h.push((
+                parts.get_untracked(),
+                wires.get_untracked(),
+                no_connect.get_untracked(),
+            ))
+        });
         parts.set(p);
         wires.set(w);
+        no_connect.set(n);
         dirty.set(true);
     };
 
     // The sheet as the rules read it: parts, wires, and the symbols the
     // parts carry. Built untracked for a command, tracked for the reading.
-    let sheet_with_symbols = |chip: &str, list: &[EditPart], wires: &[Wire]| -> Sheet {
-        let mut sheet = sheet_of(chip, list, wires);
-        for part in list {
-            if let Some(symbol) = &part.symbol
-                && !sheet.symbols.iter().any(|s| s.id() == symbol.id())
-            {
-                sheet.symbols.push(symbol.clone());
+    let sheet_with_symbols =
+        |chip: &str, list: &[EditPart], wires: &[Wire], marks: &[PinRef]| -> Sheet {
+            let mut sheet = sheet_of(chip, list, wires, marks);
+            for part in list {
+                if let Some(symbol) = &part.symbol
+                    && !sheet.symbols.iter().any(|s| s.id() == symbol.id())
+                {
+                    sheet.symbols.push(symbol.clone());
+                }
             }
-        }
-        sheet
+            sheet
+        };
+    // "Yes, that pin reaches nothing, on purpose." The one answer the
+    // loose-pin finding can be given, and the reason it is allowed to exist.
+    let toggle_no_connect = move |part: usize, pin: usize| {
+        let Some(named) = parts.with_untracked(|list| {
+            let part = list.get(part)?;
+            let symbol = part.symbol.as_ref()?;
+            let found = symbol.pins.get(pin)?;
+            Some(PinRef::new(&part.inst.reference, pin_key(symbol, found)))
+        }) else {
+            return;
+        };
+        checkpoint();
+        no_connect.update(|marks| match marks.iter().position(|p| *p == named) {
+            Some(at) => {
+                marks.remove(at);
+            }
+            None => marks.push(named),
+        });
+        dirty.set(true);
     };
+
     let sheet_now = move || {
         sheet_with_symbols(
             &chip_id.get_value(),
             &parts.get_untracked(),
             &wires.get_untracked(),
+            &no_connect.get_untracked(),
         )
     };
     // Everything the rules say about the sheet at this moment: which lamps
@@ -393,7 +450,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
     let eval: Memo<Evaluation> = {
         let chip = chip.clone();
         Memo::new(move |_| {
-            let sheet = sheet_with_symbols(&chip, &parts.get(), &wires.get());
+            let sheet = sheet_with_symbols(&chip, &parts.get(), &wires.get(), &no_connect.get());
             let rows = rows.get();
             let gpio = state.sim.gpio.get();
             let held = pressed.get();
@@ -453,7 +510,12 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
     let save = {
         let chip = chip.clone();
         Callback::new(move |_: ()| {
-            let sheet = sheet_of(&chip, &parts.get_untracked(), &wires.get_untracked());
+            let sheet = sheet_of(
+                &chip,
+                &parts.get_untracked(),
+                &wires.get_untracked(),
+                &no_connect.get_untracked(),
+            );
             controller::save_sim_board(state, sheet, dirty);
         })
     };
@@ -1096,6 +1158,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         let rows = rows.get_untracked();
                                         parts.set(parts_of(&brought, &rows));
                                         wires.set(brought.wires.clone());
+                                        no_connect.set(brought.no_connect.clone());
                                         marked.set(Vec::new());
                                         selected.set(None);
                                         selected_wire.set(None);
@@ -1339,7 +1402,19 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     .iter()
                                                     .map(|spot| {
                                                         let ((x, y), _) = spot_on_sheet(p, spot);
-                                                        (spot.number.clone(), x - p.inst.x, y - p.inst.y)
+                                                        // The pin's place in its symbol travels
+                                                        // with the dot: a no-connect is about a
+                                                        // pin, and the menu is `Copy`.
+                                                        let at = p
+                                                            .symbol
+                                                            .as_ref()
+                                                            .and_then(|s| {
+                                                                s.pins
+                                                                    .iter()
+                                                                    .position(|pin| pin.number == spot.number)
+                                                            })
+                                                            .unwrap_or(0);
+                                                        (spot.number.clone(), x - p.inst.x, y - p.inst.y, at)
                                                     })
                                                     .collect::<Vec<_>>()
                                             })
@@ -1350,10 +1425,10 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 pin_dots
                                                     .get()
                                                     .iter()
-                                                    .filter(|(number, _, _)| {
+                                                    .filter(|(number, _, _, _)| {
                                                         !edit::wires_at(&list, all, index, number).is_empty()
                                                     })
-                                                    .map(|(number, _, _)| number.clone())
+                                                    .map(|(number, _, _, _)| number.clone())
                                                     .collect::<Vec<_>>()
                                             })
                                         });
@@ -1780,7 +1855,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                             pin_dots
                                                 .get()
                                                 .into_iter()
-                                                .map(|(number, dx, dy)| {
+                                                .map(|(number, dx, dy, at)| {
                                                     // A `Copy` handle to the number, so the
                                                     // closures below can each be used more
                                                     // than once.
@@ -1795,22 +1870,65 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                             })
                                                         })
                                                     };
+                                                    // Answered for: KiCad's cross, and no more
+                                                    // pulsing — the pulse means "unfinished" and
+                                                    // this one is finished.
+                                                    let answered = move || {
+                                                        parts.with(|list| {
+                                                            let Some(part) = list.get(index) else {
+                                                                return false;
+                                                            };
+                                                            let Some(symbol) = part.symbol.as_ref() else {
+                                                                return false;
+                                                            };
+                                                            let Some(found) = number.with_value(|n| {
+                                                                symbol.pins.iter().find(|p| p.number == *n).cloned()
+                                                            }) else {
+                                                                return false;
+                                                            };
+                                                            let named = PinRef::new(
+                                                                &part.inst.reference,
+                                                                pin_key(symbol, &found),
+                                                            );
+                                                            no_connect.with(|marks| marks.contains(&named))
+                                                        })
+                                                    };
                                                     view! {
                                                         <circle
                                                             cx=dx
                                                             cy=dy
                                                             r=move || if target() { 5.5 } else { 3.4 }
                                                             fill=move || if target() { "#ffd75c" } else if wired() { "#c9a227" } else { "#e0a838" }
-                                                            class=move || if wired() || target() { "" } else { "animate-pulse" }
+                                                            class=move || if wired() || target() || answered() { "" } else { "animate-pulse" }
                                                             style="pointer-events: all; cursor: crosshair"
                                                             on:pointerdown=move |event: ev::PointerEvent| start_wire(event, number.get_value())
                                                             on:dblclick=move |event: ev::MouseEvent| {
                                                                 event.stop_propagation();
                                                                 disconnect_pin(index, number.get_value());
                                                             }
+                                                            on:contextmenu=move |event: ev::MouseEvent| {
+                                                                event.prevent_default();
+                                                                event.stop_propagation();
+                                                                menu.set(Some((
+                                                                    f64::from(event.client_x()),
+                                                                    f64::from(event.client_y()),
+                                                                    MenuTarget::Pin(index, at),
+                                                                )));
+                                                            }
                                                         >
                                                             <title>{t!("simulate.pin-hint")}</title>
                                                         </circle>
+                                                        <Show when=answered>
+                                                            <g
+                                                                stroke="#d05a5a"
+                                                                stroke-width="1.6"
+                                                                stroke-linecap="round"
+                                                                style="pointer-events: none"
+                                                            >
+                                                                <line x1=dx - 4.0 y1=dy - 4.0 x2=dx + 4.0 y2=dy + 4.0 />
+                                                                <line x1=dx - 4.0 y1=dy + 4.0 x2=dx + 4.0 y2=dy - 4.0 />
+                                                            </g>
+                                                        </Show>
                                                     }
                                                 })
                                                 .collect_view()
@@ -2717,6 +2835,36 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     />
                                 }
                                     .into_any()
+                            }
+                            MenuTarget::Pin(part, pin) => {
+                                let marked_already = parts.with_untracked(|list| {
+                                    list.get(part)
+                                        .and_then(|p| p.symbol.as_ref())
+                                        .and_then(|s| s.pins.get(pin).map(|f| (s, f)))
+                                        .zip(list.get(part))
+                                        .is_some_and(|((symbol, found), owner)| {
+                                            let named = PinRef::new(
+                                                &owner.inst.reference,
+                                                pin_key(symbol, found),
+                                            );
+                                            no_connect.with_untracked(|m| m.contains(&named))
+                                        })
+                                });
+                                let label = if marked_already {
+                                    t!("simulate.connected-again")
+                                } else {
+                                    t!("simulate.not-connected")
+                                };
+                                view! {
+                                    <MenuItem
+                                        label=label
+                                        on_select=Callback::new(move |_| {
+                                            toggle_no_connect(part, pin);
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                                .into_any()
                             }
                             MenuTarget::Sheet => view! {
                                 <MenuItem

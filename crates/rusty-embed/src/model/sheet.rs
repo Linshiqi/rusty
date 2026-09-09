@@ -125,6 +125,17 @@ pub struct Sheet {
     pub parts: Vec<Instance>,
     #[serde(default)]
     pub wires: Vec<Wire>,
+    /// The pins the author has said reach nothing *on purpose* — KiCad's
+    /// no-connect flag, and the reason the rules can complain about an
+    /// unwired pin at all.
+    ///
+    /// A finding that fires on every pin nobody has got to yet is a finding
+    /// people learn to ignore, and then they ignore it the time it mattered.
+    /// So the rule needs a way to be told "yes, and that is deliberate", and
+    /// this is it. Absence is not the same as a flag: an unmarked pin that
+    /// reaches nothing is a question, and a marked one is an answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_connect: Vec<PinRef>,
     /// The symbols the parts use, resolved by the backend from the library
     /// so the frontend can draw without a second lookup. Never in the file.
     #[serde(default)]
@@ -146,6 +157,7 @@ impl Sheet {
             kit_mirror: false,
             parts: Vec::new(),
             wires: Vec::new(),
+            no_connect: Vec::new(),
             symbols: Vec::new(),
             notes: Vec::new(),
         }
@@ -170,6 +182,11 @@ impl Sheet {
                 candidate != KIT_REFERENCE && self.parts.iter().all(|p| p.reference != *candidate)
             })
             .expect("the integers do not run out")
+    }
+
+    /// Has the author said this pin reaches nothing on purpose?
+    pub fn is_no_connect(&self, pin: &PinRef) -> bool {
+        self.no_connect.contains(pin)
     }
 
     /// Every wire touching a part, in order.

@@ -130,6 +130,25 @@ fn patch(sheet: &Sheet, original: &Schematic) -> Written {
     let mut notes = Vec::new();
 
     let rewired = nets_of(was) != nets_of(sheet);
+    // A no-connect is geometry in KiCad and a pin here, so a set that
+    // changed is rewritten whole — there are a handful of them on a sheet
+    // and no way to tell which node was which pin's once they have moved.
+    let remarked = {
+        let (mut before, mut now) = (
+            was.no_connect
+                .iter()
+                .map(PinRef::to_string)
+                .collect::<Vec<_>>(),
+            sheet
+                .no_connect
+                .iter()
+                .map(PinRef::to_string)
+                .collect::<Vec<_>>(),
+        );
+        before.sort();
+        now.sort();
+        before != now
+    };
     let parts_changed: Vec<&Instance> = sheet
         .parts
         .iter()
@@ -145,7 +164,7 @@ fn patch(sheet: &Sheet, original: &Schematic) -> Written {
         .map(|before| before.reference.as_str())
         .collect();
 
-    if !rewired && parts_changed.is_empty() && gone.is_empty() {
+    if !rewired && !remarked && parts_changed.is_empty() && gone.is_empty() {
         // The whole point, and it costs nothing to say: a file nobody
         // changed comes back as the bytes that went in.
         return Written {
@@ -168,6 +187,7 @@ fn patch(sheet: &Sheet, original: &Schematic) -> Written {
                 }
             }
             "wire" | "junction" if rewired => drop.push((span.start, span.end)),
+            "no_connect" if remarked => drop.push((span.start, span.end)),
             _ => {}
         }
     }
@@ -211,6 +231,9 @@ fn patch(sheet: &Sheet, original: &Schematic) -> Written {
         if let Some(symbol) = sheet.symbol_of(&part.reference) {
             added.push_str(&instance_node(part, symbol));
         }
+    }
+    if remarked {
+        added.push_str(&no_connect_nodes(sheet));
     }
     if rewired {
         added.push_str(&wire_nodes(sheet));
@@ -435,6 +458,27 @@ fn wire_nodes(sheet: &Sheet) -> String {
     out
 }
 
+/// The no-connect marks, at the pins they are about.
+fn no_connect_nodes(sheet: &Sheet) -> String {
+    let mut out = String::new();
+    for (index, pin) in sheet.no_connect.iter().enumerate() {
+        let Some(at) = pin_point(sheet, pin) else {
+            continue;
+        };
+        let _ = writeln!(
+            out,
+            "	(no_connect
+		(at {} {})
+		(uuid \"{}\")
+	)",
+            mm(at.0),
+            mm(at.1),
+            uuid_from("no_connect", index)
+        );
+    }
+    out
+}
+
 /// A pin's KiCad-space position on this sheet.
 fn pin_point(sheet: &Sheet, pin: &PinRef) -> Option<(f64, f64)> {
     let part = sheet.part(&pin.part)?;
@@ -502,6 +546,32 @@ mod tests {
         let out = write(&sheet, Some(&read));
         assert_eq!(out.text, LAMP, "the file is untouched");
         assert!(out.notes.is_empty(), "{:?}", out.notes);
+    }
+
+    /// A no-connect is a mark on a point in KiCad and a pin here, so it has
+    /// to survive both crossings: put one on a pin, write, read back, and
+    /// find the same pin answered for.
+    #[test]
+    fn a_no_connect_crosses_as_the_pin_it_is_about() {
+        let read = kicad_sch::parse(LAMP, "esp32c3").expect("parsed");
+        assert!(read.sheet.no_connect.is_empty(), "the fixture has none");
+
+        let mut sheet = read.sheet.clone();
+        sheet.no_connect.push(crate::model::PinRef::new("D1", "2"));
+        let out = write(&sheet, Some(&read));
+        assert!(out.text.contains("(no_connect"), "{}", out.text);
+        assert_eq!(
+            out.text.matches("(wire").count(),
+            LAMP.matches("(wire").count(),
+            "marking a pin is not rewiring"
+        );
+
+        let again = kicad_sch::parse(&out.text, "esp32c3").expect("reads back");
+        assert_eq!(
+            again.sheet.no_connect,
+            vec![crate::model::PinRef::new("D1", "2")],
+            "and it lands on the pin it was about"
+        );
     }
 
     #[test]

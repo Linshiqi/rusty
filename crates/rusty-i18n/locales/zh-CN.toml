@@ -807,6 +807,8 @@ espup = "安装这颗芯片需要的 Xtensa 编译器。上游没有任何一份
 rustup = "Rust 本身还没装。这里其他所有东西都建立在它之上，所以先装 rustup —— https://rustup.rs —— 剩下的 rusty 能自己来。"
 msvc = "Windows 的 C++ 生成工具还没装，`cargo install` 编出来的东西没有链接器可用。请安装 Visual Studio 生成工具并勾选“使用 C++ 的桌面开发”—— https://visualstudio.microsoft.com/visual-cpp-build-tools/ —— 剩下的 rusty 能自己来。"
 [simulate]
+not-connected = "标记为不连接"
+connected-again = "取消不连接"
 kicad-import = "导入 KiCad 原理图…"
 kicad-export = "导出为 KiCad 原理图…"
 planning = "正在生成仿真计划…"
@@ -891,6 +893,8 @@ warning-bus-registers = "{part}：{value} 不是 <寄存器>=<十六进制字节
 warning-bus-wiring = "{part} 有 I2C 地址，但它的 SDA 或 SCL 没有连到任何 GPIO：模拟器会回答它，桌上的板子不会"
 warning-wire-select = "{part}：{value} 不是这个器件有的片选，或者它的回答不是十六进制字节"
 warning-wire-wiring = "{part} 挂在某个片选上，但它的 SCK 或 MOSI 没有连到任何 GPIO：模拟器会和它通信，桌上的板子不会"
+warning-loose-pin = "{part}.{pin} 没有接线，而 {part} 的其它引脚都接了——接上它，或者标记为不连接"
+warning-outputs = "两个都会驱动的引脚接在了一起：{pins}"
 [parts]
 color-green = "绿"
 color-blue = "蓝"

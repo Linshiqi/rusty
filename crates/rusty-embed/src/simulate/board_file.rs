@@ -87,6 +87,11 @@ struct FileV2 {
     parts: Vec<Part>,
     #[serde(default, rename = "wire", skip_serializing_if = "Vec::is_empty")]
     wires: Vec<WireRecord>,
+    /// `no_connect = ["U2.7", "U2.8"]` — the pins the author has said reach
+    /// nothing on purpose. A list of spellings rather than a table, because
+    /// that is what a person writing this file by hand would write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    no_connect: Vec<String>,
 }
 
 // ---------------------------------------------------------------- version 1
@@ -347,6 +352,17 @@ fn read_v2(file: &FileV2, chip: &str) -> Sheet {
             )),
         }
     }
+    for spelling in &file.no_connect {
+        match PinRef::parse(spelling) {
+            Some(pin) => sheet.no_connect.push(pin),
+            // Skipped and said, not silently dropped: a no-connect that did
+            // not land turns a deliberate answer back into a finding, and
+            // the user would see the finding and not the reason.
+            None => sheet.notes.push(format!(
+                "`{spelling}` in .rusty/sim.toml's no_connect does not name a pin as `part.pin`, and was skipped"
+            )),
+        }
+    }
     sheet
 }
 
@@ -602,6 +618,7 @@ pub fn save(root: &Path, sheet: &Sheet) -> Result<()> {
                     .collect(),
             })
             .collect(),
+        no_connect: sheet.no_connect.iter().map(PinRef::to_string).collect(),
     };
     let path = root.join(".rusty/sim.toml");
     let dir = root.join(".rusty");
@@ -676,6 +693,7 @@ mod tests {
             to: PinRef::new("U1", "9"),
             bends: Vec::new(),
         });
+        sheet.no_connect.push(PinRef::new("V1", "OUT"));
         save(dir.path(), &sheet).expect("save");
         let text = std::fs::read_to_string(dir.path().join(".rusty/sim.toml")).unwrap();
         assert!(text.starts_with("version = 2\n"), "{text}");
@@ -696,6 +714,11 @@ mod tests {
         );
         assert_eq!(loaded.sheet.parts[1].props["max"], "1023");
         assert_eq!(loaded.sheet.wires[0].bends.len(), 2);
+        assert_eq!(
+            loaded.sheet.no_connect,
+            vec![PinRef::new("V1", "OUT")],
+            "a pin said to reach nothing on purpose still says so"
+        );
     }
 
     #[test]
