@@ -1991,6 +1991,20 @@ usty`) holds `location.toml`
   only in which pin is which. What settled it was a drawn diode: a lamp
   turned 90° between a supply and a ground, with its cathode bar on the
   ground side.
+- **And a mirror acts on the screen, after the turn** — the same class of
+  boolean, and the first implementation had it the other way. Before or
+  after is indistinguishable at 0° and 180° and wrong at every quarter
+  turn, so a two-pin part cannot witness it either: it took three
+  transistors, asymmetric in *both* axes. `(at … 90) (mirror x)` is drawn
+  with the base up, the collector left and the emitter right; mirroring
+  first answers the opposite for all three, which would exchange a
+  transistor's collector and emitter on every quarter-turned part and say
+  nothing. `(mirror y)` never appears in a file at all — a left–right flip
+  is `mirror x` plus 180°, and KiCad stores it that way.
+  **The lesson under both: when a transform is invisible in the geometry,
+  draw the asymmetric case and look at it.** Two files and two rounds of
+  inference from field positions produced one right answer and one wrong
+  one; a screenshot of a diode and one of three transistors produced both.
 - **A file format writer patches bytes; it does not reserialise a tree.**
   KiCad writes tabs, puts small nodes inline and long ones one per line, and
   writes `0` where a parser only knows `0.0`, so a tree cannot give back

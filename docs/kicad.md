@@ -146,10 +146,21 @@ them looked as though it had:
   from the 90° ones on the same sheet. A witness that contradicts itself is
   not a witness.
 
-`(mirror x|y)` is implemented as flip-then-turn and is **unverified**:
-neither file had a mirrored instance. One `(mirror y)` symbol at 90° with a
-wire on an asymmetric pin would settle it, the same shape of evidence the
-rotation needed. The test says so rather than implying otherwise.
+**The mirror was the second boolean, and it was wrong.** It acts on the
+screen, *after* the turn — and the first implementation had it before,
+which is indistinguishable at 0° and 180° and wrong at every quarter turn.
+The witness is three `Simulation_SPICE:NPN` transistors, asymmetric in both
+axes, which is what a two-pin part can never be: `(at … 90) (mirror x)` is
+drawn with the base up, the collector left and the emitter right, and
+mirroring first answers the opposite for all three. A reader with that
+backwards would exchange a transistor's collector and emitter on every
+quarter-turned part, silently.
+
+`(mirror y)` was never seen in any file, and there is a reason: a left–right
+flip is the same orientation as `mirror x` plus 180°, so KiCad need not
+write it — asked for one it stored `(at … 180)` with no mirror node at all.
+It follows the rule the other one established rather than a measurement of
+its own, and the code says so.
 
 **1 — the reader.** *Done* (`schematic::kicad_sch`). `.kicad_sch` into a
 `Sheet`. The syntax was free — `kicad_sym`'s tokeniser moved to

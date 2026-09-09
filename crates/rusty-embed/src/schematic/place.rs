@@ -13,11 +13,14 @@
 //! the library and is drawn *below* its connection point on the sheet, and
 //! `power:VCC`'s runs to `+2.54` and is drawn above.
 //!
-//! **Which way the angle turns** is the one thing here that had to be
-//! recovered rather than read, because getting it wrong silently swaps the
-//! pins of any rotated part that is not point-symmetric — a diode reversed,
-//! an IC's netlist scrambled, and nothing on screen to say so. The evidence
-//! is in [`ROTATION`].
+//! **Two things had to be recovered rather than read**, and each is one
+//! boolean that silently swaps the pins of a part that is not symmetric — a
+//! diode reversed, a transistor's collector and emitter exchanged, and
+//! nothing on screen to say so. Which way the angle turns is [`ROTATION`];
+//! whether the mirror comes before or after the turn is [`Mirror`]. Both
+//! were settled by drawing the case in KiCad and looking at it, because
+//! both are invisible in the file's own geometry: a symmetric part lands on
+//! the same points either way and differs only in which pin is which.
 
 use crate::model::{Pin, Symbol};
 
@@ -59,13 +62,36 @@ pub use crate::model::MM_PX;
 const ROTATION: f64 = -1.0;
 
 /// How a placed instance is flipped, in KiCad's spelling.
+///
+/// **A mirror acts on the screen, after the turn**, and that had to be
+/// measured too — it is right-looking either way at 0° and 180°, and wrong
+/// at every quarter turn. The witness is three `Simulation_SPICE:NPN`
+/// transistors, whose pins are asymmetric in *both* axes (`C` at
+/// `(2.54, 5.08)`, `B` at `(-5.08, 0)`, `E` at `(2.54, -5.08)`), which is
+/// what a two-pin part could never be:
+///
+/// - `(at … 0) (mirror x)` draws with `E` up, `C` down and `B` still left,
+///   so `mirror x` negates y and leaves x alone — top to bottom.
+/// - `(at … 90) (mirror x)` draws with **`B` up, `C` left, `E` right**.
+///   Turning first and mirroring after gives exactly that; mirroring first
+///   puts `B` down, `C` right and `E` left — all three wrong, which is the
+///   useful kind of wrong: a reader that had it backwards would swap a
+///   transistor's collector and emitter on every quarter-turned part and
+///   nothing on screen would say so.
+///
+/// `(mirror y)` was never seen in a file, and there is a reason: mirroring
+/// left to right is the same orientation as `mirror x` with 180° added, so
+/// KiCad has no need to write it — asked for a left–right flip it stored
+/// `(at … 180)` with no mirror at all. It is implemented by the rule the
+/// other one established (negate x, after the turn) rather than by a
+/// measurement of its own, and that is what this paragraph is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mirror {
     #[default]
     None,
-    /// `(mirror x)` — flipped top to bottom.
+    /// `(mirror x)` — flipped top to bottom, in screen space.
     X,
-    /// `(mirror y)` — flipped left to right.
+    /// `(mirror y)` — flipped left to right. Never observed; see above.
     Y,
 }
 
@@ -92,19 +118,23 @@ pub struct Placement {
 impl Placement {
     /// A library point through the placement, into sheet millimetres.
     ///
-    /// The order is KiCad's: flip the library's y, then mirror, then turn,
-    /// then translate. Mirror before the turn, because `(mirror y)` on a
-    /// symbol turned 90° flips the symbol and not the screen.
+    /// The order is KiCad's: flip the library's y, **turn, then mirror**,
+    /// then translate. The mirror is last because it acts on the screen and
+    /// not on the symbol's own frame — see [`Mirror`], where the drawing
+    /// that says so is written down. This file had it the other way round
+    /// first, which is right at 0° and 180° and wrong at every quarter
+    /// turn.
     pub fn point(&self, local: (f64, f64)) -> (f64, f64) {
         let (x, y) = (local.0, -local.1);
+        let a = (self.angle * ROTATION).to_radians();
+        let (sin, cos) = a.sin_cos();
+        let (x, y) = (x * cos - y * sin, x * sin + y * cos);
         let (x, y) = match self.mirror {
             Mirror::None => (x, y),
             Mirror::X => (x, -y),
             Mirror::Y => (-x, y),
         };
-        let a = (self.angle * ROTATION).to_radians();
-        let (sin, cos) = a.sin_cos();
-        (self.at.0 + x * cos - y * sin, self.at.1 + x * sin + y * cos)
+        (self.at.0 + x, self.at.1 + y)
     }
 
     /// Where a pin's wire attaches — KiCad's `at` *is* the connection
@@ -226,38 +256,70 @@ mod tests {
         assert!(same_point(supply.point((0.0, 2.54)), (113.03, 43.18)));
     }
 
+    /// Three `Simulation_SPICE:NPN` transistors drawn in KiCad 10, and what
+    /// KiCad draws. A transistor because its pins are asymmetric in *both*
+    /// axes — `C` up-right, `B` left, `E` down-right — which is the only
+    /// shape that can answer this: a two-pin part mirrors onto itself.
+    ///
+    /// **The turn comes before the mirror**, and this test is that fact.
+    /// Mirroring first is indistinguishable at 0° and 180° and wrong at
+    /// every quarter turn, so `Q3` is the one that matters and the other two
+    /// are the controls that say the rest of the pipeline is right.
     #[test]
-    fn a_mirror_flips_the_symbol_and_a_turn_then_turns_it() {
-        let plain = Placement::default();
-        assert!(same_point(plain.point((3.81, 0.0)), (3.81, 0.0)));
+    fn a_mirror_acts_on_the_screen_after_the_turn() {
+        let collector = pin("1", "C", (2.54, 5.08), 270);
+        let base = pin("2", "B", (-5.08, 0.0), 0);
+        let emitter = pin("3", "E", (2.54, -5.08), 90);
 
-        let flipped = Placement {
-            mirror: Mirror::Y,
-            ..Placement::default()
-        };
-        assert!(same_point(flipped.point((3.81, 0.0)), (-3.81, 0.0)));
-
-        // Mirrored *then* turned: the symbol is flipped in its own frame
-        // and the whole of it then turns.
-        //
-        // **Unverified against KiCad**, and said so rather than implied:
-        // neither file that settled the rotation had a mirrored instance in
-        // it, so this is the order the code implements and not a measured
-        // fact. What would settle it is one `(mirror y)` symbol at 90° with
-        // a wire on an asymmetric pin — the same shape of evidence the
-        // rotation needed.
-        let both = Placement {
-            angle: 90.0,
-            mirror: Mirror::Y,
-            ..Placement::default()
-        };
-        assert!(same_point(both.point((3.81, 0.0)), (0.0, 3.81)));
-
-        let half = Placement {
+        // Q1 — turned 180°, not mirrored. The control: an asymmetric part
+        // through the flip and a turn.
+        let q1 = Placement {
+            at: (134.62, 57.15),
             angle: 180.0,
-            ..Placement::default()
+            mirror: Mirror::None,
         };
-        assert!(same_point(half.point((3.81, 0.0)), (-3.81, 0.0)));
+        assert!(
+            same_point(q1.pin(&emitter), (132.08, 52.07)),
+            "E is drawn above"
+        );
+        assert!(same_point(q1.pin(&collector), (132.08, 62.23)), "C below");
+        assert!(same_point(q1.pin(&base), (139.7, 57.15)), "B to the right");
+
+        // Q2 — mirrored, not turned. `mirror x` negates y: the collector
+        // and emitter swap and the base does not move.
+        let q2 = Placement {
+            at: (152.4, 67.31),
+            angle: 0.0,
+            mirror: Mirror::X,
+        };
+        assert!(same_point(q2.pin(&emitter), (154.94, 62.23)), "E above");
+        assert!(same_point(q2.pin(&collector), (154.94, 72.39)), "C below");
+        assert!(same_point(q2.pin(&base), (147.32, 67.31)), "B still left");
+
+        // Q3 — mirrored *and* turned, which is the whole question. KiCad
+        // draws this one with the base up, the collector left and the
+        // emitter right. Mirroring before the turn answers the opposite for
+        // all three.
+        let q3 = Placement {
+            at: (133.35, 76.2),
+            angle: 90.0,
+            mirror: Mirror::X,
+        };
+        assert!(
+            same_point(q3.pin(&base), (133.35, 71.12)),
+            "the base is drawn above: {:?}",
+            q3.pin(&base)
+        );
+        assert!(
+            same_point(q3.pin(&collector), (128.27, 78.74)),
+            "the collector to the left: {:?}",
+            q3.pin(&collector)
+        );
+        assert!(
+            same_point(q3.pin(&emitter), (138.43, 78.74)),
+            "and the emitter to the right: {:?}",
+            q3.pin(&emitter)
+        );
     }
 
     #[test]
