@@ -153,6 +153,79 @@ pub fn ohms(value: &str) -> Option<f64> {
     text.parse().ok()
 }
 
+/// A voltage from the way people write one on a rail: `3V3`, `3.3V`,
+/// `+5V`, `5`, `12`.
+///
+/// The `V` stands in for the decimal point exactly as `k` does in `4k7`,
+/// because that is how it is written on a schematic. Anything else is
+/// nothing and says so — `VCC` names a rail without saying what it is at,
+/// and a solver that read it as five volts would be inventing the number
+/// every answer downstream depends on.
+pub fn volts(value: &str) -> Option<f64> {
+    let text: String = value
+        .trim()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let text = text.strip_prefix('+').unwrap_or(text.as_str());
+    if let Some(at) = text.find(['V', 'v']) {
+        let (head, rest) = text.split_at(at);
+        let tail = &rest[1..];
+        let head: f64 = head.parse().ok()?;
+        if tail.is_empty() {
+            return Some(head);
+        }
+        let digits: f64 = tail.parse().ok()?;
+        return Some(head + digits / 10f64.powi(tail.len() as i32));
+    }
+    text.parse().ok()
+}
+
+/// Which pins are the same *node* — joined by wires, labels and closed
+/// switches, with nothing resistive in between.
+///
+/// The partition a circuit is built on, and not the conducting one: a
+/// resistor's two ends are two nodes with an element between them, which is
+/// the whole of what makes an answer possible. `crate::circuit` is the one
+/// caller; it is exposed here because this is where the wires are read.
+pub fn solid_nets(
+    sheet: &Sheet,
+    rows: &[Row],
+    pressed: &HashSet<String>,
+) -> BTreeMap<PinRef, usize> {
+    let mut graph = Graph::new(sheet, rows);
+    let wired = graph.wired();
+    let mut solid = graph.solid(&wired, pressed);
+    let mut out = BTreeMap::new();
+    for node in 0..graph.nodes.len() {
+        out.insert(graph.nodes[node].clone(), solid.find(node));
+    }
+    // A pin found by name answers with the same node as by number, the way
+    // every other reading here does.
+    let mut aliases: Vec<(PinRef, usize)> = Vec::new();
+    for part in &sheet.parts {
+        if let Some(symbol) = sheet.symbol_of(&part.reference) {
+            for pin in symbol.pins.iter().filter(|p| p.name != p.number) {
+                let by_number = PinRef::new(&part.reference, &pin.number);
+                if let Some(node) = out.get(&by_number) {
+                    aliases.push((PinRef::new(&part.reference, &pin.name), *node));
+                }
+            }
+        }
+    }
+    for (row, spec) in rows.iter().enumerate() {
+        let by_number = PinRef::new(KIT_REFERENCE, (row + 1).to_string());
+        let by_name = PinRef::new(KIT_REFERENCE, &spec.name);
+        if let Some(node) = out.get(&by_number)
+            && !out.contains_key(&by_name)
+        {
+            aliases.push((by_name, *node));
+        }
+    }
+    out.extend(aliases);
+    out
+}
+
 /// What a rail is at: the two levels a supply pin can have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

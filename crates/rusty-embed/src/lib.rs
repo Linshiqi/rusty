@@ -42,6 +42,7 @@ pub use protocol::{
 
 #[cfg(feature = "backend")]
 pub mod catalog;
+pub mod circuit;
 #[cfg(feature = "backend")]
 pub mod config;
 #[cfg(feature = "backend")]
