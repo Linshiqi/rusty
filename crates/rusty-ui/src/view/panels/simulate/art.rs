@@ -18,7 +18,7 @@
 //! pins down the two long sides: a chip, which is what most of them are, and
 //! an honest one — the outline says "some part", the pin names say the rest.
 
-use rusty_embed::nets::{Behaviour, behaviour_of};
+use rusty_embed::nets::{Behaviour, behaviour_of, ohms};
 use rusty_embed::{Pin, Symbol};
 
 use super::geometry::local;
@@ -800,42 +800,6 @@ pub(super) fn bands(value: &str) -> Vec<&'static str> {
         COLOURS[multiplier],
         "#c9a227",
     ]
-}
-
-/// A resistance from the way people write one: `220`, `4.7k`, `10K`, `1M`,
-/// `220R`, `4k7`. Anything else is nothing, and says so.
-fn ohms(value: &str) -> Option<f64> {
-    let text: String = value
-        .trim()
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != 'Ω' && *c != 'ω')
-        .collect();
-    let text = text.trim_end_matches(['R', 'r']).to_string();
-    if text.is_empty() {
-        return None;
-    }
-    let scale = |c: char| match c {
-        'k' | 'K' => Some(1e3),
-        'M' => Some(1e6),
-        'G' => Some(1e9),
-        'R' | 'r' => Some(1.0),
-        _ => None,
-    };
-    // `4k7` — the multiplier standing in for the decimal point.
-    if let Some(at) = text.char_indices().find(|(_, c)| scale(*c).is_some()) {
-        let (index, letter) = at;
-        let (head, rest) = text.split_at(index);
-        let tail = &rest[letter.len_utf8()..];
-        let head: f64 = head.parse().ok()?;
-        let factor = scale(letter)?;
-        if tail.is_empty() {
-            return Some(head * factor);
-        }
-        let digits: f64 = tail.parse().ok()?;
-        let places = 10f64.powi(tail.len() as i32);
-        return Some((head + digits / places) * factor);
-    }
-    text.parse().ok()
 }
 
 #[cfg(test)]

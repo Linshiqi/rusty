@@ -2059,6 +2059,62 @@ proof of the import.
   matter: the *wired* nets say whether a GPIO sits straight on a lamp (the
   missing-resistor finding), the *conducting* nets say what level reaches
   it.
+- **There are three partitions, and the third one is what a short means.**
+  `wired`, then `solid` — labels and closed switches, every join with no
+  resistance in it — then `conducting`, which adds the resistors. A short is
+  two rails in one *solid* node; two rails through a resistor are a voltage
+  divider, the commonest analog circuit there is. Joining resistor ends into
+  one node made every divider report `ground and a supply share a net`, and
+  it was measured before it was fixed: a plain two-resistor divider with its
+  midpoint on GPIO4 produced exactly that finding. A net holding both rails
+  through resistance now has no level rather than a wrong one — `None`, not
+  one of the two it sits between.
+- **A resistor's value decides exactly one thing, and `nets::divider_at` is
+  it**: where a pin sits between the rails, 0.0 at ground and 1.0 at the
+  supply. `ohms` reads `220`, `4k7`, `10K`, `1M` and refuses anything that
+  is not a resistance — it lives in `nets` beside the arithmetic rather than
+  beside the colour bands it was written for, because a resistor drawn as
+  10k and computed as nothing is two answers to one question. One resistor
+  deep on purpose: a pin on a rail, a pull-up, a pull-down, and two
+  resistors with the midpoint tapped, with parallel paths added as
+  conductances because that is exact. Deeper, or a value `ohms` cannot read,
+  is `None`. **A path that exists and cannot be valued is not the same as no
+  path** — the first version conflated them and put an unvalued divider's
+  midpoint flat on ground, so any unreadable resistor reaching a rail now
+  refuses the whole answer.
+- **The potentiometer reaches the converter, and only where the sheet
+  committed.** `P<pin>=<0..255>` was console-only because what a wiper
+  converts to depends on what its ends are wired to. With both ends *on*
+  rails there is nothing left to assume, so `pot_span` answers with the
+  GPIO and the two fractions and the knob becomes ADC counts through an
+  ordinary `adc.read_oneshot()`; the text line still goes out beside it. An
+  end behind a resistor is refused rather than read — it forms a divider
+  with the pot's own track, whose resistance is not on the sheet. The knob's
+  zero is pin `1`'s end, and the backend sends the opening counts at run
+  start from the same `start` prop the slider reads, so the panel and the
+  converter cannot disagree before the first drag.
+- **A T-junction needs no junction.** Three wires at one pin have always
+  been one net, so a branch dropped on the middle of a wire is a wire to
+  *either* of that wire's ends — no model change, no file change, no rule
+  change. `wire_under` is the hit test (`pin_under`'s rule: nothing when
+  nothing is in reach, and a pin always beats a wire), and `branch_route`
+  lays the bends along the trunk from the drop to the nearer end so the two
+  draw as a T instead of as a second wire taking its own route. Those bends
+  are sheet coordinates like every other bend, so moving the trunk later
+  slides the tail off it — the same thing that happens to any hand-bent
+  wire whose neighbour moves, and the same repair.
+- **The devkit turns like any other part, and that cost almost nothing**
+  precisely because it is one: `orient` already carried its header, its
+  hit-testing and its wires, so opening it up was `kit_rot`/`kit_mirror` on
+  the sheet, the two `is_kit()` refusals in `edit`, and the board's own art
+  taking the transform the symbols already take. Two things did not come
+  free. Its anchor is the **top-left corner** of a board three hundred
+  pixels tall, so a turn about the anchor swings it a board's length away —
+  `turned_anchor` keeps the box's middle where it was, and only for the
+  devkit, because a KiCad symbol's anchor is already its middle and
+  correcting those would move parts in files people have saved. And the row
+  names are placed *after* the turn, like every other label, because text is
+  never turned.
 - **The rules run in one memo** (`eval`, from parts, wires, the firmware's
   levels and the held switches), and every part's face reads its answer:
   `is_lit` for a lamp, `is_pin_lit` per channel for an RGB lens or a digit

@@ -410,6 +410,13 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
     let gpio_for = move |reference: &str, pin: &str| -> Option<u8> {
         nets::gpio_of(&sheet_now(), &rows.get_untracked(), reference, pin)
     };
+    // Where a pot's track runs between the rails, when the sheet says. The
+    // knob then reads as ADC counts through `adc.read_oneshot()` and not
+    // only as the text protocol's `P<pin>=`; `None` is a pot whose ends the
+    // sheet has not committed to, which gets the text line alone as before.
+    let pot_span_for = move |reference: &str| -> Option<nets::PotSpan> {
+        nets::pot_span(&sheet_now(), &rows.get_untracked(), reference)
+    };
 
     // A new part arrives unwired: connecting it is the user's move, made by
     // pulling a pin to another pin. KiCad's placement: picking a part arms
@@ -993,19 +1000,48 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                         // both directions, so the two gestures cannot
                         // disagree about what wiring means.
                         if let Some(Drag::Wire { from }) = drag.get_untracked() {
-                            if let Some(to) = hover_pin.get_untracked() {
+                            let list = parts.get_untracked();
+                            // A pin first, and the middle of a wire only
+                            // when no pin is in reach: a branch is what the
+                            // gesture means where there was nothing else to
+                            // land on, never in place of the pin somebody
+                            // was aiming at.
+                            let made = if let Some(to) = hover_pin.get_untracked() {
                                 checkpoint();
-                                let list = parts.get_untracked();
-                                let made = wires
+                                wires
                                     .try_update(|all| {
                                         edit::connect(&list, all, (from.0, &from.1), (to.0, &to.1))
                                     })
-                                    .flatten();
-                                if made.is_some() {
-                                    selected.set(None);
-                                    selected_wire.set(made);
-                                    dirty.set(true);
+                                    .flatten()
+                            } else if let Some(at) = ghost.get_untracked() {
+                                let step = grid.get_untracked();
+                                let at = (snap_to(at.0, step), snap_to(at.1, step));
+                                let trunk = wires
+                                    .with_untracked(|all| wire_under(&list, all, at, REACH));
+                                match trunk {
+                                    Some(trunk) => {
+                                        checkpoint();
+                                        wires
+                                            .try_update(|all| {
+                                                edit::branch(
+                                                    &list,
+                                                    all,
+                                                    (from.0, &from.1),
+                                                    trunk,
+                                                    at,
+                                                )
+                                            })
+                                            .flatten()
+                                    }
+                                    None => None,
                                 }
+                            } else {
+                                None
+                            };
+                            if made.is_some() {
+                                selected.set(None);
+                                selected_wire.set(made);
+                                dirty.set(true);
                             }
                             hover_pin.set(None);
                         }
@@ -1414,18 +1450,40 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 let kit_h = kit_height(drawn.len());
                                                 let per_side = drawn.len().div_ceil(2).max(1);
                                                 let art = chip_label.with_value(|label| kit_art(kit_look, kit_h, label));
+                                                let (_, _, rot, mirror) = place.get();
+                                                let flip = if mirror { -1 } else { 1 };
+                                                let transform = format!("rotate({rot}) scale({flip} 1)");
                                                 let labels = drawn
                                                     .iter()
                                                     .enumerate()
                                                     .map(|(row, spec)| {
-                                                        let left = row < per_side;
-                                                        let (_, y) = row_offset(drawn.len(), row);
+                                                        // The row's name sits eight pixels in from
+                                                        // its pin, inside the board edge, which is
+                                                        // where a devkit's silkscreen puts it. The
+                                                        // position is turned with the board and the
+                                                        // text is not, the way `pin_labels` places
+                                                        // every other part's: a name printed
+                                                        // sideways is one nobody reads.
+                                                        let (px, py) = row_offset(drawn.len(), row);
+                                                        let inward = if row < per_side { 1.0 } else { -1.0 };
+                                                        let (x, y) =
+                                                            orient((px + inward * 8.0, py), rot, mirror);
+                                                        let (ox, oy) = orient((inward, 0.0), rot, mirror);
+                                                        // Which way "into the board" now points
+                                                        // decides how the name hangs off its pin.
+                                                        let (anchor, dy) = if ox.abs() > oy.abs() {
+                                                            (if ox > 0.0 { "start" } else { "end" }, 3.0)
+                                                        } else if oy > 0.0 {
+                                                            ("middle", 8.0)
+                                                        } else {
+                                                            ("middle", -3.0)
+                                                        };
                                                         let label = spec.label.clone();
                                                         view! {
                                                             <text
-                                                                x=if left { 18.0 } else { KIT_W - 18.0 }
-                                                                y=y + 3.0
-                                                                text-anchor=if left { "start" } else { "end" }
+                                                                x=x
+                                                                y=y + dy
+                                                                text-anchor=anchor
                                                                 font-family="ui-monospace"
                                                                 font-size="7.5"
                                                                 fill="#98a1ae"
@@ -1437,7 +1495,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     })
                                                     .collect_view();
                                                 view! {
-                                                    <g inner_html=art></g>
+                                                    <g transform=transform inner_html=art></g>
                                                     {labels}
                                                 }
                                                     .into_any()
@@ -2009,7 +2067,22 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 .into_any())
                                         }
                                         Some(Behaviour::Pot) => {
-                                            let turned = RwSignal::new(128u8);
+                                            // Where the sheet says this knob starts, read the way
+                                            // the analog source reads its own — the backend sends
+                                            // the matching counts as soon as a run connects, so
+                                            // the panel and the converter agree before the first
+                                            // drag rather than after it.
+                                            let start_turn = this
+                                                .with(|p| p.as_ref().and_then(|p| p.inst.prop::<u8>("start")))
+                                                .unwrap_or(128);
+                                            let turned = RwSignal::new(start_turn);
+                                            let span = pot_span_for(&reference.get_untracked());
+                                            // The converter's full scale, named the same way the
+                                            // analog source names it, so one part does not read
+                                            // on a different scale from its neighbour.
+                                            let max = this
+                                                .with(|p| p.as_ref().and_then(|p| p.inst.prop::<u16>("max")))
+                                                .unwrap_or(4095);
                                             let angle = move || -135.0 + f64::from(turned.get()) / 255.0 * 270.0;
                                             Some(view! {
                                                 <div class="pointer-events-none absolute flex items-center gap-1.5" style=style>
@@ -2023,14 +2096,27 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                         type="range"
                                                         min="0"
                                                         max="255"
-                                                        value="128"
+                                                        value=start_turn
                                                         title=t!("simulate.pot-hint")
                                                         on:pointerdown=move |event: ev::PointerEvent| event.stop_propagation()
                                                         on:input=move |event: ev::Event| {
                                                             if let Ok(value) = event_target_value(&event).parse::<u8>() {
                                                                 turned.set(value);
+                                                                // The text line, for firmware that
+                                                                // reads rusty's protocol.
                                                                 if let Some(gpio) = gpio_at("W") {
                                                                     controller::sim_pot(state, gpio, value);
+                                                                }
+                                                                // And the counts, for firmware that
+                                                                // just calls read_oneshot() — but
+                                                                // only where the sheet said what
+                                                                // the track's ends are on.
+                                                                if let Some(span) = span {
+                                                                    controller::sim_analog(
+                                                                        state,
+                                                                        span.gpio,
+                                                                        span.counts(value, max),
+                                                                    );
                                                                 }
                                                             }
                                                         }
@@ -2552,7 +2638,6 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     <MenuItem
                                         label=t!("simulate.rotate")
                                         shortcut="Space"
-                                        disabled=is_kit
                                         on_select=Callback::new(move |_| {
                                             rotate_part(index);
                                             menu.set(None);
@@ -2561,7 +2646,6 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     <MenuItem
                                         label=t!("simulate.mirror")
                                         shortcut="X"
-                                        disabled=is_kit
                                         on_select=Callback::new(move |_| {
                                             mirror_part(index);
                                             menu.set(None);

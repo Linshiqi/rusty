@@ -110,6 +110,49 @@ pub fn power_rail(symbol: &Symbol) -> Option<Rail> {
     })
 }
 
+/// A resistance from the way people write one: `220`, `4.7k`, `10K`, `1M`,
+/// `220R`, `4k7`. Anything else is nothing, and says so — which is the
+/// whole reason this returns an `Option`. A part whose value is a colour, a
+/// part number or blank has no resistance the sheet can stand behind, and
+/// every rule that needs one refuses rather than assuming a number.
+///
+/// It lives here rather than beside the colour bands it was written for
+/// because the bands and the arithmetic must read a value the same way: a
+/// resistor drawn as 10k and computed as nothing is two answers to one
+/// question.
+pub fn ohms(value: &str) -> Option<f64> {
+    let text: String = value
+        .trim()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != 'Ω' && *c != 'ω')
+        .collect();
+    let text = text.trim_end_matches(['R', 'r']).to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let scale = |c: char| match c {
+        'k' | 'K' => Some(1e3),
+        'M' => Some(1e6),
+        'G' => Some(1e9),
+        'R' | 'r' => Some(1.0),
+        _ => None,
+    };
+    // `4k7` — the multiplier standing in for the decimal point.
+    if let Some((index, letter)) = text.char_indices().find(|(_, c)| scale(*c).is_some()) {
+        let (head, rest) = text.split_at(index);
+        let tail = &rest[letter.len_utf8()..];
+        let head: f64 = head.parse().ok()?;
+        let factor = scale(letter)?;
+        if tail.is_empty() {
+            return Some(head * factor);
+        }
+        let digits: f64 = tail.parse().ok()?;
+        let places = 10f64.powi(tail.len() as i32);
+        return Some((head + digits / places) * factor);
+    }
+    text.parse().ok()
+}
+
 /// What a rail is at: the two levels a supply pin can have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -712,10 +755,19 @@ impl<'a> Graph<'a> {
         uf
     }
 
-    /// The wired nets plus every part that conducts: resistors always, and
-    /// the switches in `pressed`. A four-pin tactile switch has its pairs
-    /// joined always and all four while pressed.
-    fn conducting(&mut self, wired: &UnionFind, pressed: &HashSet<String>) -> UnionFind {
+    /// The wired nets plus every join that has *no resistance in it*: a
+    /// label's name, which is a wire drawn in words, and a closed switch,
+    /// which is a piece of wire while it is held.
+    ///
+    /// This partition exists to answer one question the conducting one
+    /// cannot: whether two rails are actually shorted. A resistor between a
+    /// supply and ground is a voltage divider — the commonest analog
+    /// circuit there is — and joining its ends into one node made every one
+    /// of them read as `ground and a supply share a net`, which is the
+    /// confident wrong answer this file exists to avoid. Measured before it
+    /// was fixed: a plain two-resistor divider with its midpoint on GPIO4
+    /// reported exactly that.
+    fn solid(&mut self, wired: &UnionFind, pressed: &HashSet<String>) -> UnionFind {
         let mut uf = UnionFind(wired.0.clone());
         // Labels first: a name is a wire drawn in words, and everything
         // after this treats the joined pins as the one node they are.
@@ -746,40 +798,68 @@ impl<'a> Graph<'a> {
         }
         for part in &self.sheet.parts {
             let reference = part.reference.as_str();
-            match self.behaviours.get(reference) {
-                Some(Behaviour::Resistor) => {
-                    if let Some((a, b)) = self.terminals(reference) {
-                        uf.union(a, b);
-                    }
+            if self.behaviours.get(reference) != Some(&Behaviour::Switch) {
+                continue;
+            }
+            let Some(symbol) = self.sheet.symbol_of(reference) else {
+                continue;
+            };
+            let nodes: Vec<Node> = symbol
+                .pins
+                .iter()
+                .filter_map(|p| self.pin_node(reference, &p.number))
+                .collect();
+            // A four-pin tactile switch has its pairs joined always and all
+            // four while pressed.
+            if nodes.len() >= 4 {
+                uf.union(nodes[0], nodes[1]);
+                uf.union(nodes[2], nodes[3]);
+            }
+            if pressed.contains(reference) {
+                for pair in nodes.windows(2) {
+                    uf.union(pair[0], pair[1]);
                 }
-                Some(Behaviour::Switch) => {
-                    let Some(symbol) = self.sheet.symbol_of(reference) else {
-                        continue;
-                    };
-                    let nodes: Vec<Node> = symbol
-                        .pins
-                        .iter()
-                        .filter_map(|p| self.pin_node(reference, &p.number))
-                        .collect();
-                    if nodes.len() >= 4 {
-                        uf.union(nodes[0], nodes[1]);
-                        uf.union(nodes[2], nodes[3]);
-                    }
-                    if pressed.contains(reference) {
-                        for pair in nodes.windows(2) {
-                            uf.union(pair[0], pair[1]);
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         uf
     }
 
-    /// What drives each net: the rails and the reported GPIOs in it.
-    fn drivers(&self, uf: &mut UnionFind, gpio: &HashMap<u8, bool>) -> HashMap<Node, Drivers> {
+    /// The solid nets plus every resistor.
+    ///
+    /// This is the partition that answers *what reaches what*: a GPIO
+    /// through a series resistor still lights the lamp beyond it, and a
+    /// probe on the sheet lists everything down the chain. It is not the
+    /// partition to judge a short on — see [`Graph::solid`] — and it is not
+    /// one a level can be read off point by point either, since a divider's
+    /// two ends and its midpoint are all one node here. The midpoint's
+    /// value comes from [`divider_at`], which walks the resistors instead of
+    /// merging them.
+    fn conducting(&mut self, solid: &UnionFind) -> UnionFind {
+        let mut uf = UnionFind(solid.0.clone());
+        for part in &self.sheet.parts {
+            let reference = part.reference.as_str();
+            if self.behaviours.get(reference) == Some(&Behaviour::Resistor)
+                && let Some((a, b)) = self.terminals(reference)
+            {
+                uf.union(a, b);
+            }
+        }
+        uf
+    }
+
+    /// What drives each net: the rails and the reported GPIOs in it, and
+    /// whether two of those rails meet with nothing between them — which is
+    /// a short, where the same two rails through a resistor are a divider.
+    fn drivers(
+        &self,
+        uf: &mut UnionFind,
+        solid: &mut UnionFind,
+        gpio: &HashMap<u8, bool>,
+    ) -> HashMap<Node, Drivers> {
         let mut out: HashMap<Node, Drivers> = HashMap::new();
+        // Where each rail sits in the *solid* partition, kept beside the
+        // answer so the short can be judged without a second walk.
+        let mut rail_nodes: HashMap<Node, Vec<(Rail, Node)>> = HashMap::new();
         // A power symbol is a rail wherever it is drawn: the same thing the
         // devkit's own GND pin is, without a wire across the whole sheet.
         for part in &self.sheet.parts {
@@ -800,6 +880,7 @@ impl<'a> Graph<'a> {
                 .or_default()
                 .rails
                 .push((rail, PinRef::new(&part.reference, &first.number)));
+            rail_nodes.entry(root).or_default().push((rail, node));
         }
         for (node, pin) in self.nodes.iter().enumerate() {
             if pin.part != KIT_REFERENCE {
@@ -811,11 +892,27 @@ impl<'a> Graph<'a> {
             let root = uf.find(node);
             let drivers = out.entry(root).or_default();
             match (&self.rows[row].rail, self.rows[row].gpio) {
-                (Some(rail), _) => drivers.rails.push((*rail, pin.clone())),
+                (Some(rail), _) => {
+                    drivers.rails.push((*rail, pin.clone()));
+                    rail_nodes.entry(root).or_default().push((*rail, node));
+                }
                 (None, Some(n)) => {
                     drivers.gpios.push((n, gpio.get(&n).copied(), pin.clone()));
                 }
                 (None, None) => {}
+            }
+        }
+        // Two rails are shorted when they are the same node with no
+        // resistance in between. Through a resistor they are a divider, and
+        // saying "short" about one of those is what this now avoids.
+        for (root, rails) in &rail_nodes {
+            let shorted = rails.iter().enumerate().any(|(i, (rail, node))| {
+                rails[i + 1..]
+                    .iter()
+                    .any(|(other, at)| other != rail && solid.find(*node) == solid.find(*at))
+            });
+            if shorted && let Some(drivers) = out.get_mut(root) {
+                drivers.shorted = true;
             }
         }
         out
@@ -826,6 +923,8 @@ impl<'a> Graph<'a> {
 struct Drivers {
     rails: Vec<(Rail, PinRef)>,
     gpios: Vec<(u8, Option<bool>, PinRef)>,
+    /// Two of `rails` disagree with nothing between them.
+    shorted: bool,
 }
 
 impl Drivers {
@@ -838,12 +937,20 @@ impl Drivers {
             .count();
         let supplies = self.rails.len() - grounds;
         if grounds > 0 && supplies > 0 {
-            return (
-                None,
-                Some(Warning::Short {
-                    pins: self.rails.iter().map(|(_, p)| p.to_string()).collect(),
-                }),
-            );
+            if self.shorted {
+                return (
+                    None,
+                    Some(Warning::Short {
+                        pins: self.rails.iter().map(|(_, p)| p.to_string()).collect(),
+                    }),
+                );
+            }
+            // Both rails, but only through resistance: a divider, and not a
+            // fault. What its midpoint sits at is a number, not a level, and
+            // `divider_at` is where the number is read — this net has no one
+            // level to give, so it gives none rather than one of the two it
+            // is between.
+            return (None, None);
         }
         if let Some((rail, _)) = self.rails.first() {
             return (Some(*rail == Rail::Supply), None);
@@ -869,8 +976,9 @@ impl Drivers {
 pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     let mut graph = Graph::new(inputs.sheet, inputs.rows);
     let mut wired = graph.wired();
-    let mut dc = graph.conducting(&wired, inputs.pressed);
-    let drivers = graph.drivers(&mut dc, inputs.gpio);
+    let mut solid = graph.solid(&wired, inputs.pressed);
+    let mut dc = graph.conducting(&solid);
+    let drivers = graph.drivers(&mut dc, &mut solid, inputs.gpio);
 
     let mut nets: BTreeMap<PinRef, usize> = BTreeMap::new();
     let mut levels: BTreeMap<PinRef, Option<bool>> = BTreeMap::new();
@@ -1046,12 +1154,199 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     }
 }
 
+/// Where a pin sits between the rails, as a fraction: 0.0 at ground, 1.0 at
+/// the supply.
+///
+/// This is the one thing on the sheet a resistor's *value* decides, and the
+/// reason it is worth reading at all: an ADC pin behind a divider reads a
+/// number nothing else here can produce. `A<pin>=<counts>` has always
+/// carried raw counts because rusty did not know anybody's divider — but
+/// when the divider is *drawn*, with values on it, rusty does know, exactly,
+/// and refusing then is refusing to read what the user wrote down.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Divider {
+    /// 0.0 at ground, 1.0 at the supply.
+    pub fraction: f64,
+    /// The resistance to each rail in ohms — zero for a solid connection,
+    /// infinite for no path at all.
+    pub to_supply: f64,
+    pub to_ground: f64,
+}
+
+/// Read [`Divider`] at one pin, or refuse.
+///
+/// **One resistor deep, and that is deliberate.** The shapes this answers
+/// for are the ones people draw: a pin straight on a rail, a pull-up or
+/// pull-down, and two resistors with the midpoint tapped. Parallel paths to
+/// the same rail add as conductances, because that is exact. A chain of
+/// three resistors, a network, anything with a value the sheet spells in a
+/// way [`ohms`] cannot read — those get `None`, and `None` is the honest
+/// answer: a solver that guessed at the rest would put a number under an
+/// ADC reading that nobody could check.
+pub fn divider_at(sheet: &Sheet, rows: &[Row], pin: &PinRef) -> Option<Divider> {
+    let mut graph = Graph::new(sheet, rows);
+    let wired = graph.wired();
+    let mut solid = graph.solid(&wired, &HashSet::new());
+    let here = solid.find(graph.pin_node(&pin.part, &pin.pin)?);
+
+    // What a solid node sits on directly, with no resistance in the way.
+    let rail_of = |solid: &mut UnionFind, root: Node| -> Option<Rail> {
+        let mut found = None;
+        for (node, at) in graph.nodes.iter().enumerate() {
+            if solid.find(node) != root {
+                continue;
+            }
+            let rail = if at.part == KIT_REFERENCE {
+                kit_pin(rows, &at.pin).and_then(|row| rows[row].rail)
+            } else {
+                sheet.symbol_of(&at.part).and_then(power_rail)
+            };
+            if rail.is_some() {
+                found = rail;
+            }
+        }
+        found
+    };
+
+    if let Some(rail) = rail_of(&mut solid, here) {
+        // On a rail itself: no divider, and the answer is the rail.
+        return Some(match rail {
+            Rail::Supply => Divider {
+                fraction: 1.0,
+                to_supply: 0.0,
+                to_ground: f64::INFINITY,
+            },
+            Rail::Ground => Divider {
+                fraction: 0.0,
+                to_supply: f64::INFINITY,
+                to_ground: 0.0,
+            },
+        });
+    }
+
+    // Every resistor with one leg here, and what its other leg sits on.
+    let mut to_supply = 0.0f64; // conductance, summed
+    let mut to_ground = 0.0f64;
+    let mut unreadable = false;
+    for part in &sheet.parts {
+        let reference = part.reference.as_str();
+        if graph.behaviours.get(reference) != Some(&Behaviour::Resistor) {
+            continue;
+        }
+        let Some((a, b)) = graph.terminals(reference) else {
+            continue;
+        };
+        let (a, b) = (solid.find(a), solid.find(b));
+        let far = if a == here && b != here {
+            b
+        } else if b == here && a != here {
+            a
+        } else {
+            continue;
+        };
+        let Some(rail) = rail_of(&mut solid, far) else {
+            continue;
+        };
+        match ohms(&part.value) {
+            // A zero-ohm link is a wire somebody drew as a resistor.
+            Some(r) if r > 0.0 => match rail {
+                Rail::Supply => to_supply += 1.0 / r,
+                Rail::Ground => to_ground += 1.0 / r,
+            },
+            _ => unreadable = true,
+        }
+    }
+
+    // A resistor that reaches a rail but says no value is a path that
+    // exists and cannot be measured — which is not the same as no path, and
+    // treating it as none is how the first version put an unvalued divider's
+    // midpoint flat on ground. The sheet has not finished saying, so nor
+    // does this.
+    if unreadable {
+        return None;
+    }
+
+    match (to_supply > 0.0, to_ground > 0.0) {
+        // Both sides: the divider.
+        (true, true) => Some(Divider {
+            fraction: to_supply / (to_supply + to_ground),
+            to_supply: 1.0 / to_supply,
+            to_ground: 1.0 / to_ground,
+        }),
+        // One side only: no current flows, so the pin sits at that rail
+        // whatever the resistor is — a pull-up's value does not change
+        // where an unloaded pin rests.
+        (true, false) => Some(Divider {
+            fraction: 1.0,
+            to_supply: 1.0 / to_supply,
+            to_ground: f64::INFINITY,
+        }),
+        (false, true) => Some(Divider {
+            fraction: 0.0,
+            to_supply: f64::INFINITY,
+            to_ground: 1.0 / to_ground,
+        }),
+        (false, false) => None,
+    }
+}
+
+/// A potentiometer as the converter sees it: the GPIO its wiper reaches,
+/// and where each end of its track sits between the rails.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PotSpan {
+    pub gpio: u8,
+    /// The fraction at the wiper with the knob hard one way and hard the
+    /// other: pin `1`'s end at zero, pin `3`'s at full.
+    pub at_zero: f64,
+    pub at_full: f64,
+}
+
+/// Read a pot's span, or refuse.
+///
+/// This closes the hole the potentiometer has had since it was drawn.
+/// `P<pin>=<0..255>` reaches firmware that reads rusty's own text protocol
+/// and nothing else, because what a wiper converts to depends on what its
+/// two ends are wired to, and turning 128 into counts would have asserted a
+/// rail-to-rail divider nobody stated. When the sheet *does* state it —
+/// both ends on rails — there is nothing left to assume and the wiper's
+/// position is ADC counts through `adc.read_oneshot()` like any other pin.
+///
+/// An end behind a resistor is refused rather than read: it forms a divider
+/// with the pot's own track, and the track's resistance is not on the
+/// sheet. The knob's zero is pin `1`'s end; two wires swapped reverses it,
+/// which is the same fix as on the bench.
+pub fn pot_span(sheet: &Sheet, rows: &[Row], part: &str) -> Option<PotSpan> {
+    if behaviour_of(sheet.symbol_of(part)?) != Behaviour::Pot {
+        return None;
+    }
+    let end = |pin: &str| -> Option<f64> {
+        let at = divider_at(sheet, rows, &PinRef::new(part, pin))?;
+        (at.to_supply == 0.0 || at.to_ground == 0.0).then_some(at.fraction)
+    };
+    Some(PotSpan {
+        gpio: gpio_of(sheet, rows, part, "W")?,
+        at_zero: end("1")?,
+        at_full: end("3")?,
+    })
+}
+
+impl PotSpan {
+    /// The counts a wiper at `turn` (0..=255) puts on the pin, for a
+    /// converter whose full scale is `max`.
+    pub fn counts(&self, turn: u8, max: u16) -> u16 {
+        let t = f64::from(turn) / 255.0;
+        let fraction = self.at_zero + t * (self.at_full - self.at_zero);
+        (fraction.clamp(0.0, 1.0) * f64::from(max)).round() as u16
+    }
+}
+
 /// The GPIO a part's pin reaches through the wires and the resistors — what
 /// a pot's wiper or a motor's duty pin is *on*, in the firmware's terms.
 pub fn gpio_of(sheet: &Sheet, rows: &[Row], part: &str, pin: &str) -> Option<u8> {
     let mut graph = Graph::new(sheet, rows);
     let wired = graph.wired();
-    let mut dc = graph.conducting(&wired, &HashSet::new());
+    let solid = graph.solid(&wired, &HashSet::new());
+    let mut dc = graph.conducting(&solid);
     let node = graph.pin_node(part, pin)?;
     let root = dc.find(node);
     graph
@@ -1073,7 +1368,8 @@ pub fn gpio_of(sheet: &Sheet, rows: &[Row], part: &str, pin: &str) -> Option<u8>
 pub fn button_drives(sheet: &Sheet, rows: &[Row], part: &str) -> Option<(u8, bool)> {
     let mut graph = Graph::new(sheet, rows);
     let wired = graph.wired();
-    let mut dc = graph.conducting(&wired, &HashSet::new());
+    let solid = graph.solid(&wired, &HashSet::new());
+    let mut dc = graph.conducting(&solid);
     let symbol = sheet.symbol_of(part)?;
     let mut sides: Vec<(Option<u8>, Option<Rail>)> = Vec::new();
     let mut seen_roots: Vec<Node> = Vec::new();
@@ -1379,12 +1675,166 @@ mod tests {
         );
     }
 
+    /// A resistance is read the way people write one, and a value that is
+    /// not a resistance is nothing rather than a number — the whole reason
+    /// `ohms` returns an `Option`.
+    #[test]
+    fn a_resistance_is_read_from_the_value_or_refused() {
+        assert_eq!(ohms("220"), Some(220.0));
+        assert_eq!(ohms("220R"), Some(220.0));
+        assert_eq!(ohms(" 10k "), Some(10_000.0));
+        assert_eq!(ohms("10K"), Some(10_000.0));
+        assert_eq!(ohms("4k7"), Some(4700.0));
+        assert_eq!(ohms("4.7k"), Some(4700.0));
+        assert_eq!(ohms("1M"), Some(1_000_000.0));
+        assert_eq!(ohms("1 kΩ"), Some(1000.0));
+        assert_eq!(ohms(""), None);
+        assert_eq!(ohms("red"), None, "a lamp's colour is not a resistance");
+        assert_eq!(ohms("C25804"), None, "nor is a part number");
+    }
+
+    /// The one thing a resistor's *value* decides, and the reason reading
+    /// it is worth anything: where a pin sits between the rails. Asserted
+    /// against the arithmetic anybody would do by hand, and — as loudly —
+    /// against the cases where the sheet has not said enough.
+    #[test]
+    fn a_divider_is_read_from_the_values_on_the_sheet_or_refused() {
+        let divider = |s: &Sheet, pin: &str| divider_at(s, &rows(), &PinRef::parse(pin).unwrap());
+
+        // Two resistors, the midpoint tapped: the textbook divider.
+        let mut s = sheet();
+        place_with(&mut s, "R1", "Device:R", "20k");
+        place_with(&mut s, "R2", "Device:R", "10k");
+        wire(&mut s, "R1.1", "U1.3V3");
+        wire(&mut s, "R1.2", "R2.1");
+        wire(&mut s, "R2.2", "U1.GND");
+        wire(&mut s, "R1.2", "U1.GPIO4");
+
+        assert_eq!(
+            eval(&s, &[], &[]).warnings,
+            vec![],
+            "a divider is not a short: two rails through resistance are a \
+             circuit, not a fault"
+        );
+        let mid = divider(&s, "U1.GPIO4").expect("the sheet says enough");
+        assert!(
+            (mid.fraction - 1.0 / 3.0).abs() < 1e-9,
+            "10k of 30k: {}",
+            mid.fraction
+        );
+        assert_eq!((mid.to_supply, mid.to_ground), (20_000.0, 10_000.0));
+
+        // The rails themselves are the ends of the scale.
+        assert_eq!(divider(&s, "U1.3V3").map(|d| d.fraction), Some(1.0));
+        assert_eq!(divider(&s, "U1.GND").map(|d| d.fraction), Some(0.0));
+
+        // A pull-up alone: no current flows, so the pin rests at the rail
+        // whatever the resistor is.
+        let mut up = sheet();
+        place_with(&mut up, "R1", "Device:R", "10k");
+        wire(&mut up, "R1.1", "U1.3V3");
+        wire(&mut up, "R1.2", "U1.GPIO4");
+        assert_eq!(divider(&up, "U1.GPIO4").map(|d| d.fraction), Some(1.0));
+        // But with no value written it says nothing rather than 1.0: one
+        // rule for an unmeasurable path, whichever side it is on, because
+        // the version that special-cased this is the version that put an
+        // unvalued divider's midpoint flat on ground.
+        let mut vague = sheet();
+        place(&mut vague, "R1", "Device:R");
+        wire(&mut vague, "R1.1", "U1.3V3");
+        wire(&mut vague, "R1.2", "U1.GPIO4");
+        assert_eq!(divider(&vague, "U1.GPIO4"), None);
+
+        // Two resistors to the same rail are parallel, which is exact.
+        let mut par = sheet();
+        place_with(&mut par, "R1", "Device:R", "10k");
+        place_with(&mut par, "R2", "Device:R", "10k");
+        place_with(&mut par, "R3", "Device:R", "5k");
+        for (r, rail) in [("R1", "U1.3V3"), ("R2", "U1.3V3"), ("R3", "U1.GND")] {
+            wire(&mut par, &format!("{r}.1"), rail);
+            wire(&mut par, &format!("{r}.2"), "U1.GPIO4");
+        }
+        let both = divider(&par, "U1.GPIO4").expect("all three readable");
+        assert_eq!(both.to_supply, 5000.0, "10k ∥ 10k");
+        assert!((both.fraction - 0.5).abs() < 1e-9);
+
+        // And the refusals, which matter more than the arithmetic.
+        let mut blank = sheet();
+        place(&mut blank, "R1", "Device:R");
+        place_with(&mut blank, "R2", "Device:R", "10k");
+        wire(&mut blank, "R1.1", "U1.3V3");
+        wire(&mut blank, "R1.2", "R2.1");
+        wire(&mut blank, "R2.2", "U1.GND");
+        wire(&mut blank, "R1.2", "U1.GPIO4");
+        assert_eq!(
+            divider(&blank, "U1.GPIO4"),
+            None,
+            "one unreadable value makes the ratio a guess"
+        );
+
+        let mut lonely = sheet();
+        place(&mut lonely, "D1", "Device:LED");
+        wire(&mut lonely, "D1.A", "U1.GPIO4");
+        assert_eq!(
+            divider(&lonely, "U1.GPIO4"),
+            None,
+            "a pin that reaches no rail sits nowhere in particular"
+        );
+    }
+
+    /// The potentiometer reaching the converter at last — and refusing
+    /// where the sheet has not said what its ends are on, which is the half
+    /// that kept it console-only until now.
+    #[test]
+    fn a_pot_across_the_rails_reads_as_counts_and_one_that_is_not_refuses() {
+        let mut s = sheet();
+        place(&mut s, "RV1", "rusty:Pot");
+        wire(&mut s, "RV1.1", "U1.GND");
+        wire(&mut s, "RV1.3", "U1.3V3");
+        wire(&mut s, "RV1.W", "U1.GPIO4");
+        let span = pot_span(&s, &rows(), "RV1").expect("both ends are on rails");
+        assert_eq!((span.gpio, span.at_zero, span.at_full), (4, 0.0, 1.0));
+        assert_eq!(span.counts(0, 4095), 0);
+        assert_eq!(span.counts(255, 4095), 4095);
+        assert_eq!(span.counts(128, 4095), 2056, "the wiper in the middle");
+
+        // Wired the other way round it counts the other way: the sheet
+        // says which end is which, and swapping the wires is the fix.
+        let mut back = sheet();
+        place(&mut back, "RV1", "rusty:Pot");
+        wire(&mut back, "RV1.1", "U1.3V3");
+        wire(&mut back, "RV1.3", "U1.GND");
+        wire(&mut back, "RV1.W", "U1.GPIO4");
+        let span = pot_span(&back, &rows(), "RV1").expect("still on rails");
+        assert_eq!(span.counts(0, 4095), 4095);
+        assert_eq!(span.counts(255, 4095), 0);
+
+        // An end reaching nothing: no span, and no invented one.
+        let mut loose = sheet();
+        place(&mut loose, "RV1", "rusty:Pot");
+        wire(&mut loose, "RV1.1", "U1.GND");
+        wire(&mut loose, "RV1.W", "U1.GPIO4");
+        assert_eq!(pot_span(&loose, &rows(), "RV1"), None);
+
+        // An end behind a resistor: a divider with the pot's own track,
+        // whose resistance the sheet never states.
+        let mut through = sheet();
+        place(&mut through, "RV1", "rusty:Pot");
+        place_with(&mut through, "R1", "Device:R", "10k");
+        wire(&mut through, "RV1.1", "U1.GND");
+        wire(&mut through, "RV1.3", "R1.1");
+        wire(&mut through, "R1.2", "U1.3V3");
+        wire(&mut through, "RV1.W", "U1.GPIO4");
+        assert_eq!(pot_span(&through, &rows(), "RV1"), None);
+    }
+
     #[test]
     fn rails_shorted_and_gpios_fighting_are_named_and_a_dangling_wire_too() {
+        // A wire, not a resistor: a short is a connection with nothing in
+        // it. The same two rails through a resistor is a load — and, with
+        // its midpoint tapped, the commonest analog circuit there is.
         let mut s = sheet();
-        place(&mut s, "R1", "Device:R");
-        wire(&mut s, "U1.GND", "R1.1");
-        wire(&mut s, "R1.2", "U1.3V3");
+        wire(&mut s, "U1.GND", "U1.3V3");
         let e = eval(&s, &[], &[]);
         assert!(
             matches!(&e.warnings[..], [Warning::Short { pins }] if pins.len() == 2),
@@ -1447,11 +1897,9 @@ mod tests {
         // A supply and a ground on one net is the short it always was,
         // whether the rails come from the devkit or from symbols.
         let mut s = sheet();
-        place(&mut s, "R2", "Device:R");
         place_with(&mut s, "GND2", "rusty:GND", "GND");
         place_with(&mut s, "PWR2", "rusty:Supply", "5V");
-        wire(&mut s, "GND2.GND", "R2.1");
-        wire(&mut s, "R2.2", "PWR2.VCC");
+        wire(&mut s, "GND2.GND", "PWR2.VCC");
         assert!(
             matches!(&eval(&s, &[], &[]).warnings[..], [Warning::Short { .. }]),
             "{:?}",

@@ -200,8 +200,8 @@ pub(super) fn parts_of(sheet: &Sheet, rows: &[Row]) -> Vec<EditPart> {
             value: sheet.chip.to_uppercase(),
             x: sheet.kit_x.unwrap_or(460.0),
             y: sheet.kit_y.unwrap_or(40.0),
-            rot: 0,
-            mirror: false,
+            rot: sheet.kit_rot,
+            mirror: sheet.kit_mirror,
             props: Default::default(),
         },
         symbol: Some(kit_symbol(&sheet.chip, rows)),
@@ -227,6 +227,8 @@ pub(super) fn sheet_of(chip: &str, parts: &[EditPart], wires: &[Wire]) -> Sheet 
         if part.is_kit() {
             sheet.kit_x = Some(part.inst.x);
             sheet.kit_y = Some(part.inst.y);
+            sheet.kit_rot = part.inst.rot;
+            sheet.kit_mirror = part.inst.mirror;
         } else {
             sheet.parts.push(part.inst.clone());
         }
@@ -518,6 +520,35 @@ pub(super) fn part_box(part: &EditPart) -> (f64, f64, f64, f64) {
     box_on_sheet(part, plan.bounds)
 }
 
+/// Where a part's anchor has to move so that turning it looks like a spin
+/// in place rather than a swing.
+///
+/// A KiCad symbol is drawn about its own anchor, so its box is roughly
+/// centred there and a turn moves nothing — which is why this is the
+/// devkit's rule and nobody else's. The devkit's anchor is the *top-left
+/// corner* of a board three hundred pixels tall ([`kit_symbol`] draws it
+/// from `(0, 0)` downwards), and a quarter turn about a corner puts the
+/// board a board's length away from where the user was looking. Correcting
+/// every part instead would change where a turned lamp lands in files
+/// people have already saved, for no gain: their anchors are already
+/// centred.
+pub(super) fn turned_anchor(part: &EditPart, rot: u16, mirror: bool) -> (f64, f64) {
+    let here = (part.inst.x, part.inst.y);
+    if !part.is_kit() {
+        return here;
+    }
+    let Some(plan) = part_layout(part) else {
+        return here;
+    };
+    let (x0, y0, x1, y1) = plan.bounds;
+    let middle = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    // Keep the box's centre where it is: the anchor moves by however much
+    // the turn moved the centre away from it.
+    let before = orient(middle, part.inst.rot, part.inst.mirror);
+    let after = orient(middle, rot, mirror);
+    (here.0 + before.0 - after.0, here.1 + before.1 - after.1)
+}
+
 /// A box in the drawing's frame, turned and mirrored onto the sheet.
 pub(super) fn box_on_sheet(part: &EditPart, rect: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
     let (x0, y0, x1, y1) = rect;
@@ -621,6 +652,109 @@ pub(super) fn wire_path(ends: &WireEnds, bends: &[(f64, f64)]) -> Vec<(f64, f64)
     }
     points.push(b);
     simplify_route(orthogonalize(points))
+}
+
+/// The distance from a point to a line segment — the wire hit test's inner
+/// step, and the one piece of arithmetic a schematic needs that pins do not.
+fn point_to_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let length = dx * dx + dy * dy;
+    if length <= f64::EPSILON {
+        return (p.0 - a.0).hypot(p.1 - a.1);
+    }
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / length).clamp(0.0, 1.0);
+    (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+}
+
+/// The wire whose drawn path passes within `radius` of `point`, nearest
+/// first — where a branch lands.
+///
+/// [`pin_under`]'s rule, for the same reason: nothing when nothing is in
+/// reach rather than the nearest, because a branch attached to a wire forty
+/// pixels from the pointer is a connection nobody made. A pin beats a wire,
+/// so the caller asks this only after `pin_under` has answered nothing.
+pub(super) fn wire_under(
+    parts: &[EditPart],
+    wires: &[Wire],
+    point: (f64, f64),
+    radius: f64,
+) -> Option<usize> {
+    let mut best: Option<(usize, f64)> = None;
+    for (index, wire) in wires.iter().enumerate() {
+        let Some(ends) = wire_ends(parts, wire) else {
+            continue;
+        };
+        for pair in wire_path(&ends, &wire.bends).windows(2) {
+            let distance = point_to_segment(point, pair[0], pair[1]);
+            if distance <= radius && best.is_none_or(|(_, near)| distance < near) {
+                best = Some((index, distance));
+            }
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+/// Where a branch dropped on a wire runs: which of the trunk's two pins it
+/// joins, and the bends that lay it along the trunk from the drop point to
+/// that pin.
+///
+/// **A T-junction needs no junction.** Three wires at one pin are already
+/// one net — the union-find in `nets` has always joined them — so a branch
+/// onto the middle of a wire is electrically a wire to *either* of that
+/// wire's ends, and the model, the file and the rules need no new idea at
+/// all. What is left is the picture, and the picture is what the bends are
+/// for: the branch overlays the trunk from the drop point onward, so the
+/// two are drawn as a T rather than as a second wire taking its own route.
+/// The nearer end is chosen, which is the shorter overlay and the fewer
+/// bends to keep.
+///
+/// Those bends are sheet coordinates like every other bend here, so moving
+/// the trunk later slides the branch's tail off it — exactly what happens
+/// to any hand-bent wire whose neighbour moves, and the same repair: drag
+/// the segment back. A junction node in the file would be a second way to
+/// say what a shared net already says.
+pub(super) fn branch_route(
+    parts: &[EditPart],
+    trunk: &Wire,
+    at: (f64, f64),
+) -> Option<(PinRef, Vec<(f64, f64)>)> {
+    let ends = wire_ends(parts, trunk)?;
+    let path = wire_path(&ends, &trunk.bends);
+    if path.len() < 2 {
+        return None;
+    }
+    // The segment the drop landed on, and how far along the path it is.
+    let mut hit = (0usize, f64::INFINITY);
+    for (index, pair) in path.windows(2).enumerate() {
+        let distance = point_to_segment(at, pair[0], pair[1]);
+        if distance < hit.1 {
+            hit = (index, distance);
+        }
+    }
+    let (segment, _) = hit;
+    let run = |points: &[(f64, f64)]| {
+        let mut length = 0.0;
+        for pair in points.windows(2) {
+            length += (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1);
+        }
+        length
+    };
+    // The walk from the drop to each of the trunk's pins, the drop point
+    // first and the pin last, so the two are compared by how far the
+    // overlay would actually run rather than by how many bends it has.
+    let toward_to: Vec<(f64, f64)> = std::iter::once(at)
+        .chain(path[segment + 1..].iter().copied())
+        .collect();
+    let toward_from: Vec<(f64, f64)> = std::iter::once(at)
+        .chain(path[..=segment].iter().rev().copied())
+        .collect();
+    let (pin, walk) = if run(&toward_to) <= run(&toward_from) {
+        (trunk.to.clone(), toward_to)
+    } else {
+        (trunk.from.clone(), toward_from)
+    };
+    // The last point is the pin the wire names, not a bend through it.
+    Some((pin, simplify_route(walk[..walk.len() - 1].to_vec())))
 }
 
 /// Re-tidy one wire after its ends moved: the pins are put back on the
@@ -1070,6 +1204,55 @@ mod tests {
         assert!(pin_labels(&bare).is_empty(), "an unnamed pin says nothing");
     }
 
+    /// The devkit is a part like any other, and turning it must not fling
+    /// it off the sheet: its anchor is the top-left corner of a board three
+    /// hundred pixels tall, so a turn about the anchor would move it by its
+    /// own length. What is asserted is the property, not the numbers — the
+    /// box's middle stays where it was, and its pins go with it.
+    #[test]
+    fn the_devkit_turns_about_its_middle_and_the_turn_survives_the_sheet() {
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.kit_x = Some(300.0);
+        sheet.kit_y = Some(20.0);
+        let mut parts = parts_of(&sheet, &rows());
+        let middle = |part: &EditPart| {
+            let (x0, y0, x1, y1) = part_box(part);
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        };
+        let before = middle(&parts[0]);
+        let pin_before = parts[0].pin("GPIO2").map(|p| pin_point(&parts[0], p));
+        assert!(pin_before.is_some(), "the kit has a GPIO2 to wire to");
+
+        crate::view::panels::simulate::edit::rotate(&mut parts, 0);
+        assert_eq!(parts[0].inst.rot, 90);
+        let after = middle(&parts[0]);
+        assert!(
+            (after.0 - before.0).abs() < 0.001 && (after.1 - before.1).abs() < 0.001,
+            "the board spins in place, not away: {before:?} -> {after:?}"
+        );
+        assert_ne!(
+            parts[0].pin("GPIO2").map(|p| pin_point(&parts[0], p)),
+            pin_before,
+            "and its header went with it"
+        );
+
+        crate::view::panels::simulate::edit::mirror(&mut parts, 0);
+        let mirrored = middle(&parts[0]);
+        assert!(
+            (mirrored.0 - before.0).abs() < 0.001 && (mirrored.1 - before.1).abs() < 0.001,
+            "a mirror stays put too"
+        );
+
+        let saved = sheet_of("esp32c3", &parts, &[]);
+        assert_eq!((saved.kit_rot, saved.kit_mirror), (90, true));
+        let reloaded = parts_of(&saved, &rows());
+        assert_eq!(
+            (reloaded[0].inst.rot, reloaded[0].inst.mirror),
+            (90, true),
+            "and comes back turned"
+        );
+    }
+
     #[test]
     fn the_sheet_round_trips_through_the_editors_parts() {
         let mut sheet = Sheet::empty("esp32c3");
@@ -1091,6 +1274,7 @@ mod tests {
         );
         let again = sheet_of("esp32c3", &parts, &sheet.wires);
         assert_eq!(again.kit_x, Some(300.0));
+        assert_eq!((again.kit_rot, again.kit_mirror), (0, false));
         assert_eq!(again.parts, sheet.parts);
         assert_eq!(again.wires, sheet.wires);
         assert!(again.symbols.is_empty(), "the backend resolves them");

@@ -111,6 +111,15 @@ pub struct Sheet {
     pub kit_x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kit_y: Option<f64>,
+    /// And how it lies, in the same two fields every other part has. The
+    /// devkit is a part like any other and its geometry already turns
+    /// through `orient`; these are here because a sheet whose parts sit
+    /// below the board wants its header pointing down, and a turn that did
+    /// not survive a save would be worse than no turn at all.
+    #[serde(default, skip_serializing_if = "super::sim::is_upright")]
+    pub kit_rot: u16,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kit_mirror: bool,
     /// Everything but the devkit, which is `U1` and drawn by the chip.
     #[serde(default)]
     pub parts: Vec<Instance>,
@@ -133,6 +142,8 @@ impl Sheet {
             chip: chip.to_string(),
             kit_x: None,
             kit_y: None,
+            kit_rot: 0,
+            kit_mirror: false,
             parts: Vec::new(),
             wires: Vec::new(),
             symbols: Vec::new(),

@@ -38,6 +38,12 @@ struct Board {
     x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     y: Option<f64>,
+    /// The devkit's turn, spelled exactly as a part's is. A first-format
+    /// file has neither and reads as upright, which is what it was.
+    #[serde(default, skip_serializing_if = "crate::model::is_upright")]
+    rot: u16,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    mirror: bool,
 }
 
 // ---------------------------------------------------------------- version 2
@@ -289,6 +295,8 @@ pub fn load(root: &Path, chip: &str) -> Option<Loaded> {
     };
     sheet.kit_x = board.x;
     sheet.kit_y = board.y;
+    sheet.kit_rot = board.rot % 360;
+    sheet.kit_mirror = board.mirror;
 
     let note = board
         .chip
@@ -564,6 +572,8 @@ pub fn save(root: &Path, sheet: &Sheet) -> Result<()> {
             chip: Some(sheet.chip.clone()),
             x: sheet.kit_x.map(f64::round),
             y: sheet.kit_y.map(f64::round),
+            rot: sheet.kit_rot,
+            mirror: sheet.kit_mirror,
         },
         parts: sheet
             .parts
@@ -632,6 +642,8 @@ mod tests {
         let mut sheet = Sheet::empty("esp32c3");
         sheet.kit_x = Some(420.0);
         sheet.kit_y = Some(30.0);
+        sheet.kit_rot = 90;
+        sheet.kit_mirror = true;
         sheet.parts.push(Instance {
             reference: "D1".into(),
             symbol: "Device:LED".into(),
@@ -676,6 +688,11 @@ mod tests {
         assert!(
             loaded.sheet.parts[0].mirror,
             "a mirrored part stays mirrored"
+        );
+        assert_eq!(
+            (loaded.sheet.kit_rot, loaded.sheet.kit_mirror),
+            (90, true),
+            "the devkit's own turn survives the file"
         );
         assert_eq!(loaded.sheet.parts[1].props["max"], "1023");
         assert_eq!(loaded.sheet.wires[0].bends.len(), 2);

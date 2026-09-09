@@ -630,6 +630,31 @@ pub async fn run_simulation(
         })
         .unwrap_or_default();
 
+    // And every potentiometer whose track the sheet has committed to. Same
+    // reason as the analog sources above: the device clears its converter on
+    // reset, so the host is the one authority on what is on a pin and has to
+    // say once, as soon as there is anything listening. A pot the sheet has
+    // not committed to sends nothing here and stays what it always was — a
+    // `P<pin>=` line for firmware that reads rusty's own text protocol.
+    let pot_start: Vec<(u32, u16)> = plan
+        .board
+        .as_ref()
+        .map(|sheet| {
+            let rows = simulate::kit_rows_for(&root, &sheet.chip);
+            sheet
+                .parts
+                .iter()
+                .filter_map(|part| {
+                    let span = nets::pot_span(sheet, &rows, &part.reference)?;
+                    let turn = part.prop::<u8>("start").unwrap_or(128);
+                    let max = part.prop::<u16>("max").unwrap_or(4095);
+                    Some((u32::from(span.gpio), span.counts(turn, max)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let analog_start: Vec<(u32, u16)> = analog_start.into_iter().chain(pot_start).collect();
+
     // And what is on the I2C bus. Same reason and same moment: the emulator
     // starts with an empty bus and only the host knows what the sheet says
     // is on it. Every device is declared even when it answers zeros — being

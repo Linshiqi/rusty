@@ -12,7 +12,7 @@
 
 use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
 
-use super::geometry::{EditPart, GroupStart, Snapshot, pin_key};
+use super::geometry::{EditPart, GroupStart, Snapshot, branch_route, pin_key, turned_anchor};
 
 /// How many steps of undo the editor keeps.
 ///
@@ -120,11 +120,19 @@ pub(super) fn set_prop(list: &mut [EditPart], index: usize, key: &str, value: &s
     }
 }
 
-/// A quarter turn clockwise. The devkit does not turn: its art is drawn
-/// upright and its header reads that way.
+/// A quarter turn clockwise — the devkit included. It is a part like any
+/// other and every geometric question about it already goes through
+/// `orient`, so the header, the hit-testing and the wires follow the turn
+/// for free; the two things that do not are the board's own art, which the
+/// view turns with it, and the row names, which are placed after the turn
+/// like every other label because text is never turned.
 pub(super) fn rotate(list: &mut [EditPart], index: usize) {
-    if let Some(part) = list.get_mut(index).filter(|p| !p.is_kit()) {
-        part.inst.rot = (part.inst.rot + 90) % 360;
+    if let Some(part) = list.get_mut(index) {
+        let rot = (part.inst.rot + 90) % 360;
+        let (x, y) = turned_anchor(part, rot, part.inst.mirror);
+        part.inst.rot = rot;
+        part.inst.x = x;
+        part.inst.y = y;
     }
 }
 
@@ -132,8 +140,12 @@ pub(super) fn rotate(list: &mut [EditPart], index: usize) {
 /// on the chip's right wants its pins on the near edge *in the same
 /// order*, and turning it 180° reverses them.
 pub(super) fn mirror(list: &mut [EditPart], index: usize) {
-    if let Some(part) = list.get_mut(index).filter(|p| !p.is_kit()) {
-        part.inst.mirror = !part.inst.mirror;
+    if let Some(part) = list.get_mut(index) {
+        let mirror = !part.inst.mirror;
+        let (x, y) = turned_anchor(part, part.inst.rot, mirror);
+        part.inst.mirror = mirror;
+        part.inst.x = x;
+        part.inst.y = y;
     }
 }
 
@@ -256,6 +268,40 @@ pub(super) fn connect(
         from: a,
         to: b,
         bends: Vec::new(),
+    });
+    Some(wires.len() - 1)
+}
+
+/// A branch off an existing wire: the T-junction, made as a wire to one of
+/// the trunk's own pins.
+///
+/// Nothing about the net model changes, because nothing needs to — three
+/// wires at one pin have always been one net. `branch_route` picks which of
+/// the trunk's pins to name and lays the bends along the trunk so the two
+/// draw as a T; the refusals are `connect`'s, for the same reasons: a wire
+/// to itself, and a pair already joined.
+pub(super) fn branch(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    trunk: usize,
+    at: (f64, f64),
+) -> Option<usize> {
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let (b, bends) = branch_route(list, wires.get(trunk)?, at)?;
+    if a == b {
+        return None;
+    }
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends,
     });
     Some(wires.len() - 1)
 }
@@ -425,6 +471,68 @@ mod tests {
         assert!(wires.is_empty());
     }
 
+    /// A T-junction is a wire to one of the trunk's own pins, because three
+    /// wires at one pin have always been one net. What is asserted is that
+    /// property — which pin it names and that the tail lies on the trunk —
+    /// rather than coordinates, which depend on where the drawing puts a
+    /// lamp's legs.
+    #[test]
+    fn a_branch_onto_a_wire_names_one_of_its_pins_and_starts_at_the_drop() {
+        use crate::view::panels::simulate::geometry::{wire_ends, wire_path, wire_under};
+
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let e = add(&mut list, &led(), 100.0, 300.0);
+        let mut wires = Vec::new();
+        let trunk = connect(&list, &mut wires, (0, "4"), (d, "2")).expect("trunk");
+
+        // A point genuinely on the trunk, read off the drawn path rather
+        // than guessed: the middle of its longest segment.
+        let ends = wire_ends(&list, &wires[trunk]).expect("the trunk is drawable");
+        let path = wire_path(&ends, &wires[trunk].bends);
+        let length = |s: &[(f64, f64)]| (s[1].0 - s[0].0).hypot(s[1].1 - s[0].1);
+        let seg = path
+            .windows(2)
+            .max_by(|p, q| length(p).total_cmp(&length(q)))
+            .expect("a segment");
+        let at = ((seg[0].0 + seg[1].0) / 2.0, (seg[0].1 + seg[1].1) / 2.0);
+
+        assert_eq!(
+            wire_under(&list, &wires, at, 8.0),
+            Some(trunk),
+            "the hit test finds the wire under the drop"
+        );
+        assert_eq!(
+            wire_under(&list, &wires, (at.0 + 400.0, at.1 + 400.0), 8.0),
+            None,
+            "and nothing at all out of reach, rather than the nearest"
+        );
+
+        let made = branch(&list, &mut wires, (e, "2"), trunk, at).expect("branched");
+        assert_eq!(wires[made].from, PinRef::new("D2", "A"));
+        assert!(
+            wires[made].to == wires[trunk].from || wires[made].to == wires[trunk].to,
+            "a branch names one of the trunk's own pins: {:?}",
+            wires[made].to
+        );
+        assert_eq!(
+            wires[made].bends.first().copied(),
+            Some(at),
+            "and its first bend is where the pointer let go"
+        );
+
+        assert_eq!(
+            branch(&list, &mut wires, (e, "2"), trunk, at),
+            None,
+            "the same branch twice is the pair that is already joined"
+        );
+        assert_eq!(
+            branch(&list, &mut wires, (d, "2"), trunk, at),
+            None,
+            "and a branch from one of the trunk's own pins means nothing"
+        );
+    }
+
     #[test]
     fn removing_a_part_takes_its_wires_and_the_devkit_cannot_go() {
         let mut list = sheet();
@@ -447,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn turning_mirroring_and_duplicating_leave_the_devkit_alone() {
+    fn the_devkit_turns_like_any_part_and_is_still_never_copied() {
         let mut list = sheet();
         let d = add(&mut list, &led(), 100.0, 100.0);
         for _ in 0..4 {
@@ -457,10 +565,18 @@ mod tests {
         rotate(&mut list, d);
         mirror(&mut list, d);
         assert_eq!((list[d].inst.rot, list[d].inst.mirror), (90, true));
+        // The devkit turns like anything else — a sheet whose parts sit
+        // below the board wants its header pointing that way — but there is
+        // only ever one of it, and its reference is the one every wire
+        // spells, so copying and renaming stay refused.
         rotate(&mut list, 0);
         mirror(&mut list, 0);
-        assert_eq!((list[0].inst.rot, list[0].inst.mirror), (0, false));
+        assert_eq!((list[0].inst.rot, list[0].inst.mirror), (90, true));
         assert_eq!(duplicate(&mut list, 0), None);
+        assert!(
+            !rename(&mut list, &mut Vec::new(), 0, "U9"),
+            "the devkit keeps its reference"
+        );
         let copy = duplicate(&mut list, d).expect("copied");
         assert_eq!(list[copy].inst.reference, "D2");
         assert_eq!(
