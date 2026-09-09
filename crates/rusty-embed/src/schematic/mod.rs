@@ -15,6 +15,7 @@
 
 pub mod easyeda;
 pub mod kicad_sym;
+pub mod place;
 
 use std::path::{Path, PathBuf};
 

@@ -118,11 +118,38 @@ cannot draw is a thing rusty must not delete.
 
 ## The stages
 
-**0 — the decision, and the geometry that follows from it.** The decision is
-above. What it needs in code is small: KiCad-space pin positions for a placed
-instance, in `rusty-embed` where both sides can reach them (pure arithmetic
-over `Symbol` — `local` and `orient`, which the frontend already has for its
-own space). Nothing about the sheet, the canvas or the file format changes.
+**0 — the decision, and the geometry that follows from it.** *Done*
+(`schematic::place`). KiCad-space pin positions for a placed instance: pure
+arithmetic over `Symbol`, and nothing about the sheet, the canvas or the
+file format changes.
+
+The library is y-up and the sheet is y-down, so a pin flips before anything
+else happens to it — not in doubt, and confirmed by which side of its
+connection point a ground symbol is drawn. **Which way the angle turns was
+in doubt, and it is one boolean that silently reverses a diode when it is
+wrong.** It is `R(-a)`, and what settled it was a lamp: a `Device:LED`
+turned 90° between a supply and a ground, and *what KiCad drew* — the
+cathode bar on the ground side. Two things could not settle it and one of
+them looked as though it had:
+
+- **Pin coordinates cannot.** Every rotated part on a real 33-symbol board
+  was a one-pin power flag or a point-symmetric resistor. For those, both
+  candidate signs put pins on the same two points and differ only in which
+  pin is which — exactly the case that matters, and exactly the one the
+  geometry is silent about.
+- **An autoplaced field is not a witness.** `Device:LED`'s `Reference` sits
+  at `(0, 2.54)` in the library and KiCad wrote the instance's on the `+x`
+  side, which `R(+90)` predicts and `R(-90)` does not; a resistor on a
+  second board agreed. Both were wrong. KiCad places field text where it
+  reads well rather than carrying it through the symbol's transform, and the
+  tell was a third instance at 270° whose field implied the opposite sign
+  from the 90° ones on the same sheet. A witness that contradicts itself is
+  not a witness.
+
+`(mirror x|y)` is implemented as flip-then-turn and is **unverified**:
+neither file had a mirrored instance. One `(mirror y)` symbol at 90° with a
+wire on an asymmetric pin would settle it, the same shape of evidence the
+rotation needed. The test says so rather than implying otherwise.
 
 **1 — the reader.** `.kicad_sch` into a `Sheet`, plus the `Sx` tree it came
 from. The work is the vocabulary, not the syntax: `lib_symbols` (the file
