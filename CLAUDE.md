@@ -97,7 +97,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is the symbol library — KiCad's `.kicad_sym` read and written, EasyEDA's answer for an LCSC part read — over `model/symbol.rs`, the drawing the frontend renders |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -2286,6 +2286,82 @@ proof of the import.
   runs; the cap sinks, the rules see it conducting, and the GPIO it
   reaches is driven through the same `B<pin>=1` the old buttons sent, so
   firmware written for the text protocol hears it too.
+
+## Numbers on the sheet
+
+The rules say on and off; `solve` says volts and amps. Modified nodal
+analysis, written here rather than ngspice bundled — `docs/kicad.md` argues
+that decision and names what would reverse it. `circuit` turns a sheet into
+a `Circuit`, `live` walks one in step with a running firmware.
+
+**The gates are closed forms, and that is the whole reason for writing it.**
+A divider's ratio, resistors in parallel, a Thévenin equivalent asserted
+across three loads rather than one, Shockley evaluated on the answer. An
+integration with somebody else's engine can only be tested by "it ran and
+said something"; this can be checked against arithmetic a person does by
+hand, and every bug below was caught that way and by nothing else.
+
+- **Voltages settling is not the circuit being solved.** With limiting
+  active, successive Newton guesses can stop moving while the junction's own
+  equation is out by two orders of magnitude — each round linearises at the
+  same clamped point and hands back the same answer, which is a fixed point
+  of the *limited* map and not a solution. The current residual is checked
+  as well: what the curve has at the answer against what the straight line
+  through the linearisation point claimed. Six tests passed before the one
+  that asserted the physics failed.
+- **Junction limiting is about the step, not the voltage.** SPICE's `pnjlim`
+  compares against the *previous* voltage, so once the guesses settle no
+  limiting applies and the linearisation is at the real operating point.
+  Clamping the new voltage alone maps every guess past the knee to one
+  point — the iteration sits still on a wrong answer, and an operating point
+  that genuinely lies above the critical voltage can never be reached at
+  all, because the clamp never switches off.
+- **An energy-storing element is in `through` at DC and not during a step.**
+  An inductor is a short with an equation of its own at DC and a conductance
+  with a source in a transient, so its new current comes from the companion
+  model (`i = i_before + h·v/L`) and not from the solved source currents.
+  Reading `through` in both cases leaves it at zero for ever and the voltage
+  across it never decays: a circuit that looks open.
+- **The accuracy gate is a convergence order, not a tolerance.** Run an RC
+  to one time constant at a hundred steps and at two hundred: the error has
+  to halve. A tolerance says an answer was close; this says the method is
+  first-order backward Euler, and something accidentally right at one step
+  size fails it.
+- **Backward Euler, not the trapezoidal rule.** A schematic here is switched
+  hard — a GPIO goes from nothing to the rail in one step — and the
+  trapezoidal rule answers a step edge with an oscillation that is
+  arithmetic rather than circuit. It also earns its place twice: across a
+  long quiet gap one coarse step is not merely stable, it lands *on* the
+  steady state, which is what makes the event-driven coupling in `live`
+  honest rather than merely fast.
+- **A node nothing is attached to is not in the circuit, and that is not
+  floating.** Every devkit row is a solid net whether or not anything is
+  wired to it, so the first bridge handed the solver twenty untouched nodes
+  and was told the first one floats. Untouched nodes are pruned. The
+  distinction it draws is the useful one: the node past a capacitor is
+  *absent* at DC, and a node wired to something that cannot reach ground is
+  a finding about a drawing somebody got wrong.
+- **What the sheet did not say is refused by name, with the property that
+  would say it.** A resistor whose value is not a resistance, a rail called
+  `VCC` — which names a net without saying what it is at — a lamp with no
+  `vf`, a capacitor whose value is a part number. `docs/schematic.md` has
+  said all along that an LED's forward voltage is not on the sheet and would
+  not be right to guess, so the lamp asks for it.
+- **The converter's full scale is not the rail.** An ESP32's SAR reads about
+  1.1 V at its default attenuation and about 3.1 V at 11 dB, so counts
+  computed against the supply are out by a factor of three and look entirely
+  plausible. `fullscale` is read off a part on the measured net and without
+  it `counts_at` answers nothing — the same rule that made `A<pin>=<counts>`
+  carry counts rather than volts in the first place, arrived at from the
+  other side. The *resolution* has a default and the voltage does not:
+  twelve bits is a fact about the chip, and the attenuation is a fact about
+  how the firmware configured it.
+- **A pin nobody has reported is not a source.** rusty will not claim to
+  know the voltage of a pin it has heard nothing about, so the first report
+  of one adds an element and rebuilds the circuit — and the voltages are
+  carried across by node, because starting the new one from rest would
+  discharge every capacitor on the sheet at the exact moment the firmware
+  first touched a pin.
 
 ## Meeting C
 

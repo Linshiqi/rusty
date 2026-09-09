@@ -256,16 +256,21 @@ impl Live {
     /// knows the divider now — it solved it — and it still does not know
     /// the converter, so it still refuses.
     pub fn counts_at(&self, gpio: u8) -> Option<u16> {
-        let node = self.gpio_node(gpio)?;
-        let volts = self.run.volts_at(node);
-        let scale = self.scale_on(node)?;
+        let volts = self.run.volts_at(self.gpio_node(gpio)?);
+        let scale = self.scale_for(gpio)?;
         let counts = (volts / scale.full_volts * f64::from(scale.max)).round();
         Some(counts.clamp(0.0, f64::from(scale.max)) as u16)
     }
 
-    /// What the sheet says the converter on this net turns volts into, or
+    /// What the sheet says the converter on this pin turns volts into, or
     /// nothing when nobody has said.
-    pub fn scale_on(&self, node: usize) -> Option<Scale> {
+    ///
+    /// By GPIO and not by node: the node numbering is this module's own and
+    /// changes whenever the circuit is rebuilt, so a caller outside could
+    /// never have obtained one. Found by the review after the fact, which
+    /// is what the review is for.
+    pub fn scale_for(&self, gpio: u8) -> Option<Scale> {
+        let node = self.gpio_node(gpio)?;
         self.sheet.parts.iter().find_map(|part| {
             let full_volts = part.prop::<f64>("fullscale").filter(|v| *v > 0.0)?;
             let symbol = self.sheet.symbol_of(&part.reference)?;
@@ -294,10 +299,6 @@ impl Live {
     /// The instant the circuit has been advanced to.
     pub fn micros(&self) -> u64 {
         self.at
-    }
-
-    pub fn pace(&self) -> Pace {
-        self.pace
     }
 
     /// The rail a driven pin is driven to. Read off the sheet, never
@@ -636,9 +637,7 @@ mod tests {
         assert_eq!(live.counts_at(3), Some(500), "half of full scale");
 
         // And the scale the sheet stated, read back.
-        let scale = live
-            .scale_on(live.gpio_node(3).expect("a node"))
-            .expect("stated");
+        let scale = live.scale_for(3).expect("stated");
         assert_eq!(scale.full_volts, 2.2);
         assert_eq!(scale.max, 1000);
 
@@ -771,6 +770,71 @@ mod tests {
         assert!(quiet.is_empty(), "nothing has moved: {quiet:?}");
         let quiet = live.absorb("[rusty:adc@202000] 3=0").expect("absorbed");
         assert!(quiet.is_empty());
+    }
+
+    /// A switch held while the firmware runs changes what conducts, and
+    /// the reading follows. Without a test this was a correct function
+    /// nothing called, which is how dead code starts.
+    #[test]
+    fn a_switch_held_down_changes_what_the_converter_reads() {
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.symbols = vec![
+            symbol("Device", "R", "R", &[("1", "~"), ("2", "~")]),
+            symbol("Device", "SW_Push", "SW", &[("1", "1"), ("2", "2")]),
+            symbol("rusty", "GND", "#PWR", &[("1", "GND")]),
+        ];
+        let mut props: std::collections::BTreeMap<String, String> = Default::default();
+        props.insert("fullscale".into(), "3.3".into());
+        props.insert("max".into(), "1000".into());
+        for (reference, id, value, scale) in [
+            ("R1", "Device:R", "10k", true),
+            ("SW1", "Device:SW_Push", "", false),
+            ("GND1", "rusty:GND", "GND", false),
+        ] {
+            sheet.parts.push(Instance {
+                reference: reference.into(),
+                symbol: id.into(),
+                value: value.into(),
+                x: 0.0,
+                y: 0.0,
+                rot: 0,
+                mirror: false,
+                props: if scale {
+                    props.clone()
+                } else {
+                    Default::default()
+                },
+            });
+        }
+        let mut wire = |from: &str, to: &str| {
+            sheet.wires.push(Wire {
+                from: PinRef::parse(from).unwrap(),
+                to: PinRef::parse(to).unwrap(),
+                bends: Vec::new(),
+            });
+        };
+        // A pull-up off the rail onto GPIO3, with a switch to ground.
+        wire("U1.3V3", "R1.1");
+        wire("R1.2", "U1.GPIO3");
+        wire("R1.2", "SW1.1");
+        wire("SW1.2", "GND1.GND");
+
+        let rows = kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
+        let mut live = Live::at_rest(sheet, rows, BTreeMap::new(), Pace::default()).expect("built");
+        live.advance_to(1_000).expect("advanced");
+        assert_eq!(
+            live.counts_at(3),
+            Some(1000),
+            "the pull-up holds it at the rail"
+        );
+
+        live.pressing("SW1", true);
+        live.advance_to(2_000).expect("advanced");
+        assert_eq!(live.counts_at(3), Some(0), "and the switch pulls it down");
+
+        live.pressing("SW1", false);
+        live.advance_to(3_000).expect("advanced");
+        assert_eq!(live.counts_at(3), Some(1000), "and lets it go again");
     }
 
     /// A line that is neither is not the coupling's business, and saying

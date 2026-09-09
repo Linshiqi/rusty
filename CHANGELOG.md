@@ -9,6 +9,60 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.14
+
+**Added — a KiCad schematic opens here, and goes back without the trip
+costing anything.** Two buttons in the board sheet's corner import a
+`.kicad_sch` and export one. What comes in keeps its parts, its values and
+its wiring; what goes out is *your original file with only what you changed
+rewritten* — every hierarchical sheet, bus, text box, footprint field and
+uuid comes back byte for byte, because the file is patched rather than
+regenerated. Move one resistor on a two-hundred-part board and one symbol is
+rewritten; every wire still holds its own bytes. A schematic rusty has never
+seen before is written whole instead, as a starting point to lay out.
+
+An imported board can also be *run*. rusty drives pins through the devkit,
+and a schematic drawn elsewhere has a microcontroller of its own — so its
+GPIO-named pins are joined to the devkit's rows and the board simulates. If
+two parts both look like the microcontroller, neither is joined and both are
+named: that is a question with no right answer.
+
+**Added — the sheet answers in volts and amps.** rusty now solves the
+circuit you drew. A divider's midpoint, the current through a lamp's
+resistor, a pull-up with a button on it: real numbers, from a solver written
+for this and checked against arithmetic you can do by hand. Capacitors
+charge, inductors decay, and the whole thing can be walked forward in step
+with the firmware running in the emulator — so a pin the firmware drives
+charges the RC you drew, and the converter it reads climbs through that RC
+instead of jumping.
+
+**Where the sheet does not say enough, it says so and names the property.**
+A resistor whose value is a colour, a rail called `VCC` — which names a net
+without saying what it is at — a lamp with no forward voltage, a capacitor
+whose value is a part number. Each is refused with the property that would
+answer it rather than filled in with a guess, because a plausible wrong
+number is worse here than no number.
+
+**Added — a potentiometer reaches the converter**, where both its ends sit
+on rails and there is nothing left to assume, so a knob on the sheet becomes
+real ADC counts through an ordinary `adc.read_oneshot()`.
+
+**Added — three things the board editor was missing.** A wire dropped on
+another wire branches, so a third connection to a net is one gesture instead
+of hunting for the pin. The devkit turns and mirrors like any other part.
+And a resistor's value is read, which is what makes the numbers above
+possible.
+
+**Added — the sheet checks more.** A pin with no wire on it, on a part whose
+other pins are wired, is now a finding — and a pin you meant to leave
+unconnected can be marked so, which is what keeps that finding worth
+reading. Two pins that both drive, wired together, is another.
+
+**Fixed — a voltage divider is no longer reported as a short.** Two rails
+joined *through a resistor* are the commonest analog circuit there is; only
+a connection with nothing in it is a short. Every divider drawn on a sheet
+had been flagged.
+
 ## v0.6.13
 
 **Added — the installer carries the tools, so a fresh install can already
