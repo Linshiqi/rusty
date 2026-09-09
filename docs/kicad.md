@@ -187,8 +187,27 @@ have moved, so a wiring change regenerates every `wire` and `junction` and
 says so in `Written::notes`. Everything else in the file still keeps its
 bytes.
 
-**3 — the editor catches up.** Buses, no-connect flags, ERC beyond today's
-findings, annotation, footprint fields. This is the stage that will try to
+**3 — the editor catches up.** *Begun.* The first part of it was not on the
+list and had to be: **the plumbing**, because stages 1 and 2 had no caller
+and a reader nobody can reach is a reader nobody has. `schematic::import`
+and `schematic::export` are the project-level pair, `sim_import_kicad` and
+`sim_export_kicad` the commands, and two buttons sit beside Save in the
+sheet's corner. Import re-reads the file's own symbols into the project's
+`.rusty/symbols/`, one file per KiCad library, because a schematic carries
+the only copy of some of them and without that the sheet would draw once
+and come back as a row of unknown boxes. Export re-reads whatever is at the
+path and patches it, so the promise holds against what is on disk *now*
+rather than against what was read an hour ago.
+
+Import says what it could not carry, in the sheet's own `notes` and so in
+the dock — most of all this: **a KiCad schematic has a microcontroller of
+its own where rusty's has a devkit**, so an imported board draws and checks
+and does not simulate until something is wired to `U1`. Said on arrival
+rather than discovered when Run does nothing. Mapping an MCU symbol's pins
+onto the devkit's rows by name is the obvious next move and is not done.
+
+What is left of the stage: buses, no-connect flags, ERC beyond today's
+findings, annotation, footprint fields. This is the part that will try to
 become infinite; the boundary is in "What this is not" below.
 
 **4 — Kirchhoff.** Modified nodal analysis: a DC operating point first, then

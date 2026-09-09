@@ -207,6 +207,13 @@ pub mod sim {
     /// Stop the emulator's clock, or start it again. The session stays: a
     /// paused simulation is one you can look at, not one you have lost.
     pub const PAUSE: &str = "sim_pause";
+    /// A `.kicad_sch` read onto the sheet, with its own symbols kept in the
+    /// project so it still draws when the project is reopened.
+    pub const IMPORT_KICAD: &str = "sim_import_kicad";
+    /// The sheet written back out as `.kicad_sch`. The file that is there is
+    /// patched rather than replaced, so everything rusty does not model
+    /// keeps its own bytes; `docs/kicad.md` is why.
+    pub const EXPORT_KICAD: &str = "sim_export_kicad";
 }
 
 pub mod features {

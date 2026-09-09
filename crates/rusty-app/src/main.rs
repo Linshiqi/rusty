@@ -113,6 +113,8 @@ fn main() {
             simulate::sim_send,
             simulate::save_sim_trace,
             simulate::sim_import_symbol,
+            simulate::sim_import_kicad,
+            simulate::sim_export_kicad,
             simulate::sim_pause,
             commands::memory_report,
             commands::wizard_options,
@@ -301,6 +303,8 @@ mod wire_names {
             cmd::sim::SAVE_TRACE => simulate::save_sim_trace,
             cmd::sim::IMPORT_SYMBOL => simulate::sim_import_symbol,
             cmd::sim::PAUSE => simulate::sim_pause,
+            cmd::sim::IMPORT_KICAD => simulate::sim_import_kicad,
+            cmd::sim::EXPORT_KICAD => simulate::sim_export_kicad,
             cmd::memory::REPORT => commands::memory_report,
 
             cmd::flash::SERIAL_PORTS => commands::serial_ports,

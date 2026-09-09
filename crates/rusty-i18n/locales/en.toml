@@ -845,6 +845,8 @@ espup = "Installs the Xtensa compiler this chip needs. Nothing upstream ships on
 rustup = "Rust itself is not installed. Everything else here rides on it, so install rustup first — https://rustup.rs — and rusty can do the rest."
 msvc = "The Windows C++ build tools are not installed, so nothing `cargo install` compiles can be linked. Install Build Tools for Visual Studio with the “Desktop development with C++” workload — https://visualstudio.microsoft.com/visual-cpp-build-tools/ — then rusty can do the rest."
 [simulate]
+kicad-import = "Import a KiCad schematic…"
+kicad-export = "Export as a KiCad schematic…"
 planning = "Working out the plan…"
 no-duty = "— no duty reported"
 wire-bends = "{bends} bend(s) — drag any segment of the wire to move it; right-click for more"

@@ -1966,6 +1966,41 @@ usty`) holds `location.toml`
   `has_gpio_model` still answers correctly. A harness that hides `apt` behind
   `>/dev/null` under `set -e` reports all of this as an empty file; two runs
   went that way before the output was let out.
+- **KiCad's schematic space and rusty's canvas are two spaces, and only a
+  pin crosses between them.** `docs/kicad.md` is the design; the fact that
+  decides it is measured: a `Device:LED`'s pins are at `(-24, 0)` and
+  `(24, 0)` in symbol coordinates and at `(-4, 18)` and `(4, 24)` on the
+  canvas, because rusty draws parts as the components they are and *the
+  drawing decides where the pins are*. The two differ **per pin**, not by
+  any transform, and most for exactly the library parts a KiCad file is made
+  of. So a free wire point has no translation and a point on a pin has an
+  exact one — which is why the sheet keeps its pin-to-pin wires and the
+  crossing is `schematic::place`, not a new wire model.
+- **An autoplaced field is not a witness to a symbol's transform.** Which
+  way KiCad's placement angle turns is one boolean that silently reverses a
+  diode, and it is `R(-a)`. `Device:LED`'s `Reference` sits at `(0, 2.54)`
+  in the library and KiCad writes the instance's on the `+x` side, which
+  `R(+90)` predicts and `R(-90)` does not; a resistor on a second board
+  agreed; both were wrong, because KiCad places field text where it reads
+  well rather than carrying it through the transform. The tell was a third
+  instance at 270° whose field implied the opposite sign from the 90° ones
+  on the same sheet — **a witness that contradicts itself is not a
+  witness**. Pin coordinates cannot settle it either: every rotated part on
+  a real 33-symbol board was a one-pin power flag or a point-symmetric
+  resistor, and for those both signs give the same two points and differ
+  only in which pin is which. What settled it was a drawn diode: a lamp
+  turned 90° between a supply and a ground, with its cathode bar on the
+  ground side.
+- **A file format writer patches bytes; it does not reserialise a tree.**
+  KiCad writes tabs, puts small nodes inline and long ones one per line, and
+  writes `0` where a parser only knows `0.0`, so a tree cannot give back
+  what came in and a reserialising writer would rewrite a two-hundred-part
+  board on its first save. `kicad_out` finds top-level spans in one
+  string-aware pass and replaces only what changed — the same technique
+  `migrate.rs` uses on `Cargo.toml`, for the same reason. The gate is a test
+  that reads a real file, changes nothing, writes it and asserts the bytes;
+  the one beside it moves a part and asserts every *wire* still holds its
+  own bytes, because moving is not rewiring.
 - **A Windows verbatim path (`\\?\E:\…`) cannot be handed to a tool that
   appends to it.** Tauri's `resource_dir()` comes back canonicalised under
   `cargo tauri dev`, and QEMU joins `-L <dir>` to `esp32c3-rom.bin` with a

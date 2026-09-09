@@ -41,6 +41,11 @@ extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch, js_name = open)]
     async fn dialog_open(options: JsValue) -> Result<JsValue, JsValue>;
 
+    /// The same picker asking where to *put* a file, which the open one
+    /// will not do: an export names a file that does not exist yet.
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch, js_name = save)]
+    async fn dialog_save(options: JsValue) -> Result<JsValue, JsValue>;
+
     /// A native OK/Cancel question, from the same plugin. Resolves to the
     /// answer as a boolean.
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch, js_name = confirm)]
@@ -62,6 +67,30 @@ pub async fn pick_folder(title: &str) -> Answer<Option<String>> {
     let selected = dialog_open(options)
         .await
         .map_err(|e| IpcError::from_js(&e))?;
+    Ok(selected.as_string())
+}
+
+/// Ask the OS for one file of a kind, by extension.
+///
+/// The same picker as [`pick_folder`] with `directory` off; `None` is a
+/// cancel and not a failure, for the same reason. `save` asks for a name
+/// that need not exist yet — which is what an export wants, and what the
+/// open dialog would refuse.
+pub async fn pick_file(title: &str, extension: &str, save: bool) -> Answer<Option<String>> {
+    let options = serde_wasm_bindgen::to_value(&serde_json::json!({
+        "directory": false,
+        "multiple": false,
+        "title": title,
+        "filters": [{ "name": extension, "extensions": [extension] }],
+    }))
+    .map_err(|e| IpcError::local(format!("could not encode dialog options: {e}")))?;
+
+    let selected = if save {
+        dialog_save(options).await
+    } else {
+        dialog_open(options).await
+    }
+    .map_err(|e| IpcError::from_js(&e))?;
     Ok(selected.as_string())
 }
 

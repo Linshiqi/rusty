@@ -36,6 +36,40 @@ pub async fn save_sim_board(board: Sheet, state: State<'_, AppState>) -> Result<
     .map_err(CommandError::from)
 }
 
+/// Read a `.kicad_sch` onto the sheet.
+///
+/// Answers with the sheet *and* what it could not bring across, because the
+/// second is the half a user has to see: a schematic drawn in KiCad has a
+/// microcontroller of its own where rusty's has a devkit, so an imported
+/// board draws and checks and does not simulate until something is wired to
+/// `U1`. Said here rather than discovered when Run does nothing.
+#[tauri::command]
+pub async fn sim_import_kicad(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Sheet, CommandError> {
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
+    let chip = state.chip().await.unwrap_or_else(|| "esp32c3".to_string());
+    blocking("importing the schematic", move || {
+        rusty_embed::schematic::import(&root, Path::new(&path), &chip)
+    })
+    .await?
+    .map_err(CommandError::from)
+}
+
+/// Write the sheet out as `.kicad_sch`, patching whatever is at `path`.
+#[tauri::command]
+pub async fn sim_export_kicad(path: String, board: Sheet) -> Result<Vec<String>, CommandError> {
+    blocking("exporting the schematic", move || {
+        rusty_embed::schematic::export(Path::new(&path), &board)
+    })
+    .await?
+    .map_err(CommandError::from)
+}
+
 /// An LCSC part as a schematic symbol, fetched from EasyEDA's component
 /// service and kept in the data directory's `symbols/lcsc.kicad_sym`, so
 /// the next plan offers it in the library. The symbol comes back for the

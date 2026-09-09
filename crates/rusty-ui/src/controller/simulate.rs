@@ -326,6 +326,90 @@ pub fn sim_analog(state: AppState, pin: u8, count: u16) {
 
 /// Persist the board editor's layout, then re-plan so the panel shows what
 /// the file now says.
+/// Read a `.kicad_sch` onto the sheet.
+///
+/// The sheet arrives with its own `notes` filled — what could not be drawn,
+/// and whether it can be simulated at all — and those go to the dock rather
+/// than nowhere: an imported board that cannot run is a fact the user needs
+/// before pressing Run, not after.
+pub fn import_kicad(state: AppState, on_sheet: Callback<rusty_embed::Sheet>) {
+    spawn_local(async move {
+        let picked = match ipc::pick_file(&t!("simulate.kicad-import"), "kicad_sch", false).await {
+            Ok(Some(path)) => path,
+            // A cancelled dialog is an answer, not a failure.
+            Ok(None) => return,
+            Err(error) => return say(state, error.message),
+        };
+        #[derive(serde::Serialize)]
+        struct Args {
+            path: String,
+        }
+        match ipc::call::<_, rusty_embed::Sheet>(cmd::sim::IMPORT_KICAD, &Args { path: picked })
+            .await
+        {
+            Ok(sheet) => {
+                for note in &sheet.notes {
+                    state.push_log(LogLine {
+                        stream: LogStream::Stdout,
+                        text: format!("[kicad] {note}"),
+                        level: None,
+                    });
+                }
+                on_sheet.run(sheet);
+            }
+            Err(error) => say(state, error.message),
+        }
+    });
+}
+
+/// Write the sheet out as `.kicad_sch`.
+pub fn export_kicad(state: AppState, board: rusty_embed::Sheet) {
+    spawn_local(async move {
+        let picked = match ipc::pick_file(&t!("simulate.kicad-export"), "kicad_sch", true).await {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => return say(state, error.message),
+        };
+        #[derive(serde::Serialize)]
+        struct Args {
+            path: String,
+            board: rusty_embed::Sheet,
+        }
+        let args = Args {
+            path: picked.clone(),
+            board,
+        };
+        match ipc::call::<_, Vec<String>>(cmd::sim::EXPORT_KICAD, &args).await {
+            Ok(notes) => {
+                state.push_log(LogLine {
+                    stream: LogStream::Stdout,
+                    text: format!("[kicad] written to {picked}"),
+                    level: None,
+                });
+                // What the file lost, if anything — most of all whether the
+                // wire routing survived, which is the one thing a user who
+                // came from KiCad will look for.
+                for note in notes {
+                    state.push_log(LogLine {
+                        stream: LogStream::Stdout,
+                        text: format!("[kicad] {note}"),
+                        level: None,
+                    });
+                }
+            }
+            Err(error) => say(state, error.message),
+        }
+    });
+}
+
+fn say(state: AppState, message: String) {
+    state.push_log(LogLine {
+        stream: LogStream::Stderr,
+        text: format!("[kicad] {message}"),
+        level: Some(LogLevel::Error),
+    });
+}
+
 pub fn save_sim_board(state: AppState, board: rusty_embed::Sheet, dirty: RwSignal<bool>) {
     #[derive(serde::Serialize)]
     struct Args {

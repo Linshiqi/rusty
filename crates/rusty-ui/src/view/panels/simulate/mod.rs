@@ -1082,6 +1082,42 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                         >
                             <IconView icon=Icon::Save size=14 />
                         </button>
+                        // KiCad, both ways. Beside Save because that is what
+                        // they are — the same sheet, written somewhere else.
+                        <span class="mx-0.5 h-4 w-px bg-line" />
+                        <button
+                            type="button"
+                            title=t!("simulate.kicad-import")
+                            on:click=move |_| {
+                                controller::import_kicad(
+                                    state,
+                                    Callback::new(move |brought: Sheet| {
+                                        checkpoint();
+                                        let rows = rows.get_untracked();
+                                        parts.set(parts_of(&brought, &rows));
+                                        wires.set(brought.wires.clone());
+                                        marked.set(Vec::new());
+                                        selected.set(None);
+                                        selected_wire.set(None);
+                                        dirty.set(true);
+                                    }),
+                                )
+                            }
+                            class=SHEET_BUTTON
+                        >
+                            "⭳"
+                        </button>
+                        <button
+                            type="button"
+                            title=t!("simulate.kicad-export")
+                            on:click=move |_| {
+                                let sheet = sheet_now();
+                                controller::export_kicad(state, sheet);
+                            }
+                            class=SHEET_BUTTON
+                        >
+                            "⭱"
+                        </button>
                         <span class="mx-0.5 h-4 w-px bg-line" />
                         <button
                             type="button"

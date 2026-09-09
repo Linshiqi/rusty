@@ -807,6 +807,8 @@ espup = "安装这颗芯片需要的 Xtensa 编译器。上游没有任何一份
 rustup = "Rust 本身还没装。这里其他所有东西都建立在它之上，所以先装 rustup —— https://rustup.rs —— 剩下的 rusty 能自己来。"
 msvc = "Windows 的 C++ 生成工具还没装，`cargo install` 编出来的东西没有链接器可用。请安装 Visual Studio 生成工具并勾选“使用 C++ 的桌面开发”—— https://visualstudio.microsoft.com/visual-cpp-build-tools/ —— 剩下的 rusty 能自己来。"
 [simulate]
+kicad-import = "导入 KiCad 原理图…"
+kicad-export = "导出为 KiCad 原理图…"
 planning = "正在生成仿真计划…"
 no-duty = "—— 未报告占空比"
 wire-bends = "{bends} 个折点——拖动导线的任意一段可移动它；右键查看更多"
