@@ -480,6 +480,17 @@ pub fn prepare(root: &Path) -> std::io::Result<()> {
 /// dropped Espressif's build into the same directory must get the right
 /// answer. The CI gate greps the same literal for the same reason.
 const GPIO_MODEL_MARKER: &[u8] = b"[rusty:gpio@";
+/// And the converter's, which is a *later* build than the GPIO model's.
+///
+/// The two are asked separately because they arrived separately: a build
+/// from before `qemu-v3` models the pins and has no SAR converter at all,
+/// and there is one such copy in the data directory of every machine that
+/// installed rusty early. Asking `has_gpio_model` and reading that as "the
+/// emulator has the peripherals" is the proxy-check mistake `find_gdb`
+/// already taught: the run gets as far as the firmware's own
+/// `adc.read_oneshot()` and hangs there, and the failure names a
+/// conversion rather than an emulator.
+const ADC_MODEL_MARKER: &[u8] = b"[rusty:adc@";
 
 /// Does this emulator model GPIO, or is it the stock one whose write handler
 /// is an empty function?
@@ -493,6 +504,10 @@ const GPIO_MODEL_MARKER: &[u8] = b"[rusty:gpio@";
 ///
 /// Cached on path, length and mtime, because it is asked once per run and the
 /// answer costs a scan of a hundred-megabyte file.
+pub fn has_adc_model(qemu: &Path) -> bool {
+    scan_for(qemu, ADC_MODEL_MARKER)
+}
+
 pub fn has_gpio_model(qemu: &Path) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};

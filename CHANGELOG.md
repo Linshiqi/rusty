@@ -27,14 +27,19 @@ GPIO-named pins are joined to the devkit's rows and the board simulates. If
 two parts both look like the microcontroller, neither is joined and both are
 named: that is a question with no right answer.
 
-**Added — the sheet answers in volts and amps.** rusty now solves the
-circuit you drew. A divider's midpoint, the current through a lamp's
-resistor, a pull-up with a button on it: real numbers, from a solver written
-for this and checked against arithmetic you can do by hand. Capacitors
-charge, inductors decay, and the whole thing can be walked forward in step
-with the firmware running in the emulator — so a pin the firmware drives
-charges the RC you drew, and the converter it reads climbs through that RC
-instead of jumping.
+**Added — what the firmware's converter reads comes from the circuit you
+drew.** rusty solves the sheet now, and walks it forward in step with the
+firmware running in the emulator. Put a resistor and a capacitor between two
+pins, drive one of them, and `adc.read_oneshot()` on the other *climbs
+through that RC* — where before it read whatever the sheet had declared, and
+a pin driven high would have arrived instantly or not at all.
+
+The solver is written for this rather than borrowed, so every answer is
+checked against arithmetic you can do by hand: a divider's ratio, the
+current through a lamp's series resistor, the time constant of an RC.
+Capacitors charge and inductors decay. What the *panel* shows has not caught
+up yet — there are no voltages drawn on the sheet in this release — but what
+the firmware sees has.
 
 **Where the sheet does not say enough, it says so and names the property.**
 A resistor whose value is a colour, a rail called `VCC` — which names a net

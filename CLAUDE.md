@@ -2356,6 +2356,22 @@ hand, and every bug below was caught that way and by nothing else.
   other side. The *resolution* has a default and the voltage does not:
   twelve bits is a fact about the chip, and the attenuation is a fact about
   how the firmware configured it.
+- **Event-driven is not enough on its own, and only a real run says so.**
+  The emulator reports a conversion when the value *changed*, and the value
+  only changes when the host sends one — so after a pin moves, nothing is
+  said, nothing advances, and the circuit sits at the instant of the edge
+  until the next one. The firmware's reading then steps from nothing to full
+  scale in a single conversion: a host echoing a pin level in a circuit's
+  clothes. Every headless test missed it, because a test that feeds a dense
+  stream of lines never stops advancing time. So `Live::advance_by` fills the
+  silence on the caller's clock while `settling()` is true, and the guest's
+  own timestamps re-sync it whenever one arrives.
+- **A gate's resolution is chosen against the firmware, not the physics.**
+  The same run then read `0, 4095, 739` — right physics, no resolution: the
+  probe reads once a millisecond and the sheet's time constant was one
+  millisecond, which is a curve with two points on it and is not
+  distinguishable from an echo. Ten times slower is ten points per constant.
+  `qemu/live-probe`'s sheet says so in its own header.
 - **A pin nobody has reported is not a source.** rusty will not claim to
   know the voltage of a pin it has heard nothing about, so the first report
   of one adds an element and rebuilds the circuit — and the voltages are

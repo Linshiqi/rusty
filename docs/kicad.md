@@ -354,10 +354,21 @@ Two things the coupling has to get right, and both are tests:
   the sheet at the exact moment the firmware first touched a pin, so the
   voltages are carried across by node.
 
-What is left is the wiring: the backend's pin-channel reader calling `Live`,
-and analog values going back the other way as `A<pin>=<counts>`. That last
-step needs one more thing stated — the converter's full scale, which is not
-the rail — and until it is, the honest thing is volts and no counts.
+`Live::absorb` is where the two halves meet, and the same function is used
+by the app and by the gate that proves it — one reading of the coupling, for
+the reason the serial protocol has one `absorb`. The backend's pin-channel
+reader calls it on every line and sends back what the converter should read;
+a circuit that stops having an answer stops answering and says so once,
+because a failure repeated at the emulator's rate is a log nobody can read.
+
+`qemu/live-probe` is the firmware that proves it: it drives one pin and
+reads another, with a resistor and a capacitor between them on the sheet.
+**The assertion is the shape of the numbers.** A host echoing the pin level
+would step from nothing to full scale in one conversion; a host solving the
+board makes the reading climb through the time constant somebody drew — and
+then arrive, because something that only ramped would be a host sending a
+ramp of its own. `cargo run -p rusty-embed --example live_probe --
+qemu/live-probe` is that gate.
 
 ## What this is not
 

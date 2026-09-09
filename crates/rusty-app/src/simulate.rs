@@ -367,6 +367,7 @@ fn open_pin_channel(
     analog_start: Vec<(u32, u16)>,
     bus_start: Vec<rusty_embed::nets::BusDevice>,
     wire_start: Vec<rusty_embed::nets::WireDevice>,
+    mut live: Option<rusty_embed::live::Live>,
 ) -> PinChannel {
     use std::io::{BufRead, BufReader};
 
@@ -414,13 +415,83 @@ fn open_pin_channel(
             handle_for_start.wire_device(device);
         }
 
+        // The channel the circuit's own thread listens on, when there is
+        // one. `None` once it has gone, so a dead thread costs one failed
+        // send rather than a send per line for the rest of the run.
+        let mut watched: Option<std::sync::mpsc::Sender<String>> = None;
+
         let mut lines = BufReader::new(reader)
             .lines()
             .map_while(Result::ok)
             .filter(|line| !line.is_empty());
+        // Every line the emulator says goes to the frontend as it always
+        // did, and on the way past it also drives the circuit the sheet
+        // draws. What comes back is what the converter should read — the
+        // firmware's own pins, solved, and sent to the pin it samples.
+        //
+        // The solver only speaks for a pin whose full scale the sheet
+        // stated; an `Analog` part declares its counts directly and is left
+        // alone, so the two do not argue over one pin unless somebody asks
+        // them to.
+        // The circuit runs on its own thread, and that is not tidiness —
+        // it is the fix for a deadlock a real run found. The emulator
+        // reports a conversion only when the value *changed*, and the value
+        // only changes when the host sends one; so after a pin moves,
+        // nothing is said, the reader blocks, the circuit stays frozen at
+        // the instant of the edge, and the firmware's next reading jumps to
+        // wherever it had got to by the following edge. A reading that
+        // steps instead of climbing is a host echoing a pin level in a
+        // circuit's clothes. So this side has a clock: a line advances the
+        // circuit to the instant the guest names, and silence advances it
+        // by the slice.
+        if let Some(mut board) = live.take() {
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            watched = Some(tx);
+            let back = handle_for_start.clone();
+            std::thread::spawn(move || {
+                // Half a millisecond: shorter than any interval a firmware
+                // polls a converter on, so the host is never what limits
+                // the shape the firmware can see.
+                const SLICE: std::time::Duration = std::time::Duration::from_micros(500);
+                loop {
+                    let moved = match rx.recv_timeout(SLICE) {
+                        Ok(line) => board.absorb(&line),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) if board.settling() => {
+                            board.advance_by(SLICE.as_secs_f64())
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(Vec::new()),
+                        // The reader is gone, so the run is over.
+                        Err(_) => return,
+                    };
+                    match moved {
+                        Ok(counts) => {
+                            for (pin, count) in counts {
+                                back.analog(u32::from(pin), count);
+                            }
+                        }
+                        // A circuit that stops having an answer stops
+                        // answering, and says so once rather than every
+                        // line: the run is still worth watching, and a
+                        // failure repeated at the emulator's rate is a log
+                        // nobody can read.
+                        Err(trouble) => {
+                            eprintln!("the sheet's circuit could not be solved: {trouble}");
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+
         stream::forward(
             || {
-                lines.next().map(|text| LogLine {
+                let text = lines.next()?;
+                if let Some(tx) = watched.as_ref()
+                    && tx.send(text.clone()).is_err()
+                {
+                    watched = None;
+                }
+                Some(LogLine {
                     stream: LogStream::Stdout,
                     text,
                     level: None,
@@ -830,6 +901,35 @@ pub async fn run_simulation(
         // quietly: a pin channel that never answers leaves the board on the
         // firmware's own narration, which is where it has always been.
         if let Some(port) = pins_port {
+            // The sheet's own circuit, walked in step with the firmware.
+            // Absent when there is no board, and absent *with a reason in
+            // the dock* when the sheet does not say enough to put numbers
+            // on: a run that quietly stopped answering would read as a
+            // converter that had gone dead.
+            let live = match plan.board.as_ref() {
+                Some(board) => {
+                    let rows = simulate::kit_rows_for(&root, &board.chip);
+                    match rusty_embed::live::Live::at_rest(
+                        board.clone(),
+                        rows,
+                        Default::default(),
+                        Default::default(),
+                    ) {
+                        Ok(live) => Some(live),
+                        Err(unstated) => {
+                            note(
+                                &on_line,
+                                format!(
+                                    "[rusty:volts] the sheet is not solved: {unstated}. Analog \
+                                     pins keep whatever the sheet declares."
+                                ),
+                            );
+                            None
+                        }
+                    }
+                }
+                None => None,
+            };
             state
                 .set_pins(Some(open_pin_channel(
                     port,
@@ -838,6 +938,7 @@ pub async fn run_simulation(
                     analog_start.clone(),
                     bus_start.clone(),
                     wire_start.clone(),
+                    live,
                 )))
                 .await;
         }

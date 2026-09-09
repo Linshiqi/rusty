@@ -143,6 +143,48 @@ impl Live {
         Ok(())
     }
 
+    /// Advance by a length of time nobody reported, and answer with what
+    /// moved.
+    ///
+    /// **The event-driven advance is not enough on its own, and a real run
+    /// is what proved it.** The emulator reports a conversion only when the
+    /// value *changed*, and the value only changes when the host sends a
+    /// new one — so after a pin moves, nothing is said, nothing advances,
+    /// and the circuit sits at the instant of the edge until the next one.
+    /// The firmware's reading then steps from nothing to full scale in a
+    /// single conversion: a host echoing a pin level wearing a circuit's
+    /// clothes, which is exactly what the gate exists to catch and exactly
+    /// what it caught. The headless tests could not see it, because a test
+    /// that feeds a dense stream of lines never stops advancing time.
+    ///
+    /// So a caller with a clock follows the circuit forward while it is
+    /// settling. This only fills the silence: the guest's own timestamps
+    /// still correct it whenever one arrives, and [`Live::advance_to`]
+    /// treats going backwards as a no-op, so an over-eager clock costs
+    /// nothing but a little resolution.
+    pub fn advance_by(&mut self, seconds: f64) -> Result<Vec<(u8, u16)>, Trouble> {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return Ok(Vec::new());
+        }
+        let ahead = self.at.saturating_add((seconds * 1e6).round() as u64);
+        self.advance_to(ahead)?;
+        Ok(self.changed_counts())
+    }
+
+    /// Is anything still moving?
+    ///
+    /// What a caller uses to decide whether following the circuit forward
+    /// is worth the solves: a settled circuit answers the same counts for
+    /// ever, and stepping it is arithmetic nobody reads.
+    pub fn settling(&self) -> bool {
+        self.bridged.circuit.elements.iter().any(|element| {
+            matches!(
+                element,
+                Element::Capacitor { .. } | Element::Inductor { .. }
+            )
+        })
+    }
+
     /// What the firmware reported: a pin it is driving, at the instant it
     /// said so.
     ///
@@ -753,6 +795,59 @@ mod tests {
             "back down: {:?}",
             live.counts_at(3)
         );
+    }
+
+    /// **The deadlock a real run found, and the headless tests could not.**
+    ///
+    /// The emulator reports a conversion only when the value changed, and
+    /// the value only changes when the host sends one. So after a pin
+    /// moves, nobody says anything: the circuit stays at the instant of the
+    /// edge, and the next thing the firmware sees is a jump to wherever it
+    /// had got to by the *following* edge. The reading steps instead of
+    /// climbing, which is a host echoing a pin level in a circuit's
+    /// clothes.
+    ///
+    /// Every test above feeds a dense stream of lines, so time always
+    /// advanced and none of them could see it. This one absorbs the edge
+    /// and then says nothing at all, exactly as the emulator does.
+    #[test]
+    fn a_circuit_still_settling_is_followed_while_the_emulator_says_nothing() {
+        let (sheet, rows) = driven_rc_read_by_a_pin();
+        let mut live = Live::at_rest(sheet, rows, BTreeMap::new(), Pace::default()).expect("built");
+        assert!(live.settling(), "there is a capacitor on this sheet");
+
+        // The one line the emulator will say, and then silence.
+        live.absorb("[rusty:gpio@0] 2=1").expect("absorbed");
+
+        // A caller with a clock follows it forward. Two hundred
+        // microseconds at a time, through one time constant.
+        let mut seen: Vec<u16> = Vec::new();
+        for _ in 0..10 {
+            for (pin, counts) in live.advance_by(200e-6).expect("advanced") {
+                if pin == 3 {
+                    seen.push(counts);
+                }
+            }
+        }
+        assert!(
+            seen.len() >= 8,
+            "the circuit is followed rather than frozen: {seen:?}"
+        );
+        assert!(
+            seen.windows(2).all(|pair| pair[1] > pair[0]),
+            "and it climbs: {seen:?}"
+        );
+        assert!(
+            *seen.last().unwrap() < 1_000,
+            "still short of full scale after one time constant, which is the \
+             whole difference from an echo: {seen:?}"
+        );
+
+        // And a sheet with nothing to settle says so, so a caller does not
+        // spend solves on arithmetic nobody reads.
+        let (flat, rows) = divider_into_a_pin();
+        let live = Live::at_rest(flat, rows, BTreeMap::new(), Pace::default()).expect("built");
+        assert!(!live.settling(), "a divider is already where it is going");
     }
 
     /// The same number is not sent twice, which is the change suppression
