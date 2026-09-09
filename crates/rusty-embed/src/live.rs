@@ -92,6 +92,10 @@ pub struct Live {
     /// The guest instant the circuit has been advanced to, in the
     /// systimer's own microseconds.
     at: u64,
+    /// The counts last said for each pin, so the same number is not sent
+    /// twice — the change suppression every other report on this channel
+    /// has.
+    said: BTreeMap<u8, u16>,
 }
 
 impl Live {
@@ -115,6 +119,7 @@ impl Live {
             run,
             pace,
             at: 0,
+            said: BTreeMap::new(),
         })
     }
 
@@ -164,6 +169,56 @@ impl Live {
             self.run.drive(element, volts);
         }
         Ok(())
+    }
+
+    /// Read one line off the emulator's pin channel, and answer with what
+    /// should go back down it.
+    ///
+    /// **The one place the two halves meet**, so the example that proves it
+    /// and the app that ships it cannot drift about what the coupling
+    /// means — the same rule that put the serial protocol's reading in one
+    /// `absorb` after telemetry worked in the simulator and vanished on
+    /// hardware.
+    ///
+    /// A `[rusty:gpio@…]` line is the firmware driving a pin, at the
+    /// instant it drove it. A `[rusty:adc@…]` line is the firmware having
+    /// *read* one, which is also a statement about time: the circuit is
+    /// advanced to that instant, because a converter reads the present.
+    ///
+    /// What comes back is `(gpio, counts)` for every readable pin whose
+    /// counts have moved — change-suppressed like every other report on
+    /// this channel, because a firmware polling a sensor would otherwise
+    /// put twenty kilobytes a second down the line the console shares.
+    pub fn absorb(&mut self, line: &str) -> Result<Vec<(u8, u16)>, Trouble> {
+        if let Some(report) = crate::protocol::parse_gpio_report(line) {
+            let at = report.at_us.unwrap_or(self.at);
+            for (pin, level) in report.pins {
+                self.drove(pin, level, at)?;
+            }
+        } else if let Some(report) = crate::protocol::parse_adc_report(line) {
+            if let Some(at) = report.at_us {
+                self.advance_to(at)?;
+            }
+        } else {
+            return Ok(Vec::new());
+        }
+        Ok(self.changed_counts())
+    }
+
+    /// Every readable pin whose counts have moved since it was last said.
+    fn changed_counts(&mut self) -> Vec<(u8, u16)> {
+        let mut out = Vec::new();
+        let gpios: Vec<u8> = self.rows.iter().filter_map(|row| row.gpio).collect();
+        for gpio in gpios {
+            let Some(counts) = self.counts_at(gpio) else {
+                continue;
+            };
+            if self.said.get(&gpio) != Some(&counts) {
+                self.said.insert(gpio, counts);
+                out.push((gpio, counts));
+            }
+        }
+        out
     }
 
     /// A switch held or let go, which changes what conducts.
@@ -589,6 +644,152 @@ mod tests {
 
         // A pin the sheet gives no node has no counts either.
         assert_eq!(live.counts_at(5), None);
+    }
+
+    /// A GPIO driving an RC whose midpoint another pin reads — the shape
+    /// the firmware-in-the-loop gate boots, headless.
+    fn driven_rc_read_by_a_pin() -> (Sheet, Vec<Row>) {
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.symbols = vec![
+            symbol("Device", "R", "R", &[("1", "~"), ("2", "~")]),
+            symbol("Device", "C", "C", &[("1", "~"), ("2", "~")]),
+            symbol("rusty", "GND", "#PWR", &[("1", "GND")]),
+        ];
+        let mut place = |reference: &str, id: &str, value: &str, scale: bool| {
+            let mut props: std::collections::BTreeMap<String, String> = Default::default();
+            if scale {
+                // The converter's full scale, said on the part sitting on
+                // the net it reads — the one thing the sheet has to state.
+                props.insert("fullscale".into(), "3.3".into());
+                props.insert("max".into(), "1000".into());
+            }
+            sheet.parts.push(Instance {
+                reference: reference.into(),
+                symbol: id.into(),
+                value: value.into(),
+                x: 0.0,
+                y: 0.0,
+                rot: 0,
+                mirror: false,
+                props,
+            });
+        };
+        place("R1", "Device:R", "1k", false);
+        place("C1", "Device:C", "1u", true);
+        place("GND1", "rusty:GND", "GND", false);
+        let mut wire = |from: &str, to: &str| {
+            sheet.wires.push(Wire {
+                from: PinRef::parse(from).unwrap(),
+                to: PinRef::parse(to).unwrap(),
+                bends: Vec::new(),
+            });
+        };
+        // GPIO2 drives through the resistor; GPIO3 reads the capacitor.
+        wire("U1.GPIO2", "R1.1");
+        wire("R1.2", "C1.1");
+        wire("C1.1", "U1.GPIO3");
+        wire("C1.2", "GND1.GND");
+        (sheet, kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]))
+    }
+
+    /// **The coupling, end to end and headless.** The emulator's own lines
+    /// go in and the counts that should go back come out, and what they
+    /// have to show is that the reading *ramps* — because that is the whole
+    /// claim. A converter fed straight from a pin level would jump from
+    /// nothing to full scale in one report; one fed from a solved circuit
+    /// climbs through the RC that is drawn.
+    #[test]
+    fn the_emulators_lines_go_in_and_the_converters_counts_come_back() {
+        let (sheet, rows) = driven_rc_read_by_a_pin();
+        let mut live = Live::at_rest(sheet, rows, BTreeMap::new(), Pace::default()).expect("built");
+
+        // Nothing yet: no pin has been reported, so nothing is driving and
+        // the first reading is the bottom of the range.
+        let first = live.absorb("[rusty:adc@0] 3=0").expect("absorbed");
+        assert_eq!(
+            first,
+            vec![(3u8, 0u16)],
+            "the pin sits at nothing: {first:?}"
+        );
+
+        // The firmware drives GPIO2 high at one millisecond.
+        live.absorb("[rusty:gpio@1000] 2=1").expect("absorbed");
+
+        // Then reads its converter every two hundred microseconds. The
+        // counts have to climb rather than arrive.
+        let mut seen: Vec<u16> = Vec::new();
+        for step in 1..=10 {
+            let at = 1_000 + step * 200;
+            let back = live
+                .absorb(&format!("[rusty:adc@{at}] 3=0"))
+                .expect("absorbed");
+            if let Some((_, counts)) = back.iter().find(|(pin, _)| *pin == 3) {
+                seen.push(*counts);
+            }
+        }
+        assert!(seen.len() >= 8, "a reading per poll: {seen:?}");
+        assert!(
+            seen.windows(2).all(|pair| pair[1] >= pair[0]),
+            "and it only climbs: {seen:?}"
+        );
+        assert!(
+            seen[0] > 0 && *seen.last().unwrap() < 1_000,
+            "still climbing through the time constant rather than arrived: {seen:?}"
+        );
+
+        // Two milliseconds after the edge is two time constants: about 86%.
+        live.absorb("[rusty:adc@3000] 3=0").expect("absorbed");
+        let at_two = live.counts_at(3).expect("a reading");
+        let want = 1_000.0 * (1.0 - (-2.0f64).exp());
+        assert!(
+            (f64::from(at_two) - want).abs() < 0.05 * want,
+            "two time constants: {at_two} against {want:.0}"
+        );
+
+        // And the pin goes low again, so it discharges.
+        live.absorb("[rusty:gpio@3000] 2=0").expect("absorbed");
+        live.absorb("[rusty:adc@9000] 3=0").expect("absorbed");
+        assert!(
+            live.counts_at(3).expect("a reading") < 10,
+            "back down: {:?}",
+            live.counts_at(3)
+        );
+    }
+
+    /// The same number is not sent twice, which is the change suppression
+    /// every other report on this channel has: a firmware polling its
+    /// converter would otherwise fill the line the console shares.
+    #[test]
+    fn counts_that_have_not_moved_are_not_said_again() {
+        let (sheet, rows) = driven_rc_read_by_a_pin();
+        let mut live = Live::at_rest(sheet, rows, BTreeMap::new(), Pace::default()).expect("built");
+        live.absorb("[rusty:gpio@0] 2=1").expect("absorbed");
+        live.absorb("[rusty:adc@200000] 3=0").expect("absorbed");
+
+        // Settled: polling again says nothing.
+        let quiet = live.absorb("[rusty:adc@201000] 3=0").expect("absorbed");
+        assert!(quiet.is_empty(), "nothing has moved: {quiet:?}");
+        let quiet = live.absorb("[rusty:adc@202000] 3=0").expect("absorbed");
+        assert!(quiet.is_empty());
+    }
+
+    /// A line that is neither is not the coupling's business, and saying
+    /// nothing about it is different from failing on it.
+    #[test]
+    fn a_line_that_is_not_a_report_is_passed_over() {
+        let (sheet, rows) = driven_rc_read_by_a_pin();
+        let mut live = Live::at_rest(sheet, rows, BTreeMap::new(), Pace::default()).expect("built");
+        assert!(
+            live.absorb("hello from the firmware")
+                .expect("fine")
+                .is_empty()
+        );
+        assert!(
+            live.absorb("[rusty:i2c@10] 3c w 00ae")
+                .expect("fine")
+                .is_empty()
+        );
+        assert_eq!(live.micros(), 0, "and none of them moved time");
     }
 
     /// A pin nothing is wired to has no voltage, which is not zero.
