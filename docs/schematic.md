@@ -240,13 +240,24 @@ there and be dead on the desk. `examples/sense-board` is the worked end.
 
 ## Not yet
 
-A wire that ends on another wire (a T junction) — today a net is joined at
-pins, or by a label. Symbols with several units. Turning the devkit. A
-broader ERC than the findings listed above. EasyEDA's text records beyond
+A broader ERC than the findings listed above. EasyEDA's text records beyond
 plain labels. A screen that shows what the firmware *drew*: the bus carries
 a display's bytes now and is reported, but nothing decodes an SSD1306's
-command stream into pixels. Quantities: the rules are DC on and off, so a
-resistor's value changes nothing, a capacitor never charges, and nothing is
-measured in volts or amps — and the honest half of that is smaller than it
-looks, since the current through an LED depends on a forward voltage the
-sheet does not carry and would not be right to guess.
+command stream into pixels.
+
+Quantities are half here. A resistor's *value* is read (`nets::ohms`) and
+decides one thing: where a pin sits between the rails, which is what
+`divider_at` answers and what lets a potentiometer across the rails reach
+the converter as real counts. What is still not here is anything measured
+in volts or amps — the rails are on and off, because a symbol claiming to
+know 3.3 V from 5 V would claim more than it reads, and the current through
+an LED depends on a forward voltage the sheet does not carry and would not
+be right to guess. A capacitor still never charges: that wants a solver,
+which is `docs/kicad.md`'s stage 4.
+
+Four things this section used to list are done: a wire that ends on another
+wire, symbols with several units, turning the devkit, and a resistor's value
+taking part in the arithmetic.
+
+`.kicad_sch` — reading and writing the schematic file itself, as against the
+symbol library — is its own project, and `docs/kicad.md` is its design.
