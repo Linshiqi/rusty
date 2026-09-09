@@ -60,6 +60,24 @@ impl Default for Pace {
     }
 }
 
+/// The converter's own resolution when the sheet does not say.
+///
+/// Twelve bits, which is the ESP32 family's SAR converter. It has a default
+/// where the full-scale voltage does not, and the difference is the point:
+/// the resolution is a fact about the chip rusty already knows, and the
+/// voltage is a fact about how the firmware configured it, which only the
+/// firmware knows.
+const DEFAULT_COUNTS: u16 = 4095;
+
+/// What a converter turns volts into, as the sheet states it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Scale {
+    /// The voltage that reads full scale. Not the rail — see
+    /// [`Live::counts_at`].
+    pub full_volts: f64,
+    pub max: u16,
+}
+
 /// A circuit being driven by a running firmware.
 #[derive(Debug, Clone)]
 pub struct Live {
@@ -164,6 +182,58 @@ impl Live {
     /// node — a pin nothing is wired to has no voltage rather than zero.
     pub fn volts_at(&self, pin: &PinRef) -> Option<f64> {
         Some(self.run.volts_at(*self.bridged.node_of.get(pin)?))
+    }
+
+    /// The counts a converter on `gpio` would report.
+    ///
+    /// **The full scale is not the rail**, and that is the whole reason
+    /// this returns an `Option`. An ESP32's SAR converter reads about 1.1 V
+    /// at its default attenuation and about 3.1 V at 11 dB — neither is
+    /// 3.3 — so turning a solved voltage into counts against the supply
+    /// would be out by a factor of three and look entirely plausible. The
+    /// sheet has to say, on a part sitting on that net, as `fullscale`; the
+    /// resolution comes from the same part's `max` and is the converter's
+    /// own, which is why it has a default and the voltage does not.
+    ///
+    /// This is the rule the whole simulator already runs on, arrived at
+    /// from the other side: `A<pin>=<counts>` has always carried counts
+    /// rather than volts because rusty did not know anybody's divider. It
+    /// knows the divider now — it solved it — and it still does not know
+    /// the converter, so it still refuses.
+    pub fn counts_at(&self, gpio: u8) -> Option<u16> {
+        let node = self.gpio_node(gpio)?;
+        let volts = self.run.volts_at(node);
+        let scale = self.scale_on(node)?;
+        let counts = (volts / scale.full_volts * f64::from(scale.max)).round();
+        Some(counts.clamp(0.0, f64::from(scale.max)) as u16)
+    }
+
+    /// What the sheet says the converter on this net turns volts into, or
+    /// nothing when nobody has said.
+    pub fn scale_on(&self, node: usize) -> Option<Scale> {
+        self.sheet.parts.iter().find_map(|part| {
+            let full_volts = part.prop::<f64>("fullscale").filter(|v| *v > 0.0)?;
+            let symbol = self.sheet.symbol_of(&part.reference)?;
+            let touches = symbol.pins.iter().any(|pin| {
+                self.bridged
+                    .node_of
+                    .get(&PinRef::new(&part.reference, &pin.number))
+                    == Some(&node)
+            });
+            touches.then_some(Scale {
+                full_volts,
+                max: part.prop::<u16>("max").unwrap_or(DEFAULT_COUNTS),
+            })
+        })
+    }
+
+    /// The node a GPIO row sits on, by name or by number.
+    fn gpio_node(&self, gpio: u8) -> Option<usize> {
+        let row = self.rows.iter().find(|row| row.gpio == Some(gpio))?;
+        self.bridged
+            .node_of
+            .get(&PinRef::new(crate::model::KIT_REFERENCE, &row.name))
+            .copied()
     }
 
     /// The instant the circuit has been advanced to.
@@ -407,6 +477,118 @@ mod tests {
             Some(at_tau),
             "neither moved the circuit"
         );
+    }
+
+    /// A divider from the rail into an ADC pin — the circuit a knob or a
+    /// battery monitor is — with the resistors chosen so the midpoint is a
+    /// third of the rail.
+    fn divider_into_a_pin() -> (Sheet, Vec<Row>) {
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.symbols = vec![
+            symbol("Device", "R", "R", &[("1", "~"), ("2", "~")]),
+            symbol("rusty", "GND", "#PWR", &[("1", "GND")]),
+        ];
+        let mut place = |reference: &str, id: &str, value: &str| {
+            sheet.parts.push(Instance {
+                reference: reference.into(),
+                symbol: id.into(),
+                value: value.into(),
+                x: 0.0,
+                y: 0.0,
+                rot: 0,
+                mirror: false,
+                props: Default::default(),
+            });
+        };
+        place("R1", "Device:R", "20k");
+        place("R2", "Device:R", "10k");
+        place("GND1", "rusty:GND", "GND");
+        let mut wire = |from: &str, to: &str| {
+            sheet.wires.push(Wire {
+                from: PinRef::parse(from).unwrap(),
+                to: PinRef::parse(to).unwrap(),
+                bends: Vec::new(),
+            });
+        };
+        wire("U1.3V3", "R1.1");
+        wire("R1.2", "R2.1");
+        wire("R2.1", "U1.GPIO3");
+        wire("R2.2", "GND1.GND");
+        (sheet, kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]))
+    }
+
+    /// Volts become counts only where the sheet said what full scale is,
+    /// and the rail is not an answer to that question.
+    #[test]
+    fn counts_need_a_full_scale_the_sheet_stated() {
+        let (sheet, rows) = divider_into_a_pin();
+        let mut live = Live::at_rest(
+            sheet.clone(),
+            rows.clone(),
+            BTreeMap::new(),
+            Pace::default(),
+        )
+        .expect("built");
+        live.advance_to(1_000).expect("advanced");
+
+        let at_pin = live
+            .volts_at(&PinRef::new("U1", "GPIO3"))
+            .expect("the divider gives it a voltage");
+        assert!((at_pin - 1.1).abs() < 1e-9, "a third of 3V3: {at_pin}");
+        assert_eq!(
+            live.counts_at(3),
+            None,
+            "and nobody has said what the converter reads full scale at"
+        );
+
+        // Said, on the part sitting on that net: 1.1 V, which is what an
+        // ESP32's SAR reads at its default attenuation — and is a third of
+        // the rail, so reading it against the rail instead would be out by
+        // three and look perfectly plausible.
+        let mut stated = sheet;
+        if let Some(part) = stated.parts.iter_mut().find(|p| p.reference == "R2") {
+            part.props.insert("fullscale".into(), "1.1".into());
+        }
+        let mut live =
+            Live::at_rest(stated, rows, BTreeMap::new(), Pace::default()).expect("built");
+        live.advance_to(1_000).expect("advanced");
+        assert_eq!(
+            live.counts_at(3),
+            Some(DEFAULT_COUNTS),
+            "1.1 V against a 1.1 V full scale is the top of the range"
+        );
+    }
+
+    /// The arithmetic anybody would check: half of full scale is half the
+    /// counts, and past it saturates rather than wrapping.
+    #[test]
+    fn a_solved_voltage_becomes_the_counts_the_scale_says() {
+        let (mut sheet, rows) = divider_into_a_pin();
+        if let Some(part) = sheet.parts.iter_mut().find(|p| p.reference == "R2") {
+            // Full scale at twice the divider's midpoint, so it should read
+            // exactly half, with a round thousand of counts to check by eye.
+            part.props.insert("fullscale".into(), "2.2".into());
+            part.props.insert("max".into(), "1000".into());
+        }
+        let mut live = Live::at_rest(
+            sheet.clone(),
+            rows.clone(),
+            BTreeMap::new(),
+            Pace::default(),
+        )
+        .expect("built");
+        live.advance_to(1_000).expect("advanced");
+        assert_eq!(live.counts_at(3), Some(500), "half of full scale");
+
+        // And the scale the sheet stated, read back.
+        let scale = live
+            .scale_on(live.gpio_node(3).expect("a node"))
+            .expect("stated");
+        assert_eq!(scale.full_volts, 2.2);
+        assert_eq!(scale.max, 1000);
+
+        // A pin the sheet gives no node has no counts either.
+        assert_eq!(live.counts_at(5), None);
     }
 
     /// A pin nothing is wired to has no voltage, which is not zero.
