@@ -78,6 +78,7 @@ pub mod schematic;
 pub mod serial;
 #[cfg(feature = "backend")]
 pub mod simulate;
+pub mod solve;
 #[cfg(feature = "backend")]
 pub mod svd;
 #[cfg(feature = "backend")]

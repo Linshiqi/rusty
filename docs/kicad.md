@@ -259,13 +259,59 @@ This is the part of the stage that would try to become infinite; the
 boundary is in "What this is not" below, and this paragraph is where it is
 applied.
 
-**4 — Kirchhoff.** Modified nodal analysis: a DC operating point first, then
-transient. Either written here — a bounded piece of work for R/C/L/V/I plus
-diodes and transistors through Newton–Raphson — or ngspice bundled, which is
-what KiCad itself drives and which the installer's tool machinery already
-knows how to carry. Writing it is more work and no dependency; bundling it is
-less work and a real one. **Decide at stage 4, on how far stage 3 got**, not
-now.
+**4 — Kirchhoff.** *Decided: written here, not ngspice.* The comparison,
+because the decision is not obvious and the losing option loses on one
+criterion rather than on all of them.
+
+Two facts frame it. First, **most of what a rusty sheet can hold has no
+SPICE meaning at all**: of sixteen `Behaviour`s, eight are circuit elements
+(lamp, resistor, capacitor, switch, RGB, digit, pot, rail) and eight are
+behavioural by construction — a `Display` shows a channel, a `Sensor` feeds
+one the firmware declared, a `Motor` is a duty and a direction, a `Servo` is
+an angle, a `Buzzer` is on or off, a `Label` is a name, an `Analog` *is* ADC
+counts. Second, **a KiCad schematic already carries ngspice annotations** —
+`Sim.Device "NPN"`, `Sim.Type "GUMMELPOON"`, `Sim.Pins "1=C 2=B 3=E"` — for
+the plain reason that KiCad's simulator is ngspice.
+
+| | written here | ngspice bundled |
+|---|---|---|
+| Stepped by QEMU (stage 5) | in-process `step(dt, inputs) -> outputs` | built to be handed a netlist and a duration; global state, one simulation per process, and lockstep down a pipe at microsecond granularity |
+| Device models | R/C/L/V/I and a diode, then it stops | thirty years of them, and the ones KiCad's annotations name |
+| Provable | against closed form — a divider's ratio, `τ = RC`, a diode against Shockley | "it ran and said something" |
+| Installer | nothing | three more platform binaries, a version pin, a licence review, and one more thing that can fail to download |
+| Convergence | **the real risk.** SPICE's forty years are not in the MNA formulation, which is a page of linear algebra; they are in gmin stepping, source stepping, adaptive timesteps, LTE control and limiting for exponential devices | solved |
+
+**What decides it is stage 5, not stage 4.** For "simulate a circuit"
+ngspice wins on models and it is not close. For "the firmware drives the
+circuit" the solver has to be steppable from inside this process at the
+firmware's own timescale, and ngspice's shape is wrong for that. Three
+things support the same answer: being provable against closed form is worth
+more in this repository than in most; the coverage gap is smaller than it
+looks, because nothing rusty draws is a semiconductor and transistors arrive
+only with an imported board; and the convergence risk is one this project's
+own rule disarms — **a solver that refuses to converge is in keeping, and
+one that quietly returns a wrong operating point is not.**
+
+**What would change it**, written down so it can be noticed rather than
+argued about later: if importing KiCad boards with real semiconductors
+becomes the main use — if people start depending on those `Sim.*`
+properties — then writing this becomes reimplementing Gummel-Poon and
+ngspice wins. The reader can already see those properties, so the signal is
+countable.
+
+The scope, in order, each step provable before the next:
+
+1. DC operating point: MNA with a dense LU, since these circuits have tens
+   of nodes. Resistors, voltage and current sources, and a closed switch as
+   a zero-volt source rather than a zero-ohm resistor.
+2. The gates: a divider's ratio, resistors in parallel, a Thévenin
+   equivalent — closed-form answers a test can assert exactly.
+3. Newton–Raphson and a Shockley diode, with gmin stepping, and *not
+   converging* as a reported outcome.
+4. Transient: backward Euler first — unconditionally stable, where the
+   trapezoidal rule rings — and capacitors and inductors with it.
+5. The bridge from `nets`, which is nearly free: the union-find already
+   answers which pins are one node, and MNA wants exactly that incidence.
 
 **5 — the firmware in the loop.** This is the reason to do any of it.
 
