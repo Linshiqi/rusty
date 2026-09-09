@@ -26,7 +26,13 @@ pub(super) const KIT_W: f64 = 150.0;
 /// segment can only ever meet an anchor that is itself snapped.
 pub(super) const ROW_PITCH: f64 = 16.0;
 /// One KiCad millimetre in sheet pixels: 2.54 mm is one row pitch.
-pub(super) const MM_PX: f64 = ROW_PITCH / 2.54;
+///
+/// The model's, not a second copy: the KiCad writer converts back with it,
+/// and two spellings of one scale is how an imported part comes in at a
+/// different size from the one beside it. `ROW_PITCH / 2.54` is what it is,
+/// and the assertion below is what keeps that true.
+pub(super) use rusty_embed::MM_PX;
+const _: () = assert!(MM_PX == ROW_PITCH / 2.54);
 /// The devkit's symbol id. Generated from the chip's rows rather than read
 /// from a library, and never written to a file — `U1` is drawn by the chip.
 pub(super) const KIT_SYMBOL: &str = "rusty:kit";

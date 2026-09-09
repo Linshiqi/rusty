@@ -1,0 +1,268 @@
+(kicad_sch
+	(version 20260306)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "a5c165fc-b8cb-43c8-94c6-f1e2e5d1ea6f")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:LED"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 1.016)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "D"
+				(at 0 2.54 0)
+			)
+			(property "Value" "LED"
+				(at 0 -2.54 0)
+			)
+			(property "Description" "Light emitting diode"
+				(at 0 0 0)
+				(hide yes)
+			)
+			(symbol "LED_0_1"
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy -1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 -1.27) (xy 1.27 1.27) (xy -1.27 0) (xy 1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "LED_1_1"
+				(pin passive line
+					(at -3.81 0 0)
+					(length 2.54)
+					(name "K")
+					(number "1")
+				)
+				(pin passive line
+					(at 3.81 0 180)
+					(length 2.54)
+					(name "A")
+					(number "2")
+				)
+			)
+		)
+		(symbol "power:GND"
+			(power global)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -6.35 0)
+				(hide yes)
+			)
+			(property "Value" "GND"
+				(at 0 -3.81 0)
+			)
+			(symbol "GND_0_1"
+				(polyline
+					(pts
+						(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "GND_1_1"
+				(pin power_in line
+					(at 0 0 270)
+					(length 0)
+					(name "")
+					(number "1")
+				)
+			)
+		)
+		(symbol "power:VCC"
+			(power global)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -3.81 0)
+				(hide yes)
+			)
+			(property "Value" "VCC"
+				(at 0 3.556 0)
+			)
+			(symbol "VCC_0_1"
+				(polyline
+					(pts
+						(xy -0.762 1.27) (xy 0 2.54) (xy 0.762 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "VCC_1_1"
+				(pin power_in line
+					(at 0 0 90)
+					(length 0)
+					(name "")
+					(number "1")
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 113.03 55.88) (xy 113.03 60.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4b047302-eed6-4741-a239-7dea1eb03c05")
+	)
+	(wire
+		(pts
+			(xy 113.03 45.72) (xy 113.03 48.26)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c346cbe5-5795-4ffc-ae30-2fdebabf34c3")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 113.03 60.96 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "9d277208-f7ea-4d73-b256-f9a70245681d")
+		(property "Reference" "#PWR01"
+			(at 113.03 67.31 0)
+			(hide yes)
+		)
+		(property "Value" "GND"
+			(at 113.03 66.04 0)
+		)
+		(pin "1"
+			(uuid "9792f50a-1f04-4120-b32e-11bb7f2d8248")
+		)
+		(instances
+			(project "lamp"
+				(path "/a5c165fc-b8cb-43c8-94c6-f1e2e5d1ea6f"
+					(reference "#PWR01")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:LED")
+		(at 113.03 52.07 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e3989403-1193-4e29-b08d-ec56228a1cd2")
+		(property "Reference" "D1"
+			(at 116.84 52.3874 90)
+		)
+		(property "Value" "LED"
+			(at 116.84 54.9274 90)
+		)
+		(property "Footprint" "LED_SMD:LED_0805_2012Metric"
+			(at 113.03 52.07 0)
+			(hide yes)
+		)
+		(pin "1"
+			(uuid "456db2bf-49a3-40be-ae0a-126a67fb4bad")
+		)
+		(pin "2"
+			(uuid "73fcb142-baf4-4d24-b9cd-2ae903e59fd8")
+		)
+		(instances
+			(project "lamp"
+				(path "/a5c165fc-b8cb-43c8-94c6-f1e2e5d1ea6f"
+					(reference "D1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:VCC")
+		(at 113.03 45.72 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "feee8914-3eac-4688-896f-4377327a29aa")
+		(property "Reference" "#PWR02"
+			(at 113.03 49.53 0)
+			(hide yes)
+		)
+		(property "Value" "VCC"
+			(at 113.03 40.64 0)
+		)
+		(pin "1"
+			(uuid "1131ccae-8cda-4017-b573-5c3890b55224")
+		)
+		(instances
+			(project "lamp"
+				(path "/a5c165fc-b8cb-43c8-94c6-f1e2e5d1ea6f"
+					(reference "#PWR02")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+	(embedded_fonts no)
+)

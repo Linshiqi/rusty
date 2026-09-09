@@ -21,6 +21,8 @@
 
 use crate::model::{Pin, Symbol};
 
+pub use crate::model::MM_PX;
+
 /// KiCad's angle turns **negative** in the sheet's own frame, after the y
 /// flip: a pin at library `(lx, ly)` on an instance placed at angle `a`
 /// lands at `R(-a) · (lx, -ly)`.

@@ -14,8 +14,11 @@
 //! symbol would draw and never wire.
 
 pub mod easyeda;
+pub mod kicad_out;
+pub mod kicad_sch;
 pub mod kicad_sym;
 pub mod place;
+pub(crate) mod sexpr;
 
 use std::path::{Path, PathBuf};
 

@@ -78,6 +78,18 @@ pub enum Fill {
     Background,
 }
 
+/// One KiCad millimetre in the sheet's own units.
+///
+/// A symbol is in KiCad's millimetres; a sheet is in pixels. This is the
+/// one scale between them, and it is `ROW_PITCH / 2.54` — a devkit header's
+/// row pitch is KiCad's 100 mil pin pitch — so a symbol's pins land on the
+/// same grid as the devkit's, which is what lets a snapped wire meet both
+/// ends. It sits here, beside the coordinates it is about and on the wasm
+/// side, because both the canvas and the KiCad writer convert with it and a
+/// second copy is how an imported part comes in at a different size from
+/// the one beside it.
+pub const MM_PX: f64 = 16.0 / 2.54;
+
 /// One drawing primitive of a symbol's body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

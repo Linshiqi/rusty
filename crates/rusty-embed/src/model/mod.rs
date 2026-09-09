@@ -53,7 +53,7 @@ pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
 #[cfg(feature = "backend")]
 pub(crate) use sim::is_upright;
 pub use sim::{Drive, Emulator, SimDebug, SimPlan, SimTool};
-pub use symbol::{Fill, Graphic, Pin, PinKind, Symbol};
+pub use symbol::{Fill, Graphic, MM_PX, Pin, PinKind, Symbol};
 pub use toolchain::{ToolStatus, Toolchain, ToolchainReport, ToolchainStatus};
 pub use wizard::{Explanation, WizardChoice, WizardOption};
 pub use workbench::{AssistantChoice, ProjectTabs, RelocateReport, StorageLocation, UpdateStatus};

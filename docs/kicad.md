@@ -151,17 +151,41 @@ neither file had a mirrored instance. One `(mirror y)` symbol at 90° with a
 wire on an asymmetric pin would settle it, the same shape of evidence the
 rotation needed. The test says so rather than implying otherwise.
 
-**1 — the reader.** `.kicad_sch` into a `Sheet`, plus the `Sx` tree it came
-from. The work is the vocabulary, not the syntax: `lib_symbols` (the file
-carries a copy of every symbol it uses, which is what makes an imported
-board self-contained), `symbol` instances, `wire`/`junction`/`label`, and
-KiCad's connectivity rules. Read, never trusted — a node the reader does not
-know is kept in the tree and skipped, exactly as `kicad_sym` already does.
+**1 — the reader.** *Done* (`schematic::kicad_sch`). `.kicad_sch` into a
+`Sheet`. The syntax was free — `kicad_sym`'s tokeniser moved to
+`schematic::sexpr` and both vocabularies read it — and the work was the
+vocabulary plus the one thing that is genuinely different: **connectivity is
+geometric**. A segment joins its own two ends; two segments ending at one
+point are one node because the point is the key; a junction joins every
+segment through it, which is what makes two crossing wires with a junction
+one net and two without it two nets; a pin joins any wire it lies on,
+*including in the middle*, because KiCad connects there and a reader that
+matched only endpoints would silently drop every part somebody wired by
+running a line across its pins. Labels of one name are one net. The answer
+is then stated as rusty's pin-to-pin wires, a star per net.
 
-**2 — the writer.** Patch the tree for a file that came from KiCad; write
-from scratch for a sheet that did not. A round-trip test that reads a real
-file, changes nothing, writes it, and asserts the bytes are unchanged is the
-gate this stage lives or dies by.
+An anchor crosses by one scale (`MM_PX`, which now lives in `model` so the
+canvas and the writer cannot spell it differently); pins do not cross at
+all, which is the whole finding this project is built on.
+
+**2 — the writer.** *Done* (`schematic::kicad_out`). Two shapes and one
+rule. A sheet that came from KiCad is written by **patching the bytes it
+came in as** — spans found in one string-aware pass, never a reserialised
+tree, because a tree cannot give the formatting back (KiCad writes tabs,
+puts small nodes inline and long ones one per line, and writes `0` where a
+parser only knows `0.0`). A sheet drawn in rusty has no original and is
+written whole.
+
+The gate the stage lives by is `a_file_nobody_changed_comes_back_as_the_
+bytes_that_went_in`, and it passes. Moving, turning, renaming, revaluing,
+adding and deleting a part are patched in place: the part keeps its uuid,
+its footprint field and everything else in its node, and **every wire keeps
+its own bytes**, which is the assertion beside it. What a patch will not do
+is pretend — rewiring changes a netlist, and which of KiCad's segments
+belonged to which net is not a question the geometry answers once the nets
+have moved, so a wiring change regenerates every `wire` and `junction` and
+says so in `Written::notes`. Everything else in the file still keeps its
+bytes.
 
 **3 — the editor catches up.** Buses, no-connect flags, ERC beyond today's
 findings, annotation, footprint fields. This is the stage that will try to
