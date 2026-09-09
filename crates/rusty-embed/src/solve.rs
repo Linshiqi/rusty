@@ -66,6 +66,12 @@ pub enum Element {
         saturation: f64,
         ideality: f64,
     },
+    /// `farads` between two nodes. An open circuit at DC and a conductance
+    /// of `C/h` in a transient step, which is what makes it remember.
+    Capacitor { a: usize, b: usize, farads: f64 },
+    /// `henries` between two nodes. A short at DC, and the mirror image of
+    /// the capacitor in a step.
+    Inductor { a: usize, b: usize, henries: f64 },
 }
 
 impl Element {
@@ -76,6 +82,7 @@ impl Element {
             Element::Source { plus, minus, .. } => (plus, minus),
             Element::Current { from, into, .. } => (from, into),
             Element::Diode { anode, cathode, .. } => (anode, cathode),
+            Element::Capacitor { a, b, .. } | Element::Inductor { a, b, .. } => (a, b),
         }
     }
 
@@ -87,6 +94,12 @@ impl Element {
     /// grounded check below reads this and not `ends`.
     fn conducts(&self) -> bool {
         !matches!(self, Element::Current { .. })
+    }
+
+    /// Does it hold energy — and so carry something from one step to the
+    /// next, and behave differently at DC than in a transient?
+    fn remembers(&self) -> bool {
+        matches!(self, Element::Capacitor { .. } | Element::Inductor { .. })
     }
 }
 
@@ -137,6 +150,8 @@ pub enum Trouble {
     /// are largely in not reaching this, and rusty has neither those years
     /// nor a reason to pretend it does.
     DidNotConverge { after: usize },
+    /// A transient step that is not a positive length of time.
+    BadStep { seconds: f64 },
 }
 
 impl std::fmt::Display for Trouble {
@@ -159,11 +174,145 @@ impl std::fmt::Display for Trouble {
                 f,
                 "the operating point did not settle after {after} attempts, so there is no answer to report"
             ),
+            Trouble::BadStep { seconds } => {
+                write!(f, "{seconds} is not a length of time to step through")
+            }
         }
     }
 }
 
 impl std::error::Error for Trouble {}
+
+/// What one transient step needs beyond the circuit: how long it is, and
+/// where each energy-storing element was at the end of the last one.
+#[derive(Debug, Clone, Copy)]
+struct Dynamic<'a> {
+    seconds: f64,
+    /// Indexed by element: a capacitor's voltage, an inductor's current.
+    memory: &'a [f64],
+}
+
+/// A circuit being walked through time.
+///
+/// **This is the shape stage 5 needs**, and the reason the solver is
+/// written here rather than driven as a subprocess: advance to the next
+/// instant, read the voltages, change what the firmware is driving, advance
+/// again. A netlist handed to something else and run to completion cannot
+/// be asked that.
+///
+/// Backward Euler, and not the trapezoidal rule: it is unconditionally
+/// stable and it damps rather than rings. A schematic here is switched hard
+/// — a GPIO goes from nothing to the rail in one step — and the trapezoidal
+/// rule answers a step edge with an oscillation that is arithmetic rather
+/// than circuit, which is exactly the kind of confident wrong answer this
+/// simulator exists not to give. The price is first-order accuracy, which
+/// is a smaller timestep, and the test below measures that the error really
+/// does halve with the step rather than asserting a tolerance nobody can
+/// justify.
+#[derive(Debug, Clone)]
+pub struct Transient {
+    circuit: Circuit,
+    memory: Vec<f64>,
+    now: Solution,
+}
+
+impl Transient {
+    /// Start from the DC operating point — capacitors open, inductors
+    /// shorted — which is what a circuit that has been sitting there is at.
+    pub fn settled(circuit: Circuit) -> Result<Self, Trouble> {
+        let now = solve(&circuit, None)?;
+        let mut started = Transient {
+            memory: vec![0.0; circuit.elements.len()],
+            circuit,
+            now,
+        };
+        started.remember(None);
+        Ok(started)
+    }
+
+    /// Start from rest: every capacitor uncharged, every inductor
+    /// carrying nothing.
+    ///
+    /// The other constructor and not a fallback from it, because the two
+    /// are different claims. [`Transient::settled`] says the circuit has
+    /// been sitting there — and for a node reachable only through a
+    /// capacitor there is no such answer, which it reports rather than
+    /// inventing a zero. This one says the power has just come on, which is
+    /// a statement about the world that only the caller can make.
+    pub fn at_rest(circuit: Circuit) -> Self {
+        Transient {
+            memory: vec![0.0; circuit.elements.len()],
+            now: Solution {
+                volts: vec![0.0; circuit.nodes],
+                through: BTreeMap::new(),
+            },
+            circuit,
+        }
+    }
+
+    /// Advance by `seconds`.
+    pub fn step(&mut self, seconds: f64) -> Result<&Solution, Trouble> {
+        // NaN fails the first test, so the second never sees one.
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return Err(Trouble::BadStep { seconds });
+        }
+        self.now = solve(
+            &self.circuit,
+            Some(Dynamic {
+                seconds,
+                memory: &self.memory,
+            }),
+        )?;
+        self.remember(Some(seconds));
+        Ok(&self.now)
+    }
+
+    /// What a source is insisting on — how the firmware reaches the
+    /// circuit between one step and the next.
+    pub fn drive(&mut self, element: usize, volts: f64) {
+        if let Some(Element::Source { volts: at, .. }) = self.circuit.elements.get_mut(element) {
+            *at = volts;
+        }
+    }
+
+    pub fn now(&self) -> &Solution {
+        &self.now
+    }
+
+    pub fn volts_at(&self, node: usize) -> f64 {
+        self.now.volts_at(node)
+    }
+
+    /// Carry each element's state across the boundary: a capacitor keeps
+    /// the voltage it ended at, an inductor the current it ended at.
+    fn remember(&mut self, seconds: Option<f64>) {
+        for (index, element) in self.circuit.elements.iter().enumerate() {
+            match *element {
+                Element::Capacitor { a, b, .. } => {
+                    self.memory[index] = self.now.volts_at(a) - self.now.volts_at(b);
+                }
+                Element::Inductor { a, b, henries } => {
+                    // At DC it was a short, and its current is the one the
+                    // extra equation solved for. In a step it is not in
+                    // that list at all -- it is a conductance and a source
+                    // like the capacitor -- so its new current comes from
+                    // the companion's own equation, `i = i_before + h·v/L`.
+                    // Reading `through` here instead leaves the current at
+                    // zero for ever, and the voltage across it never
+                    // decays: the circuit looks like an open one.
+                    self.memory[index] = match seconds {
+                        Some(h) => {
+                            let across = self.now.volts_at(a) - self.now.volts_at(b);
+                            self.memory[index] + h / henries.max(1e-300) * across
+                        }
+                        None => self.now.through.get(&index).copied().unwrap_or(0.0),
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 /// The thermal voltage at room temperature, `kT/q` at 300.15 K.
 const THERMAL: f64 = 0.025_865;
@@ -204,13 +353,18 @@ const RELTOL_I: f64 = 1e-9;
 /// which is the real circuit. It is the oldest trick in SPICE, and it is
 /// here because the alternative is a refusal on circuits that have answers.
 pub fn dc(circuit: &Circuit) -> Result<Solution, Trouble> {
+    solve(circuit, None)
+}
+
+/// One operating point, static or one step into a transient.
+fn solve(circuit: &Circuit, dynamic: Option<Dynamic<'_>>) -> Result<Solution, Trouble> {
     if circuit.nodes == 0 {
         return Ok(Solution {
             volts: Vec::new(),
             through: BTreeMap::new(),
         });
     }
-    grounded(circuit)?;
+    grounded(circuit, dynamic.is_some())?;
 
     let nonlinear = circuit
         .elements
@@ -218,18 +372,18 @@ pub fn dc(circuit: &Circuit) -> Result<Solution, Trouble> {
         .any(|e| matches!(e, Element::Diode { .. }));
     let mut guess = vec![0.0; circuit.nodes];
     if !nonlinear {
-        return step(circuit, &guess, 0.0, &mut []).map(|(found, _)| found);
+        return step(circuit, &guess, 0.0, &mut [], dynamic).map(|(found, _)| found);
     }
 
     // Straight at the answer first: most circuits here converge from zero
     // and pay nothing for the ladder below.
     let mut attempts = 0usize;
-    if let Ok(found) = newton(circuit, &mut guess.clone(), 0.0, &mut attempts) {
+    if let Ok(found) = newton(circuit, &mut guess.clone(), 0.0, &mut attempts, dynamic) {
         return Ok(found);
     }
     // And when they do not, walk gmin down, each answer seeding the next.
     for gmin in [1e-3, 1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 0.0] {
-        match newton(circuit, &mut guess, gmin, &mut attempts) {
+        match newton(circuit, &mut guess, gmin, &mut attempts, dynamic) {
             Ok(found) if gmin == 0.0 => return Ok(found),
             Ok(_) => {}
             Err(Trouble::DidNotConverge { .. }) => {}
@@ -248,12 +402,13 @@ fn newton(
     guess: &mut Vec<f64>,
     gmin: f64,
     attempts: &mut usize,
+    dynamic: Option<Dynamic<'_>>,
 ) -> Result<Solution, Trouble> {
     const ROUNDS: usize = 200;
     let mut last = vec![0.0; circuit.elements.len()];
     for _ in 0..ROUNDS {
         *attempts += 1;
-        let (found, residual) = step(circuit, guess, gmin, &mut last)?;
+        let (found, residual) = step(circuit, guess, gmin, &mut last, dynamic)?;
         let settled = found.volts.iter().zip(guess.iter()).all(|(now, before)| {
             (now - before).abs() <= RELTOL * now.abs().max(before.abs()) + VNTOL
         });
@@ -292,6 +447,7 @@ fn step(
     guess: &[f64],
     gmin: f64,
     last: &mut [f64],
+    dynamic: Option<Dynamic<'_>>,
 ) -> Result<(Solution, Residual), Trouble> {
     let mut residual = Residual::default();
     // Every source and short gets an equation of its own, and a current to
@@ -302,7 +458,14 @@ fn step(
         .elements
         .iter()
         .enumerate()
-        .filter(|(_, e)| matches!(e, Element::Source { .. } | Element::Short { .. }))
+        .filter(|(_, e)| match e {
+            Element::Source { .. } | Element::Short { .. } => true,
+            // At DC an inductor is a piece of wire, and a piece of wire is
+            // an equation of its own for the same reason a short is: the
+            // current through it is what the rest of the circuit asks for.
+            Element::Inductor { .. } => dynamic.is_none(),
+            _ => false,
+        })
         .map(|(at, _)| at)
         .collect();
 
@@ -374,6 +537,36 @@ fn step(
                     &mut b,
                 );
             }
+            Element::Capacitor { a: p, b: m, farads } => {
+                // Backward Euler: `i = C·(v − v_before) / h`, which is a
+                // conductance of `C/h` in parallel with a source carrying
+                // where the capacitor was. With no step it contributes
+                // nothing, which is what an open circuit is.
+                if let Some(now) = dynamic {
+                    let g = farads / now.seconds;
+                    pair(p, m, g, -g * now.memory[index], &mut a, &mut b);
+                }
+            }
+            Element::Inductor {
+                a: p,
+                b: m,
+                henries,
+            } => {
+                // The mirror image: `i = i_before + h·v / L`. The current
+                // is out of `p` and into `m`, which is the sign `pair`
+                // takes, so the companion's constant part is what it was
+                // already carrying.
+                if let Some(now) = dynamic {
+                    pair(
+                        p,
+                        m,
+                        now.seconds / henries.max(1e-300),
+                        now.memory[index],
+                        &mut a,
+                        &mut b,
+                    );
+                }
+            }
             Element::Source { .. } | Element::Short { .. } => {}
         }
     }
@@ -382,8 +575,8 @@ fn step(
         let row = n + k;
         let (plus, minus, volts) = match circuit.elements[*index] {
             Element::Source { plus, minus, volts } => (plus, minus, volts),
-            Element::Short { a, b } => (a, b, 0.0),
-            _ => unreachable!("extras holds only sources and shorts"),
+            Element::Short { a, b } | Element::Inductor { a, b, .. } => (a, b, 0.0),
+            _ => unreachable!("extras holds sources, shorts and static inductors"),
         };
         if let Some(p) = at(plus) {
             a[p][row] += 1.0;
@@ -446,7 +639,7 @@ fn limited(wanted: f64, previous: f64, saturation: f64, thermal: f64) -> f64 {
 
 /// Every node has a conducting path to ground, or the first one that does
 /// not is named.
-fn grounded(circuit: &Circuit) -> Result<(), Trouble> {
+fn grounded(circuit: &Circuit, stepping: bool) -> Result<(), Trouble> {
     let mut parent: Vec<usize> = (0..circuit.nodes).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
@@ -455,7 +648,14 @@ fn grounded(circuit: &Circuit) -> Result<(), Trouble> {
         }
         node
     }
-    for element in circuit.elements.iter().filter(|e| e.conducts()) {
+    // A capacitor conducts during a step and not at DC, which is exactly
+    // the difference between a node that has a voltage while something is
+    // changing and one that never had one.
+    for element in circuit
+        .elements
+        .iter()
+        .filter(|e| e.conducts() && (stepping || !e.remembers()))
+    {
         let (a, b) = element.ends();
         if a >= circuit.nodes || b >= circuit.nodes {
             continue;
@@ -975,5 +1175,246 @@ mod tests {
             (1e-3..2e-2).contains(&current),
             "and the current a 330 ohm resistor lets through: {current}"
         );
+    }
+
+    // ── time ───────────────────────────────────────────────────────────
+
+    /// An RC charging, run to one time constant at two step sizes.
+    fn rc_after_one_constant(steps: usize) -> f64 {
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+                Element::Capacitor {
+                    a: 2,
+                    b: 0,
+                    farads: 1e-6,
+                },
+            ],
+        };
+        let mut run = Transient::at_rest(circuit);
+        let constant = 1e-3;
+        for _ in 0..steps {
+            run.step(constant / steps as f64).expect("stepped");
+        }
+        run.volts_at(2)
+    }
+
+    /// **The error halves when the step does**, which is what first order
+    /// means and is a far stronger claim than any tolerance would be: a
+    /// tolerance says the answer is close, and this says the method is the
+    /// one it is supposed to be. Backward Euler is first order, so the
+    /// ratio should be about a half; anything that is accidentally right at
+    /// one step size fails here.
+    #[test]
+    fn a_charging_capacitor_converges_at_the_order_backward_euler_has() {
+        let exact = 5.0 * (1.0 - (-1.0f64).exp());
+        let coarse = (rc_after_one_constant(100) - exact).abs();
+        let fine = (rc_after_one_constant(200) - exact).abs();
+        assert!(coarse > 0.0 && fine > 0.0);
+        assert!(
+            fine < 0.6 * coarse,
+            "halving the step should roughly halve the error: {coarse} then {fine}, \
+             against the exact {exact}"
+        );
+        assert!(
+            fine < 0.01 * exact,
+            "and two hundred steps should be within a percent: {fine}"
+        );
+    }
+
+    #[test]
+    fn a_capacitor_given_long_enough_ends_up_at_the_rail() {
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+                Element::Capacitor {
+                    a: 2,
+                    b: 0,
+                    farads: 1e-6,
+                },
+            ],
+        };
+        let mut run = Transient::at_rest(circuit);
+        for _ in 0..2_000 {
+            run.step(1e-5).expect("stepped");
+        }
+        assert!(
+            (run.volts_at(2) - 5.0).abs() < 1e-6,
+            "twenty time constants: {}",
+            run.volts_at(2)
+        );
+    }
+
+    /// The inductor's mirror image, and its own closed form: the voltage
+    /// across it decays as `V·exp(−t/τ)` with `τ = L/R`.
+    #[test]
+    fn an_inductor_lets_its_voltage_decay_at_the_rate_l_over_r_says() {
+        let run_to = |steps: usize| {
+            let circuit = Circuit {
+                nodes: 3,
+                elements: vec![
+                    Element::Source {
+                        plus: 1,
+                        minus: 0,
+                        volts: 5.0,
+                    },
+                    Element::Resistor {
+                        a: 1,
+                        b: 2,
+                        ohms: 1_000.0,
+                    },
+                    Element::Inductor {
+                        a: 2,
+                        b: 0,
+                        henries: 1.0,
+                    },
+                ],
+            };
+            let mut run = Transient::at_rest(circuit);
+            for _ in 0..steps {
+                run.step(1e-3 / steps as f64).expect("stepped");
+            }
+            run.volts_at(2)
+        };
+        let exact = 5.0 * (-1.0f64).exp();
+        let coarse = (run_to(100) - exact).abs();
+        let fine = (run_to(200) - exact).abs();
+        assert!(
+            fine < 0.6 * coarse,
+            "first order again: {coarse} then {fine}, against {exact}"
+        );
+    }
+
+    /// A circuit that has been sitting there does not move when time
+    /// passes, which is the one thing a transient must never get wrong: an
+    /// integrator with the sign or the memory wrong drifts from a steady
+    /// state, and drift is what every wrong answer downstream looks like.
+    #[test]
+    fn a_settled_circuit_stays_where_it_is() {
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+                Element::Resistor {
+                    a: 2,
+                    b: 0,
+                    ohms: 1_000.0,
+                },
+                Element::Capacitor {
+                    a: 2,
+                    b: 0,
+                    farads: 1e-6,
+                },
+            ],
+        };
+        let mut run = Transient::settled(circuit).expect("it has a DC answer");
+        let started = run.volts_at(2);
+        assert!((started - 2.5).abs() < 1e-9, "the divider: {started}");
+        for _ in 0..500 {
+            run.step(1e-4).expect("stepped");
+        }
+        assert!(
+            (run.volts_at(2) - 2.5).abs() < 1e-9,
+            "and fifty milliseconds later it is still there: {}",
+            run.volts_at(2)
+        );
+    }
+
+    /// The gesture stage 5 is for: change what a source insists on between
+    /// one step and the next, which is how the firmware reaches the
+    /// circuit.
+    #[test]
+    fn what_a_source_insists_on_can_change_between_steps() {
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 0.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+                Element::Capacitor {
+                    a: 2,
+                    b: 0,
+                    farads: 1e-6,
+                },
+            ],
+        };
+        let mut run = Transient::at_rest(circuit);
+        for _ in 0..50 {
+            run.step(1e-5).expect("stepped");
+        }
+        assert!(run.volts_at(2).abs() < 1e-12, "nothing has driven it yet");
+
+        // The pin goes high. Twenty time constants, because five is
+        // ninety-nine percent and this asserts a part per million.
+        run.drive(0, 3.3);
+        for _ in 0..2_000 {
+            run.step(1e-5).expect("stepped");
+        }
+        assert!(
+            (run.volts_at(2) - 3.3).abs() < 1e-6,
+            "and it charges to the rail: {}",
+            run.volts_at(2)
+        );
+
+        // And low again.
+        run.drive(0, 0.0);
+        for _ in 0..2_000 {
+            run.step(1e-5).expect("stepped");
+        }
+        assert!(
+            run.volts_at(2).abs() < 1e-6,
+            "and back down: {}",
+            run.volts_at(2)
+        );
+    }
+
+    #[test]
+    fn a_step_that_is_not_a_length_of_time_is_refused() {
+        let mut run = Transient::at_rest(Circuit {
+            nodes: 2,
+            elements: vec![Element::Resistor {
+                a: 1,
+                b: 0,
+                ohms: 1.0,
+            }],
+        });
+        assert_eq!(run.step(0.0), Err(Trouble::BadStep { seconds: 0.0 }));
+        assert_eq!(run.step(-1e-3), Err(Trouble::BadStep { seconds: -1e-3 }));
     }
 }

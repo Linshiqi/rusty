@@ -313,6 +313,15 @@ The scope, in order, each step provable before the next:
 5. The bridge from `nets`, which is nearly free: the union-find already
    answers which pins are one node, and MNA wants exactly that incidence.
 
+**All five are done**, and 4 and 5 were taken in the other order on
+purpose: until something built a circuit, `solve` was a library nothing
+called, and a modelling gap is easier to find without another layer on top
+of it. `Transient` is the shape stage 5 needs — `step(seconds)`, read the
+voltages, `drive` a source, step again — and the accuracy claim is a
+convergence-order test rather than a tolerance: halving the step halves the
+error, which says the method is the one it is meant to be instead of saying
+one answer happened to be close.
+
 **5 — the firmware in the loop.** This is the reason to do any of it.
 
 ## What this is not

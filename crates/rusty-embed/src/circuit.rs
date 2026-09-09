@@ -348,6 +348,7 @@ fn touches(element: &Element) -> [usize; 2] {
         Element::Source { plus, minus, .. } => [plus, minus],
         Element::Current { from, into, .. } => [from, into],
         Element::Diode { anode, cathode, .. } => [anode, cathode],
+        Element::Capacitor { a, b, .. } | Element::Inductor { a, b, .. } => [a, b],
     }
 }
 
@@ -381,6 +382,16 @@ fn moved(element: Element, to: &BTreeMap<usize, usize>) -> Element {
             cathode: at(cathode),
             saturation,
             ideality,
+        },
+        Element::Capacitor { a, b, farads } => Element::Capacitor {
+            a: at(a),
+            b: at(b),
+            farads,
+        },
+        Element::Inductor { a, b, henries } => Element::Inductor {
+            a: at(a),
+            b: at(b),
+            henries,
         },
     }
 }
