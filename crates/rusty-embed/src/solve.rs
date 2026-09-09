@@ -101,6 +101,30 @@ impl Element {
     fn remembers(&self) -> bool {
         matches!(self, Element::Capacitor { .. } | Element::Inductor { .. })
     }
+
+    /// The current its own curve has at `across`, first terminal to second,
+    /// or nothing when the element has no curve and the solve had to work
+    /// its current out as an unknown of its own.
+    ///
+    /// This is the one place a junction's current is written down: the
+    /// linearisation stamps a *tangent* to it and the closed-form gates
+    /// assert against it, and two spellings of Shockley that drifted apart
+    /// would make the gate agree with the bug.
+    fn current_at(&self, across: f64) -> Option<f64> {
+        match *self {
+            Element::Resistor { ohms, .. } => Some(across / ohms),
+            Element::Current { amps, .. } => Some(-amps),
+            Element::Diode {
+                saturation,
+                ideality,
+                ..
+            } => Some(saturation * ((across / (ideality.max(1e-3) * THERMAL)).exp() - 1.0)),
+            // At DC. In a step it carries `C·dv/dt`, which is the companion
+            // model's business and not a function of the voltage alone.
+            Element::Capacitor { .. } => Some(0.0),
+            Element::Source { .. } | Element::Short { .. } | Element::Inductor { .. } => None,
+        }
+    }
 }
 
 /// A circuit: how many nodes, and what is between them.
@@ -116,16 +140,46 @@ pub struct Circuit {
 pub struct Solution {
     /// One volt figure per node, ground included and always zero.
     pub volts: Vec<f64>,
-    /// The current through each voltage source and short, in the order they
-    /// appear in `elements` — positive out of `plus`. MNA computes these
-    /// as a by-product, and they are the answer to "how much is this
-    /// drawing", which is the question a series resistor exists to settle.
+    /// The current through each voltage source and short, keyed by their
+    /// index in `elements`. MNA computes these as a by-product, and they
+    /// are the answer to "how much is this drawing", which is the question
+    /// a series resistor exists to settle.
+    ///
+    /// **Positive from `plus` to `minus` through the element** — the
+    /// passive convention every element here is read in, so a source that
+    /// is *supplying* reads negative. This comment said "positive out of
+    /// `plus`" for a while, which is the opposite, while the test beside it
+    /// asserted the truth; a sign in prose that contradicts a sign in a
+    /// test is how a reading gets built backwards.
     pub through: BTreeMap<usize, f64>,
 }
 
 impl Solution {
     pub fn volts_at(&self, node: usize) -> f64 {
         self.volts.get(node).copied().unwrap_or(0.0)
+    }
+
+    /// What is across one element of the circuit this answers about, first
+    /// terminal to second.
+    pub fn across(&self, circuit: &Circuit, index: usize) -> Option<f64> {
+        let (a, b) = circuit.elements.get(index)?.ends();
+        Some(self.volts_at(a) - self.volts_at(b))
+    }
+
+    /// And what is going through it, in the same direction.
+    ///
+    /// Two sources of the answer, and which one applies is a property of
+    /// the element rather than a fallback: a source, a short and a
+    /// DC inductor have a current the solve had to compute as an unknown,
+    /// and everything else has one its own curve gives at the voltage it
+    /// ended up with. A capacitor at DC is `0.0` and not `None` — nothing
+    /// flows through it, which is an answer.
+    pub fn amps_through(&self, circuit: &Circuit, index: usize) -> Option<f64> {
+        let element = circuit.elements.get(index)?;
+        match element.current_at(self.across(circuit, index)?) {
+            Some(amps) => Some(amps),
+            None => self.through.get(&index).copied(),
+        }
     }
 }
 
@@ -999,7 +1053,17 @@ mod tests {
     /// everything around it; it cannot satisfy Kirchhoff at the junction by
     /// accident.
     fn shockley(volts: f64, saturation: f64, ideality: f64) -> f64 {
-        saturation * ((volts / (ideality * super::THERMAL)).exp() - 1.0)
+        // The model's own formula, not a second copy of it. A gate written
+        // against its own spelling of the physics can only prove the solver
+        // agrees with the gate.
+        Element::Diode {
+            anode: 0,
+            cathode: 0,
+            saturation,
+            ideality,
+        }
+        .current_at(volts)
+        .expect("a junction has a curve")
     }
 
     #[test]

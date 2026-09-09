@@ -47,6 +47,14 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # a resolved stream reads as "server exited" and flips LSP Ready back off;
 # and save/open must be stateful like the disk is, or every save-then-reread
 # flow (format-on-save) looks broken in the mock while correct in the app.
+# A fourth, learned late: **a stub that has not kept up with the model is a
+# panel nobody can drive.** `plan_simulation` answered with the *first*
+# board's `leds`/`buttons` for two format changes; serde ignored every key
+# of it and the sim panel opened on a bare devkit, so nothing in it could be
+# exercised here at all — and the chips carried no `gpio`, which draws a
+# devkit with rails and no header and makes every wire to a pin a finding.
+# It is a divider on a C3 now: two resistors, both rails, a tap on GPIO4,
+# and 1.10 V at the middle for anyone to check.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -2378,6 +2386,45 @@ hand, and every bug below was caught that way and by nothing else.
   carried across by node, because starting the new one from rest would
   discharge every capacitor on the sheet at the exact moment the firmware
   first touched a pin.
+- **The panel reads the solver through one door**, `circuit::operating_point`
+  — bridge, solve, and one error type over both halves — held in a memo
+  beside the rules' (`solved` next to `eval`, same parts, same wires, same
+  held switches, same reported levels). The probe on a wire gains what its
+  net is *at* and a selected part gains what is across it, through it and
+  dissipated in it. On a divider the two memos say different true things
+  about one net: `eval` says nothing is driving it, because a net holding
+  both rails through resistance has no level, and `solved` says 1.10 V.
+- **A refusal goes where the question was asked, and beside the part it is
+  about.** `solved` is an `Err` far more often than an answer — a lamp with
+  no `vf` is an ordinary state of a sheet somebody is drawing — so the
+  reason takes the number's place in the probe, and `Unsolved::part` decides
+  which part's inspector shows it. A reason repeated on all thirty parts
+  says "something is wrong here" twenty-nine times over.
+- **`Trouble::Floating` names a node number, which is not a thing on a
+  sheet.** It is an index into an array `circuit` built and then renumbered.
+  `operating_point` is where both halves are in hand, so that is where it
+  becomes `Unsolved::Floating { pins }` — what somebody can actually point
+  at. It is also the refusal a person is most likely to hit, by moving a
+  part off its rail.
+- **A sign in prose that contradicts a sign in a test is how a reading gets
+  built backwards.** `Solution::through` is documented as the passive
+  convention — positive from `plus` to `minus` *through* the element, so a
+  source that is supplying reads negative — and said the opposite for a
+  while, with the test beside it asserting the truth. `Solution::across`
+  and `amps_through` were written against the prose and would have shipped
+  every current negated. `turning_a_part_round_turns_its_reading_round` is
+  the test that holds it now.
+- **One spelling of Shockley.** `Element::current_at` is the curve, and the
+  closed-form gate's own helper calls it rather than repeating the formula
+  — a gate written against its own arithmetic can only prove the solver
+  agrees with the gate.
+- **A reading is what a meter shows.** `view/panels/simulate/readout.rs` is
+  engineering notation, pure and tested: `4.08 mA`, not `4.0799e-3 A`;
+  three significant figures, so a column lines up and the widest a part's
+  reading gets is bounded; exact zero is `0 V`, because a prefix chosen
+  from `log10(0)` reads as an instrument fault; and anything not finite is
+  a dash rather than `inf V` beside a resistor somebody would then go and
+  check.
 
 ## Meeting C
 

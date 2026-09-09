@@ -9,6 +9,32 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.15
+
+**Added — the sheet shows its voltages.** The last release solved the
+circuit for the firmware and said so plainly: the panel had not caught up.
+It has now.
+
+Click a wire and the probe says what its net is *at* — `1.65 V` beside the
+high/low it already told you, which on a divider is the same net saying two
+useful things. Select a part and the panel shows what is across it, what is
+going through it and what it is dissipating: `1.35 V  4.08 mA  5.49 mW`,
+under the value that decides all three, so changing 330 to 1k and watching
+the current move is one glance. It follows a running firmware, because the
+levels it solves from are the ones the emulator is reporting.
+
+Readings are in the units a meter shows — `4.08 mA`, not `4.0799e-3 A`.
+
+**And where there is no number, the reason is in its place** rather than a
+blank. A lamp with no forward voltage says so beside that lamp; a rail
+called `VCC` says it names a net without saying what it is at; a part left
+with one end loose is named by that end, not by an internal node number.
+Each names the property that would answer it.
+
+**Fixed — a current's sign.** The solver's own note about which way it
+measures said the opposite of what it does, which is how a reading gets
+built backwards. Nothing shipped was wrong; the trap is.
+
 ## v0.6.14
 
 **Added — a KiCad schematic opens here, and goes back without the trip

@@ -10,6 +10,48 @@
     send(msg) { if (this._handler) this._handler(msg); else (this._queued = this._queued || []).push(msg); }
   }
 
+  // The pin sets the two mocked chips actually have. Without them the
+  // devkit draws rails and nothing else — `kit_rows` derives the header
+  // from the die — and every wire to a GPIO is reported as reaching a pin
+  // that is not there, which is a correct complaint about a mock that had
+  // not said what the part is.
+  const ESP32_GPIO = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+    19, 20, 21, 22, 23, 25, 26, 27, 32, 33, 34, 35, 36, 37, 38, 39];
+  const C3_GPIO = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
+
+  // The three symbols the mock board is drawn from, in KiCad's own units:
+  // millimetres, y up, `at` the connection point and `angle` pointing from
+  // it *into* the body. Enough of the real thing that the sheet's geometry,
+  // its nets and the solver all behave as they do in the app — a resistor
+  // whose pins were not 2.54 apart would snap to a different grid here than
+  // there, which is the kind of difference that makes a mock lie.
+  const pin = (number, name, x, angle) => ({
+    number, name, kind: "passive", at: [x, 0], length: 2.54, angle,
+  });
+  const MOCK_SYMBOLS = [
+    {
+      library: "Device", name: "R", reference: "R", value: "R",
+      pins: [pin("1", "~", -3.81, 270), pin("2", "~", 3.81, 90)],
+      graphics: [
+        { kind: "rectangle", start: [-1.016, 2.54], end: [1.016, -2.54], width: 0.254, fill: "none" },
+      ],
+    },
+    {
+      library: "rusty", name: "GND", reference: "#PWR", value: "GND",
+      pins: [pin("1", "GND", 0, 90)],
+      graphics: [
+        { kind: "polyline", points: [[-1.27, -2.54], [1.27, -2.54]], width: 0.254, fill: "none" },
+      ],
+    },
+    {
+      library: "rusty", name: "Supply", reference: "#PWR", value: "3V3",
+      pins: [pin("1", "VCC", 0, 270)],
+      graphics: [
+        { kind: "polyline", points: [[-1.27, 2.54], [0, 3.81], [1.27, 2.54]], width: 0.254, fill: "none" },
+      ],
+    },
+  ];
+
   const RS = [
     "#![no_std]",
     "#![no_main]",
@@ -313,11 +355,30 @@
     plan_simulation: () => ({
       supported: true, reason: null, missing: [],
       steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
+      // A sheet with a *circuit* on it, not an empty one. This used to be
+      // the first board's `leds`/`buttons` shape, which the wire model left
+      // behind two formats ago — serde ignored every key of it and the
+      // panel opened on a bare devkit, so nothing in the sim panel could be
+      // driven here at all. A divider is the smallest board that exercises
+      // the whole of it: two resistors, both rails, a tap on a GPIO, and an
+      // answer anybody can check (3.3 × 10/30 = 1.1 V).
       board: {
-        chip: "esp32", kitX: 460, kitY: 40,
-        leds: [{ pin: 26, color: "green", label: "GPIO26", x: 60, y: 40, routes: [] }],
-        buttons: [], rgbs: [], sevens: [], displays: [], pots: [],
+        chip: "esp32c3", kitX: 460, kitY: 40,
+        parts: [
+          { reference: "R1", symbol: "Device:R", value: "20k", x: 200, y: 120 },
+          { reference: "R2", symbol: "Device:R", value: "10k", x: 200, y: 240 },
+          { reference: "PWR1", symbol: "rusty:Supply", value: "3V3", x: 200, y: 40 },
+          { reference: "GND1", symbol: "rusty:GND", value: "GND", x: 200, y: 330 },
+        ],
+        wires: [
+          { from: { part: "PWR1", pin: "VCC" }, to: { part: "R1", pin: "1" }, bends: [] },
+          { from: { part: "R1", pin: "2" }, to: { part: "R2", pin: "1" }, bends: [] },
+          { from: { part: "R2", pin: "1" }, to: { part: "U1", pin: "GPIO4" }, bends: [] },
+          { from: { part: "R2", pin: "2" }, to: { part: "GND1", pin: "GND" }, bends: [] },
+        ],
+        symbols: MOCK_SYMBOLS,
       },
+      library: MOCK_SYMBOLS,
       parts: [],
       debug: { gdbCommand: "echo mock-gdb", elf: "target/x/blinky", port: 1234 },
       debugTool: null,
@@ -413,8 +474,8 @@
       rationale: "mock: espflash speaks the ROM bootloader on this transport",
     }),
     chip_catalogue: () => [
-      { id: "esp32", name: "ESP32", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 520000, flashBytes: null, bareMetalTarget: "xtensa-esp32-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [] },
-      { id: "esp32c3", name: "ESP32-C3", vendor: "espressif", arch: "riscV", cores: 1, sramBytes: 400000, flashBytes: null, bareMetalTarget: "riscv32imc-unknown-none-elf", stdTarget: null, toolchain: "stock", flashers: [], probeRsTarget: null, radios: [] },
+      { id: "esp32", name: "ESP32", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 520000, flashBytes: null, bareMetalTarget: "xtensa-esp32-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [], gpio: ESP32_GPIO },
+      { id: "esp32c3", name: "ESP32-C3", vendor: "espressif", arch: "riscV", cores: 1, sramBytes: 400000, flashBytes: null, bareMetalTarget: "riscv32imc-unknown-none-elf", stdTarget: null, toolchain: "stock", flashers: [], probeRsTarget: null, radios: [], gpio: C3_GPIO },
       { id: "esp32s3", name: "ESP32-S3", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 512000, flashBytes: null, bareMetalTarget: "xtensa-esp32s3-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [] },
     ],
     board_catalogue: () => [],

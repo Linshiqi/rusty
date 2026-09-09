@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::model::{PinRef, Sheet};
 use crate::nets::{self, Behaviour, Rail, Row, behaviour_of, farads, ohms, power_rail, volts};
-use crate::solve::{Circuit, Element};
+use crate::solve::{Circuit, Element, Solution, Trouble};
 
 /// The circuit, and how to read an answer back onto the sheet.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -86,6 +86,157 @@ impl std::fmt::Display for Unstated {
 }
 
 impl std::error::Error for Unstated {}
+
+/// Why a sheet has no numbers on it.
+///
+/// Two halves, and they are different kinds of answer. `Unstated` is about
+/// the *drawing* and names a property that would fix it; `Trouble` is about
+/// the *circuit* and is a finding — a node that reaches ground through
+/// nothing is a mistake somebody made, not a field they forgot.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unsolved {
+    Unstated(Unstated),
+    /// A node that reaches ground through nothing, named by the pins
+    /// sitting on it.
+    ///
+    /// [`Trouble::Floating`] carries the bridge's own node number, which is
+    /// an index into an array this module built and renumbered — nothing
+    /// anybody can look at on a sheet. The pins are what they drew, so the
+    /// one refusal a person is actually likely to hit (a part with an end
+    /// left loose) says which end.
+    Floating {
+        pins: Vec<PinRef>,
+    },
+    Trouble(Trouble),
+}
+
+impl std::fmt::Display for Unsolved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unsolved::Unstated(why) => why.fmt(f),
+            Unsolved::Floating { pins } => {
+                let named: Vec<String> = pins.iter().map(PinRef::to_string).collect();
+                write!(
+                    f,
+                    "{} reaches ground through nothing, so there is no voltage to report there",
+                    named.join(", ")
+                )
+            }
+            Unsolved::Trouble(why) => why.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for Unsolved {}
+
+impl Unsolved {
+    /// Which part the refusal is about, when it is about one.
+    ///
+    /// A panel puts the reason beside that part and nowhere else: a sheet
+    /// has one reason at a time and thirty parts, and showing it on all of
+    /// them would say "something is wrong here" twenty-nine times over. The
+    /// ones that answer `None` are about the drawing as a whole — no
+    /// ground, or a circuit that cannot be solved — and belong wherever
+    /// somebody asked for a number rather than beside a part.
+    pub fn part(&self) -> Option<&str> {
+        match self {
+            Unsolved::Unstated(
+                Unstated::Resistance { part, .. }
+                | Unstated::Supply { part, .. }
+                | Unstated::ForwardVoltage { part }
+                | Unstated::Capacitance { part, .. },
+            ) => Some(part),
+            Unsolved::Unstated(Unstated::NoGround)
+            | Unsolved::Floating { .. }
+            | Unsolved::Trouble(_) => None,
+        }
+    }
+}
+
+/// So `of`'s refusal can travel through a `?`. There is deliberately no
+/// matching one for [`Trouble`]: `operating_point` has to *look* at that
+/// one, because `Floating` becomes the pins it is about rather than being
+/// carried straight through, and a `?` there would silently skip that.
+impl From<Unstated> for Unsolved {
+    fn from(why: Unstated) -> Self {
+        Unsolved::Unstated(why)
+    }
+}
+
+/// A sheet with a number on every node of it.
+///
+/// The operating point: where the circuit sits once everything has settled,
+/// which is what a probe on a schematic is asking. It is deliberately not a
+/// [`crate::live::Live`] — that one is walking a firmware's clock and
+/// carries charge from one instant to the next, and a sheet nobody is
+/// running has no instant to be at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Solved {
+    pub bridged: Bridged,
+    pub answer: Solution,
+}
+
+/// Solve the sheet where it settles.
+pub fn operating_point(
+    sheet: &Sheet,
+    rows: &[Row],
+    pressed: &HashSet<String>,
+    levels: &BTreeMap<u8, bool>,
+) -> Result<Solved, Unsolved> {
+    let bridged = of(sheet, rows, pressed, levels)?;
+    match crate::solve::dc(&bridged.circuit) {
+        Ok(answer) => Ok(Solved { bridged, answer }),
+        // The one refusal worth restating: the solver knows the node and
+        // the bridge knows the pins, and only here are both in hand.
+        Err(Trouble::Floating { node }) => Err(Unsolved::Floating {
+            pins: bridged
+                .node_of
+                .iter()
+                .filter(|(_, on)| **on == node)
+                .map(|(pin, _)| pin.clone())
+                .collect(),
+        }),
+        Err(why) => Err(Unsolved::Trouble(why)),
+    }
+}
+
+impl Solved {
+    /// What a pin is at, or nothing when the sheet gives it no node — a pin
+    /// nothing is wired to has no voltage rather than zero.
+    pub fn volts_at(&self, pin: &PinRef) -> Option<f64> {
+        Some(self.answer.volts_at(*self.bridged.node_of.get(pin)?))
+    }
+
+    /// What is across a part and what is going through it, or nothing when
+    /// the part is not an element of the circuit.
+    ///
+    /// Most of the sheet is not: a display, a sensor and a label have no
+    /// electrical model here, and neither does a rail, whose voltage is the
+    /// answer rather than something to be read off it.
+    pub fn reading(&self, reference: &str) -> Option<Reading> {
+        let index = *self.bridged.element_of.get(reference)?;
+        Some(Reading {
+            across: self.answer.across(&self.bridged.circuit, index)?,
+            through: self.answer.amps_through(&self.bridged.circuit, index)?,
+        })
+    }
+}
+
+/// What a part is doing, in the passive convention: both measured from the
+/// element's first terminal to its second, so their product is the power it
+/// is dissipating and a negative one is a part that is supplying.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reading {
+    pub across: f64,
+    pub through: f64,
+}
+
+impl Reading {
+    /// What it is dissipating, in watts.
+    pub fn watts(&self) -> f64 {
+        self.across * self.through
+    }
+}
 
 /// The current a lamp's `vf` is quoted at.
 ///
@@ -715,6 +866,186 @@ mod tests {
         .expect("built");
         let found = dc(&low.circuit).expect("solved");
         assert!(found.volts_at(low.node_of[&PinRef::new("R1", "1")]).abs() < 1e-9);
+    }
+
+    /// What the panel puts beside a part, against the arithmetic anybody
+    /// does on a divider: two resistors in series carry **one** current,
+    /// `3.3 / 30k`, and each drops its own share of it.
+    #[test]
+    fn a_part_reads_the_current_and_the_drop_the_series_arithmetic_gives() {
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R", "20k");
+        place(&mut s, "R2", "Device:R", "10k");
+        place(&mut s, "PWR1", "rusty:Supply", "3V3");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        wire(&mut s, "PWR1.VCC", "R1.1");
+        wire(&mut s, "R1.2", "R2.1");
+        wire(&mut s, "R2.2", "GND1.GND");
+
+        let solved = operating_point(&s, &rows(), &HashSet::new(), &BTreeMap::new())
+            .expect("a divider is solvable");
+        let one = solved.reading("R1").expect("R1 is an element");
+        let two = solved.reading("R2").expect("R2 is an element");
+        let amps = 3.3 / 30_000.0;
+        assert!((one.through - amps).abs() < 1e-12, "{one:?}");
+        assert!(
+            (one.through - two.through).abs() < 1e-15,
+            "in series, so one current: {one:?} {two:?}"
+        );
+        assert!((one.across - 3.3 * 2.0 / 3.0).abs() < 1e-9, "{one:?}");
+        assert!((two.across - 3.3 / 3.0).abs() < 1e-9, "{two:?}");
+        assert!(
+            (one.watts() - amps * amps * 20_000.0).abs() < 1e-12,
+            "I²R: {}",
+            one.watts()
+        );
+        // Nothing electrical to say about a rail, and that is not a
+        // failure — its voltage is the answer, not something read off it.
+        assert_eq!(solved.reading("PWR1"), None);
+        assert_eq!(
+            solved
+                .volts_at(&PinRef::new("R1", "2"))
+                .map(|v| (v * 1e6).round()),
+            Some((3.3f64 / 3.0 * 1e6).round())
+        );
+    }
+
+    /// **The sign is which way the part is drawn, and only a test can hold
+    /// it.** `through` is the passive convention — into the first terminal
+    /// — so the same resistor wired the other way round reads the negative
+    /// of itself. The doc comment on `Solution::through` claimed the
+    /// opposite of its own test for a while, which is exactly how a panel
+    /// ends up reporting a current backwards.
+    #[test]
+    fn turning_a_part_round_turns_its_reading_round() {
+        let build = |from_pin: &str, to_pin: &str| {
+            let mut s = sheet();
+            place(&mut s, "R1", "Device:R", "1k");
+            place(&mut s, "PWR1", "rusty:Supply", "3V3");
+            place(&mut s, "GND1", "rusty:GND", "GND");
+            wire(&mut s, "PWR1.VCC", &format!("R1.{from_pin}"));
+            wire(&mut s, &format!("R1.{to_pin}"), "GND1.GND");
+            operating_point(&s, &rows(), &HashSet::new(), &BTreeMap::new())
+                .expect("solvable")
+                .reading("R1")
+                .expect("an element")
+        };
+        let forwards = build("1", "2");
+        let backwards = build("2", "1");
+        assert!((forwards.through - 3.3e-3).abs() < 1e-12, "{forwards:?}");
+        assert!((backwards.through + 3.3e-3).abs() < 1e-12, "{backwards:?}");
+        assert!((forwards.across + backwards.across).abs() < 1e-12);
+        // Dissipation has no direction, and a reading that got the sign
+        // wrong on one of the two would show it here.
+        assert!((forwards.watts() - backwards.watts()).abs() < 1e-15);
+        assert!(forwards.watts() > 0.0, "a resistor dissipates");
+    }
+
+    /// The gate that a linear one cannot be: at a junction the *reading*
+    /// has to satisfy Kirchhoff, with the lamp's own curve evaluated at the
+    /// answer rather than at the figure its `vf` was quoted at. Two
+    /// elements in series, one of them exponential, and one current.
+    #[test]
+    fn a_lamp_reads_the_same_current_as_the_resistor_feeding_it() {
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R", "330");
+        place(&mut s, "D1", "Device:LED", "red");
+        place(&mut s, "PWR1", "rusty:Supply", "3V3");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        if let Some(lamp) = s.parts.iter_mut().find(|p| p.reference == "D1") {
+            lamp.props.insert("vf".into(), "2.0".into());
+        }
+        wire(&mut s, "PWR1.VCC", "R1.1");
+        wire(&mut s, "R1.2", "D1.A");
+        wire(&mut s, "D1.K", "GND1.GND");
+
+        let solved =
+            operating_point(&s, &rows(), &HashSet::new(), &BTreeMap::new()).expect("solvable");
+        let resistor = solved.reading("R1").expect("R1");
+        let lamp = solved.reading("D1").expect("D1");
+        // Both run the way the loop does — the resistor from its pin 1,
+        // which is on the supply, and the junction from its anode, which
+        // a diode's element always does — so in series they read the same
+        // number rather than opposite ones. Which sign a part reads is a
+        // fact about how it was drawn, and that is the neighbouring test.
+        assert!(
+            (resistor.through - lamp.through).abs() < 1e-12,
+            "one current through the pair: {resistor:?} {lamp:?}"
+        );
+        assert!(
+            (resistor.across + lamp.across - 3.3).abs() < 1e-9,
+            "and the two drops add up to the rail: {resistor:?} {lamp:?}"
+        );
+        assert!(
+            (3.0e-3..4.5e-3).contains(&resistor.through),
+            "about four milliamps by hand: {resistor:?}"
+        );
+    }
+
+    /// A capacitor carries nothing at DC, and `0.0` is an answer rather
+    /// than a refusal — a panel showing nothing there would read as a part
+    /// the solver could not reach.
+    #[test]
+    fn a_capacitor_reads_the_rail_and_no_current() {
+        let mut s = sheet();
+        place(&mut s, "C1", "Device:C", "100n");
+        place(&mut s, "PWR1", "rusty:Supply", "3V3");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        wire(&mut s, "PWR1.VCC", "C1.1");
+        wire(&mut s, "C1.2", "GND1.GND");
+
+        let solved =
+            operating_point(&s, &rows(), &HashSet::new(), &BTreeMap::new()).expect("solvable");
+        let reading = solved.reading("C1").expect("C1 is an element");
+        assert!((reading.across - 3.3).abs() < 1e-9, "{reading:?}");
+        assert_eq!(reading.through, 0.0, "open at DC");
+    }
+
+    /// The two halves of a refusal stay apart. A drawing that has not said
+    /// enough names the property; a drawing that says enough and is *wrong*
+    /// is the solver's finding, and a panel that showed one as the other
+    /// would send somebody to fill in a field that is already there.
+    #[test]
+    fn what_cannot_be_solved_says_which_kind_of_wrong_it_is() {
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R", "wrong");
+        place(&mut s, "PWR1", "rusty:Supply", "3V3");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        wire(&mut s, "PWR1.VCC", "R1.1");
+        wire(&mut s, "R1.2", "GND1.GND");
+        let why = operating_point(&s, &rows(), &HashSet::new(), &BTreeMap::new())
+            .expect_err("a value that is not a resistance");
+        assert!(
+            matches!(why, Unsolved::Unstated(Unstated::Resistance { .. })),
+            "{why:?}"
+        );
+        assert!(why.to_string().contains("4k7"), "it says how to write one");
+
+        // And two resistors wired to each other and to nothing else: a
+        // drawing that says everything and still has no answer, because
+        // those two nodes reach ground through nothing. Somebody drew this
+        // by moving a part off its rail.
+        let mut s = sheet();
+        place(&mut s, "R1", "Device:R", "1k");
+        place(&mut s, "R2", "Device:R", "1k");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        wire(&mut s, "R1.1", "R2.1");
+        wire(&mut s, "R1.2", "R2.2");
+        let why = operating_point(&s, &rows(), &HashSet::new(), &BTreeMap::new())
+            .expect_err("a loop that never reaches ground");
+        let Unsolved::Floating { pins } = &why else {
+            panic!("a node with no path to ground: {why:?}");
+        };
+        // And it says which pins, in the sheet's own words. The solver
+        // knows this as "node 1", which is an index into an array this
+        // module built and renumbered — a number nobody can point at on a
+        // canvas.
+        assert!(
+            pins.contains(&PinRef::new("R1", "1")) || pins.contains(&PinRef::new("R1", "2")),
+            "an end of the loop is named: {pins:?}"
+        );
+        assert!(why.to_string().contains("R1."), "{why}");
+        assert_eq!(why.part(), None, "a loose net is not one part's fault");
     }
 
     #[test]

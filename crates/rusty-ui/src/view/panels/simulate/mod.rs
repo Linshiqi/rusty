@@ -13,7 +13,7 @@
 //! or the emulator holds, and the caption says which: the stock QEMU
 //! exposes no GPIO state, and the board says so rather than pretending.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use leptos::{ev, prelude::*};
 
@@ -21,9 +21,11 @@ mod art;
 mod edit;
 mod geometry;
 mod library;
+mod readout;
 
 use geometry::*;
 use library::Library;
+use rusty_embed::circuit;
 use rusty_embed::nets::{self, Behaviour, Evaluation, Row, Warning, behaviour_of};
 use rusty_embed::{PinRef, Sheet, Symbol, Wire};
 
@@ -245,6 +247,54 @@ fn warning_text(warning: &Warning) -> String {
     }
 }
 
+/// Why the sheet has no numbers on it, in the window's own language.
+///
+/// The same rule `warning_text` follows: the variant's *name* is the stable
+/// half and the values travel beside it, so a refusal reads as a sentence
+/// here and prints as English in the CLI. `Display` on these types is the
+/// English one and is what the headless tools use; a panel calling it would
+/// be the one place in the window that answers in the wrong language.
+fn unsolved_text(why: &circuit::Unsolved) -> String {
+    use circuit::{Unsolved, Unstated};
+    use rusty_embed::solve::Trouble;
+    match why {
+        Unsolved::Unstated(Unstated::Resistance { part, value }) => {
+            t!("simulate.unstated-resistance", part = part, value = value)
+        }
+        Unsolved::Unstated(Unstated::Supply { part, value }) => {
+            t!("simulate.unstated-supply", part = part, value = value)
+        }
+        Unsolved::Unstated(Unstated::ForwardVoltage { part }) => {
+            t!("simulate.unstated-vf", part = part)
+        }
+        Unsolved::Unstated(Unstated::Capacitance { part, value }) => {
+            t!("simulate.unstated-capacitance", part = part, value = value)
+        }
+        Unsolved::Unstated(Unstated::NoGround) => t!("simulate.unstated-ground"),
+        Unsolved::Floating { pins } => t!(
+            "simulate.unsolved-floating",
+            pins = pins
+                .iter()
+                .map(PinRef::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Unsolved::Trouble(Trouble::Contradiction) => t!("simulate.unsolved-contradiction"),
+        Unsolved::Trouble(Trouble::BadResistance { ohms }) => {
+            t!("simulate.unsolved-resistance", ohms = ohms.to_string())
+        }
+        Unsolved::Trouble(Trouble::DidNotConverge { .. }) => t!("simulate.unsolved-converge"),
+        // Neither can reach a panel: `operating_point` catches `Floating`
+        // and turns it into the pins it is about, and a step length belongs
+        // to a transient, which this memo never runs. They fall back to the
+        // English the type itself writes rather than borrowing a key about
+        // something else — no entry, no claim, which is the same rule the
+        // backend's own text follows. Spelled out rather than left to a
+        // catch-all so that a variant added later is a compile error here.
+        Unsolved::Trouble(Trouble::Floating { .. } | Trouble::BadStep { .. }) => why.to_string(),
+    }
+}
+
 /// The editor: library, sheet, corner controls, properties. Local state
 /// until Save writes it into `.rusty/sim.toml` and the plan reloads.
 #[component]
@@ -460,6 +510,32 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                 gpio: &gpio,
                 pressed: &held,
             })
+        })
+    };
+    // And what the same sheet is at, in volts.
+    //
+    // `eval` says on and off; this says numbers, and they are two readings
+    // of one drawing rather than two drawings — the same parts, the same
+    // wires, the same held switches and the same levels the firmware has
+    // reported. The operating point and not a transient: a sheet nobody is
+    // running has no instant to be at, and where it settles is what a probe
+    // on a schematic is asking. While a session *is* running the levels
+    // move, so this moves with them.
+    //
+    // It is an `Err` far more often than it is an answer, and that is the
+    // design rather than a shortcoming: a lamp with no `vf` and a rail
+    // called `VCC` are ordinary states of a sheet somebody is still
+    // drawing, and each names the property that would answer it.
+    let solved: Memo<Result<circuit::Solved, circuit::Unsolved>> = {
+        let chip = chip.clone();
+        Memo::new(move |_| {
+            let sheet = sheet_with_symbols(&chip, &parts.get(), &wires.get(), &no_connect.get());
+            // `nets` keys its levels by hash and the bridge by order,
+            // because the element order decides the node numbering and a
+            // circuit that renumbered itself between two identical sheets
+            // would be a memo that never settles.
+            let gpio: BTreeMap<u8, bool> = state.sim.gpio.get().into_iter().collect();
+            circuit::operating_point(&sheet, &rows.get(), &pressed.get(), &gpio)
         })
     };
     // The GPIO a part's pin reaches through the wires — what a knob, a
@@ -2985,12 +3061,49 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                             .iter()
                                             .map(PinRef::to_string)
                                             .collect();
+                                        // And what it is *at*. High and low
+                                        // are the rules' reading; this is
+                                        // the solver's, and on a divider
+                                        // they are the same net saying two
+                                        // different useful things — "not
+                                        // being driven" and "1.65 V".
+                                        //
+                                        // Where there is no number, the
+                                        // reason goes in its place. This is
+                                        // the moment somebody asked what a
+                                        // net is at, so it is the moment to
+                                        // say which property would answer
+                                        // them — a probe that silently
+                                        // showed nothing would read as a
+                                        // feature that does not work.
+                                        let at = solved.with(|answer| match answer {
+                                            Ok(found) => Ok(found.volts_at(&wire.from).map(readout::volts)),
+                                            Err(why) => Err(unsolved_text(why)),
+                                        });
                                         view! {
                                             <div class="flex flex-col gap-1 border-t border-line pt-2">
                                                 <span class="text-caption text-label-4">
                                                     {t!("simulate.net")}
                                                 </span>
-                                                <p class=format!("font-mono text-footnote {tone}")>{word}</p>
+                                                <div class="flex items-baseline gap-2">
+                                                    <p class=format!("font-mono text-footnote {tone}")>{word}</p>
+                                                    {at
+                                                        .as_ref()
+                                                        .ok()
+                                                        .and_then(|volts| volts.clone())
+                                                        .map(|volts| {
+                                                            view! {
+                                                                <p class="font-mono text-footnote text-label">{volts}</p>
+                                                            }
+                                                        })}
+                                                </div>
+                                                {at
+                                                    .err()
+                                                    .map(|why| {
+                                                        view! {
+                                                            <p class="text-caption leading-snug text-label-4">{why}</p>
+                                                        }
+                                                    })}
                                                 <p class="font-mono text-caption leading-snug text-label-3 select-text">
                                                     {members.join("  ")}
                                                 </p>
@@ -3385,6 +3498,66 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         }}
                                     }
                                 })}
+                                // What the solver makes of this part: what
+                                // is across it and what is going through
+                                // it, under the value that decides both, so
+                                // changing 330 to 1k and watching the
+                                // current move is one glance.
+                                //
+                                // Silent for a part with no electrical
+                                // model — a label, a display, a rail — and
+                                // for a refusal about some *other* part,
+                                // which belongs beside that one.
+                                {
+                                    let reference = reference.clone();
+                                    move || {
+                                        solved
+                                            .with(|answer| match answer {
+                                                Ok(found) => found
+                                                    .reading(&reference)
+                                                    .map(|read| {
+                                                        Ok((
+                                                            readout::volts(read.across),
+                                                            readout::amps(read.through),
+                                                            readout::watts(read.watts()),
+                                                        ))
+                                                    }),
+                                                Err(why) => (why.part() == Some(reference.as_str()))
+                                                    .then(|| Err(unsolved_text(why))),
+                                            })
+                                            .map(|reading| match reading {
+                                                Ok((across, through, watts)) => {
+                                                    view! {
+                                                        <div class="flex flex-col gap-0.5">
+                                                            <span class="text-caption text-label-4">
+                                                                {t!("simulate.measured")}
+                                                            </span>
+                                                            // One line at this column's width:
+                                                            // three significant figures caps
+                                                            // each figure, so the widest a
+                                                            // reading gets is three negative
+                                                            // ones — 154px of the 176 there
+                                                            // are, measured in the panel.
+                                                            <p class="flex items-baseline gap-2 font-mono text-footnote text-label">
+                                                                <span>{across}</span>
+                                                                <span class="text-label-3">{through}</span>
+                                                                <span class="text-caption text-label-4">{watts}</span>
+                                                            </p>
+                                                        </div>
+                                                    }
+                                                        .into_any()
+                                                }
+                                                Err(why) => {
+                                                    view! {
+                                                        <p class="rounded-[6px] bg-sunken px-2 py-1 text-caption leading-snug text-label-3">
+                                                            {why}
+                                                        </p>
+                                                    }
+                                                        .into_any()
+                                                }
+                                            })
+                                    }
+                                }
                                 <div class="flex flex-col gap-1">
                                     <span class="text-caption text-label-4">{t!("simulate.pins")}</span>
                                     {pin_rows

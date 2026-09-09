@@ -313,6 +313,33 @@ The scope, in order, each step provable before the next:
 5. The bridge from `nets`, which is nearly free: the union-find already
    answers which pins are one node, and MNA wants exactly that incidence.
 
+**And the answers are on the panel.** `circuit::operating_point` is the
+sheet-level door — bridge, solve, and one error type over both halves — and
+the editor holds it in a memo beside the rules': `eval` says on and off,
+`solved` says numbers, over the same parts, the same wires, the same held
+switches and the same levels the firmware has reported. The probe on a wire
+gains what its net is *at*, and a selected part gains what is across it,
+what is through it and what it is dissipating, under the value that decides
+all three.
+
+Three things that shape it more than the arithmetic does:
+
+- **A refusal goes where the question was asked.** `solved` is an `Err`
+  far more often than it is an answer, and that is the design: a lamp with
+  no `vf` is an ordinary state of a sheet somebody is still drawing. So the
+  reason takes the number's place in the probe, and sits beside the part it
+  is about when it is about one — `Unsolved::part` is that test, and a
+  reason shown on all thirty parts would say "something is wrong here"
+  twenty-nine times over.
+- **A refusal speaks the sheet's language, not the solver's.**
+  `Trouble::Floating` names a node number, which is an index into an array
+  the bridge built and renumbered; `operating_point` turns it into the pins
+  on that node, because that is what somebody can point at.
+- **The reading is what a meter shows.** `view/panels/simulate/readout.rs`
+  is engineering notation, pure and tested: `4.08 mA`, not
+  `4.0799e-3 A`, and exact zero is `0 V` rather than a prefix chosen from
+  `log10(0)`.
+
 **All five are done**, and 4 and 5 were taken in the other order on
 purpose: until something built a circuit, `solve` was a library nothing
 called, and a modelling gap is easier to find without another layer on top

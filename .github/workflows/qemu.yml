@@ -1367,6 +1367,40 @@ jobs:
           finally:
               qemu.kill()
 
+      # And the one that closes the loop. Every gate above proves one
+      # direction of one peripheral: the host says something and the
+      # firmware hears it, or the firmware does something and the model
+      # reports it. This proves the two halves *joined* — the firmware
+      # drives a pin, the sheet's own resistor and capacitor decide what
+      # that does, and the firmware's converter reads the answer back.
+      #
+      # **The assertion is the shape of the numbers, and nothing weaker
+      # would do.** A host echoing the pin level passes "the firmware read
+      # something" and every other check that counts lines; what it cannot
+      # do is make the reading *climb* through a time constant somebody
+      # drew and then arrive. So the probe requires readings at all, a run
+      # of several that rise, and a settle at both ends — and it exits
+      # non-zero otherwise, which is what makes this a gate.
+      #
+      # It needs the converter, not just the pins: a build from before
+      # `qemu-v3` has GPIO and no SAR, and the probe checks that marker
+      # rather than a proxy for it. Twenty-five seconds because the step
+      # builds the firmware and the image first, through the same
+      # `simulate::plan` the app runs.
+      - name: The firmware drives the circuit the sheet draws
+        env:
+          RUSTY_CONFIG_DIR: ${{ github.workspace }}
+        run: |
+          cargo run -p rusty-embed --example live_probe -- qemu/live-probe 25 \
+            > live-probe.log 2>&1 || {
+              echo "::error::the firmware-in-the-loop gate failed on qemu/live-probe"
+              tail -40 live-probe.log | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+                | while IFS= read -r chunk; do echo "::error::…$chunk"; done
+              exit 1
+            }
+          tail -30 live-probe.log
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -1388,4 +1422,5 @@ jobs:
             spi-serial.log
             spi-qemu.out
             board-probe.log
+            live-probe.log
           if-no-files-found: warn
