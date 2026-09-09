@@ -50,6 +50,22 @@ pub enum Element {
     Short { a: usize, b: usize },
     /// `amps` pushed *out of* `from` and *into* `into`.
     Current { from: usize, into: usize, amps: f64 },
+    /// A PN junction, by Shockley: `I = Is·(exp(V / (n·Vt)) − 1)`.
+    ///
+    /// The first element here that is not linear, which is what brings
+    /// Newton–Raphson and everything that can go wrong with it.
+    /// `saturation` is `Is` and `ideality` is `n`: a silicon signal diode
+    /// is about `1e-14` A and 1, which puts it near 0.7 V at a few
+    /// milliamps, and a red lamp about `1e-20` A and 2, which puts it near
+    /// 2 V. Both of those are asserted below rather than asserted here —
+    /// the drop is what a person recognises, and the parameters are only
+    /// how it is reached.
+    Diode {
+        anode: usize,
+        cathode: usize,
+        saturation: f64,
+        ideality: f64,
+    },
 }
 
 impl Element {
@@ -59,6 +75,7 @@ impl Element {
             Element::Resistor { a, b, .. } | Element::Short { a, b } => (a, b),
             Element::Source { plus, minus, .. } => (plus, minus),
             Element::Current { from, into, .. } => (from, into),
+            Element::Diode { anode, cathode, .. } => (anode, cathode),
         }
     }
 
@@ -110,6 +127,16 @@ pub enum Trouble {
     Contradiction,
     /// A resistance that is not a positive number of ohms.
     BadResistance { ohms: f64 },
+    /// Newton-Raphson did not settle, even after stepping `gmin` down from
+    /// a conductance that makes every junction behave.
+    ///
+    /// **This is a real answer**, and the reason writing the solver is
+    /// defensible at all: the circuits here are small and mostly linear, so
+    /// a refusal is rare — and a refusal is what the rules of this project
+    /// demand over an operating point nobody can check. SPICE's forty years
+    /// are largely in not reaching this, and rusty has neither those years
+    /// nor a reason to pretend it does.
+    DidNotConverge { after: usize },
 }
 
 impl std::fmt::Display for Trouble {
@@ -128,13 +155,54 @@ impl std::fmt::Display for Trouble {
                     "{ohms} is not a resistance a current can be worked out through"
                 )
             }
+            Trouble::DidNotConverge { after } => write!(
+                f,
+                "the operating point did not settle after {after} attempts, so there is no answer to report"
+            ),
         }
     }
 }
 
 impl std::error::Error for Trouble {}
 
+/// The thermal voltage at room temperature, `kT/q` at 300.15 K.
+const THERMAL: f64 = 0.025_865;
+
+/// How close two successive guesses must be before the answer is taken:
+/// SPICE's own shape — a relative part for large voltages and a floor for
+/// small ones — and tighter than its defaults, because these circuits are
+/// small enough to afford it and a test asserting against Shockley wants
+/// the digits.
+const RELTOL: f64 = 1e-9;
+const VNTOL: f64 = 1e-12;
+
+/// And how closely the currents have to agree.
+///
+/// **Voltages settling is not the same as the circuit being solved**, and
+/// the difference is not academic: with limiting active, successive guesses
+/// can stop moving while the junction's own equation is out by two orders
+/// of magnitude, because each round linearises at the same clamped point
+/// and hands back the same answer. That is a fixed point of the *limited*
+/// map and not a solution of the circuit. So the residual is checked too —
+/// what the junction's curve says at the answer against what the straight
+/// line through the linearisation point said — and it is what makes the
+/// convergence claim mean anything.
+const ABSTOL: f64 = 1e-14;
+const RELTOL_I: f64 = 1e-9;
+
 /// Solve for the DC operating point.
+///
+/// A linear circuit is one solve. A circuit with a junction in it is
+/// Newton-Raphson: guess the voltages, replace each diode with the
+/// conductance and current source that match it *at that guess*, solve the
+/// linear system that makes, and repeat until the guess stops moving.
+///
+/// **When it will not settle, `gmin` steps.** A tiny conductance across
+/// every junction makes the circuit easier to solve and the answer slightly
+/// wrong; starting with a large one, solving, and carrying that answer into
+/// the next round with a smaller one walks the solver down to `gmin = 0`,
+/// which is the real circuit. It is the oldest trick in SPICE, and it is
+/// here because the alternative is a refusal on circuits that have answers.
 pub fn dc(circuit: &Circuit) -> Result<Solution, Trouble> {
     if circuit.nodes == 0 {
         return Ok(Solution {
@@ -144,6 +212,88 @@ pub fn dc(circuit: &Circuit) -> Result<Solution, Trouble> {
     }
     grounded(circuit)?;
 
+    let nonlinear = circuit
+        .elements
+        .iter()
+        .any(|e| matches!(e, Element::Diode { .. }));
+    let mut guess = vec![0.0; circuit.nodes];
+    if !nonlinear {
+        return step(circuit, &guess, 0.0, &mut []).map(|(found, _)| found);
+    }
+
+    // Straight at the answer first: most circuits here converge from zero
+    // and pay nothing for the ladder below.
+    let mut attempts = 0usize;
+    if let Ok(found) = newton(circuit, &mut guess.clone(), 0.0, &mut attempts) {
+        return Ok(found);
+    }
+    // And when they do not, walk gmin down, each answer seeding the next.
+    for gmin in [1e-3, 1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 0.0] {
+        match newton(circuit, &mut guess, gmin, &mut attempts) {
+            Ok(found) if gmin == 0.0 => return Ok(found),
+            Ok(_) => {}
+            Err(Trouble::DidNotConverge { .. }) => {}
+            Err(other) => return Err(other),
+        }
+    }
+    Err(Trouble::DidNotConverge { after: attempts })
+}
+
+/// Newton-Raphson at one `gmin`, leaving its answer in `guess`.
+///
+/// `last` carries each junction's voltage from the previous round, because
+/// limiting is about the *step* and not about the voltage — see [`limited`].
+fn newton(
+    circuit: &Circuit,
+    guess: &mut Vec<f64>,
+    gmin: f64,
+    attempts: &mut usize,
+) -> Result<Solution, Trouble> {
+    const ROUNDS: usize = 200;
+    let mut last = vec![0.0; circuit.elements.len()];
+    for _ in 0..ROUNDS {
+        *attempts += 1;
+        let (found, residual) = step(circuit, guess, gmin, &mut last)?;
+        let settled = found.volts.iter().zip(guess.iter()).all(|(now, before)| {
+            (now - before).abs() <= RELTOL * now.abs().max(before.abs()) + VNTOL
+        });
+        guess.clone_from(&found.volts);
+        // Both, or neither counts: see ABSTOL.
+        if settled && residual.solved() {
+            return Ok(found);
+        }
+    }
+    Err(Trouble::DidNotConverge { after: *attempts })
+}
+
+/// The worst disagreement between a junction's own curve at the answer and
+/// the straight line the solve was built on.
+#[derive(Debug, Clone, Copy, Default)]
+struct Residual {
+    off_by: f64,
+    largest: f64,
+}
+
+impl Residual {
+    fn saw(&mut self, off_by: f64, current: f64) {
+        self.off_by = self.off_by.max(off_by.abs());
+        self.largest = self.largest.max(current.abs());
+    }
+
+    fn solved(&self) -> bool {
+        self.off_by <= ABSTOL + RELTOL_I * self.largest
+    }
+}
+
+/// One linear solve: every element stamped, each diode at the operating
+/// point `guess` puts it at.
+fn step(
+    circuit: &Circuit,
+    guess: &[f64],
+    gmin: f64,
+    last: &mut [f64],
+) -> Result<(Solution, Residual), Trouble> {
+    let mut residual = Residual::default();
     // Every source and short gets an equation of its own, and a current to
     // solve for. Their order here is the order of their currents in the
     // unknown vector, and `through` is keyed by their index in `elements`
@@ -163,33 +313,66 @@ pub fn dc(circuit: &Circuit) -> Result<Solution, Trouble> {
     // Ground has no row and no column: `at` maps a node to its place, or
     // to nothing, which is what makes a stamp against ground a no-op.
     let at = |node: usize| (node != 0).then(|| node - 1);
+    // A conductance and a current between two nodes, which is what every
+    // element below reduces to. `i` flows out of `p` and into `m`.
+    let pair = |p: usize, m: usize, g: f64, i: f64, a: &mut [Vec<f64>], b: &mut [f64]| {
+        if let Some(p) = at(p) {
+            a[p][p] += g;
+            b[p] -= i;
+        }
+        if let Some(m) = at(m) {
+            a[m][m] += g;
+            b[m] += i;
+        }
+        if let (Some(p), Some(m)) = (at(p), at(m)) {
+            a[p][m] -= g;
+            a[m][p] -= g;
+        }
+    };
 
-    for element in &circuit.elements {
+    for (index, element) in circuit.elements.iter().enumerate() {
         match *element {
             Element::Resistor { a: p, b: m, ohms } => {
                 // NaN fails the first test, so the second never sees one.
                 if !ohms.is_finite() || ohms <= 0.0 {
                     return Err(Trouble::BadResistance { ohms });
                 }
-                let g = 1.0 / ohms;
-                if let Some(p) = at(p) {
-                    a[p][p] += g;
-                }
-                if let Some(m) = at(m) {
-                    a[m][m] += g;
-                }
-                if let (Some(p), Some(m)) = (at(p), at(m)) {
-                    a[p][m] -= g;
-                    a[m][p] -= g;
-                }
+                pair(p, m, 1.0 / ohms, 0.0, &mut a, &mut b);
             }
             Element::Current { from, into, amps } => {
-                if let Some(from) = at(from) {
-                    b[from] -= amps;
-                }
-                if let Some(into) = at(into) {
-                    b[into] += amps;
-                }
+                pair(from, into, 0.0, amps, &mut a, &mut b);
+            }
+            Element::Diode {
+                anode,
+                cathode,
+                saturation,
+                ideality,
+            } => {
+                let thermal = ideality.max(1e-3) * THERMAL;
+                let wanted = guess.get(anode).copied().unwrap_or(0.0)
+                    - guess.get(cathode).copied().unwrap_or(0.0);
+                let across = limited(wanted, last[index], saturation, thermal);
+                last[index] = across;
+                let exponent = (across / thermal).exp();
+                let current = saturation * (exponent - 1.0);
+                let slope = saturation / thermal * exponent + gmin;
+                // What the curve really has at the voltage the *previous*
+                // solve produced, against what the line through this point
+                // claims there. Zero when limiting is off and the guess has
+                // stopped moving, which is exactly when the answer is real.
+                let truly = saturation * ((wanted / thermal).exp() - 1.0);
+                residual.saw(truly - (current + slope * (wanted - across)), truly);
+                // The companion model: a conductance equal to the curve's
+                // slope here, and a source carrying whatever the real curve
+                // has that the straight line through this point does not.
+                pair(
+                    anode,
+                    cathode,
+                    slope,
+                    current - slope * across,
+                    &mut a,
+                    &mut b,
+                );
             }
             Element::Source { .. } | Element::Short { .. } => {}
         }
@@ -221,7 +404,44 @@ pub fn dc(circuit: &Circuit) -> Result<Solution, Trouble> {
         .enumerate()
         .map(|(k, index)| (*index, x[n + k]))
         .collect();
-    Ok(Solution { volts, through })
+    Ok((Solution { volts, through }, residual))
+}
+
+/// SPICE's junction limiting (`pnjlim`), and the whole reason a diode
+/// converges.
+///
+/// The exponential doubles every eighteen millivolts, so a Newton step that
+/// overshoots by a quarter of a volt asks the curve for `e^10` times the
+/// current, and the next guess overshoots further: it runs away to infinity
+/// in about three iterations. The naive loop is not slow, it is useless.
+///
+/// **It limits the step, not the voltage**, and that distinction is the
+/// whole of it. A version that clamped the new voltage alone looked right
+/// and converged on a lie: past the knee it mapped every guess to the same
+/// point, so the iteration stopped moving while Kirchhoff was out by two
+/// orders of magnitude, and — worse — an answer that genuinely sits above
+/// the critical voltage could never be reached, because limiting never
+/// switched off. Comparing against `previous` means that once the guesses
+/// settle, the step is small, no limiting applies, and the linearisation is
+/// at the real operating point.
+fn limited(wanted: f64, previous: f64, saturation: f64, thermal: f64) -> f64 {
+    if !wanted.is_finite() {
+        return previous;
+    }
+    let critical = thermal * (thermal / (saturation.max(1e-300) * std::f64::consts::SQRT_2)).ln();
+    if wanted <= critical || (wanted - previous).abs() <= 2.0 * thermal {
+        return wanted;
+    }
+    if previous > 0.0 {
+        let arg = 1.0 + (wanted - previous) / thermal;
+        if arg > 0.0 {
+            previous + thermal * arg.ln()
+        } else {
+            critical
+        }
+    } else {
+        thermal * (wanted / thermal).ln()
+    }
 }
 
 /// Every node has a conducting path to ground, or the first one that does
@@ -546,5 +766,214 @@ mod tests {
         // the equations even though the voltages agree — and saying so is
         // right. What must not happen is a silent answer.
         assert_eq!(dc(&circuit), Err(Trouble::Contradiction));
+    }
+
+    /// Shockley's own equation, evaluated on the answer.
+    ///
+    /// The whole point of the closed-form gates: this asserts that the
+    /// operating point satisfies the *physics* — the current the resistor
+    /// carries and the current the junction carries are the same number —
+    /// rather than that it equals a figure somebody once wrote down. A
+    /// solver could match a memorised constant while being wrong about
+    /// everything around it; it cannot satisfy Kirchhoff at the junction by
+    /// accident.
+    fn shockley(volts: f64, saturation: f64, ideality: f64) -> f64 {
+        saturation * ((volts / (ideality * super::THERMAL)).exp() - 1.0)
+    }
+
+    #[test]
+    fn a_junction_lands_where_shockley_and_the_resistor_agree() {
+        // 5 V ── 1k ── node 2 ──▶|── ground
+        let (saturation, ideality) = (1e-14, 1.0);
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+                Element::Diode {
+                    anode: 2,
+                    cathode: 0,
+                    saturation,
+                    ideality,
+                },
+            ],
+        };
+        let found = dc(&circuit).expect("solved");
+        let across = found.volts_at(2);
+
+        let through_resistor = (5.0 - across) / 1_000.0;
+        let through_junction = shockley(across, saturation, ideality);
+        assert!(
+            (through_resistor - through_junction).abs() < 1e-12,
+            "Kirchhoff at the node: {through_resistor} A through the resistor \
+             against {through_junction} A through the junction, at {across} V"
+        );
+        // And the band a person would recognise, so a solver that satisfied
+        // its own arithmetic in the wrong units could not pass.
+        assert!(
+            (0.6..0.8).contains(&across),
+            "a silicon diode at a few milliamps sits near 0.7 V: {across}"
+        );
+    }
+
+    #[test]
+    fn a_junction_the_wrong_way_round_blocks() {
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+                // The cathode at the resistor: reverse-biased.
+                Element::Diode {
+                    anode: 0,
+                    cathode: 2,
+                    saturation: 1e-14,
+                    ideality: 1.0,
+                },
+            ],
+        };
+        let found = dc(&circuit).expect("solved");
+        assert!(
+            (found.volts_at(2) - 5.0).abs() < 1e-6,
+            "only the saturation current flows, so the resistor drops nothing \
+             measurable and the node sits at the rail: {}",
+            found.volts_at(2)
+        );
+    }
+
+    #[test]
+    fn two_junctions_in_series_drop_more_than_one_and_less_than_twice() {
+        let of = |count: usize| {
+            let mut elements = vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1_000.0,
+                },
+            ];
+            // A chain from node 2 down to ground, one node per junction.
+            for k in 0..count {
+                elements.push(Element::Diode {
+                    anode: 2 + k,
+                    cathode: if k + 1 == count { 0 } else { 3 + k },
+                    saturation: 1e-14,
+                    ideality: 1.0,
+                });
+            }
+            Circuit {
+                nodes: 2 + count,
+                elements,
+            }
+        };
+        let one = dc(&of(1)).expect("one").volts_at(2);
+        let two = dc(&of(2)).expect("two").volts_at(2);
+        assert!(
+            two > one && two < 2.0 * one,
+            "each of two carries less current than one alone did, so it drops \
+             a little less than it did: {one} then {two}"
+        );
+    }
+
+    /// The test that limiting exists for.
+    ///
+    /// One ohm between a five-volt rail and a junction: the first Newton
+    /// step from a zero guess asks the exponential for `e^193`, which is
+    /// not a large number, it is infinity, and the iteration after it is
+    /// arithmetic on NaN. Unlimited, this does not converge slowly — it
+    /// never converges at all.
+    #[test]
+    fn a_junction_driven_hard_still_settles() {
+        let (saturation, ideality) = (1e-20, 2.0);
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 5.0,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 1.0,
+                },
+                Element::Diode {
+                    anode: 2,
+                    cathode: 0,
+                    saturation,
+                    ideality,
+                },
+            ],
+        };
+        let found = dc(&circuit).expect("a hard drive still has an answer");
+        let across = found.volts_at(2);
+        assert!(across.is_finite(), "{across}");
+        let through_resistor = (5.0 - across) / 1.0;
+        let through_junction = shockley(across, saturation, ideality);
+        let scale = through_resistor.abs().max(through_junction.abs());
+        assert!(
+            (through_resistor - through_junction).abs() <= 1e-9 * scale,
+            "Kirchhoff still holds at {across} V: {through_resistor} against {through_junction}"
+        );
+    }
+
+    /// A lamp on a rail through its resistor, which is the circuit this
+    /// solver exists for — every rusty sheet has one.
+    #[test]
+    fn a_lamp_on_a_rail_draws_a_few_milliamps_through_its_resistor() {
+        let (saturation, ideality) = (1e-20, 2.0);
+        let circuit = Circuit {
+            nodes: 3,
+            elements: vec![
+                Element::Source {
+                    plus: 1,
+                    minus: 0,
+                    volts: 3.3,
+                },
+                Element::Resistor {
+                    a: 1,
+                    b: 2,
+                    ohms: 330.0,
+                },
+                Element::Diode {
+                    anode: 2,
+                    cathode: 0,
+                    saturation,
+                    ideality,
+                },
+            ],
+        };
+        let found = dc(&circuit).expect("solved");
+        let across = found.volts_at(2);
+        let current = (3.3 - across) / 330.0;
+        assert!(
+            (1.8..2.4).contains(&across),
+            "a red lamp's forward drop: {across}"
+        );
+        assert!(
+            (1e-3..2e-2).contains(&current),
+            "and the current a 330 ohm resistor lets through: {current}"
+        );
     }
 }
