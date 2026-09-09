@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{KIT_REFERENCE, PinRef, Sheet, Symbol};
+use crate::model::{KIT_REFERENCE, PinRef, Sheet, Symbol, Wire};
 
 /// What a placed symbol *does* on the sheet. Read off the symbol's library
 /// and name, then its reference prefix and pin names — so a part imported
@@ -1154,6 +1154,116 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     }
 }
 
+/// The GPIO a pin's *name* claims, or nothing.
+///
+/// Vendors spell the same pin three ways on one datasheet — `GPIO5`, `IO5`,
+/// `GPIO05` — and a symbol drawn by hand uses whichever the author read.
+/// Anything that is not one of those shapes is not a GPIO: `GPIO` alone,
+/// `IO_MUX`, `VDD3P3` and a bare `5` all answer `None`, because a pin bound
+/// to the wrong row is a lamp that lights when the firmware set a different
+/// pin and nothing on screen to say so.
+pub fn gpio_named(name: &str) -> Option<u8> {
+    let digits = name
+        .strip_prefix("GPIO")
+        .or_else(|| name.strip_prefix("IO"))
+        .or_else(|| name.strip_prefix("gpio"))
+        .or_else(|| name.strip_prefix("io"))?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Wire an imported microcontroller to the devkit, so a schematic drawn
+/// elsewhere can be simulated here.
+///
+/// **Why this is needed at all.** rusty drives pins through `U1`, whose
+/// header rows *are* the GPIOs; a KiCad schematic has a module of its own
+/// instead, and nothing on it reaches a row. So an imported board draws and
+/// checks and does nothing when it is run. This reads the module's pin
+/// *names* — what the author wrote — and joins each to the row of the same
+/// number, which is the same reading `kit_rows` does from the other side.
+///
+/// **Exactly one candidate, or none.** Two parts that both look like the
+/// microcontroller is a question with no right answer, and answering it
+/// anyway means driving one module's pins through the other's — so that
+/// case binds nothing and names both, the way `firmware_root` refuses two
+/// excluded firmware crates. A part qualifies on four GPIO-named pins:
+/// fewer is a header or a test point, and a connector that happens to be
+/// labelled `IO0` should not become the chip.
+///
+/// The wires it adds are rusty's, not the file's, and the KiCad writer
+/// knows it: a wire touching `U1` is neither written nor counted as a
+/// change, so binding a board and exporting it again is still the identity.
+pub fn bind_to_kit(sheet: &mut Sheet, rows: &[Row]) -> Vec<String> {
+    let mut candidates: Vec<(String, Vec<(String, u8)>)> = Vec::new();
+    for part in &sheet.parts {
+        let Some(symbol) = sheet.symbol_of(&part.reference) else {
+            continue;
+        };
+        let found: Vec<(String, u8)> = symbol
+            .pins
+            .iter()
+            .filter(|pin| !pin.hidden)
+            .filter_map(|pin| {
+                let gpio = gpio_named(&pin.name)?;
+                rows.iter()
+                    .any(|row| row.gpio == Some(gpio))
+                    .then(|| (pin.number.clone(), gpio))
+            })
+            .collect();
+        if found.len() >= 4 {
+            candidates.push((part.reference.clone(), found));
+        }
+    }
+
+    match candidates.len() {
+        0 => Vec::new(),
+        1 => {
+            let (reference, pins) = candidates.remove(0);
+            let mut bound = 0usize;
+            for (number, gpio) in pins {
+                let Some(row) = rows.iter().find(|row| row.gpio == Some(gpio)) else {
+                    continue;
+                };
+                let from = PinRef::new(&reference, &number);
+                let to = PinRef::new(KIT_REFERENCE, &row.name);
+                if sheet
+                    .wires
+                    .iter()
+                    .any(|w| (w.from == from && w.to == to) || (w.from == to && w.to == from))
+                {
+                    continue;
+                }
+                sheet.wires.push(Wire {
+                    from,
+                    to,
+                    bends: Vec::new(),
+                });
+                bound += 1;
+            }
+            if bound == 0 {
+                return Vec::new();
+            }
+            vec![format!(
+                "{reference} reads as this board's microcontroller, so its {bound} \
+                 named GPIO pins were joined to the devkit's rows and the sheet \
+                 can be simulated. Those joins are rusty's own and are not \
+                 written back to the file."
+            )]
+        }
+        _ => {
+            let names: Vec<&str> = candidates.iter().map(|(r, _)| r.as_str()).collect();
+            vec![format!(
+                "{} both read as this board's microcontroller, so neither was \
+                 joined to the devkit: driving one module's pins through the \
+                 other's would be a guess. Wire the one you mean to U1 by hand.",
+                names.join(" and ")
+            )]
+        }
+    }
+}
+
 /// Where a pin sits between the rails, as a fraction: 0.0 at ground, 1.0 at
 /// the supply.
 ///
@@ -1673,6 +1783,100 @@ mod tests {
             eval(&s, &[], &[]).warnings,
             vec![Warning::SwitchDrivesNothing { part: "SW3".into() }]
         );
+    }
+
+    /// A pin name is read for a GPIO the way three datasheets spell one,
+    /// and anything else is refused — a pin bound to the wrong row lights a
+    /// lamp the firmware never set.
+    #[test]
+    fn a_gpio_is_read_from_a_pins_name_or_refused() {
+        assert_eq!(gpio_named("GPIO5"), Some(5));
+        assert_eq!(gpio_named("IO5"), Some(5));
+        assert_eq!(gpio_named("GPIO05"), Some(5));
+        assert_eq!(gpio_named("io21"), Some(21));
+        assert_eq!(gpio_named("GPIO"), None, "a prefix is not a pin");
+        assert_eq!(gpio_named("IO_MUX"), None);
+        assert_eq!(gpio_named("VDD3P3"), None);
+        assert_eq!(gpio_named("5"), None, "a bare number names nothing");
+        assert_eq!(gpio_named("GPIO5A"), None);
+    }
+
+    /// The join that turns an imported board from one rusty can draw into
+    /// one rusty can run — and the case where it refuses to.
+    #[test]
+    fn an_imported_module_is_joined_to_the_devkit_or_the_two_are_named() {
+        let rows = rows();
+        let module = |name: &str| {
+            symbol(
+                "RF_Module",
+                name,
+                "U",
+                &[
+                    ("1", "IO2"),
+                    ("2", "IO3"),
+                    ("3", "GPIO4"),
+                    ("4", "IO5"),
+                    ("5", "GND"),
+                    ("6", "IO99"),
+                ],
+            )
+        };
+
+        let mut s = sheet();
+        s.symbols.push(module("ESP32-C3-MINI-1"));
+        place(&mut s, "U2", "RF_Module:ESP32-C3-MINI-1");
+        let notes = bind_to_kit(&mut s, &rows);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("U2") && notes[0].contains("4"),
+            "{}",
+            notes[0]
+        );
+
+        let joined = |pin: &str, row: &str| {
+            let (a, b) = (PinRef::new("U2", pin), PinRef::new(KIT_REFERENCE, row));
+            s.wires
+                .iter()
+                .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+        };
+        assert!(joined("1", "GPIO2"), "IO2 reaches GPIO2");
+        assert!(joined("3", "GPIO4"), "and GPIO4 reaches GPIO4");
+        assert!(
+            !s.wires.iter().any(|w| w.from.pin == "6" || w.to.pin == "6"),
+            "IO99 is not a pin this chip has, so it joins nothing"
+        );
+        assert!(
+            !s.wires.iter().any(|w| w.from.pin == "5" || w.to.pin == "5"),
+            "and GND is not a GPIO"
+        );
+
+        // Run again: the joins are already there and are not doubled.
+        let before = s.wires.len();
+        assert!(bind_to_kit(&mut s, &rows).is_empty());
+        assert_eq!(s.wires.len(), before);
+
+        // Two modules is a question with no right answer.
+        let mut two = sheet();
+        two.symbols.push(module("ESP32-C3-MINI-1"));
+        two.symbols.push(module("ESP32-C6-MINI-1"));
+        place(&mut two, "U2", "RF_Module:ESP32-C3-MINI-1");
+        place(&mut two, "U3", "RF_Module:ESP32-C6-MINI-1");
+        let notes = bind_to_kit(&mut two, &rows);
+        assert!(two.wires.is_empty(), "neither is bound");
+        assert!(
+            notes[0].contains("U2") && notes[0].contains("U3"),
+            "and both are named: {}",
+            notes[0]
+        );
+
+        // A part with a GPIO-ish pin or two is a connector, not the chip.
+        let mut small = sheet();
+        small
+            .symbols
+            .push(symbol("Conn", "Header", "J", &[("1", "IO0"), ("2", "GND")]));
+        place(&mut small, "J1", "Conn:Header");
+        assert!(bind_to_kit(&mut small, &rows).is_empty());
+        assert!(small.wires.is_empty());
     }
 
     /// A resistance is read the way people write one, and a value that is

@@ -270,6 +270,13 @@ fn retouch(node: &str, now: &Instance) -> Option<String> {
 /// Every net as a sorted set of pins, which is the comparison that says
 /// whether the wiring changed — and not the wire list, because two wire
 /// lists can state one netlist.
+///
+/// The devkit is not in it. `U1` is rusty's, not the file's: it is how the
+/// emulator reaches a pin, and `nets::bind_to_kit` joins an imported
+/// module's GPIOs to its rows so an imported board can be run at all.
+/// Counting those joins as a change would make every export of an imported
+/// board rewrite its wiring, which is the one thing the patching writer
+/// exists to avoid.
 fn nets_of(sheet: &Sheet) -> Vec<Vec<String>> {
     let mut of: HashMap<String, usize> = HashMap::new();
     let mut parent: Vec<usize> = Vec::new();
@@ -287,6 +294,11 @@ fn nets_of(sheet: &Sheet) -> Vec<Vec<String>> {
         n
     }
     for wire in &sheet.wires {
+        if wire.from.part == crate::model::KIT_REFERENCE
+            || wire.to.part == crate::model::KIT_REFERENCE
+        {
+            continue;
+        }
         let a = node(&mut of, &mut parent, &wire.from);
         let b = node(&mut of, &mut parent, &wire.to);
         let (a, b) = (find(&mut parent, a), find(&mut parent, b));
@@ -393,6 +405,13 @@ fn wire_nodes(sheet: &Sheet) -> String {
     let mut out = String::new();
     let mut seen = 0usize;
     for wire in &sheet.wires {
+        // A wire to the devkit is rusty's own and has nowhere to go in a
+        // KiCad file: `U1` is not a part of it.
+        if wire.from.part == crate::model::KIT_REFERENCE
+            || wire.to.part == crate::model::KIT_REFERENCE
+        {
+            continue;
+        }
         let (Some(a), Some(b)) = (pin_point(sheet, &wire.from), pin_point(sheet, &wire.to)) else {
             continue;
         };
@@ -464,6 +483,25 @@ mod tests {
         let out = write(&read.sheet, Some(&read));
         assert_eq!(out.text, LAMP, "an untouched round trip is the identity");
         assert!(out.notes.is_empty());
+    }
+
+    /// The devkit is rusty's and is not in the file, so joining an imported
+    /// module to it must not read as rewiring. Without this, every export
+    /// of an imported board would rewrite its whole layout on the way out —
+    /// the one thing the patching writer exists to prevent.
+    #[test]
+    fn joining_the_devkit_is_not_a_change_to_the_file() {
+        let read = kicad_sch::parse(LAMP, "esp32c3").expect("parsed");
+        let mut sheet = read.sheet.clone();
+        sheet.wires.push(crate::model::Wire {
+            from: crate::model::PinRef::new("D1", "2"),
+            to: crate::model::PinRef::new(crate::model::KIT_REFERENCE, "GPIO2"),
+            bends: Vec::new(),
+        });
+
+        let out = write(&sheet, Some(&read));
+        assert_eq!(out.text, LAMP, "the file is untouched");
+        assert!(out.notes.is_empty(), "{:?}", out.notes);
     }
 
     #[test]

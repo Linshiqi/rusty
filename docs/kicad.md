@@ -199,12 +199,23 @@ and come back as a row of unknown boxes. Export re-reads whatever is at the
 path and patches it, so the promise holds against what is on disk *now*
 rather than against what was read an hour ago.
 
-Import says what it could not carry, in the sheet's own `notes` and so in
-the dock — most of all this: **a KiCad schematic has a microcontroller of
-its own where rusty's has a devkit**, so an imported board draws and checks
-and does not simulate until something is wired to `U1`. Said on arrival
-rather than discovered when Run does nothing. Mapping an MCU symbol's pins
-onto the devkit's rows by name is the obvious next move and is not done.
+**And an imported board can be run.** A KiCad schematic has a module of its
+own where rusty's sheet has a devkit, and rusty drives pins through `U1`'s
+rows — so an imported board used to draw, check, and do nothing when run.
+`nets::bind_to_kit` reads the module's pin *names* (`GPIO5`, `IO5`,
+`GPIO05` — what the author wrote, not a guess) and joins each to the row of
+the same number, skipping any the chip does not have. Exactly one candidate
+or none: two parts that both look like the microcontroller is a question
+with no right answer, so that case binds nothing and names both, the way
+`firmware_root` refuses two excluded firmware crates. Four GPIO-named pins
+is the bar — fewer is a connector, and a header labelled `IO0` should not
+become the chip.
+
+Those joins are rusty's and not the file's, and the writer knows it: a wire
+touching `U1` is neither written out nor counted as a change, so binding an
+imported board and exporting it again is still the identity. That is its own
+test, because without it every export of an imported board would rewrite the
+whole layout — the one thing the patching writer exists to prevent.
 
 What is left of the stage: buses, no-connect flags, ERC beyond today's
 findings, annotation, footprint fields. This is the part that will try to
