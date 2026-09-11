@@ -39,7 +39,7 @@ mod tree;
 mod watch;
 
 #[cfg(feature = "backend")]
-pub use document::{Files, create, save};
+pub use document::{Files, create, read_bytes, save};
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
 #[cfg(feature = "backend")]

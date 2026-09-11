@@ -241,6 +241,9 @@ pub enum DockTab {
 }
 
 impl DockTab {
+    /// Every tab there is, in the order the strip draws them. The View menu
+    /// and the palette list these; the strip itself carries a subset
+    /// ([`Layout::dock_tabs`]).
     pub const ALL: [DockTab; 9] = [
         DockTab::Problems,
         DockTab::Output,
@@ -252,6 +255,47 @@ impl DockTab {
         DockTab::Flight,
         DockTab::Devices,
     ];
+
+    /// The three every IDE's panel opens with, and the only ones that cannot
+    /// be hidden: what is wrong, what the tools said, and a shell. The other
+    /// six are on the strip only while something has put them there.
+    pub const PINNED: [DockTab; 3] = [DockTab::Problems, DockTab::Output, DockTab::Terminal];
+
+    pub fn pinned(self) -> bool {
+        Self::PINNED.contains(&self)
+    }
+
+    /// `strip` with `tab` on it, in [`Self::ALL`]'s order — a tab that
+    /// appears mid-session lands where it always sits, not at the end. A
+    /// tab already there changes nothing.
+    pub fn strip_with(strip: &[DockTab], tab: DockTab) -> Vec<DockTab> {
+        Self::ALL
+            .into_iter()
+            .filter(|t| *t == tab || strip.contains(t))
+            .collect()
+    }
+
+    /// `strip` without `tab`, and which tab is in front afterwards: `fronted`
+    /// unless it was the one that went, then its left-hand neighbour, as
+    /// closing an editor tab does. `None` when there is nothing to do — a
+    /// pinned tab, or one that was not on the strip.
+    pub fn strip_without(
+        strip: &[DockTab],
+        tab: DockTab,
+        fronted: DockTab,
+    ) -> Option<(Vec<DockTab>, DockTab)> {
+        if tab.pinned() {
+            return None;
+        }
+        let at = strip.iter().position(|t| *t == tab)?;
+        let rest = strip.iter().copied().filter(|t| *t != tab).collect();
+        let front = if fronted == tab {
+            strip[..at].last().copied().unwrap_or(DockTab::Problems)
+        } else {
+            fronted
+        };
+        Some((rest, front))
+    }
 
     pub fn label(self) -> String {
         match self {
@@ -739,7 +783,8 @@ pub struct Editor {
     /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
     /// the editor derives from it.
     pub zoom: RwSignal<f64>,
-    /// Markdown files the user asked to see as source.
+    /// Files the user asked to see as source rather than as what they draw:
+    /// a Markdown file's page, an SVG's picture.
     ///
     /// The default for `.md` is the rendered view, because a workbench opens a
     /// README to read it far more often than to edit it — so this holds the
@@ -747,6 +792,12 @@ pub struct Editor {
     /// and for the same reason: which way you were reading a file yesterday
     /// is not worth restoring onto one somebody has since rewritten.
     pub source_view: RwSignal<Vec<String>>,
+    /// Pictures the page view and the image view have asked for, by
+    /// project-relative path: a `data:` URL once the bytes arrived, or why
+    /// they did not. Shared by both groups, like the tree — the same figure
+    /// in two panes is one file. Session state; the watcher drops an entry
+    /// when its file changes on disk, so the next look re-reads it.
+    pub images: RwSignal<HashMap<String, ImageLoad>>,
     /// Which regions of the active document are collapsed.
     ///
     /// Session state, per tab, deliberately not persisted: a fold is where
@@ -795,6 +846,7 @@ impl Editor {
             reveal: RwSignal::new(None),
             expanded: RwSignal::new(Vec::new()),
             source_view: RwSignal::new(Vec::new()),
+            images: RwSignal::new(HashMap::new()),
             folds: RwSignal::new(rusty_edit::Folded::default()),
             stale: RwSignal::new(Vec::new()),
             watch_session: RwSignal::new(0),
@@ -819,11 +871,23 @@ impl Editor {
             zoom: self.zoom,
             vim_on: self.vim_on,
             source_view: self.source_view,
+            images: self.images,
             stale: self.stale,
             watch_session: self.watch_session,
             ..Self::fresh()
         }
     }
+}
+
+/// One picture's way to the screen: asked for, arrived as a `data:` URL, or
+/// refused with the reason — a file that is not there, or one too large to
+/// load as a picture. `Loading` is in the map so a page re-rendered on every
+/// keystroke asks for each figure once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageLoad {
+    Loading,
+    Ready(String),
+    Failed(String),
 }
 
 /// Which editor group a state value addresses. Two at most: VS Code's
@@ -1307,6 +1371,16 @@ pub struct Layout {
     /// hidden drawer is a build whose failure the user finds out about later.
     pub dock_open: RwSignal<bool>,
     pub dock_tab: RwSignal<DockTab>,
+    /// Which tabs the strip carries, in [`DockTab::ALL`]'s order. The pinned
+    /// three from the first paint; the rest appear when something puts them
+    /// there — a debug run, a serial link, the firmware's first telemetry
+    /// sample — and go when the user hides them. Nine tabs on a window with
+    /// no project open was nine names for things that were not happening.
+    ///
+    /// Session state, not persisted: nothing is running at boot, so the strip
+    /// starts with what is true at boot, and the View menu lists all nine for
+    /// anyone who wants one before it has anything to show.
+    pub dock_tabs: RwSignal<Vec<DockTab>>,
     pub panel: RwSignal<String>,
     /// Whole-interface scale, browser-zoom style. 1.0 is native.
     pub zoom: RwSignal<f64>,
@@ -1593,6 +1667,7 @@ impl AppState {
                 drag_from: RwSignal::new((0.0, 0.0, 1.0)),
                 dock_open: RwSignal::new(true),
                 dock_tab: RwSignal::new(DockTab::Problems),
+                dock_tabs: RwSignal::new(DockTab::PINNED.to_vec()),
                 panel: RwSignal::new("files".to_string()),
                 zoom: RwSignal::new(stored_ui_zoom()),
                 split: RwSignal::new(false),
@@ -1839,10 +1914,123 @@ impl AppState {
         })
     }
 
-    /// Bring a dock tab forward, opening the dock if it was collapsed.
+    /// Bring a dock tab forward, opening the dock if it was collapsed — and
+    /// putting it on the strip if it was not, which is how most tabs arrive:
+    /// a debug run brings Debug, a serial link brings Plot, the title bar's
+    /// flash button brings Devices.
     pub fn show_dock(&self, tab: DockTab) {
+        self.reveal_tab(tab);
         self.layout.dock_tab.set(tab);
         self.layout.dock_open.set(true);
+    }
+
+    /// Put a tab on the strip without bringing it forward or opening the
+    /// dock. For the firmware's side of things: its first telemetry sample
+    /// means there is a plot, and the strip should say so — but the user is
+    /// reading Output, and a panel that switched under them would be the
+    /// banner that reflowed the workspace, again. Untracked and free when the
+    /// tab is already there, because the protocol reader calls this per line.
+    pub fn reveal_tab(&self, tab: DockTab) {
+        let tabs = self.layout.dock_tabs;
+        if tabs.with_untracked(|strip| strip.contains(&tab)) {
+            return;
+        }
+        tabs.update(|strip| *strip = DockTab::strip_with(strip, tab));
+    }
+
+    /// Take a tab off the strip. A pinned one stays; hiding the one in front
+    /// fronts its left-hand neighbour, as closing an editor tab does.
+    pub fn hide_tab(&self, tab: DockTab) {
+        let fronted = self.layout.dock_tab.get_untracked();
+        let next = self
+            .layout
+            .dock_tabs
+            .with_untracked(|strip| DockTab::strip_without(strip, tab, fronted));
+        if let Some((strip, front)) = next {
+            self.layout.dock_tabs.set(strip);
+            if front != fronted {
+                self.layout.dock_tab.set(front);
+            }
+        }
+    }
+
+    /// Back to the three the strip starts with — Reset layout's share of the
+    /// dock, alongside the dividers.
+    pub fn reset_strip(&self) {
+        self.layout.dock_tabs.set(DockTab::PINNED.to_vec());
+        if !self.layout.dock_tab.get_untracked().pinned() {
+            self.layout.dock_tab.set(DockTab::Problems);
+        }
+    }
+}
+
+#[cfg(test)]
+mod dock_strip_tests {
+    use super::DockTab;
+
+    const PINNED: [DockTab; 3] = DockTab::PINNED;
+
+    /// A tab revealed mid-session sits where the full strip would put it,
+    /// however many were revealed before it and in whatever order; revealing
+    /// it again is not a second copy.
+    #[test]
+    fn a_revealed_tab_takes_its_place_in_the_order_and_only_once() {
+        let strip = DockTab::strip_with(&PINNED, DockTab::Flight);
+        let strip = DockTab::strip_with(&strip, DockTab::Waves);
+        assert_eq!(
+            strip,
+            [
+                DockTab::Problems,
+                DockTab::Output,
+                DockTab::Terminal,
+                DockTab::Waves,
+                DockTab::Flight,
+            ]
+        );
+        assert_eq!(DockTab::strip_with(&strip, DockTab::Waves), strip);
+    }
+
+    /// Hiding the tab in front moves the front to its left-hand neighbour —
+    /// the pinned three guarantee there is one — and hiding any other tab
+    /// leaves the front alone.
+    #[test]
+    fn hiding_the_fronted_tab_fronts_its_left_neighbour() {
+        let strip =
+            DockTab::strip_with(&DockTab::strip_with(&PINNED, DockTab::Waves), DockTab::Plot);
+
+        let (rest, front) = DockTab::strip_without(&strip, DockTab::Plot, DockTab::Plot).unwrap();
+        assert_eq!(front, DockTab::Waves);
+        assert!(!rest.contains(&DockTab::Plot));
+
+        let (rest, front) =
+            DockTab::strip_without(&strip, DockTab::Waves, DockTab::Terminal).unwrap();
+        assert_eq!(front, DockTab::Terminal);
+        assert_eq!(rest, DockTab::strip_with(&PINNED, DockTab::Plot));
+
+        let (_, front) = DockTab::strip_without(&strip, DockTab::Waves, DockTab::Waves).unwrap();
+        assert_eq!(
+            front,
+            DockTab::Terminal,
+            "the last pinned tab is the neighbour"
+        );
+    }
+
+    /// The pinned three cannot go, and a tab that is not on the strip is
+    /// nothing to do rather than a change.
+    #[test]
+    fn the_pinned_three_stay_and_an_absent_tab_is_a_no_op() {
+        for tab in PINNED {
+            assert!(
+                DockTab::strip_without(&PINNED, tab, tab).is_none(),
+                "{tab:?} must not be hideable"
+            );
+        }
+        assert!(DockTab::strip_without(&PINNED, DockTab::Flight, DockTab::Problems).is_none());
+        // And every pinned tab is one the full order knows, so a strip built
+        // through `strip_with` always carries all three.
+        for tab in PINNED {
+            assert!(DockTab::ALL.contains(&tab));
+        }
     }
 }
 

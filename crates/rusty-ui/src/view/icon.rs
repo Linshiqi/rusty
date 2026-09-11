@@ -49,6 +49,8 @@ pub enum Icon {
     Columns,
     /// An X: hides the dock, as VS Code's panel header does.
     Close,
+    /// A flask, the glyph VS Code's Testing view taught: the test suite.
+    Flask,
     /// An arrow leaving a box: open this in a window of its own.
     External,
     /// A page with a plus, and a folder with one: the tree header's new
@@ -95,6 +97,11 @@ impl Icon {
             Icon::Save => "M4 4h9l3 3v9H4zM7 4v4h5V4M6.8 16v-4.5h6.4V16",
             // A hammer.
             Icon::Hammer => "M4 15.8 9.6 10.2M9 5.5l2.3-2.3 5.5 5.5L14.5 11zM11.3 3.2l5.5 5.5",
+            // An Erlenmeyer flask: lip, neck, the sides flaring to a base,
+            // and the surface of what is in it.
+            Icon::Flask => {
+                "M7.5 3h5M8.5 3v5.2L4.6 15.3a1.1 1.1 0 0 0 1 1.7h8.8a1.1 1.1 0 0 0 1-1.7L11.5 8.2V3M6.4 12.5h7.2"
+            }
             // Corners of a frame — fit to view.
             Icon::Fit => "M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4",
             // A grid.

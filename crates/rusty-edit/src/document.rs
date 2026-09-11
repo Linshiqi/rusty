@@ -17,6 +17,31 @@ use crate::{
 /// opening one says why it will not.
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Files bigger than this are not turned into a picture. Twenty megabytes is
+/// a photograph nobody put in a firmware repository on purpose, and base64 of
+/// anything larger crosses IPC as one string the window waits on.
+const MAX_BLOB_BYTES: u64 = 20 * 1024 * 1024;
+
+/// A file's bytes under `root`, untouched — for showing it as a picture: a
+/// figure in a page, an image opened from the tree. Bytes rather than text so
+/// a PNG is not refused as binary the way [`Files::open`] refuses it, under
+/// the same root confinement, and capped for the reason above.
+pub fn read_bytes(root: &Path, relative: &str) -> Result<Vec<u8>> {
+    let path = resolve(root, relative)?;
+    let read = |source| Error::Read {
+        path: relative.to_string(),
+        source,
+    };
+    let metadata = std::fs::metadata(&path).map_err(read)?;
+    if metadata.len() > MAX_BLOB_BYTES {
+        return Err(Error::TooLarge {
+            path: relative.to_string(),
+            bytes: metadata.len(),
+        });
+    }
+    std::fs::read(&path).map_err(read)
+}
+
 /// Holds the grammars.
 ///
 /// `SyntaxSet::load_defaults_newlines` parses a bundled binary dump and takes
@@ -276,6 +301,21 @@ mod tests {
         assert!(matches!(
             create(dir.path(), "../escape", true).unwrap_err(),
             Error::Outside { .. },
+        ));
+    }
+
+    /// A picture is read as the bytes it is — the ELF that `open` refuses as
+    /// binary comes back whole here — under the same root confinement.
+    #[test]
+    fn bytes_come_back_whole_and_stay_inside_the_root() {
+        let dir = scratch();
+        assert_eq!(
+            read_bytes(dir.path(), "firmware.elf").unwrap(),
+            [0x7f, b'E', b'L', b'F', 0, 1]
+        );
+        assert!(matches!(
+            read_bytes(dir.path(), "../escape.png").unwrap_err(),
+            Error::Outside { .. }
         ));
     }
 

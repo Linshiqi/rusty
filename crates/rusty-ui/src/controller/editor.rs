@@ -225,6 +225,45 @@ pub fn open_file(state: AppState, path: String) {
     );
 }
 
+/// Fetch a project file as a picture — a figure in a page, an image opened
+/// from the tree — into `editor.images`, once per path.
+///
+/// Not through `track`: a figure that is not on disk is a chip in the page
+/// saying so, not a banner over the workbench. A chapter with a missing
+/// figure is a document with a typo in it, not a failure of the tool. And
+/// only for paths whose extension names an image the WebView can draw; a
+/// `<img src="notes.pdf">` is left to the page to describe.
+pub fn load_image(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    let Some(mime) = rusty_git::image_mime(&path) else {
+        return;
+    };
+    let asked = state
+        .editor
+        .images
+        .with_untracked(|images| images.contains_key(&path));
+    if asked {
+        return;
+    }
+    state.editor.images.update(|images| {
+        images.insert(path.clone(), crate::state::ImageLoad::Loading);
+    });
+    let args = Args { path: path.clone() };
+    spawn_local(async move {
+        let outcome = match ipc::call::<_, String>(cmd::files::BLOB, &args).await {
+            Ok(encoded) => crate::state::ImageLoad::Ready(format!("data:{mime};base64,{encoded}")),
+            Err(error) => crate::state::ImageLoad::Failed(error.message),
+        };
+        state.editor.images.update(|images| {
+            images.insert(path, outcome);
+        });
+    });
+}
+
 /// Re-read the active document from disk and replace it in place — the tail
 /// of a save, where disk and draft have just been made equal.
 fn reload_active(state: AppState, path: String) {
@@ -317,19 +356,28 @@ fn clear_editor_transients(state: AppState) {
 }
 
 /// Front an already open tab, parking the current one.
+///
+/// A strip entry with no parked body is a tab the last session left open
+/// and nobody has clicked since: `restore_tabs` lists the strip whole and
+/// reads only the active file, so the others are read here, on the click,
+/// exactly as a click in the tree reads them. This used to treat such an
+/// entry as corrupt and drop it — and after every restart the first click
+/// on any restored tab closed it instead of opening it.
 pub fn activate_tab(state: AppState, path: String) {
     let active = state.active_path_now();
     if active.as_deref() == Some(path.as_str()) {
         return;
     }
-    park_active(state);
-    if !front_parked(state, &path) {
-        // A strip entry with no parked body should not exist; refusing to
-        // guess beats showing a stale document as if it were current.
-        state.editor.tabs.update(|tabs| tabs.retain(|t| t != &path));
-        // A closed tab has no draft left to protect, so its warning is spent.
-        clear_stale(state, &path);
+    let parked = state
+        .editor
+        .parked
+        .with_untracked(|parked| parked.iter().any(|e| e.document.path == path));
+    if !parked {
+        open_file(state, path);
+        return;
     }
+    park_active(state);
+    front_parked(state, &path);
 }
 
 /// Move a parked editor onto the screen. False when no such entry exists.
@@ -424,9 +472,15 @@ fn remove_tab(state: AppState, path: String) {
 
     if is_active {
         clear_editor_transients(state);
-        let fronted = next.is_some_and(|n| front_parked(state, &n));
+        let fronted = next.as_deref().is_some_and(|n| front_parked(state, n));
         if !fronted {
             clear_screen(state);
+            // The neighbour is listed and has no body: restored last session
+            // and never clicked. Read it, as `activate_tab` would — a blank
+            // pane under a strip that still names a file reads as a failure.
+            if let Some(next) = next {
+                open_file(state, next);
+            }
         }
     }
     settle_groups(state);

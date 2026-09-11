@@ -311,6 +311,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* A formula in a page is MathML, which the WebView draws itself — Chromium,
+   WebKit and Gecko all do now, so there is no KaTeX to ship or to load. The
+   engine picks the math font (Cambria Math on Windows); only the size is
+   ours, a touch over the prose so sub- and superscripts stay legible. */
+.md-math math {
+  font-size: 1.08em;
+}
+
 /* Apple's focus ring: a soft halo, not a hard outline.
 
    Inside @layer base so an explicit `outline-none` utility can win. Unlayered,

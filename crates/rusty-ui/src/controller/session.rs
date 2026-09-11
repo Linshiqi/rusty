@@ -146,9 +146,19 @@ pub(super) fn clear_capture(state: AppState) {
 /// plotted in the simulator and vanished on real hardware.
 ///
 /// Anything that is not protocol is log, unchanged.
+///
+/// A line that carries what a dock tab shows also puts that tab on the strip
+/// — telemetry or a tunable the Plot, a sensor declaration the Flight tab, a
+/// gpio report the Waves — without bringing it forward: the user is reading
+/// Output, and the strip saying "there is a plot now" is the whole of the
+/// interruption. Which lines reveal which tab is decided here, beside the
+/// reading, because the tabs are about the protocol and this is the one
+/// place it is read. A `[rusty:pwm]` line reveals nothing on purpose: a servo
+/// or a dimmed lamp is a duty too, and the board sheet already shows those.
 pub(super) fn absorb(state: AppState, line: LogLine) {
     if let Some(sample) = rusty_embed::protocol::parse_telemetry(&line.text) {
         record_plot(state, sample);
+        state.reveal_tab(crate::state::DockTab::Plot);
     } else if let Some(param) = rusty_embed::protocol::parse_param(&line.text) {
         // Newest wins, by name: the firmware re-announces after a change, and
         // what it says it took is the truth — a clamp is information, not a
@@ -159,6 +169,7 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
                 None => params.push(param),
             }
         });
+        state.reveal_tab(crate::state::DockTab::Plot);
     } else if let Some(def) = rusty_embed::parse_sensor_def(&line.text) {
         // Newest wins by name, exactly as the tunables do: firmware that
         // re-announces on a timer is how a panel connecting late finds out
@@ -169,12 +180,14 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
                 None => known.push(def),
             },
         );
+        state.reveal_tab(crate::state::DockTab::Flight);
     } else if let Some(source) = rusty_embed::parse_pin_source(&line.text) {
         // Before the gpio arm on purpose: this line decides what the board's
         // caption may claim about every line after it.
         state.sim.pin_source.set(source);
         state.push_log(line);
     } else if let Some(report) = rusty_embed::parse_gpio_report(&line.text) {
+        state.reveal_tab(crate::state::DockTab::Waves);
         state.sim.gpio.update(|gpio| {
             for (pin, level) in &report.pins {
                 gpio.insert(*pin, *level);

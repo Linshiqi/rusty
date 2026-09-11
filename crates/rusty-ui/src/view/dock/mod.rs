@@ -7,6 +7,13 @@
 //!
 //! So output is shared state, not panel state, and this is the one place that
 //! renders it.
+//!
+//! The strip carries the tabs that have something to say. Problems, Output
+//! and Terminal are always there; the other six appear when something puts
+//! them there — a button or the View menu through `show_dock`, or the first
+//! protocol line carrying what a tab shows through `reveal_tab` — and go when
+//! the user hides them with the × on the tab. Nine tabs on a window with no
+//! project open was nine names for things that were not happening.
 
 use leptos::prelude::*;
 
@@ -71,53 +78,19 @@ fn DockTabs() -> impl IntoView {
 
     view! {
         <div class="flex h-8 items-center gap-0.5 border-t border-line px-2">
-            {DockTab::ALL
-                .into_iter()
-                .map(|tab| {
-                    let selected = Signal::derive(move || {
-                        state.layout.dock_open.get() && state.layout.dock_tab.get() == tab
-                    });
-                    view! {
-                        <button
-                            type="button"
-                            on:click=move |_| {
-                                // Clicking the tab you are already on collapses
-                                // the dock. That is how every editor behaves,
-                                // and it saves reaching for a separate control.
-                                if selected.get() {
-                                    state.layout.dock_open.set(false);
-                                } else {
-                                    state.show_dock(tab);
-                                }
-                            }
-                            class=move || {
-                                let base = "flex h-[26px] items-center gap-1.5 rounded-[5px] px-2.5 \
-                                            text-callout transition-colors";
-                                if selected.get() {
-                                    format!("{base} bg-sunken font-medium text-label")
-                                } else {
-                                    format!("{base} text-label-2 hover:text-label")
-                                }
-                            }
-                        >
-                            {tab.label()}
-                            <DockCount tab=tab />
-                        </button>
-                        // The shell picker sits beside its tab, not at the
-                        // far edge next to the collapse chevron — two
-                        // unrelated dropdown arrows in one corner read as
-                        // one broken control.
-                        {(tab == DockTab::Terminal)
-                            .then(|| {
-                                view! {
-                                    <Show when=move || selected.get()>
-                                        <ShellPicker />
-                                    </Show>
-                                }
-                            })}
-                    }
-                })
-                .collect_view()}
+            // The strip's own list, not `DockTab::ALL`: what is on it changes
+            // as tabs arrive and are hidden, and rarely — so the whole row is
+            // rebuilt on that and nothing else. Which tab is in front is read
+            // inside each tab, where a click changes only that tab's class.
+            {move || {
+                state
+                    .layout
+                    .dock_tabs
+                    .get()
+                    .into_iter()
+                    .map(|tab| view! { <DockTabButton tab=tab /> })
+                    .collect_view()
+            }}
 
             <span class="flex-1" />
 
@@ -177,6 +150,77 @@ fn DockTabs() -> impl IntoView {
                 <IconView icon=Icon::Close size=13 />
             </button>
         </div>
+    }
+}
+
+/// One tab on the strip: its name, its count, and — on a tab that is not
+/// pinned — the × that takes it off again, shown on hover as the editor's
+/// tabs show theirs.
+#[component]
+fn DockTabButton(tab: DockTab) -> impl IntoView {
+    let state = AppState::expect();
+    let selected =
+        Signal::derive(move || state.layout.dock_open.get() && state.layout.dock_tab.get() == tab);
+    // A box holding two buttons rather than a × inside the tab's own button:
+    // a button in a button is not HTML, and the box is what carries the
+    // selected fill, so the × sits inside it rather than beside it.
+    let frame = move || {
+        let base = "group flex h-[26px] items-center rounded-[5px] pl-2.5 text-callout \
+                    transition-colors";
+        let end = if tab.pinned() { "pr-2.5" } else { "pr-1" };
+        if selected.get() {
+            format!("{base} {end} bg-sunken font-medium text-label")
+        } else {
+            format!("{base} {end} text-label-2 hover:text-label")
+        }
+    };
+
+    view! {
+        <div class=frame>
+            <button
+                type="button"
+                class="flex items-center gap-1.5"
+                on:click=move |_| {
+                    // Clicking the tab you are already on collapses the dock.
+                    // That is how every editor behaves, and it saves reaching
+                    // for a separate control.
+                    if selected.get() {
+                        state.layout.dock_open.set(false);
+                    } else {
+                        state.show_dock(tab);
+                    }
+                }
+            >
+                {tab.label()}
+                <DockCount tab=tab />
+            </button>
+            {(!tab.pinned())
+                .then(|| {
+                    view! {
+                        <button
+                            type="button"
+                            title=t!("dock.chrome.hide-tab", name = tab.label())
+                            class="ml-1 rounded-[4px] px-0.5 leading-none text-label-3 opacity-0 \
+                                   transition-opacity group-hover:opacity-100 hover:bg-selection \
+                                   hover:text-label"
+                            on:click=move |_| state.hide_tab(tab)
+                        >
+                            "×"
+                        </button>
+                    }
+                })}
+        </div>
+        // The shell picker sits beside its tab, not at the far edge next to
+        // the collapse chevron — two unrelated dropdown arrows in one corner
+        // read as one broken control.
+        {(tab == DockTab::Terminal)
+            .then(|| {
+                view! {
+                    <Show when=move || selected.get()>
+                        <ShellPicker />
+                    </Show>
+                }
+            })}
     }
 }
 

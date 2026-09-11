@@ -128,6 +128,10 @@ fn detected_at(root: &Path, firmware: &Path) -> Answer<EmbeddedProject> {
                 Some(source) => format!("{source}, {where_from}"),
                 None => where_from,
             });
+            // The same fact as a value: the title bar's Test keys on it,
+            // and matching ", in " out of the prose would be the English
+            // comparison every other refusal here avoids.
+            project.firmware_dir = Some(name.display().to_string());
         }
         // Back to what the user opened. `root` means "the project directory"
         // everywhere it is read — the title bar's name, and the key the

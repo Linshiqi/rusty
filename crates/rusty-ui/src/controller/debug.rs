@@ -83,6 +83,12 @@ fn attach_session<A: serde::Serialize + 'static>(
         .debug
         .session
         .set(Some(rusty_dbg::DebugState::default()));
+    // Both debugging tabs onto the strip now, whichever is fronted first: a
+    // test's build streams to Output for a while, and the strip should
+    // already say where the session will land. Registers rides with Debug
+    // because it reads the same stopped target and nothing else.
+    state.reveal_tab(crate::state::DockTab::Debug);
+    state.reveal_tab(crate::state::DockTab::Registers);
     state.show_dock(first_tab);
 
     let channel = ipc::Channel::new();

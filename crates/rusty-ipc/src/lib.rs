@@ -122,6 +122,9 @@ pub mod terminal {
 pub mod files {
     pub const TREE: &str = "file_tree";
     pub const OPEN: &str = "open_file";
+    /// One file's bytes, base64 — a figure in a page, an image opened from
+    /// the tree. `OPEN` refuses those as binary, rightly, for the editor.
+    pub const BLOB: &str = "read_blob";
     pub const SAVE: &str = "save_file";
     pub const CREATE: &str = "create_entry";
     pub const DETACH: &str = "open_editor_window";

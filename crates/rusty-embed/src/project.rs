@@ -101,6 +101,9 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         root: root.display().to_string(),
         chip: chip_id,
         chip_source,
+        // Detection answers for the directory it was given; whether that is
+        // the opened project or a crate below it is the caller's knowledge.
+        firmware_dir: None,
         runtime,
         configured_target,
         configured_toolchain,

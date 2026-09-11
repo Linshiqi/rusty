@@ -283,6 +283,8 @@ debug-test = "Debug {name} under gdb, stopping at your breakpoints"
 [toolbar]
 save = "Format and save (Ctrl+S)"
 build = "Build — cargo build --release, output in the dock"
+test = "Test — cargo test at the project root, output in the dock"
+test-blocked = "The opened directory is the firmware itself, and cargo test there builds the tests for the chip, which has no test harness. Keep the firmware crate excluded from the workspace and the testable crates as members; Test then runs where they are."
 flash = "Flash the board…"
 debug = "Debug — boot frozen, stop at your breakpoints"
 run = "Build and run in the simulator"
@@ -501,6 +503,7 @@ channel = "Show one output channel"
 filter = "filter (!word excludes)"
 filter-hint = "Space-separated terms all must match; !term excludes"
 collapse = "Hide panel"
+hide-tab = "Hide {name} — the View menu brings it back, and so does anything that has something to show there"
 stop = "Stop"
 command-placeholder = "cargo build --release"
 command-needs-project = "open a project first — commands run in its root"
@@ -1058,6 +1061,23 @@ show-source = "Show the source"
 show-preview = "Show the rendered page"
 source = "Source"
 preview = "Preview"
+# What the page says in place of a thing it will not or cannot draw. Each
+# names the reason: a formula the converter refused, a picture on another
+# machine, a picture still on its way or not on disk, markup that is not run.
+math-error = "This formula could not be rendered: {error}"
+image-remote = "Not fetched: a remote image would tell its host that you opened this file"
+image-loading = "Loading {path}…"
+image-failed = "{path} could not be shown: {error}"
+html-skipped = "<{tag}> is not rendered here"
+
+[image]
+# An image file opened from the tree: the picture by default, and for an SVG
+# — which is text as well — the same toggle a Markdown page has.
+show-source = "Show the source"
+show-picture = "Show the picture"
+source = "Source"
+picture = "Picture"
+loading = "Loading the picture…"
 
 [quick]
 # The file finder: the title bar's box, and Ctrl+P.

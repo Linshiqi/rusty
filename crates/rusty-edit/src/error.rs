@@ -41,6 +41,12 @@ pub enum Error {
     #[error("{path} already exists")]
     Exists { path: String },
 
+    /// A file asked for as a picture that is bigger than this window will
+    /// load as one. Named with the size, so "will not show" reads as a limit
+    /// rather than a broken image.
+    #[error("{path} is {bytes} bytes, more than this window will load as a picture")]
+    TooLarge { path: String, bytes: u64 },
+
     /// The platform said no to something with no better name — today only the
     /// file watcher, which can fail on an exhausted inotify budget or a path
     /// the OS will not watch. Carried as a message because there is nothing

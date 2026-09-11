@@ -1,5 +1,6 @@
 //! Reading and writing the project's files.
 
+use base64::Engine;
 use rusty_edit::{Document, Entry};
 use tauri::State;
 
@@ -120,6 +121,20 @@ pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Docum
     // Highlighting a large file is still work worth a blocking thread.
     let files = state.files();
     Ok(blocking("opening the file", move || files.open(&root, &path)).await??)
+}
+
+/// One file's bytes as base64 — how a figure in a page and an image opened
+/// from the tree reach the screen, the way a picture in a diff does
+/// (`git_blob`). The frontend adds the MIME type it read off the extension;
+/// the read is confined to the project and capped, in `rusty_edit`.
+#[tauri::command]
+pub async fn read_blob(path: String, state: State<'_, AppState>) -> Result<String, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let bytes = blocking("reading the picture", move || {
+        rusty_edit::read_bytes(&root, &path)
+    })
+    .await??;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 /// Open a dependency's source read-only — where goto-definition lands when

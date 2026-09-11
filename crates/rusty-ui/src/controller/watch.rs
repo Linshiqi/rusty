@@ -80,6 +80,11 @@ fn absorb(state: AppState, changes: FileChanges) {
     // whose history nobody has opened.
     refresh_git(state);
     for path in changes.changed {
+        // A figure redrawn on disk is a stale picture in every page showing
+        // it; dropping the cached bytes makes the next look re-read them.
+        state.editor.images.update(|images| {
+            images.remove(&path);
+        });
         follow(state, path);
     }
 }

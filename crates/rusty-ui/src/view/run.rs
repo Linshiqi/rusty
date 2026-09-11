@@ -53,6 +53,20 @@ pub fn RunControls() -> impl IntoView {
                 .then(|| t!("simulate.debug-blocked"))
         })
     });
+    // Test is refused where it is certain to fail — a root that is its own
+    // firmware builds its tests for the chip, which has no test harness —
+    // but the refusal happens on the *click*, in the dock and the banner
+    // (`test_project`), not by disabling the button. Disabled with a tooltip
+    // it was refused in silence: the user clicked, nothing happened, and the
+    // last build's output still in the dock read as "Test ran a build". The
+    // tooltip keeps the reason for anyone who hovers first.
+    let test_block = Signal::derive(move || {
+        state
+            .project
+            .detected
+            .with(|p| p.as_ref().is_some_and(|p| p.root_is_firmware()))
+            .then(|| t!("toolbar.test-blocked"))
+    });
 
     move || {
         state.has_project().then(|| {
@@ -79,6 +93,25 @@ pub fn RunControls() -> impl IntoView {
                     >
                         <IconView icon=Icon::Hammer size=15 />
                     </button>
+                    // Test, between Build and Run: the suite is what stands
+                    // between a build that passed and a run worth watching.
+                    // Nothing else ran it before this — Build is `cargo build`
+                    // and nothing more, and the only other way to the suite
+                    // was one lens at a time.
+                    {move || {
+                        let title = test_block.get().unwrap_or_else(|| t!("toolbar.test"));
+                        view! {
+                            <button
+                                type="button"
+                                title=title
+                                disabled=move || running.get()
+                                on:click=move |_| controller::test_project(state)
+                                class=format!("{BUTTON} text-label-2 hover:text-label")
+                            >
+                                <IconView icon=Icon::Flask size=15 />
+                            </button>
+                        }
+                    }}
                     // Run becomes Stop in place while something runs — a
                     // build, a run, a debug session — so nothing beside it
                     // moves. A debug session ends through the debugger, which

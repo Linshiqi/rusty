@@ -713,6 +713,10 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                 state.layout.size_signal(divider).set(size);
                 remember_size(divider, size);
             }
+            // And the dock's strip back to its three: the tabs are layout
+            // as much as the dividers are, and "reset" that left a Flight
+            // tab from last week's run in place would not read as one.
+            state.reset_strip();
         }
     }
 }

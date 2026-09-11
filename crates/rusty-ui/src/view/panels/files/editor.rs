@@ -106,6 +106,27 @@ pub(crate) fn Editor() -> impl IntoView {
             .into_any();
         };
 
+        // A picture reads as a picture. An SVG is text as well, and its
+        // source is one click away, as a Markdown page's is; a PNG has no
+        // source to show and arrives `binary`, so the picture is all there
+        // is of it — and better than a notice that it is not text.
+        if is_picture(&document.path)
+            && !state
+                .editor
+                .source_view
+                .with(|v| v.contains(&document.path))
+        {
+            let header = (!document.binary).then(|| view! { <Header document=document.clone() /> });
+            return view! {
+                <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <TabStrip />
+                    {header}
+                    <Picture path=document.path.clone() from_draft=!document.binary />
+                </div>
+            }
+            .into_any();
+        }
+
         if document.binary {
             return view! {
                 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -141,7 +162,10 @@ pub(crate) fn Editor() -> impl IntoView {
                         <div class="mx-auto max-w-[80ch]">
                             {move || {
                                 let text = state.editor.draft.get();
-                                view! { <crate::view::markdown::Markdown text=text /> }
+                                // The file's own path is what its figures
+                                // are relative to.
+                                let base = state.active_path_now();
+                                view! { <crate::view::markdown::Markdown text=text base=base /> }
                             }}
                         </div>
                     </div>
@@ -172,4 +196,58 @@ pub(crate) fn Editor() -> impl IntoView {
 pub(super) fn is_markdown(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".md") || lower.ends_with(".markdown")
+}
+
+/// Whether this path is an image the WebView can draw. One list, the git
+/// panel's, so a file compared as a picture in a diff opens as one here.
+pub(super) fn is_picture(path: &str) -> bool {
+    rusty_git::image_mime(path).is_some()
+}
+
+/// The one picture format that is also text, and so has a source to show.
+pub(super) fn is_svg(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".svg")
+}
+
+/// The picture a file is.
+///
+/// An SVG is drawn from the *draft*, so an edit made in the source view shows
+/// the moment the toggle flips back, and the picture can never be a stale
+/// copy of the text beside it — the Markdown page's rule. A binary image has
+/// no draft and comes through the same fetch the page view's figures use.
+#[component]
+fn Picture(path: String, from_draft: bool) -> impl IntoView {
+    let state = AppState::expect();
+    if !from_draft {
+        crate::controller::load_image(state, path.clone());
+    }
+    let key = path.clone();
+    let src = move || -> Result<String, String> {
+        if from_draft {
+            let svg = state.editor.draft.get();
+            let encoded: String = js_sys::encode_uri_component(&svg).into();
+            return Ok(format!("data:image/svg+xml;charset=utf-8,{encoded}"));
+        }
+        match state.editor.images.with(|images| images.get(&key).cloned()) {
+            Some(crate::state::ImageLoad::Ready(url)) => Ok(url),
+            Some(crate::state::ImageLoad::Failed(error)) => Err(error),
+            _ => Err(t!("image.loading")),
+        }
+    };
+    view! {
+        <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
+            {move || match src() {
+                Ok(url) => view! {
+                    <img src=url alt=path.clone() class="max-h-full max-w-full object-contain" />
+                }
+                    .into_any(),
+                Err(message) => view! {
+                    <p class="max-w-[44ch] text-center text-callout leading-relaxed text-label-3">
+                        {message}
+                    </p>
+                }
+                    .into_any(),
+            }}
+        </div>
+    }
 }

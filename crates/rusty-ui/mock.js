@@ -266,6 +266,15 @@
       return docOf(a.path, window.__mock.saved[a.path] || fallback);
     },
     highlight_text: (a) => docOf(a.path || MAIN, a.text).lines,
+    // A picture for any path, base64 as the real command answers it: one
+    // small SVG carrying the path it stands for, so a page's figures and
+    // the image view can be driven without a project on disk.
+    read_blob: (a) => btoa(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160">' +
+      '<rect width="320" height="160" rx="12" fill="#2a3a4a"/>' +
+      '<text x="160" y="86" text-anchor="middle" fill="#e0b080" font-size="14" font-family="monospace">' +
+      a.path + '</text></svg>'
+    ),
     save_file: (a) => { window.__mock.saved[a.path] = a.text; return null; },
     // The real command is a long-lived stream; resolving would read as "the
     // server exited" and flip Ready back to Off.

@@ -298,11 +298,13 @@ pub(super) fn Header(
             >
                 <IconView icon=Icon::Save size=14 />
             </button>
-            // Markdown only: every other file has one way to read it, and a
-            // toggle that does nothing on 95% of tabs is chrome.
-            {super::editor::is_markdown(&path)
+            // Markdown and SVG only — the two files that are both a text and
+            // a thing the text draws. Every other file has one way to read
+            // it, and a toggle that does nothing on 95% of tabs is chrome.
+            {(super::editor::is_markdown(&path) || super::editor::is_svg(&path))
                 .then(|| {
                     let path = path.clone();
+                    let page = super::editor::is_markdown(&path);
                     let showing_source = {
                         let path = path.clone();
                         Signal::derive(move || {
@@ -313,10 +315,11 @@ pub(super) fn Header(
                         <button
                             type="button"
                             title=move || {
-                                if showing_source.get() {
-                                    t!("markdown.show-preview")
-                                } else {
-                                    t!("markdown.show-source")
+                                match (showing_source.get(), page) {
+                                    (true, true) => t!("markdown.show-preview"),
+                                    (true, false) => t!("image.show-picture"),
+                                    (false, true) => t!("markdown.show-source"),
+                                    (false, false) => t!("image.show-source"),
                                 }
                             }
                             on:click=move |_| {
@@ -334,10 +337,11 @@ pub(super) fn Header(
                             class="shrink-0 rounded-[5px] px-2 py-0.5 text-footnote text-label-2 hover:bg-sunken hover:text-label"
                         >
                             {move || {
-                                if showing_source.get() {
-                                    t!("markdown.preview")
-                                } else {
-                                    t!("markdown.source")
+                                match (showing_source.get(), page) {
+                                    (true, true) => t!("markdown.preview"),
+                                    (true, false) => t!("image.picture"),
+                                    (false, true) => t!("markdown.source"),
+                                    (false, false) => t!("image.source"),
                                 }
                             }}
                         </button>

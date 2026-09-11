@@ -803,6 +803,7 @@ mod tests {
             root: "E:/work/blinky".to_string(),
             chip: Some("esp32c3".to_string()),
             chip_source: None,
+            firmware_dir: None,
             runtime: None,
             configured_target: Some("riscv32imc-unknown-none-elf".to_string()),
             configured_toolchain: Some("nightly-2025-06-01".to_string()),

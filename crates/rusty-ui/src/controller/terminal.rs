@@ -3,7 +3,8 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_embed::{LogLine, LogStream};
+use rusty_embed::{LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
 use rusty_term::Screen as TermScreen;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
@@ -308,6 +309,44 @@ pub fn run_test(state: AppState, filter: String) {
     };
     // At the project, not at the firmware crate: see `run_command_at_root`.
     run_command_at_root(state, line);
+}
+
+/// The whole suite — the title bar's Test. The same path as the lens with
+/// an empty filter, so the two cannot disagree about where tests run; and
+/// no `--nocapture`, because a suite's `println!`s are noise and the harness
+/// prints a failing test's output regardless. Refused while something runs,
+/// as Build is: the backend's slot would stop it, and a test run that
+/// silently killed a flash is worse than a button that waits.
+///
+/// A root that is its own firmware is refused *out loud*: the reason goes
+/// to the dock, which comes forward, and to the banner. The first version
+/// disabled the button with the reason in its tooltip, and the user clicked
+/// it, saw nothing happen, and read the previous build's output still in the
+/// dock as Test having run a build. A refusal nobody can see is silence.
+pub fn test_project(state: AppState) {
+    if state.app.session_running.get_untracked() {
+        return;
+    }
+    let refused = state
+        .project
+        .detected
+        .with_untracked(|p| p.as_ref().is_some_and(|p| p.root_is_firmware()));
+    if refused {
+        let message = t!("toolbar.test-blocked");
+        state.push_log(LogLine {
+            stream: LogStream::Stderr,
+            text: message.clone(),
+            level: Some(LogLevel::Error),
+        });
+        state.show_dock(crate::state::DockTab::Output);
+        state.app.error.set(Some(ipc::IpcError {
+            message,
+            causes: Vec::new(),
+            kind: Some("test-on-firmware-root".to_string()),
+        }));
+        return;
+    }
+    run_test(state, String::new());
 }
 
 #[cfg(test)]

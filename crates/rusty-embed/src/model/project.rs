@@ -19,6 +19,15 @@ pub struct EmbeddedProject {
     pub chip: Option<String>,
     /// How the chip was determined, so the user can correct a wrong guess.
     pub chip_source: Option<String>,
+    /// The firmware crate's directory, relative to `root`, when the chip was
+    /// found one directory down rather than at the root — the standard
+    /// layout, with the bare-metal crate `exclude`d. `None` means the root
+    /// is its own firmware, or has no chip at all. `chip_source` says the
+    /// same thing in prose for a person to read; this is the half a program
+    /// may key on, which is what decides whether `cargo test` at the root
+    /// can run at all.
+    #[serde(default)]
+    pub firmware_dir: Option<String>,
     pub runtime: Option<Runtime>,
     /// Target triple from `.cargo/config.toml`, if set.
     pub configured_target: Option<String>,
@@ -38,6 +47,55 @@ pub struct EmbeddedProject {
     pub evidence: Vec<String>,
     /// Things that will stop a build, in the order worth fixing them.
     pub problems: Vec<Problem>,
+}
+
+impl EmbeddedProject {
+    /// True when the opened directory is the firmware crate itself: a chip
+    /// was detected and it was not found one directory down. `cargo test`
+    /// there builds the tests *for the chip*, and a `no_std` target has no
+    /// test harness — "can't find crate for `test`", which reads as a broken
+    /// toolchain. One predicate for the button's tooltip and the click's
+    /// refusal, so the two cannot describe different projects. No chip at
+    /// all is a host project, which tests like any other.
+    pub fn root_is_firmware(&self) -> bool {
+        self.chip.is_some() && self.firmware_dir.is_none()
+    }
+}
+
+#[cfg(test)]
+mod root_is_firmware_tests {
+    use super::EmbeddedProject;
+
+    fn project(chip: Option<&str>, firmware_dir: Option<&str>) -> EmbeddedProject {
+        EmbeddedProject {
+            root: "E:/work/demo".into(),
+            chip: chip.map(str::to_string),
+            chip_source: None,
+            firmware_dir: firmware_dir.map(str::to_string),
+            runtime: None,
+            configured_target: None,
+            configured_toolchain: None,
+            frameworks: Vec::new(),
+            uses_defmt: false,
+            uses_embassy: false,
+            c_interop: Default::default(),
+            evidence: Vec::new(),
+            problems: Vec::new(),
+        }
+    }
+
+    /// The three layouts the title bar's Test has to tell apart: a host
+    /// project tests; the standard layout tests at the root beside its
+    /// excluded firmware; only a root that is its own firmware is refused.
+    #[test]
+    fn only_a_root_that_is_its_own_firmware_is_refused() {
+        assert!(!project(None, None).root_is_firmware(), "a host project");
+        assert!(
+            !project(Some("esp32"), Some("firmware")).root_is_firmware(),
+            "the standard layout"
+        );
+        assert!(project(Some("esp32"), None).root_is_firmware());
+    }
 }
 
 /// Something wrong with the project or the machine, stated in terms of what to

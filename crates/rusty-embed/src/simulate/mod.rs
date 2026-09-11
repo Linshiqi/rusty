@@ -677,6 +677,7 @@ mod tests {
             root: root.display().to_string(),
             chip: chip.map(str::to_string),
             chip_source: None,
+            firmware_dir: None,
             runtime: None,
             configured_target: target.map(str::to_string),
             configured_toolchain: None,

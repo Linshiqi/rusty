@@ -1029,11 +1029,23 @@ active panel's actions under the switchers — save, build, flash, run, debug,
 the debugger's transport, git's fetch/pull/push — and read as one 46px column
 of sixteen icons at one weight, with Run in a different place on every panel
 and the transport pushing it down the column when a session began. Four kinds
-of button, four homes now. The **project's verbs** (Build, Run/Stop, Debug,
-Flash) sit in the title bar's centre with the file finder's icon
+of button, four homes now. The **project's verbs** (Build, Test, Run/Stop,
+Debug, Flash) sit in the title bar's centre with the file finder's icon
 (`view/run.rs`), where Xcode and CLion put them: one position on every
 panel, in a row the window already spends, and Run switches to the board
-itself so nothing is far from anything. The **debugger's transport** floats over the working area while a
+itself so nothing is far from anything. Build is `cargo build --release`
+and nothing more — it never ran the tests, and until Test arrived the only
+way to the suite was one lens at a time. Test is `cargo test` at the
+project root through the lens's own path (`test_project`), and it is
+refused where it is certain to fail: a root with a chip of its own and no
+`firmware_dir` (`EmbeddedProject::root_is_firmware`) builds its tests for
+the chip, which has no harness. **The refusal is on the click, in the dock
+and the banner — not a disabled button.** Disabled with the reason in its
+tooltip, it was refused in silence: the user clicked, nothing happened, and
+the previous build's output still in the dock read as "Test ran a build".
+Run and Debug are still disabled when blocked, and get away with it because
+the Simulate panel lists what is missing; a refusal with no panel behind it
+has to say so where the click landed. The **debugger's transport** floats over the working area while a
 session is live (`view/transport.rs`) — VS Code's debug toolbar, an overlay so
 its arrival moves nothing, and one copy where there were two. A **panel's own
 actions** sit at the right of the row that names the panel — the Files
@@ -1064,6 +1076,52 @@ menu and the palette iterate `DockTab::ALL` and the panel registry; five of
 the nine dock tabs were once spelled out by hand and the other four were
 reachable from nowhere but a click on the strip. `Divider::ALL` and
 `Divider::default_size` play the same role for Reset layout.
+
+**The dock's strip carries the tabs that have something to say.** Problems,
+Output and Terminal (`DockTab::PINNED`) are always there; the other six
+appear when something puts them there and go when the user hides them with
+the × on the tab. Two doors: `show_dock` — a button, the View menu, the
+palette — puts a tab on the strip *and* in front; `reveal_tab` puts it on
+the strip and nothing else, because a panel that switched under somebody
+reading Output is the banner that reflowed the workspace again. The second
+is called from `absorb`, beside the reading of the protocol: telemetry or a
+tunable reveals Plot, a sensor declaration reveals Flight, a gpio report
+reveals Waves, and a debug session reveals Debug and Registers together. A
+`[rusty:pwm]` line reveals nothing, since a servo is a duty too. The strip
+is session state (`Layout.dock_tabs`), not persisted: nothing is running at
+boot, so the strip starts with what is true at boot, and Reset layout puts
+it back. Nine tabs on a window with no project open was nine names for
+things that were not happening.
+
+**A page draws what a book puts in it, and reads the rest aloud.** The
+Markdown page (`view/markdown/`) renders a chapter's formulas, figures and
+raw HTML, each by a rule that names what it will not do. Formulas are
+MathML: `$…$` and `$$…$$` go through `pulldown-latex` and the WebView draws
+the result — Chromium, WebKit and Gecko all do now, so there is no KaTeX to
+ship — and a formula the parser refuses is shown as its source with the
+reason in the tooltip, never dropped. Not `latex2mathml`, which shipped for
+an afternoon: it read `v_i^2` as a superscript on the subscript, a picture
+subtly wrong in the way this project fears most, and knew no `aligned`; the
+real book found both within one chapter. A picture in the project is fetched
+(`files::BLOB`, base64, the way a picture in a diff is) and resolved against
+the page's own path, never above the project root; a remote one stays alt
+text with the reason in the tooltip, because fetching it tells its host who
+opened the file. Raw HTML is *read*, by a small tag reader
+(`markdown/html.rs`) and an allowlist in `element` — a `<figure>` is a
+figure, a `<kbd>` a key cap, an `<a>` copies like a Markdown link — rather
+than injected: injected markup would run, and an `<a href>` in it would
+navigate the workbench away with no back button. html5ever would be a
+megabyte of wasm to read `<figure><img><figcaption>`. An unknown element
+shows its children; a script or frame is named and not run; an inline tag
+that pairs with nothing stays the text it is. An image file opened from the
+tree is a picture too (`is_picture`), with the Markdown page's source toggle
+for SVG — drawn from the *draft*, so an edit shows the moment the toggle
+flips back — and the blob fetch for anything binary, which used to be a
+notice that the file was not text. The fetched pictures live in
+`editor.images`, shared by both groups; the watcher drops an entry when its
+file changes on disk. A Leptos trap met on the way: `#[prop(optional, into)]`
+on an `Option<String>` prop *strips the Option* and the setter wants a
+`String`; `optional_no_strip` is the one that takes the `Option`.
 
 **The board sheet is dark in both themes, on purpose.** The canvas, the
 devkit and the parts are drawn in hard-coded colours (`#101216` and
@@ -1918,8 +1976,11 @@ usty`) holds `location.toml`
   bare-metal crate — and `cargo test` there fails with "can't find crate for
   `test`", because a `no_std` target has no test harness, which is the whole
   reason that crate is excluded. Host commands pass `at_project_root`, so
-  they run where the testable members are. The Run Test lens and `debug_test`
-  both do.
+  they run where the testable members are. The Run Test lens, the title
+  bar's Test and `debug_test` all do — and the backend says which layout it
+  found as a value, `firmware_dir`, beside the prose in `chip_source`, so
+  the frontend can refuse Test on a root that is its own firmware without
+  matching English.
 - **CI's clippy is today's stable; the machine's is whenever `rustup update`
   last ran.** v0.3.1 was tagged with clippy green here on 1.97 and failed on
   the runners' 1.98 — `chunks_exact(5)` where `as_chunks::<5>()` now exists,
@@ -2076,6 +2137,16 @@ usty`) holds `location.toml`
   rest only on Windows. Three crates, one class of bug, found one per push
   because `cargo test` stops at the first failing binary — the CI passes
   `--no-fail-fast` now so a run names them all.
+- **"Listed and not parked" has one meaning: a restored tab nobody has
+  clicked yet.** `restore_tabs` puts the whole strip back and reads only the
+  active file, so every other tab is a name with no body until it is
+  clicked; `activate_tab` read that same state as a corrupt strip entry and
+  *dropped* it — so after every restart the first click on any restored tab
+  closed it instead of opening it, and the user reported "clicking a file
+  makes its tab disappear". `open_file` and `transplant` already knew the
+  lazy case; the strip's own click handler was the one caller that did not.
+  When two functions read one state, grep for every reader before changing
+  what the state means.
 
 ## The sheet
 

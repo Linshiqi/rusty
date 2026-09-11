@@ -9,6 +9,45 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.16
+
+**Added — a book's chapter reads as a book's chapter.** The Markdown page
+now draws formulas, figures and the raw HTML a book carries. `$…$` and
+`$$…$$` render as real mathematics — including `aligned` systems, sub- and
+superscripts on one base, and the rest of what a physics chapter writes — and
+a formula rusty cannot render is shown as its source with the reason in the
+tooltip rather than dropped. A `<figure>` with an `<img>` and a caption is a
+figure; `<kbd>`, `<sub>`, `<sup>`, `<details>` and the other tags a document
+uses render as what they are; anything that would run or embed something is
+named and left alone. Pictures the page refers to are read from the project,
+relative to the page — `figures/fig-01.svg` beside its chapter shows up as the
+drawing. A picture on another machine still does not load, because loading
+it would tell that machine you opened the file; its alt text says so.
+
+**Added — an image file opens as a picture.** Click an SVG or a PNG in the
+tree and you see the image, where before an SVG opened as its markup and a
+PNG as a notice that it was not text. An SVG keeps the source one click away,
+with the same toggle a Markdown page has, and the picture follows your edits
+as you make them.
+
+**Added — the panel below shows only the tabs that have something to say.**
+Problems, Output and Terminal are always there; Waves, Plot, Debug,
+Registers, Flight and Devices appear when something puts them there — a run
+that starts printing telemetry brings Plot, a sensor declaration brings
+Flight, a debug session brings Debug and Registers — and go when you close
+them with the × on the tab. The View menu still lists all nine.
+
+**Added — Test, in the title bar between Build and Run.** One click runs
+`cargo test` at the project root, where the testable crates of the standard
+layout live, with the output in the panel below. Where the opened directory
+is the firmware crate itself, Test refuses and says why — the tests would be
+built for the chip, which has no test harness — in the panel and in a
+banner, rather than by going grey.
+
+**Fixed — a tab reopened from the last session closed itself on the first
+click.** rusty restores your open tabs at startup and reads only the active
+file; clicking any of the others closed it instead of opening it. They open.
+
 ## v0.6.15
 
 **Added — the sheet shows its voltages.** The last release solved the
