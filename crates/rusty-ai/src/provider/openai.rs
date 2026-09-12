@@ -287,13 +287,12 @@ fn to_messages(request: &ChatRequest) -> Vec<Value> {
     out
 }
 
+/// The prose of a message as one string: its text, and any attached file
+/// framed as the file it is.
 fn join_text(content: &[Content]) -> String {
     content
         .iter()
-        .filter_map(|c| match c {
-            Content::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
+        .filter_map(Content::prose)
         .collect::<Vec<_>>()
         .join("")
 }

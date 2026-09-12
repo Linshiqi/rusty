@@ -31,13 +31,10 @@ pub(super) fn StorageSettings() -> impl IntoView {
     });
 
     view! {
-        <Field
-            label=t!("settings.storage.data-directory")
-            help=t!("settings.storage.data-directory-help")
-        >
+        <Group footer=t!("settings.storage.note")>
             {move || {
                 let Some(here) = location.get() else {
-                    return view! { <p class="text-callout text-label-2">"…"</p> }.into_any();
+                    return view! { <NoteRow text="…" /> }.into_any();
                 };
                 let (badge, tone) = if here.env_override {
                     // The variable's own name: it is what to grep for.
@@ -47,85 +44,59 @@ pub(super) fn StorageSettings() -> impl IntoView {
                 } else {
                     (t!("settings.storage.custom"), Tone::Patina)
                 };
-                let env_note = here.env_override;
+                let env_override = here.env_override;
                 view! {
-                    <div class="flex flex-wrap items-center gap-2">
-                        <code class="rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote select-text">
+                    <Row label=t!("settings.storage.data-directory") stacked=true>
+                        <code class="rounded-[5px] bg-sunken px-2 py-1 font-mono text-footnote text-label select-text">
                             {here.path.clone()}
                         </code>
                         <Pill label=badge tone=tone />
-                    </div>
-                    {env_note
-                        .then(|| {
-                            view! {
-                                <p class="mt-2 text-footnote text-amber">
-                                    {t!("settings.storage.env-override")}
-                                </p>
-                            }
-                        })}
+                    </Row>
+                    {env_override
+                        .then(|| view! { <NoteRow text=t!("settings.storage.env-override") warn=true /> })}
+                    <Row label=t!("settings.storage.move")>
+                        <Button
+                            label=t!("settings.storage.choose")
+                            disabled=Signal::derive(move || env_override)
+                            on_click=Callback::new(move |_| {
+                                crate::controller::pick_storage_folder(Callback::new(move |picked| {
+                                    if let Some(target) = picked {
+                                        crate::controller::relocate_storage(
+                                            state, target, false, note, blocked, location,
+                                        );
+                                    }
+                                }));
+                            })
+                        />
+                    </Row>
                 }
-                .into_any()
+                    .into_any()
             }}
-        </Field>
-
-        <Field
-            label=t!("settings.storage.move-it")
-            help=t!("settings.storage.move-it-help")
-        >
-            <Button
-                label=t!("settings.storage.choose")
-                disabled=Signal::derive(move || {
-                    location.get().is_some_and(|here| here.env_override)
-                })
-                on_click=Callback::new(move |_| {
-                    crate::controller::pick_storage_folder(Callback::new(move |picked| {
-                        if let Some(target) = picked {
-                            crate::controller::relocate_storage(
-                                state, target, false, note, blocked, location,
-                            );
-                        }
-                    }));
-                })
-            />
             {move || {
                 blocked
                     .get()
                     .map(|target| {
                         let adopt = target.clone();
                         view! {
-                            <div class="mt-2 max-w-[62ch] rounded-[8px] bg-amber-fill px-3 py-2">
-                                <p class="text-callout leading-relaxed">
-                                    {t!("settings.storage.already-has-data")}
-                                </p>
-                                <div class="mt-1.5">
-                                    <Button
-                                        label=t!("settings.storage.use-existing")
-                                        on_click=Callback::new(move |_| {
-                                            crate::controller::relocate_storage(
-                                                state,
-                                                adopt.clone(),
-                                                true,
-                                                note,
-                                                blocked,
-                                                location,
-                                            )
-                                        })
-                                    />
-                                </div>
-                            </div>
+                            <Row label=t!("settings.storage.already-has-data") detail=target.clone()>
+                                <Button
+                                    label=t!("settings.storage.use-existing")
+                                    on_click=Callback::new(move |_| {
+                                        crate::controller::relocate_storage(
+                                            state,
+                                            adopt.clone(),
+                                            true,
+                                            note,
+                                            blocked,
+                                            location,
+                                        )
+                                    })
+                                />
+                            </Row>
                         }
                     })
             }}
-            {move || {
-                note.get()
-                    .map(|text| {
-                        view! {
-                            <p class="mt-2 max-w-[62ch] text-footnote leading-relaxed text-label-2 select-text">
-                                {text}
-                            </p>
-                        }
-                    })
-            }}
-        </Field>
+            {move || note.get().map(|text| view! { <NoteRow text=text /> })}
+        </Group>
     }
 }

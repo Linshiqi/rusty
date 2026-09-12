@@ -2,8 +2,9 @@
 //!
 //! The largest category by some way, and the only one that can fail: a key is
 //! stored in the OS credential store rather than here, a base URL can be
-//! unreachable, and a model list has to be fetched. Everything else on this
-//! screen applies the instant it is touched.
+//! unreachable, and a model list has to be fetched. Everything else in
+//! settings applies the instant it is touched; this page has a Save, because
+//! the endpoint is edited as a draft and half a base URL must never be live.
 
 use leptos::prelude::*;
 
@@ -66,138 +67,129 @@ pub(super) fn Assistant() -> impl IntoView {
         }
     });
 
+    let field = |read: fn(&ProviderConfig) -> &String, write: fn(&mut ProviderConfig, String)| {
+        (
+            Signal::derive(move || draft.with(|d| read(d).clone())),
+            Callback::new(move |value: String| draft.update(|d| write(d, value))),
+        )
+    };
+    let (base_url, set_base_url) = field(|d| &d.base_url, |d, v| d.base_url = v);
+    let (model, set_model) = field(|d| &d.model, |d, v| d.model = v);
+    let (profile_name, set_profile) = field(|d| &d.profile, |d, v| d.profile = v);
+
     view! {
-        <Field
-            label=t!("settings.assistant.start-from")
-            help=t!("settings.assistant.start-from-help")
-        >
-            <div class="flex flex-wrap gap-1.5">
-                {move || {
-                    state
-                        .ai.presets
-                        .get()
-                        .into_iter()
-                        .map(|preset| {
-                            let label = preset.label.clone();
-                            view! {
-                                <button
-                                    type="button"
-                                    on:click=move |_| {
-                                        draft
-                                            .update(|d| {
-                                                d.kind = preset.kind;
-                                                d.base_url = preset.base_url.clone();
-                                                d.model = preset.suggested_model.clone();
-                                                d.profile = preset.label.to_lowercase();
-                                            });
-                                        verdict.set(None);
-                                        models.set(Vec::new());
-                                    }
-                                    class="rounded-[6px] px-2 py-1 text-callout text-label-2 ring-1 ring-line transition-colors hover:bg-sunken hover:text-label"
-                                >
-                                    {label}
-                                    {preset
-                                        .local
-                                        .then(|| {
-                                            view! {
-                                                <span class="ml-1.5 text-footnote text-patina">
-                                                    {t!("settings.assistant.local")}
-                                                </span>
-                                            }
-                                        })}
-                                </button>
-                            }
-                        })
-                        .collect_view()
-                }}
-            </div>
-        </Field>
-
-        <Field label=t!("settings.assistant.endpoint")>
-            <div class="flex flex-col gap-2">
-                <TextRow
-                    label=t!("settings.assistant.base-url")
-                    value=Signal::derive(move || draft.with(|d| d.base_url.clone()))
-                    on_input=Callback::new(move |v: String| draft.update(|d| d.base_url = v))
-                />
-                <TextRow
-                    label=t!("settings.assistant.model")
-                    value=Signal::derive(move || draft.with(|d| d.model.clone()))
-                    on_input=Callback::new(move |v: String| draft.update(|d| d.model = v))
-                />
-                <TextRow
-                    label=t!("settings.assistant.profile")
-                    value=Signal::derive(move || draft.with(|d| d.profile.clone()))
-                    on_input=Callback::new(move |v: String| draft.update(|d| d.profile = v))
-                />
-            </div>
-
-            <div class="mt-2 flex items-center gap-2">
+        <Group title=t!("settings.assistant.model")>
+            <Row label=t!("settings.assistant.preset")>
+                // A menu, as macOS offers a fixed handful of choices: picking
+                // one only fills the fields below, and nothing is sent.
+                <select
+                    class="h-[26px] max-w-[300px] rounded-[6px] bg-sunken px-2 text-callout text-label outline-none ring-1 ring-line focus:ring-rust"
+                    on:change=move |event| {
+                        let label = event_target_value(&event);
+                        let preset = state
+                            .ai
+                            .presets
+                            .with_untracked(|presets| presets.iter().find(|p| p.label == label).cloned());
+                        if let Some(preset) = preset {
+                            draft.update(|d| {
+                                d.kind = preset.kind;
+                                d.base_url = preset.base_url.clone();
+                                d.model = preset.suggested_model.clone();
+                                d.profile = preset.label.to_lowercase();
+                            });
+                            verdict.set(None);
+                            models.set(Vec::new());
+                        }
+                    }
+                >
+                    <option value="" selected=true disabled=true>
+                        {t!("settings.assistant.preset-pick")}
+                    </option>
+                    {move || {
+                        state
+                            .ai
+                            .presets
+                            .get()
+                            .into_iter()
+                            .map(|preset| {
+                                let text = if preset.local {
+                                    format!("{} · {}", preset.label, t!("settings.assistant.local"))
+                                } else {
+                                    preset.label.clone()
+                                };
+                                view! { <option value=preset.label.clone()>{text}</option> }
+                            })
+                            .collect_view()
+                    }}
+                </select>
+            </Row>
+            <Row label=t!("settings.assistant.base-url")>
+                <TextField value=base_url on_input=set_base_url placeholder="https://" />
+            </Row>
+            <Row label=t!("settings.assistant.model-name")>
+                <TextField value=model on_input=set_model width="w-[220px]" />
                 <Button
                     label=t!("settings.assistant.list-models")
+                    kind=ButtonKind::Quiet
                     on_click=Callback::new(move |_| {
                         controller::list_models(state, draft.get_untracked(), models)
                     })
                 />
-                <span class="text-footnote text-label-3">
-                    {t!("settings.assistant.list-models-note")}
-                </span>
-            </div>
-
+            </Row>
             {move || {
                 let found = models.get();
                 (!found.is_empty())
                     .then(|| {
                         view! {
-                            <div class="mt-2 flex max-h-[132px] flex-wrap gap-1.5 overflow-y-auto">
-                                {found
-                                    .into_iter()
-                                    .map(|name| {
-                                        let pick = name.clone();
-                                        view! {
-                                            <button
-                                                type="button"
-                                                on:click=move |_| {
-                                                    draft.update(|d| d.model = pick.clone())
-                                                }
-                                                class="rounded-full bg-sunken px-2 py-0.5 font-mono text-footnote text-label-2 hover:text-label"
-                                            >
-                                                {name}
-                                            </button>
-                                        }
-                                    })
-                                    .collect_view()}
-                            </div>
+                            <Row label=t!("settings.assistant.models-found") stacked=true>
+                                <div class="flex max-h-[120px] flex-wrap gap-1.5 overflow-y-auto">
+                                    {found
+                                        .into_iter()
+                                        .map(|name| {
+                                            let pick = name.clone();
+                                            view! {
+                                                <button
+                                                    type="button"
+                                                    on:click=move |_| draft.update(|d| d.model = pick.clone())
+                                                    class="rounded-full bg-sunken px-2 py-0.5 font-mono text-footnote text-label-2 hover:text-label"
+                                                >
+                                                    {name}
+                                                </button>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </div>
+                            </Row>
                         }
                     })
             }}
-        </Field>
+            <Row label=t!("settings.assistant.profile")>
+                <TextField value=profile_name on_input=set_profile width="w-[220px]" />
+            </Row>
+        </Group>
 
-        <Field
-            label=t!("settings.assistant.api-key")
-            help=t!("settings.assistant.api-key-help")
-        >
-            <div class="flex items-center gap-2">
-                <input
-                    type="password"
-                    placeholder=t!("settings.assistant.api-key-placeholder")
-                    class="h-[28px] w-[320px] rounded-[6px] bg-sunken px-2.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
-                    on:input=move |event| api_key.set(event_target_value(&event))
+        <Group title=t!("settings.assistant.key-group") footer=t!("settings.assistant.key-note")>
+            <Row label=t!("settings.assistant.key")>
+                <TextField
+                    value=Signal::derive(move || api_key.get())
+                    on_input=Callback::new(move |value: String| api_key.set(value))
+                    placeholder=t!("settings.assistant.key-placeholder")
+                    width="w-[240px]"
+                    kind="password"
                 />
                 <Button
                     label=t!("settings.assistant.save-key")
                     disabled=Signal::derive(move || api_key.with(|k| k.trim().is_empty()))
                     on_click=Callback::new(move |_| {
+                        // `store_key` refreshes the stored flag when the write
+                        // has landed; asking here as well raced it, and the
+                        // answer that arrived first was "not saved".
                         controller::store_key(
                             state,
                             draft.get_untracked().profile,
                             api_key.get_untracked(),
                         );
                         api_key.set(String::new());
-                        crate::controller::refresh_key_state(
-                            state,
-                            draft.get_untracked().profile,
-                        );
                     })
                 />
                 // The one thing this screen is allowed to know about the key.
@@ -208,6 +200,7 @@ pub(super) fn Assistant() -> impl IntoView {
                                 <Pill label=t!("settings.assistant.stored") tone=Tone::Patina />
                                 <Button
                                     label=t!("settings.assistant.remove")
+                                    kind=ButtonKind::Quiet
                                     on_click=Callback::new(move |_| {
                                         crate::controller::delete_key(
                                             state,
@@ -222,11 +215,27 @@ pub(super) fn Assistant() -> impl IntoView {
                         view! { <Pill label=t!("settings.assistant.none-saved") tone=Tone::Neutral /> }.into_any()
                     }
                 }}
-            </div>
-        </Field>
+            </Row>
+        </Group>
 
-        <Field label=t!("settings.assistant.use-it")>
-            <div class="flex items-center gap-2">
+        <Group title=t!("settings.assistant.enable")>
+            <Row
+                label=t!("settings.assistant.current")
+                detail=Signal::derive(move || {
+                    state
+                        .ai
+                        .config
+                        .get()
+                        .map(|c| t!("settings.assistant.in-use", model = c.model, url = c.base_url))
+                        .unwrap_or_else(|| t!("settings.assistant.none-configured"))
+                })
+            >
+                <Button
+                    label=t!("settings.assistant.test")
+                    on_click=Callback::new(move |_| {
+                        controller::check_provider(state, draft.get_untracked(), verdict)
+                    })
+                />
                 <Button
                     label=t!("settings.assistant.save")
                     kind=ButtonKind::Primary
@@ -234,57 +243,28 @@ pub(super) fn Assistant() -> impl IntoView {
                         controller::set_provider(state, draft.get_untracked())
                     })
                 />
-                <Button
-                    label=t!("settings.assistant.test")
-                    title=t!("settings.assistant.test-help")
-                    on_click=Callback::new(move |_| {
-                        controller::check_provider(state, draft.get_untracked(), verdict)
+            </Row>
+            {move || {
+                verdict
+                    .get()
+                    .map(|check| {
+                        let (tone, text) = describe_check(&check);
+                        view! {
+                            <div class="flex items-center gap-2 px-3.5 py-2 text-callout text-label-2">
+                                <Dot tone=tone />
+                                <span class="select-text">{text}</span>
+                            </div>
+                        }
                     })
-                />
-                {move || {
-                    verdict
-                        .get()
-                        .map(|check| {
-                            let (tone, text) = describe_check(&check);
-                            view! {
-                                <span class="flex items-center gap-2 text-callout text-label-2">
-                                    <Dot tone=tone />
-                                    {text}
-                                </span>
-                            }
-                        })
-                }}
-            </div>
+            }}
+        </Group>
 
-            <div class="mt-2 flex items-center gap-2">
-                <Dot tone=Signal::derive(move || {
-                    if state.ai.config.with(Option::is_some) { Tone::Patina } else { Tone::Neutral }
-                })
-                    .get() />
-                <span class="text-callout text-label-2">
-                    {move || {
-                        state
-                            .ai.config
-                            .get()
-                            .map(|c| t!(
-                                "settings.assistant.in-use",
-                                model = c.model,
-                                url = c.base_url,
-                            ))
-                            .unwrap_or_else(|| t!("settings.assistant.none-configured"))
-                    }}
-                </span>
-            </div>
-        </Field>
-
-        <Field
-            label=t!("settings.assistant.tools")
-            help=t!("settings.assistant.tools-help")
-        >
-            <div class="flex flex-wrap gap-1.5">
+        <Group title=t!("settings.assistant.tools") footer=t!("settings.assistant.tools-note")>
+            <div class="flex flex-wrap gap-1.5 px-3.5 py-2.5">
                 {move || {
                     state
-                        .ai.tools
+                        .ai
+                        .tools
                         .get()
                         .into_iter()
                         .map(|tool| {
@@ -300,7 +280,7 @@ pub(super) fn Assistant() -> impl IntoView {
                         .collect_view()
                 }}
             </div>
-        </Field>
+        </Group>
     }
 }
 

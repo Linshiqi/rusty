@@ -29,6 +29,9 @@ tokio = { version = "1.53.1", features = ["rt", "macros", "sync", "time"], optio
 
 rusty-core = { path = "../rusty-core", default-features = false, optional = true }
 rusty-embed = { path = "../rusty-embed", default-features = false, optional = true }
+# The project's files as the Files panel sees them — confined to the root,
+# .gitignore honoured — for the read/search/list tools.
+rusty-edit = { path = "../rusty-edit", default-features = false, optional = true }
 
 [features]
 default = ["backend"]
@@ -46,6 +49,8 @@ backend = [
     "dep:tokio",
     "dep:rusty-core",
     "dep:rusty-embed",
+    "dep:rusty-edit",
+    "rusty-edit/backend",
     "rusty-core/backend",
     "rusty-embed/backend",
 ]

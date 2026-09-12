@@ -95,7 +95,14 @@ fn from_choice(choice: &rusty_embed::AssistantChoice) -> Option<ProviderConfig> 
     })
 }
 
-/// File an API key in the OS credential store.
+/// File an API key in the OS credential store, and re-read whether one is
+/// on file once the write has landed.
+///
+/// The re-read is here and not at the call site: the settings page used to
+/// ask right after calling this, the two round trips raced, and "not saved"
+/// arrived first and stayed — over a key the next request used perfectly
+/// well. A flag that says the opposite of the store is the confident wrong
+/// answer this project exists to avoid.
 pub fn store_key(state: AppState, profile: String, api_key: String) {
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -104,11 +111,14 @@ pub fn store_key(state: AppState, profile: String, api_key: String) {
         api_key: String,
     }
 
-    let args = Args { profile, api_key };
+    let args = Args {
+        profile: profile.clone(),
+        api_key,
+    };
     track(
         state,
         async move { ipc::call::<_, ()>(cmd::ai::STORE_KEY, &args).await },
-        move |()| {},
+        move |()| refresh_key_state(state, profile),
     );
 }
 
@@ -165,8 +175,9 @@ pub fn cancel_ask(state: AppState) {
     );
 }
 
-/// Ask a question, streaming the answer.
-pub fn ask(state: AppState, question: String) {
+/// Ask a question, streaming the answer. `context` is the file the user had
+/// open, when they chose to send it along: its path and its text.
+pub fn ask(state: AppState, question: String, context: Option<(String, String)>) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
     let Some(config) = state.ai.config.get_untracked() else {
@@ -180,10 +191,16 @@ pub fn ask(state: AppState, question: String) {
         history: Vec<Message>,
     }
 
-    state
-        .ai
-        .conversation
-        .update(|c| c.push(Message::user(question)));
+    let mut content = vec![Content::Text { text: question }];
+    if let Some((path, text)) = context {
+        content.push(Content::Attachment { path, text });
+    }
+    state.ai.conversation.update(|c| {
+        c.push(Message {
+            role: rusty_ai::Role::User,
+            content,
+        })
+    });
     state.ai.pending.set(String::new());
     state.ai.activity.set(Vec::new());
     state.ai.usage.set(None);
@@ -279,4 +296,59 @@ pub fn clear_conversation(state: AppState) {
     state.ai.pending.set(String::new());
     state.ai.activity.set(Vec::new());
     state.ai.usage.set(None);
+}
+
+/// The file in front of the user, as the context sent with a question: its
+/// path and its *draft* — what is on screen, unsaved edits included — cut
+/// to a size a model can take. `None` when nothing is open, or what is open
+/// is not text.
+pub fn open_file_context(state: AppState) -> Option<(String, String)> {
+    let group = state.focused();
+    let document = group.editor.document.get_untracked()?;
+    if document.binary {
+        return None;
+    }
+    let text = group.editor.draft.get_untracked();
+    Some((document.path, attachment_text(&text)))
+}
+
+/// The most of a file that goes along with a question. Sixty kilobytes is
+/// about fifteen thousand tokens: a whole chapter or a long source file, and
+/// short of the point where the file crowds out the question.
+const ATTACHMENT_CAP: usize = 60_000;
+
+/// A file's text as sent: whole when it fits, otherwise the first
+/// `ATTACHMENT_CAP` bytes cut at a character boundary and marked as cut, so
+/// the model knows it is reading the start of something and not all of it.
+pub fn attachment_text(text: &str) -> String {
+    if text.len() <= ATTACHMENT_CAP {
+        return text.to_string();
+    }
+    let mut end = ATTACHMENT_CAP;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let omitted = text.len() - end;
+    format!("{}\n… [{omitted} bytes omitted]", &text[..end])
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::{ATTACHMENT_CAP, attachment_text};
+
+    /// A short file goes whole; a long one is cut at a character boundary —
+    /// the CJK case is the one that panics when it is not — and says so.
+    #[test]
+    fn a_long_file_is_cut_at_a_character_and_marked() {
+        assert_eq!(attachment_text("fn main() {}"), "fn main() {}");
+        let long: String = std::iter::repeat_n('中', ATTACHMENT_CAP).collect();
+        let sent = attachment_text(&long);
+        assert!(sent.len() < long.len());
+        assert!(
+            sent.contains("bytes omitted]"),
+            "{}",
+            &sent[sent.len() - 40..]
+        );
+        assert!(sent.starts_with("中中中"));
+    }
 }

@@ -225,6 +225,12 @@ fn to_messages(request: &ChatRequest) -> Vec<Value> {
                 .iter()
                 .map(|content| match content {
                     Content::Text { text } => json!({ "type": "text", "text": text }),
+                    // An attached file is a text block framed as the file it
+                    // is — the same prose the OpenAI path sends.
+                    Content::Attachment { .. } => json!({
+                        "type": "text",
+                        "text": content.prose().unwrap_or_default(),
+                    }),
                     Content::ToolUse { id, name, input } => json!({
                         "type": "tool_use", "id": id, "name": name, "input": input
                     }),

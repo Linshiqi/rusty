@@ -15,6 +15,7 @@
 mod cargo;
 mod context;
 mod embedded;
+mod files;
 
 use serde_json::Value;
 
@@ -41,6 +42,7 @@ impl ToolRegistry {
     pub fn workbench() -> Self {
         let mut tools = cargo::tools();
         tools.extend(embedded::tools());
+        tools.extend(files::tools());
         Self { tools }
     }
 

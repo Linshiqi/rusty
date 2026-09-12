@@ -9,6 +9,41 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.17
+
+**Added — the assistant can read the project.** Ask about a chapter, a
+source file or a configuration file and the model reads it before answering:
+three new tools list the project's files, search their text the way the
+Search panel does, and read a file with line numbers. They see the project
+exactly as the Files panel does — inside the project only, `.gitignore`
+honoured, build output and dot directories left out — and they never write.
+A long file or a long list of results is cut at a limit and says so, so the
+model cannot mistake the first half of a file for the whole of it. Before
+this, the assistant could name your chip and could not open your README.
+
+**Added — the file you are looking at goes with your question.** The
+assistant drawer shows the open file as a chip above the input, the way VS
+Code sends the active editor; its × leaves it out of that one question, and
+the button that takes its place puts it back. Unsaved edits travel too,
+since the question is usually about them. The chip stays on the message in
+the conversation, so you can see later which file a question was about.
+
+**Changed — Settings, rebuilt.** Every page is a title over grouped rows,
+in the shape of macOS System Settings: a label on the left, its control on
+the right, a switch for a yes or no, a segmented control for a handful of
+choices, and at most one line of explanation under a group. The paragraph
+under every field and the summary under every sidebar entry are gone.
+
+**Changed — the assistant drawer starts quiet.** An empty conversation is
+one line and the input. The paragraph about the tools, the suggested
+questions and the row of tool names are gone; the tools are listed under
+Settings ▸ Assistant.
+
+**Fixed — a saved API key was reported as not saved.** The check ran
+alongside the save and sometimes finished first, so the badge said "not
+saved" while every request used the key perfectly well. It now says
+"saved" the moment the save completes.
+
 ## v0.6.16
 
 **Added — a book's chapter reads as a book's chapter.** The Markdown page

@@ -4,10 +4,7 @@ use leptos::prelude::*;
 
 use rusty_i18n::t;
 
-use crate::{
-    state::AppState,
-    view::components::{Dot, Tone},
-};
+use crate::state::AppState;
 
 use super::*;
 
@@ -22,62 +19,57 @@ pub(super) fn CatalogueSettings() -> impl IntoView {
     });
 
     view! {
-        <Field
-            label=t!("settings.catalogue.sources")
-            help=t!("settings.catalogue.sources-help")
-        >
-            <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 font-mono text-footnote select-text">
-                <dt class="text-label-3">{t!("settings.catalogue.built-in")}</dt>
-                <dd class="m-0 text-label-2">{t!("settings.catalogue.built-in-where")}</dd>
-                <dt class="text-label-3">{t!("settings.catalogue.yours")}</dt>
-                <dd class="m-0">"%APPDATA%\\rusty\\boards\\*.toml"</dd>
-                <dt class="text-label-3">{t!("settings.catalogue.project")}</dt>
-                <dd class="m-0">".rusty/boards/*.toml"</dd>
-            </dl>
-        </Field>
+        <Group title=t!("settings.catalogue.sources") footer=t!("settings.catalogue.sources-note")>
+            <Row label=t!("settings.catalogue.built-in")>
+                <span class="text-callout text-label-2">{t!("settings.catalogue.built-in-where")}</span>
+            </Row>
+            <Row label=t!("settings.catalogue.yours")>
+                <code class="font-mono text-footnote text-label-2 select-text">
+                    "%APPDATA%\\rusty\\boards\\*.toml"
+                </code>
+            </Row>
+            <Row label=t!("settings.catalogue.project")>
+                <code class="font-mono text-footnote text-label-2 select-text">".rusty/boards/*.toml"</code>
+            </Row>
+            <Row label=t!("settings.catalogue.loaded")>
+                <span class="tnum text-callout text-label-2">
+                    {move || {
+                        t!(
+                            "settings.catalogue.loaded-count",
+                            chips = state.project.chips.with(Vec::len).to_string(),
+                            boards = state.project.boards.with(Vec::len).to_string()
+                        )
+                    }}
+                </span>
+            </Row>
+        </Group>
         {move || {
             let problems = state.project.catalog_problems.get();
             (!problems.is_empty())
                 .then(|| {
                     view! {
-                        <Field
-                            label=t!("settings.catalogue.broken")
-                            help=t!("settings.catalogue.broken-help")
+                        <Group
+                            title=t!("settings.catalogue.broken")
+                            footer=t!("settings.catalogue.broken-note")
                         >
-                            <div class="flex flex-col gap-1.5">
-                                {problems
-                                    .into_iter()
-                                    .map(|problem| {
-                                        view! {
-                                            <div class="max-w-[70ch] rounded-[6px] bg-amber-fill px-3 py-2">
-                                                <p class="font-mono text-footnote select-text">
-                                                    {problem.path}
-                                                </p>
-                                                <p class="mt-0.5 text-footnote leading-relaxed text-label-2 select-text">
-                                                    {problem.detail}
-                                                </p>
-                                            </div>
-                                        }
-                                    })
-                                    .collect_view()}
-                            </div>
-                        </Field>
+                            {problems
+                                .into_iter()
+                                .map(|problem| {
+                                    view! {
+                                        <div class="px-3.5 py-2.5">
+                                            <p class="font-mono text-footnote text-amber select-text">
+                                                {problem.path}
+                                            </p>
+                                            <p class="mt-0.5 text-footnote leading-relaxed text-label-2 select-text">
+                                                {problem.detail}
+                                            </p>
+                                        </div>
+                                    }
+                                })
+                                .collect_view()}
+                        </Group>
                     }
                 })
         }}
-        <Field label=t!("settings.catalogue.loaded")>
-            <div class="flex items-center gap-2">
-                <Dot tone=Tone::Patina />
-                <span class="tnum text-callout text-label-2">
-                    {move || {
-                        format!(
-                            "{} chips, {} boards",
-                            state.project.chips.with(Vec::len),
-                            state.project.boards.with(Vec::len),
-                        )
-                    }}
-                </span>
-            </div>
-        </Field>
     }
 }

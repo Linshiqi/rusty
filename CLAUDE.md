@@ -162,6 +162,22 @@ they exist to prevent, not as feature summaries — see `tools/embedded.rs`.
 Adding an analysis means adding a tool. The same definitions are intended to
 back an MCP server later, so third parties get them too.
 
+**The project's files are tools as well** (`tools/files.rs`: `read_file`,
+`search_project`, `list_files`), through `rusty_edit` so the model sees the
+project exactly as the Files panel does — confined to the root, `.gitignore`
+honoured, dot entries and `target/` absent, nothing written. They exist
+because the assistant could name a project's chip and not read the README
+beside it, and told a user asking about a chapter of their own book that it
+had no way to open the file. Every answer is capped *and says so*
+(`truncated`, `total`): a model handed the first half of a file that reads
+as whole describes half a file as if it were one. The file the user has open
+travels with their question as `Content::Attachment`, so the common case
+needs no call at all. `tests/agent_loop.rs` is the proof that the pieces
+meet: a loopback server in the OpenAI dialect answers with a `read_file`
+call, and the test reads the second request to see the chapter's numbered
+text go back as the tool message — the check a desk with no route to a
+provider cannot make by asking, which is the desk this was written at.
+
 ### 5. The simulator's contract is one serial line
 
 Espressif's QEMU boots the same merged image `espflash` would burn, and
@@ -1122,6 +1138,31 @@ notice that the file was not text. The fetched pictures live in
 file changes on disk. A Leptos trap met on the way: `#[prop(optional, into)]`
 on an `Option<String>` prop *strips the Option* and the setter wants a
 `String`; `optional_no_strip` is the one that takes the `Option`.
+
+**Settings are macOS System Settings' shapes, and prose is one line under
+the group.** `view/settings/shell.rs` has the three: a page is a title over
+`Group`s, a `Group` is a rounded box of `Row`s divided by hairlines with an
+optional small title above and an optional one-line `footer` below, and a
+`Row` is a label (with an optional second line) on the left and its control
+on the right — `stacked` when the control is a URL or a path. Controls are
+`Segmented`/`Segment` for a handful of exclusive choices, `Switch` for a
+boolean, `TextField` for a value a machine reads. The first version put a
+paragraph under every field and a summary under every sidebar entry, and the
+user's verdict was exact: cluttered, and written to be admired rather than
+read. Labels are one to three words; a footer is one sentence stating a
+fact ("Changing this restarts the terminal"), never a rationale; the
+rationale lives in the code comment. Same for the assistant drawer: an
+empty transcript is one line and the composer — the paragraph about the
+tools, the four openers and the tool-name chips were read once and then in
+the way of every conversation after, and the tools are listed in Settings.
+
+**The open file goes with a question**, as VS Code sends the active editor:
+a chip above the composer names it, its × drops it for that question, and
+it travels as `Content::Attachment { path, text }` — its own block, so the
+transcript draws the chip and only the providers render it as prose
+(`Content::prose`, the one place the framing is spelled). The text is the
+focused group's *draft*, unsaved edits included, cut at
+`ATTACHMENT_CAP` on a character boundary and marked as cut.
 
 **The board sheet is dark in both themes, on purpose.** The canvas, the
 devkit and the parts are drawn in hard-coded colours (`#101216` and
@@ -2147,6 +2188,13 @@ usty`) holds `location.toml`
   lazy case; the strip's own click handler was the one caller that did not.
   When two functions read one state, grep for every reader before changing
   what the state means.
+- **Two round trips fired together answer in either order.** The settings
+  page called `store_key` and then `refresh_key_state` back to back; the
+  check overtook the write, "not saved" arrived and stayed, and the next
+  request used the key perfectly well — a flag contradicting the store it
+  describes. A re-read that depends on a write goes in the write's success
+  callback, which is where `store_key` runs it now. The same shape waits
+  wherever a view calls two controllers in a row.
 
 ## The sheet
 

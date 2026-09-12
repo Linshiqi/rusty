@@ -87,6 +87,29 @@ pub enum Content {
         content: String,
         is_error: bool,
     },
+    /// The file the user had open when they asked, sent with the question so
+    /// the model reads what they are looking at rather than guessing at it.
+    /// Its own variant rather than text folded into the question: the panel
+    /// shows it as a chip and the providers render it as prose, so the
+    /// transcript never carries the file twice — once for the model and once
+    /// for the eye.
+    #[serde(rename_all = "camelCase")]
+    Attachment { path: String, text: String },
+}
+
+impl Content {
+    /// What a provider sends for this block where it can only send text: the
+    /// prose itself, or an attachment framed as the file it is. Tool blocks
+    /// have their own wire shapes and answer `None`.
+    pub fn prose(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Content::Text { text } => Some(std::borrow::Cow::Borrowed(text)),
+            Content::Attachment { path, text } => Some(std::borrow::Cow::Owned(format!(
+                "The user has this file open in the editor: `{path}`\n\n```\n{text}\n```"
+            ))),
+            Content::ToolUse { .. } | Content::ToolResult { .. } => None,
+        }
+    }
 }
 
 /// Normalized stream events.
@@ -393,17 +416,32 @@ mod tests {
                     content: "{}".into(),
                     is_error: false,
                 },
+                Content::Attachment {
+                    path: "src/main.rs".into(),
+                    text: "fn main() {}".into(),
+                },
             ],
         };
 
         let json = serde_json::to_string(&message).expect("serialize");
         let back: Message = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(back.content.len(), 3);
-        assert_eq!(back.text(), "checking the project");
+        assert_eq!(back.content.len(), 4);
+        assert_eq!(
+            back.text(),
+            "checking the project",
+            "an attachment is not prose to show; the panel draws it as a chip"
+        );
         assert!(
             matches!(&back.content[1], Content::ToolUse { name, .. } if name == "project_status"),
             "tool calls must survive: the next turn replays them to the model",
+        );
+        let framed = back.content[3]
+            .prose()
+            .expect("an attachment reaches the model as text");
+        assert!(
+            framed.contains("src/main.rs") && framed.contains("fn main() {}"),
+            "{framed}"
         );
     }
 

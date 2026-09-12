@@ -13,36 +13,52 @@ pub(super) fn Keyboard() -> impl IntoView {
     let state = AppState::expect();
 
     view! {
-        <Field
-            label=t!("settings.keyboard.shortcuts")
-            help=t!("settings.keyboard.shortcuts-help")
-        >
-            <div class="grid grid-cols-[max-content_1fr_max-content] items-center gap-x-4 gap-y-1.5">
-                {move || {
-                    // Read for reactivity: rows re-render as overrides land.
-                    let overrides = state.app.keybinds.get();
-                    let rows = crate::view::palette::effective(state);
-                    // A chord bound twice is a surprise worth surfacing.
-                    let mut seen = std::collections::HashMap::new();
-                    for (_, chord) in &rows {
-                        *seen.entry(chord.clone()).or_insert(0) += 1;
-                    }
-                    rows.into_iter()
-                        .map(|(binding, chord)| {
-                            let id = binding.id.clone();
-                            let overridden = overrides.contains_key(&id);
-                            let duplicate = seen.get(&chord).copied().unwrap_or(0) > 1;
-                            let capture_id = id.clone();
-                            let reset_id = id.clone();
-                            let capturing = Signal::derive({
-                                let id = id.clone();
-                                move || {
-                                    state
-                                        .app.capturing
-                                        .with(|c| c.as_deref() == Some(id.as_str()))
-                                }
-                            });
-                            view! {
+        <Group title=t!("settings.keyboard.shortcuts") footer=t!("settings.keyboard.note")>
+            {move || {
+                // Read for reactivity: rows re-render as overrides land.
+                let overrides = state.app.keybinds.get();
+                let rows = crate::view::palette::effective(state);
+                // A chord bound twice is a surprise worth surfacing.
+                let mut seen = std::collections::HashMap::new();
+                for (_, chord) in &rows {
+                    *seen.entry(chord.clone()).or_insert(0) += 1;
+                }
+                rows.into_iter()
+                    .map(|(binding, chord)| {
+                        let id = binding.id.clone();
+                        let overridden = overrides.contains_key(&id);
+                        let duplicate = seen.get(&chord).copied().unwrap_or(0) > 1;
+                        let capture_id = id.clone();
+                        let reset_id = id.clone();
+                        let capturing = Signal::derive({
+                            let id = id.clone();
+                            move || {
+                                state
+                                    .app.capturing
+                                    .with(|c| c.as_deref() == Some(id.as_str()))
+                            }
+                        });
+                        view! {
+                            <Row label=binding.label>
+                                {overridden
+                                    .then(|| {
+                                        view! {
+                                            <button
+                                                type="button"
+                                                title=t!("settings.keyboard.restore")
+                                                on:click=move |_| {
+                                                    controller::save_keybind(
+                                                        state,
+                                                        reset_id.clone(),
+                                                        None,
+                                                    );
+                                                }
+                                                class="rounded-[4px] px-1.5 py-0.5 text-footnote text-label-3 hover:bg-sunken hover:text-label"
+                                            >
+                                                {t!("settings.keyboard.reset")}
+                                            </button>
+                                        }
+                                    })}
                                 <button
                                     type="button"
                                     title=t!("settings.keyboard.rebind")
@@ -96,8 +112,8 @@ pub(super) fn Keyboard() -> impl IntoView {
                                         }
                                     }
                                     class=move || {
-                                        let base = "justify-self-start rounded-[4px] px-1.5 \
-                                                    py-0.5 font-mono text-footnote";
+                                        let base = "min-w-[6ch] rounded-[5px] px-2 py-0.5 \
+                                                    font-mono text-footnote";
                                         if capturing.get() {
                                             format!("{base} bg-selection text-rust ring-1 ring-rust")
                                         } else if duplicate {
@@ -115,38 +131,16 @@ pub(super) fn Keyboard() -> impl IntoView {
                                         }
                                     }}
                                 </button>
-                                <span class="text-callout text-label-2">{binding.label}</span>
-                                <span>
-                                    {overridden
-                                        .then(|| {
-                                            view! {
-                                                <button
-                                                    type="button"
-                                                    title=t!("settings.keyboard.restore")
-                                                    on:click=move |_| {
-                                                        controller::save_keybind(
-                                                            state,
-                                                            reset_id.clone(),
-                                                            None,
-                                                        );
-                                                    }
-                                                    class="rounded-[4px] px-1.5 py-0.5 text-footnote text-label-3 hover:bg-sunken hover:text-label"
-                                                >
-                                                    {t!("settings.keyboard.reset")}
-                                                </button>
-                                            }
-                                        })}
-                                </span>
-                            }
-                        })
-                        .collect_view()
-                }}
-                <kbd class="justify-self-start rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote text-label-3">
+                            </Row>
+                        }
+                    })
+                    .collect_view()
+            }}
+            <Row label=t!("misc.close-front")>
+                <kbd class="rounded-[5px] bg-sunken px-2 py-0.5 font-mono text-footnote text-label-3">
                     "Esc"
                 </kbd>
-                <span class="text-callout text-label-3">{t!("misc.close-front")}</span>
-                <span />
-            </div>
-        </Field>
+            </Row>
+        </Group>
     }
 }

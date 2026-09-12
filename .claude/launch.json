@@ -6,6 +6,12 @@
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "set NO_COLOR=&& cd crates\\rusty-ui && trunk serve"],
       "port": 17425
+    },
+    {
+      "name": "rusty-ui-verify",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set NO_COLOR=&& cd crates\\rusty-ui && trunk serve --dist ..\\..\\target\\dist-verify"],
+      "port": 17425
     }
   ]
 }

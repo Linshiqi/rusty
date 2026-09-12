@@ -5345,6 +5345,7 @@ dependencies = [
  "keyring",
  "reqwest",
  "rusty-core",
+ "rusty-edit",
  "rusty-embed",
  "serde",
  "serde_json",

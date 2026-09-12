@@ -36,18 +36,19 @@ pub(super) fn TerminalShell() -> impl IntoView {
             custom.set(preference);
         }
     });
+    let apply_custom = move || {
+        let value = custom.get_untracked();
+        let value = value.trim();
+        if !value.is_empty() {
+            controller::set_terminal_shell(state, Some(value.to_string()));
+        }
+    };
 
     view! {
-        <Field
-            label=t!("settings.terminal.shell")
-            help=t!("settings.terminal.shell-help")
-        >
+        <Group footer=t!("settings.terminal.note")>
             {move || {
                 let Some(info) = state.term.info.get() else {
-                    return view! {
-                        <p class="text-callout text-label-3">{t!("settings.terminal.asking")}</p>
-                    }
-                        .into_any();
+                    return view! { <NoteRow text=t!("settings.terminal.asking") /> }.into_any();
                 };
                 let preference = info.preference.clone();
                 let is_auto = preference.is_none();
@@ -55,67 +56,49 @@ pub(super) fn TerminalShell() -> impl IntoView {
                 let is_custom = !is_auto && !is_system;
                 let active = info.active.clone();
                 view! {
-                    <div class="flex flex-col gap-3">
-                        <div class="inline-flex self-start rounded-[7px] bg-sunken p-0.5">
-                            {[
-                                (t!("settings.terminal.auto"), "auto", is_auto),
-                                (t!("settings.terminal.system"), "system", is_system),
-                            ]
-                                .into_iter()
-                                .map(|(label, value, selected)| {
-                                    view! {
-                                        <button
-                                            type="button"
-                                            on:click=move |_| {
-                                                controller::set_terminal_shell(
-                                                    state,
-                                                    Some(value.to_string()),
-                                                );
-                                            }
-                                            class=if selected {
-                                                "rounded-[6px] bg-content px-3 py-1 text-callout font-medium shadow-sm"
-                                            } else {
-                                                "rounded-[6px] px-3 py-1 text-callout text-label-2 hover:text-label"
-                                            }
-                                        >
-                                            {label}
-                                        </button>
-                                    }
+                    <Row label=t!("settings.terminal.shell")>
+                        <Segmented>
+                            <Segment
+                                label=t!("settings.terminal.auto")
+                                selected=Signal::derive(move || is_auto)
+                                on_click=Callback::new(move |_| {
+                                    controller::set_terminal_shell(state, Some("auto".to_string()))
                                 })
-                                .collect_view()}
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <input
-                                placeholder=t!("settings.terminal.custom-placeholder")
-                                class="w-72 rounded-[6px] bg-sunken px-2 py-1 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
-                                prop:value=move || custom.get()
-                                on:input=move |event| custom.set(event_target_value(&event))
-                                on:keydown=move |event: leptos::ev::KeyboardEvent| {
-                                    if event.key() == "Enter" {
-                                        let value = custom.get_untracked();
-                                        let value = value.trim();
-                                        if !value.is_empty() {
-                                            controller::set_terminal_shell(
-                                                state,
-                                                Some(value.to_string()),
-                                            );
-                                        }
-                                    }
-                                }
                             />
-                            {is_custom
-                                .then(|| view! { <Pill label=t!("settings.terminal.in-use") tone=Tone::Rust /> })}
-                        </div>
-                        <div class="flex items-center gap-2 text-callout text-label-2">
-                            <span class="text-label-3">{t!("settings.terminal.next-shell")}</span>
-                            <code class="rounded-[4px] bg-sunken px-1.5 py-0.5 font-mono text-footnote">
-                                {active}
-                            </code>
-                        </div>
-                    </div>
+                            <Segment
+                                label=t!("settings.terminal.system")
+                                selected=Signal::derive(move || is_system)
+                                on_click=Callback::new(move |_| {
+                                    controller::set_terminal_shell(state, Some("system".to_string()))
+                                })
+                            />
+                        </Segmented>
+                    </Row>
+                    <Row label=t!("settings.terminal.custom")>
+                        <input
+                            placeholder=t!("settings.terminal.custom-placeholder")
+                            autocomplete="off"
+                            spellcheck="false"
+                            class="h-[26px] w-[260px] rounded-[6px] bg-sunken px-2.5 font-mono text-footnote text-label outline-none ring-1 ring-line placeholder:text-label-4 focus:ring-rust"
+                            prop:value=move || custom.get()
+                            on:input=move |event| custom.set(event_target_value(&event))
+                            on:keydown=move |event: leptos::ev::KeyboardEvent| {
+                                if event.key() == "Enter" {
+                                    apply_custom();
+                                }
+                            }
+                        />
+                        {is_custom
+                            .then(|| view! { <Pill label=t!("settings.terminal.in-use") tone=Tone::Rust /> })}
+                    </Row>
+                    <Row label=t!("settings.terminal.next-shell")>
+                        <code class="rounded-[5px] bg-sunken px-2 py-0.5 font-mono text-footnote text-label-2">
+                            {active}
+                        </code>
+                    </Row>
                 }
                     .into_any()
             }}
-        </Field>
+        </Group>
     }
 }

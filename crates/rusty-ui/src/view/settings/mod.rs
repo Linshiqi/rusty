@@ -7,7 +7,9 @@
 //!
 //! One category at a time, chosen from a list on the left. Stacking every
 //! section in one scroll makes the reader do the filtering, and the result is
-//! that nobody reads any of it.
+//! that nobody reads any of it. The list carries names only: a summary line
+//! under each was a second sentence to read before choosing, and the page
+//! titles say the same thing once the choice is made.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Category {
@@ -51,23 +53,6 @@ impl Category {
             Category::Updates => t!("settings.category.updates"),
         }
     }
-
-    /// One line under the title in the list, so a category can be chosen
-    /// without opening it first.
-    fn summary(self) -> String {
-        match self {
-            Category::Appearance => t!("settings.summary.appearance"),
-            Category::Editor => t!("settings.summary.editor"),
-            Category::Keyboard => t!("settings.summary.keyboard"),
-            Category::Terminal => t!("settings.summary.terminal"),
-            Category::Language => t!("settings.summary.language"),
-            Category::Assistant => t!("settings.summary.assistant"),
-            Category::Catalogue => t!("settings.summary.catalogue"),
-            Category::Storage => t!("settings.summary.storage"),
-            Category::Network => t!("settings.summary.network"),
-            Category::Updates => t!("settings.summary.updates"),
-        }
-    }
 }
 
 mod appearance;
@@ -85,7 +70,7 @@ mod update;
 use rusty_i18n::t;
 
 pub use shell::Settings;
-// `Field` and `TextRow` are the two rows every category is built from.
+// `Group`, `Row` and the controls every category is built from.
 use shell::*;
 
 // Flat within the overlay: `Category::Assistant` and `assistant::Assistant`

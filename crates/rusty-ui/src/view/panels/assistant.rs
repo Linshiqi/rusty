@@ -10,6 +10,16 @@
 //! Which tools ran is shown, not hidden. An answer derived from a real
 //! resolution and an answer invented from training data look identical in
 //! prose, and the difference is the whole value.
+//!
+//! **The panel is quiet.** An empty transcript is one line and the composer;
+//! the paragraph about the tools, the four suggested questions and the row of
+//! tool names that used to fill it were read once and then in the way of
+//! every conversation after. The tools are listed in Settings.
+//!
+//! **The open file goes with the question**, as VS Code sends the active
+//! editor: a chip above the input names it, its × drops it for this question,
+//! and it travels as its own content block so the transcript shows the chip
+//! and the model reads the file.
 
 use leptos::{ev, html, prelude::*};
 
@@ -23,6 +33,7 @@ use crate::{
     view::{
         SettingsOpen,
         components::{Button, ButtonKind, Dot, Empty, Pill, Tone},
+        icon::{Icon, IconView},
     },
 };
 
@@ -53,7 +64,6 @@ pub fn Assistant() -> impl IntoView {
 
 #[component]
 fn NotConfigured() -> impl IntoView {
-    let state = AppState::expect();
     let SettingsOpen(settings_open) = expect_context::<SettingsOpen>();
 
     view! {
@@ -61,23 +71,11 @@ fn NotConfigured() -> impl IntoView {
             title=t!("assistant.no-model-title")
             detail=t!("assistant.no-model-detail")
         >
-            <div class="mt-1 flex items-center gap-2">
-                <Button
-                    label=t!("assistant.open-settings")
-                    kind=ButtonKind::Primary
-                    on_click=Callback::new(move |_| settings_open.set(true))
-                />
-            </div>
-            <p class="mt-3 max-w-[52ch] text-callout text-label-3">
-                {move || {
-                    let count = state.ai.tools.with(Vec::len);
-                    if count == 0 {
-                        String::new()
-                    } else {
-                        t!("assistant.tool-count", count = count)
-                    }
-                }}
-            </p>
+            <Button
+                label=t!("assistant.open-settings")
+                kind=ButtonKind::Primary
+                on_click=Callback::new(move |_| settings_open.set(true))
+            />
         </Empty>
     }
 }
@@ -91,7 +89,15 @@ fn Transcript() -> impl IntoView {
             {move || {
                 let conversation = state.ai.conversation.get();
                 if conversation.is_empty() && !state.ai.streaming.get() {
-                    return view! { <Suggestions /> }.into_any();
+                    return view! {
+                        <div class="flex h-full flex-col items-center justify-center gap-2 p-10 text-center">
+                            <span class="text-label-4">
+                                <IconView icon=Icon::Assistant size=22 />
+                            </span>
+                            <p class="max-w-[34ch] text-callout text-label-3">{t!("assistant.empty")}</p>
+                        </div>
+                    }
+                        .into_any();
                 }
 
                 view! {
@@ -185,6 +191,11 @@ fn ToolActivity(runs: Vec<ToolRun>) -> impl IntoView {
     .into_any()
 }
 
+/// The last segment of a project-relative path: what a chip has room for.
+fn file_name(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+}
+
 #[component]
 fn Bubble(message: Message) -> impl IntoView {
     let is_user = message.role == Role::User;
@@ -200,13 +211,44 @@ fn Bubble(message: Message) -> impl IntoView {
             _ => None,
         })
         .collect();
+    // Files the user sent along, shown as what they are rather than as the
+    // pages of text the model received.
+    let attachments: Vec<String> = message
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Attachment { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
 
     if is_user {
         return view! {
-            <div class="flex justify-end">
+            <div class="flex flex-col items-end gap-1.5">
                 <div class="max-w-[76ch] rounded-[10px] bg-selection px-3 py-2 text-body whitespace-pre-wrap select-text">
                     {text}
                 </div>
+                {(!attachments.is_empty())
+                    .then(|| {
+                        view! {
+                            <div class="flex flex-wrap justify-end gap-1.5">
+                                {attachments
+                                    .into_iter()
+                                    .map(|path| {
+                                        view! {
+                                            <span
+                                                title=t!("assistant.attached", path = path.clone())
+                                                class="inline-flex items-center gap-1 rounded-[6px] bg-sunken px-2 py-0.5 font-mono text-footnote text-label-3"
+                                            >
+                                                <IconView icon=Icon::Files size=11 />
+                                                {file_name(&path)}
+                                            </span>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        }
+                    })}
             </div>
         }
         .into_any();
@@ -238,76 +280,26 @@ fn Bubble(message: Message) -> impl IntoView {
     .into_any()
 }
 
-/// Openers, chosen to show what having the tools changes.
-///
-/// Not decorative: an empty chat box invites the questions a general model
-/// answers badly. These are the ones where calling `project_status` or
-/// `memory_report` produces an answer nothing else can give.
-#[component]
-fn Suggestions() -> impl IntoView {
-    let state = AppState::expect();
-
-    let openers = [
-        t!("assistant.opener-build"),
-        t!("assistant.opener-flash"),
-        t!("assistant.opener-dupes"),
-        t!("assistant.opener-toolchain"),
-    ];
-
-    view! {
-        <div class="flex flex-1 flex-col items-center justify-center gap-4 p-10">
-            <p class="max-w-[52ch] text-center text-body text-label-2">
-                {t!("assistant.intro")}
-            </p>
-            <div class="flex max-w-[62ch] flex-col gap-1.5">
-                {openers
-                    .into_iter()
-                    .map(|opener| {
-                        let ask = opener.clone();
-                        view! {
-                            <button
-                                type="button"
-                                on:click=move |_| controller::ask(state, ask.clone())
-                                class="rounded-[8px] px-3 py-2 text-left text-callout text-label-2 ring-1 ring-line transition-colors hover:bg-sunken hover:text-label"
-                            >
-                                {opener}
-                            </button>
-                        }
-                    })
-                    .collect_view()}
-            </div>
-            {move || {
-                let tools = state.ai.tools.get();
-                (!tools.is_empty())
-                    .then(|| {
-                        view! {
-                            <div class="mt-2 flex max-w-[62ch] flex-wrap justify-center gap-1.5">
-                                {tools
-                                    .into_iter()
-                                    .map(|tool| {
-                                        view! {
-                                            <span
-                                                title=tool.description.clone()
-                                                class="rounded-full bg-sunken px-2 py-0.5 font-mono text-footnote text-label-3"
-                                            >
-                                                {tool.name}
-                                            </span>
-                                        }
-                                    })
-                                    .collect_view()}
-                            </div>
-                        }
-                    })
-            }}
-        </div>
-    }
-}
-
 #[component]
 fn Composer() -> impl IntoView {
     let state = AppState::expect();
     let draft = RwSignal::new(String::new());
     let input: NodeRef<html::Textarea> = NodeRef::new();
+    // Whether the open file rides along with the next question. On by
+    // default, as VS Code attaches the active editor; the × on the chip
+    // drops it for this question and the + brings it back.
+    let attach = RwSignal::new(true);
+    // The file in front of the user, in whichever group has the focus. A
+    // binary is not context anyone can read.
+    let open_file = Signal::derive(move || {
+        let group = state.group(state.layout.focus.get());
+        group
+            .editor
+            .document
+            .get()
+            .filter(|d| !d.binary)
+            .map(|d| d.path)
+    });
 
     let send = move || {
         let question = draft.get_untracked().trim().to_string();
@@ -318,17 +310,66 @@ fn Composer() -> impl IntoView {
         if let Some(element) = input.get_untracked() {
             element.set_value("");
         }
-        controller::ask(state, question);
+        let context = if attach.get_untracked() {
+            controller::open_file_context(state)
+        } else {
+            None
+        };
+        controller::ask(state, question, context);
     };
 
     view! {
-        <div class="flex-none border-t border-line px-4 py-3">
-            <div class="flex items-end gap-2">
+        <div class="flex-none border-t border-line px-3 py-3">
+            <div class="rounded-[10px] bg-sunken ring-1 ring-line transition-shadow focus-within:ring-rust">
+                {move || {
+                    open_file
+                        .get()
+                        .map(|path| {
+                            let name = file_name(&path);
+                            if attach.get() {
+                                view! {
+                                    <div class="flex items-center px-2 pt-2">
+                                        <span
+                                            title=t!("assistant.context-attached", path = path.clone())
+                                            class="inline-flex h-[22px] items-center gap-1 rounded-[6px] bg-raised px-2 font-mono text-footnote text-label-2 ring-1 ring-line"
+                                        >
+                                            <IconView icon=Icon::Files size=11 />
+                                            {name}
+                                            <button
+                                                type="button"
+                                                title=t!("assistant.context-remove")
+                                                on:click=move |_| attach.set(false)
+                                                class="ml-0.5 rounded-[3px] px-0.5 leading-none text-label-3 hover:text-label"
+                                            >
+                                                "×"
+                                            </button>
+                                        </span>
+                                    </div>
+                                }
+                                    .into_any()
+                            } else {
+                                view! {
+                                    <div class="flex items-center px-2 pt-2">
+                                        <button
+                                            type="button"
+                                            title=t!("assistant.context-add")
+                                            on:click=move |_| attach.set(true)
+                                            class="inline-flex h-[22px] items-center gap-1 rounded-[6px] px-2 font-mono text-footnote text-label-3 hover:bg-raised hover:text-label"
+                                        >
+                                            "+ "
+                                            {name}
+                                        </button>
+                                    </div>
+                                }
+                                    .into_any()
+                            }
+                        })
+                }}
                 <textarea
                     node_ref=input
                     rows="1"
                     placeholder=t!("assistant.ask-placeholder")
-                    class="max-h-[160px] min-h-[34px] flex-1 resize-none rounded-[8px] bg-sunken px-3 py-2 text-body outline-none ring-1 ring-line focus:ring-rust placeholder:text-label-3"
+                    class="max-h-[160px] min-h-[36px] w-full resize-none bg-transparent px-3 py-2 text-body outline-none placeholder:text-label-3"
                     on:input=move |event| draft.set(event_target_value(&event))
                     on:keydown=move |event: ev::KeyboardEvent| {
                         // Enter sends, Shift+Enter breaks the line. The reverse
@@ -339,52 +380,47 @@ fn Composer() -> impl IntoView {
                         }
                     }
                 />
-                <Button
-                    label=t!("assistant.ask")
-                    kind=ButtonKind::Primary
-                    disabled=Signal::derive(move || {
-                        state.ai.streaming.get() || draft.with(|d| d.trim().is_empty())
-                    })
-                    on_click=Callback::new(move |_| send())
-                />
-            </div>
-
-            <div class="mt-1.5 flex items-center gap-3 text-footnote text-label-3">
-                {move || {
-                    state
-                        .ai.config
-                        .get()
-                        .map(|config| {
-                            view! { <span class="font-mono">{config.model}</span> }
+                <div class="flex items-center gap-2 px-2 pb-2 text-footnote text-label-3">
+                    {move || {
+                        state
+                            .ai.config
+                            .get()
+                            .map(|config| view! { <span class="font-mono">{config.model}</span> })
+                    }}
+                    {move || {
+                        state
+                            .ai.usage
+                            .get()
+                            .map(|(input, output)| {
+                                view! {
+                                    <span class="tnum">
+                                        {t!("assistant.tokens", input = input.to_string(), output = output.to_string())}
+                                    </span>
+                                }
+                            })
+                    }}
+                    <span class="flex-1" />
+                    {move || {
+                        (!state.ai.conversation.with(Vec::is_empty))
+                            .then(|| {
+                                view! {
+                                    <Button
+                                        label=t!("assistant.clear")
+                                        kind=ButtonKind::Quiet
+                                        on_click=Callback::new(move |_| controller::clear_conversation(state))
+                                    />
+                                }
+                            })
+                    }}
+                    <Button
+                        label=t!("assistant.ask")
+                        kind=ButtonKind::Primary
+                        disabled=Signal::derive(move || {
+                            state.ai.streaming.get() || draft.with(|d| d.trim().is_empty())
                         })
-                }}
-                {move || {
-                    state
-                        .ai.usage
-                        .get()
-                        .map(|(input, output)| {
-                            view! {
-                                <span class="tnum">
-                                    {t!("assistant.tokens", input = input.to_string(), output = output.to_string())}
-                                </span>
-                            }
-                        })
-                }}
-                <span class="flex-1" />
-                {move || {
-                    (!state.ai.conversation.with(Vec::is_empty))
-                        .then(|| {
-                            view! {
-                                <button
-                                    type="button"
-                                    class="rounded-[5px] px-1.5 py-0.5 text-label-3 hover:text-label"
-                                    on:click=move |_| controller::clear_conversation(state)
-                                >
-                                    {t!("assistant.clear")}
-                                </button>
-                            }
-                        })
-                }}
+                        on_click=Callback::new(move |_| send())
+                    />
+                </div>
             </div>
         </div>
     }
