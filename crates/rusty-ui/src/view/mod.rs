@@ -257,20 +257,6 @@ pub fn App() -> impl IntoView {
                                 view! { <Stage /> }.into_any()
                             }
                         }}
-                        // Over the editor's corner, and only there: the pin
-                        // map answers a question you have while reading code.
-                        // `pointer-events-none` on the layer so the corner it
-                        // does not fill still belongs to the editor.
-                        {move || {
-                            (!settings_open.get() && state.layout.panel.get() == "files")
-                                .then(|| {
-                                    view! {
-                                        <div class="pointer-events-none absolute inset-0">
-                                            <pinmap::PinMap />
-                                        </div>
-                                    }
-                                })
-                        }}
                     </div>
                     <dock::Dock />
                 </main>
@@ -937,32 +923,13 @@ fn StatusBar() -> impl IntoView {
 
             <span class="flex-1" />
 
-            {move || {
-                state
-                    .project.workspace
-                    .get()
-                    .map(|report| {
-                        view! {
-                            <span class="flex h-full items-center border-l border-line px-3">
-                                {t!("status.deps", count = report.vitals.resolved_deps)}
-                            </span>
-                        }
-                    })
-            }}
-
-            // Doubles as proof the IPC bridge is alive: these numbers can only
-            // be non-zero if a command round-tripped.
-            {move || {
-                let boards = state.project.boards.with(Vec::len);
-                view! {
-                    <span
-                        class="flex h-full items-center border-l border-line px-3"
-                        title=t!("status.boards-hint")
-                    >
-                        {t!("status.boards", count = boards)}
-                    </span>
-                }
-            }}
+            // The right end is the chip's pins, opening upwards on click.
+            // A dependency count and a board count sat here before — two
+            // numbers that proved the IPC bridge alive and that nobody acted
+            // on — while the pin map floated over the editor's corner as a
+            // fixture. The status bar is where a fact about the project that
+            // is one click from useful belongs.
+            <pinmap::PinStatus />
         </footer>
     }
 }

@@ -9,6 +9,25 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.18
+
+**Fixed — switching tabs lost your place.** Every document opened at the
+previous document's scroll position: the working area kept its offset across
+the switch, so a chapter you had read half of came back at the wrong place,
+and a freshly opened file did not start at the top. Each tab now remembers
+where you left it — the scroll position and, in the source view, the caret —
+and comes back exactly there; a new file opens at the top. A jump into a
+file (a search hit, a problem, go-to-definition, Back) still lands on its
+target.
+
+**Changed — the chip's pins live in the status bar.** The pin map no longer
+floats over the editor's corner. The right end of the status bar reads
+`ESP32 pins` and opens the map upwards on click; clicking a pin jumps to
+where it is named and closes the map, and a click anywhere else closes it.
+The dependency and board counts that sat there before are gone. The map is
+reachable from every panel, not only Files, and it starts closed rather than
+remembering that it was open.
+
 ## v0.6.17
 
 **Added — the assistant can read the project.** Ask about a chapter, a

@@ -1198,9 +1198,11 @@ usty`) holds `location.toml`
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
 - Theme, divider positions, the editor's text zoom, the interface scale, the
-  pin map's collapsed state, the file tree's fold, the Git panel's diff
-  layout (one column or side by side) and the locale *cache* are
-  localStorage, and that is all that is. They all go through `state::local_get` / `local_set` /
+  file tree's fold, the Git panel's diff layout (one column or side by side)
+  and the locale *cache* are localStorage, and that is all that is. (The pin
+  map's collapsed state was on this list while the map floated over the
+  editor's corner; it is a status-bar popover now, closed unless clicked,
+  and `PinStatus` takes the old key out once.) They all go through `state::local_get` / `local_set` /
   `local_take` — one door, so the list above is a grep and not a claim.
   **Audit that claim when you add one** — it had already drifted twice. The
   assistant profile failed the rule (a second window boots the same frontend,
@@ -2188,6 +2190,20 @@ usty`) holds `location.toml`
   lazy case; the strip's own click handler was the one caller that did not.
   When two functions read one state, grep for every reader before changing
   what the state means.
+- **The working area's scroller is one DOM element for every document that
+  passes through it.** The `Editor` closure re-runs on a document change and
+  Leptos rebuilds the view in place, so the page's `overflow-y-auto` div (and
+  the code surface's) keeps its `scrollTop` across the switch — measured:
+  the same element, still at 900, with the next chapter in it. Every switch
+  therefore landed the new file at the old file's offset, and coming back
+  to a half-read chapter meant scrolling to find the place. A tab parks its
+  viewport beside its caret (`ParkedEditor.viewport`, read off the scroller
+  tagged `data-scroller=<group>` at park time); fronting sets
+  `Editor.viewport`, which the view that owns the scroller consumes one tick
+  after mounting — caret placed without scrolling first, then the offset —
+  and a fresh document gets a `(0, 0)` restore so it opens at the top. A
+  `reveal` for the same path clears the pending viewport: a jump into a
+  parked file lands on the target, not where the tab was left.
 - **Two round trips fired together answer in either order.** The settings
   page called `store_key` and then `refresh_key_state` back to back; the
   check overtook the write, "not saved" arrived and stayed, and the next

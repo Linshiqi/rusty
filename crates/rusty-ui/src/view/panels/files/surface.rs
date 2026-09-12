@@ -117,6 +117,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                 return;
             }
             state.editor.reveal.set(None);
+            // A jump beats a parked viewport: the tab may have been fronted
+            // with one pending, and a goto into it lands on the target.
+            state.editor.viewport.set(None);
             // Deferred one tick: on a freshly mounted editor the textarea's
             // value lands after this effect runs, and a selection set before
             // the value is snapped to the end when the text arrives — the
@@ -148,6 +151,49 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             * row_height(zoom.get_untracked())
                             - 120.0;
                         scroller.set_scroll_top(top.max(0.0) as i32);
+                    }
+                },
+                std::time::Duration::ZERO,
+            );
+        });
+    }
+
+    // Put a fronted tab back where it was left: the caret first, without
+    // scrolling, then the scroller — so what decides where the eye lands is
+    // what was on screen, not where the caret happened to be. Deferred one
+    // tick for the reason the goto above is, and re-read when the tick
+    // fires: a jump that arrived in between has cleared it and must win.
+    {
+        let path = path.clone();
+        Effect::new(move |_| {
+            let Some(pending) = state.editor.viewport.get() else {
+                return;
+            };
+            if pending.path != path || state.editor.highlighted.with(Vec::is_empty) {
+                return;
+            }
+            let mine = path.clone();
+            set_timeout(
+                move || {
+                    let still = state.editor.viewport.get_untracked();
+                    if still.as_ref().is_none_or(|it| it.path != mine) {
+                        return;
+                    }
+                    state.editor.viewport.set(None);
+                    if let (Some(element), Some((line, col))) =
+                        (area.get_untracked(), pending.caret)
+                    {
+                        let offset =
+                            utf16_offset_of(&state.editor.draft.get_untracked(), line, col);
+                        let options = web_sys::FocusOptions::new();
+                        options.set_prevent_scroll(true);
+                        let _ = element.focus_with_options(&options);
+                        let _ = element.set_selection_start(Some(offset));
+                        let _ = element.set_selection_end(Some(offset));
+                    }
+                    if let Some(scroller) = scroller.get_untracked() {
+                        scroller.set_scroll_top(pending.top);
+                        scroller.set_scroll_left(pending.left);
                     }
                 },
                 std::time::Duration::ZERO,
@@ -355,6 +401,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             }
         <div
             node_ref=scroller
+            // Tagged with the group, so parking reads this group's offset
+            // and never the other's.
+            data-scroller=state.group.index().to_string()
             class="relative min-h-0 flex-1 overflow-auto"
             // Ctrl+wheel scales the editor font, as every editor since
             // forever. The browser's own page zoom is exactly what this

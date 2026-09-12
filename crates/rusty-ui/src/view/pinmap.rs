@@ -1,4 +1,4 @@
-//! The chip's pins, over the editor's bottom-right corner.
+//! The chip's pins, from the status bar.
 //!
 //! Answers "where did I put the LED, and what is still free" without leaving
 //! the file — the question that otherwise means grepping for `GPIO` and then
@@ -9,12 +9,20 @@
 //! they come out on a particular module's header is a property of the board
 //! and is not guessed at here. Every square on screen is a pin that exists.
 //!
+//! It sits at the right end of the status bar — where a dependency count and
+//! a board count used to sit, two numbers nobody acted on — and opens
+//! upwards on click, as the chip's popover at the other end does. It used
+//! to float over the editor's bottom-right corner and stay there, open by
+//! default and remembered across launches, which read as a fixture in the
+//! way of the text. Closed by default and not remembered now: it is one
+//! click away, and a click on a pin closes it, since the jump is the answer.
+//!
 //! Read-only on purpose, for now. Editing a pin from here means writing into
 //! a buffer the editor owns — its undo history, its language server — and
 //! that is a correctness problem worth its own pass rather than a corner of
 //! this one.
 
-use leptos::prelude::*;
+use leptos::{ev, prelude::*};
 
 use rusty_embed::{PinInfo, PinReport};
 
@@ -22,22 +30,16 @@ use rusty_i18n::t;
 
 use crate::{controller, state::AppState};
 
-/// Collapsed state lives in localStorage: only this window cares, and losing
-/// it costs a click.
-const KEY: &str = "rusty.pinmap.open";
-
-fn stored_open() -> bool {
-    crate::state::local_get(KEY).is_none_or(|value| value != "0")
-}
-
-fn remember(open: bool) {
-    crate::state::local_set(KEY, if open { "1" } else { "0" });
-}
-
+/// The status bar's pin item: the chip's name, and the pin map above it on
+/// click. Nothing while no chip has a pin report — an item for a project
+/// with no chip would name nothing.
 #[component]
-pub fn PinMap() -> impl IntoView {
+pub fn PinStatus() -> impl IntoView {
     let state = AppState::expect();
-    let open = RwSignal::new(stored_open());
+    let open = RwSignal::new(false);
+    // The corner's collapsed state, from before this was a status-bar item.
+    // Read once and dropped, so the storage audit stays a grep.
+    let _ = crate::state::local_take("rusty.pinmap.open");
 
     // Re-read when the project changes: a chip switch changes every answer
     // on this panel.
@@ -50,40 +52,55 @@ pub fn PinMap() -> impl IntoView {
     move || {
         let report = state.project.pins.get()?;
         let chip = report.chip.to_uppercase();
-        Some(if open.get() {
-            view! {
-                <div class="pointer-events-auto absolute right-3 bottom-3 z-20 flex max-h-[60%] w-[15rem] flex-col rounded-[8px] border border-line bg-raised/95 shadow-lg backdrop-blur">
-                    <button
-                        type="button"
-                        title=t!("pinmap.hide")
-                        on:click=move |_| {
-                            open.set(false);
-                            remember(false);
-                        }
-                        class="flex items-center justify-between px-2.5 py-1.5 text-caption text-label-3 transition-colors hover:text-label"
-                    >
-                        <span class="font-mono">{chip}</span>
-                        <span>"▾"</span>
-                    </button>
-                    <Body report=report />
-                </div>
-            }
-            .into_any()
-        } else {
-            view! {
+        let label = t!("pinmap.pins", chip = chip);
+        Some(view! {
+            <div class="relative h-full">
                 <button
                     type="button"
-                    title=t!("pinmap.show")
-                    on:click=move |_| {
-                        open.set(true);
-                        remember(true);
+                    title=move || if open.get() { t!("pinmap.hide") } else { t!("pinmap.show") }
+                    on:click=move |_| open.update(|it| *it = !*it)
+                    class=move || {
+                        format!(
+                            "flex h-full items-center gap-1.5 border-l border-line px-3 transition-colors \
+                             hover:bg-sunken hover:text-label {}",
+                            if open.get() { "bg-sunken text-label" } else { "" },
+                        )
                     }
-                    class="pointer-events-auto absolute right-3 bottom-3 z-20 rounded-[8px] border border-line bg-raised/95 px-2.5 py-1.5 font-mono text-caption text-label-3 shadow-lg transition-colors hover:text-label"
                 >
-                    {t!("pinmap.pins", chip = chip.to_string())}
+                    {label}
+                    <span class="text-label-4">"▴"</span>
                 </button>
-            }
-            .into_any()
+                {move || {
+                    open.get()
+                        .then(|| {
+                            let report = report.clone();
+                            view! {
+                                // Full-screen catcher, so clicking anywhere
+                                // else closes it — the behaviour every menu
+                                // in here has.
+                                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
+                                <div
+                                    class="absolute right-0 bottom-full z-50 mb-px flex max-h-[70vh] w-[16rem] flex-col rounded-t-[8px] border border-line bg-raised pt-1.5 shadow-lg"
+                                    // A pin is a jump to where it is named; the
+                                    // jump is the answer, so it closes the map.
+                                    on:click=move |event: ev::MouseEvent| {
+                                        use wasm_bindgen::JsCast;
+                                        let on_button = event
+                                            .target()
+                                            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                                            .and_then(|element| element.closest("button").ok().flatten())
+                                            .is_some();
+                                        if on_button {
+                                            open.set(false);
+                                        }
+                                    }
+                                >
+                                    <Body report=report />
+                                </div>
+                            }
+                        })
+                }}
+            </div>
         })
     }
 }

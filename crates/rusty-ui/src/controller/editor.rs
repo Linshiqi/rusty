@@ -16,7 +16,7 @@ use rusty_i18n::t;
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, EditHistory, LspStatus, ParkedEditor},
+    state::{AppState, EditHistory, LspStatus, ParkedEditor, ParkedViewport},
 };
 
 /// Create a file or directory, then show it — the tree refreshes, and a new
@@ -312,6 +312,18 @@ fn show_document(state: AppState, document: Document, announce: bool) {
         lsp_open_doc(document.path.clone(), document.text.clone());
         request_semantic(state, document.path.clone());
     }
+    // A different document opens at the top. The working area's scroller is
+    // one DOM element for every document that passes through it, so without
+    // this the new file opened wherever the old one had been scrolled to. A
+    // save's re-read is the same path and keeps its place.
+    if active.as_deref() != Some(document.path.as_str()) {
+        state.editor.viewport.set(Some(ParkedViewport {
+            path: document.path.clone(),
+            top: 0,
+            left: 0,
+            caret: None,
+        }));
+    }
     state.editor.document.set(Some(document));
 }
 
@@ -326,6 +338,7 @@ fn park_active(state: AppState) {
         caret: active_caret(state),
         history: state.editor.history.get_untracked(),
         folds: state.editor.folds.get_untracked(),
+        viewport: viewport_position(state),
         document,
     };
     state.editor.parked.update(|parked| {
@@ -353,6 +366,9 @@ fn clear_editor_transients(state: AppState) {
     state.editor.hover.set(None);
     state.editor.semantic.set(None);
     state.editor.actions.set(None);
+    // A viewport still waiting for a view that never mounted belongs to a
+    // document that is no longer coming.
+    state.editor.viewport.set(None);
 }
 
 /// Front an already open tab, parking the current one.
@@ -402,14 +418,16 @@ fn front_parked(state: AppState, path: &str) -> bool {
     state.editor.echo_text.set(entry.draft);
     state.editor.highlighted.set(entry.highlighted);
     state.editor.document.set(Some(entry.document));
-    if let Some((line, col)) = entry.caret {
-        state.editor.reveal.set(Some(rusty_lsp::Location {
-            path: path.to_string(),
-            line,
-            col,
-            external: false,
-        }));
-    }
+    // Back to what was on screen, not merely to the caret: the view puts the
+    // caret where it was without scrolling, then the scroller where it was.
+    // A jump into this file that follows (`open_at`, a definition, Back)
+    // sets `reveal`, and the view lets that win.
+    state.editor.viewport.set(Some(ParkedViewport {
+        path: path.to_string(),
+        top: entry.viewport.0,
+        left: entry.viewport.1,
+        caret: entry.caret,
+    }));
     // An edited draft's parked highlight may be a pulse behind; freshen it.
     // Clean or read-only tabs have nothing to freshen.
     if dirty && !read_only {

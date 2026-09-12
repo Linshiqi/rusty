@@ -155,7 +155,7 @@ pub(crate) fn Editor() -> impl IntoView {
                 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
                     <TabStrip />
                     <Header document=document.clone() />
-                    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                    <Scroller path=document.path.clone() class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                         // The draft, not the saved text: switching to the page
                         // after an edit must show the edit, or the toggle reads
                         // as having lost it.
@@ -168,7 +168,7 @@ pub(crate) fn Editor() -> impl IntoView {
                                 view! { <crate::view::markdown::Markdown text=text base=base /> }
                             }}
                         </div>
-                    </div>
+                    </Scroller>
                 </div>
             }
             .into_any();
@@ -234,8 +234,9 @@ fn Picture(path: String, from_draft: bool) -> impl IntoView {
             _ => Err(t!("image.loading")),
         }
     };
+    let at = path.clone();
     view! {
-        <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
+        <Scroller path=at class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
             {move || match src() {
                 Ok(url) => view! {
                     <img src=url alt=path.clone() class="max-h-full max-w-full object-contain" />
@@ -248,6 +249,65 @@ fn Picture(path: String, from_draft: bool) -> impl IntoView {
                 }
                     .into_any(),
             }}
+        </Scroller>
+    }
+}
+
+/// The scroller under a page or a picture, which puts a fronted tab back
+/// where it was left.
+///
+/// The element is one for every document that passes through it — Leptos
+/// rebuilds the view in place — so a switch left the new document at the old
+/// one's offset, and a chapter you had read half of opened at the top when
+/// you came back. The code surface does the same for itself, because it has
+/// a caret to place first. Tagged with the group so parking reads this
+/// group's offset and never the other's.
+#[component]
+fn Scroller(path: String, #[prop(into)] class: String, children: Children) -> impl IntoView {
+    let state = AppState::expect();
+    let scroller: NodeRef<html::Div> = NodeRef::new();
+    Effect::new(move |_| {
+        let Some(pending) = state.editor.viewport.get() else {
+            return;
+        };
+        if pending.path != path {
+            return;
+        }
+        let mine = path.clone();
+        // One tick, so the content is in the document; re-read when it
+        // fires, because a jump that arrived in between has cleared it.
+        set_timeout(
+            move || {
+                let still = state.editor.viewport.get_untracked();
+                if still.as_ref().is_none_or(|it| it.path != mine) {
+                    return;
+                }
+                state.editor.viewport.set(None);
+                let Some(element) = scroller.get_untracked() else {
+                    return;
+                };
+                element.set_scroll_top(pending.top);
+                element.set_scroll_left(pending.left);
+                // A page's figures decode after the first layout and push
+                // the text below them down. Once more when they have, if the
+                // reader has not moved since — the same target, so a page
+                // with no figures sees nothing happen.
+                let applied = element.scroll_top();
+                set_timeout(
+                    move || {
+                        if element.scroll_top() == applied {
+                            element.set_scroll_top(pending.top);
+                        }
+                    },
+                    std::time::Duration::from_millis(150),
+                );
+            },
+            std::time::Duration::ZERO,
+        );
+    });
+    view! {
+        <div node_ref=scroller data-scroller=state.group.index().to_string() class=class>
+            {children()}
         </div>
     }
 }

@@ -330,6 +330,23 @@ pub(super) fn editor_element() -> Option<web_sys::HtmlElement> {
         .ok()
 }
 
+/// Where this group's working area is scrolled to, as (top, left) pixels.
+///
+/// The scroller is whichever view is showing the document — the code
+/// surface's, the Markdown page's or the picture's — and each marks itself
+/// with the group it belongs to (`data-scroller`), so the second group's
+/// position is never read off the first's. Nothing on screen reads as the
+/// top.
+pub(super) fn viewport_position(state: AppState) -> (i32, i32) {
+    let selector = format!("[data-scroller='{}']", state.group.index());
+    web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.query_selector(&selector).ok().flatten())
+        .map_or((0, 0), |element| {
+            (element.scroll_top(), element.scroll_left())
+        })
+}
+
 /// Where the caret is, for the navigation history to remember.
 ///
 /// Read off the DOM rather than tracked in a signal: the caret moves on

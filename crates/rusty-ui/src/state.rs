@@ -88,6 +88,29 @@ pub struct ParkedEditor {
     /// at, and a file that unfolds itself every time you glance at another
     /// one is a fold feature nobody uses twice.
     pub folds: rusty_edit::Folded,
+    /// Where the working area was scrolled to, as (top, left) pixels of
+    /// whichever scroller was showing the tab — the code surface's, the
+    /// Markdown page's or the picture's. The caret says where the user was
+    /// typing; this says what they were looking at, which after a long read
+    /// of a chapter is somewhere else entirely.
+    pub viewport: (i32, i32),
+}
+
+/// A viewport to put back once a tab's view is on screen.
+///
+/// Set by the controller when a parked tab is fronted, and once when a fresh
+/// document replaces another, consumed by the view that owns the scroller.
+/// It exists because the scroller is one DOM element for every document that
+/// passes through it: switching tabs left the new document at the old one's
+/// offset, and every switch cost a scroll back to where you were.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParkedViewport {
+    pub path: String,
+    pub top: i32,
+    pub left: i32,
+    /// The caret to place first, when the tab had one — placed without
+    /// scrolling, so the viewport below is what decides where the eye lands.
+    pub caret: Option<(u32, u32)>,
 }
 
 /// The editor's own undo history.
@@ -777,6 +800,11 @@ pub struct Editor {
     /// Somewhere the editor should go — the result of goto-definition. Kept in
     /// state because the target file may still be opening when it is decided.
     pub reveal: RwSignal<Option<rusty_lsp::Location>>,
+    /// Where a tab was scrolled to when it was parked, waiting for its view to
+    /// mount and put the scroller back. A `reveal` for the same path beats
+    /// it: a jump into a parked file lands on the target, not where the tab
+    /// was left.
+    pub viewport: RwSignal<Option<ParkedViewport>>,
     /// Directories the user has opened. Collapsed by default, because a tree
     /// that unfolds everything is a list.
     pub expanded: RwSignal<Vec<String>>,
@@ -844,6 +872,7 @@ impl Editor {
             nav: RwSignal::new(NavHistory::default()),
             rename: RwSignal::new(None),
             reveal: RwSignal::new(None),
+            viewport: RwSignal::new(None),
             expanded: RwSignal::new(Vec::new()),
             source_view: RwSignal::new(Vec::new()),
             images: RwSignal::new(HashMap::new()),
@@ -908,7 +937,9 @@ impl Group {
         }
     }
 
-    fn index(self) -> usize {
+    /// 0 for the first group, 1 for the second: the index into `Groups`, and
+    /// the tag a group's scroller carries so the controller can find it.
+    pub fn index(self) -> usize {
         match self {
             Group::First => 0,
             Group::Second => 1,
