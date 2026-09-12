@@ -83,6 +83,7 @@ fn NotConfigured() -> impl IntoView {
 #[component]
 fn Transcript() -> impl IntoView {
     let state = AppState::expect();
+    let SettingsOpen(settings_open) = expect_context::<SettingsOpen>();
 
     view! {
         <div class="min-h-0 flex-1 overflow-y-auto">
@@ -111,6 +112,32 @@ fn Transcript() -> impl IntoView {
                             .map(|message| view! { <Bubble message=message /> })
                             .collect_view()}
 
+                        // The answer hit the output cap. Said here, under it,
+                        // with the number and the way to raise it — a model
+                        // that spent the whole budget thinking produced no
+                        // text, and the transcript alone read as a question
+                        // nobody answered.
+                        {move || {
+                            state.ai.cut_short.get().then(|| {
+                                let max = state
+                                    .ai
+                                    .config
+                                    .with(|config| config.as_ref().map_or(0, |c| c.max_tokens));
+                                view! {
+                                    <div class="flex max-w-[76ch] flex-wrap items-center gap-x-2 gap-y-1 rounded-[6px] bg-amber-fill px-2.5 py-1.5 text-caption leading-relaxed text-amber">
+                                        <span>{t!("assistant.cut-short", max = max)}</span>
+                                        <button
+                                            type="button"
+                                            on:click=move |_| settings_open.set(true)
+                                            class="underline underline-offset-2 hover:text-label"
+                                        >
+                                            {t!("assistant.open-settings")}
+                                        </button>
+                                    </div>
+                                }
+                            })
+                        }}
+
                         <Streaming />
                     </div>
                 }
@@ -131,11 +158,20 @@ fn Streaming() -> impl IntoView {
         }
 
         let pending = state.ai.pending.get();
+        let thinking = state.ai.thinking.get();
         let activity = state.ai.activity.get();
 
         view! {
             <div class="flex flex-col gap-2">
                 <ToolActivity runs=activity />
+                // Open while the reasoning streams and the answer has not
+                // begun: the minute a reasoning model spends before its first
+                // word used to be an empty drawer.
+                {(!thinking.is_empty())
+                    .then(|| {
+                        let open = pending.is_empty();
+                        view! { <Reasoning text=thinking open=open /> }
+                    })}
                 {(!pending.is_empty())
                     .then(|| {
                         view! {
@@ -254,8 +290,22 @@ fn Bubble(message: Message) -> impl IntoView {
         .into_any();
     }
 
+    // What the model thought before answering, when it streamed it. Folded:
+    // the answer is what was asked for, and the thinking is there for the
+    // reader who wants to know how it got there — or, when the budget ran out
+    // before the answer began, what the money bought.
+    let thinking: String = message
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Thinking { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+
     view! {
         <div class="flex flex-col gap-2">
+            {(!thinking.is_empty()).then(|| view! { <Reasoning text=thinking open=false /> })}
             {(!calls.is_empty())
                 .then(|| {
                     view! {
@@ -278,6 +328,27 @@ fn Bubble(message: Message) -> impl IntoView {
         </div>
     }
     .into_any()
+}
+
+/// The model's reasoning, folded under one line that names it. Open while it
+/// streams — a model that thinks for a minute before its first word is then
+/// visibly thinking rather than silent — and folded once the answer is
+/// there. Dim and small, because it is not the answer.
+#[component]
+fn Reasoning(text: String, open: bool) -> impl IntoView {
+    view! {
+        <details
+            open=open
+            class="max-w-[76ch] rounded-[6px] bg-sunken px-2.5 py-1.5 text-caption text-label-3"
+        >
+            <summary class="cursor-default text-footnote text-label-4 select-none">
+                {t!("assistant.reasoning")}
+            </summary>
+            <div class="mt-1 max-h-48 overflow-y-auto leading-relaxed whitespace-pre-wrap select-text">
+                {text}
+            </div>
+        </details>
+    }
 }
 
 #[component]

@@ -95,6 +95,12 @@ pub enum Content {
     /// for the eye.
     #[serde(rename_all = "camelCase")]
     Attachment { path: String, text: String },
+    /// What the model thought before it answered, from models that stream
+    /// their reasoning. Kept in the transcript so the reader can unfold it,
+    /// and skipped by both providers when the history goes back: the OpenAI
+    /// dialect's reasoning models reject their own reasoning as input, and
+    /// Anthropic's would want it signed.
+    Thinking { text: String },
 }
 
 impl Content {
@@ -107,7 +113,7 @@ impl Content {
             Content::Attachment { path, text } => Some(std::borrow::Cow::Owned(format!(
                 "The user has this file open in the editor: `{path}`\n\n```\n{text}\n```"
             ))),
-            Content::ToolUse { .. } | Content::ToolResult { .. } => None,
+            Content::ToolUse { .. } | Content::ToolResult { .. } | Content::Thinking { .. } => None,
         }
     }
 }
@@ -121,6 +127,15 @@ impl Content {
 pub enum ChatEvent {
     /// A chunk of assistant prose.
     TextDelta {
+        text: String,
+    },
+    /// A chunk of the model's reasoning, from models that stream it
+    /// (`reasoning_content` in the OpenAI dialect, `thinking_delta` in
+    /// Anthropic's). Its own event because it is not the answer: shown dim
+    /// and folded, and never sent back. A reasoning model can spend its
+    /// whole output budget here — 4096 tokens of thought and no answer, which
+    /// with this dropped on the floor looked like a reply that never came.
+    ThinkingDelta {
         text: String,
     },
     /// The model has decided to call a tool. Arguments stream in separately
@@ -420,17 +435,28 @@ mod tests {
                     path: "src/main.rs".into(),
                     text: "fn main() {}".into(),
                 },
+                Content::Thinking {
+                    text: "the manifest names a chip".into(),
+                },
             ],
         };
 
         let json = serde_json::to_string(&message).expect("serialize");
+        assert!(
+            json.contains("\"type\":\"thinking\""),
+            "the panel matches the tag: {json}"
+        );
         let back: Message = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(back.content.len(), 4);
+        assert_eq!(back.content.len(), 5);
         assert_eq!(
             back.text(),
             "checking the project",
-            "an attachment is not prose to show; the panel draws it as a chip"
+            "neither an attachment nor the thinking is prose to show; the panel draws each its own way"
+        );
+        assert!(
+            back.content[4].prose().is_none(),
+            "thinking never goes back to a model as text"
         );
         assert!(
             matches!(&back.content[1], Content::ToolUse { name, .. } if name == "project_status"),

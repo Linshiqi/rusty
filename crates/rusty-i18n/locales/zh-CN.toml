@@ -528,6 +528,8 @@ context-attached = "随问题一起发送：{path}"
 context-remove = "不附带这个文件"
 context-add = "附上当前文件"
 attached = "附带：{path}"
+reasoning = "思考过程"
+cut-short = "回答在输出上限 {max} 个 token 处被截断；会推理的模型要先把一部分花在思考上。"
 
 [toolchain]
 downloads-here = "rusty 下载的 QEMU 和调试器放在这里"

@@ -730,6 +730,14 @@ pub struct Assistant {
     pub conversation: RwSignal<Vec<Message>>,
     /// Prose from the answer in flight, before it becomes a `Message`.
     pub pending: RwSignal<String>,
+    /// The model's reasoning in flight, from models that stream it. Shown
+    /// dim and folded while it arrives, so a model that thinks for a minute
+    /// before its first word is visibly thinking rather than silent.
+    pub thinking: RwSignal<String>,
+    /// The last answer stopped at the output cap. Nothing in the returned
+    /// history says so — the model produced no text to mark — so the window
+    /// keeps the fact itself until the next question.
+    pub cut_short: RwSignal<bool>,
     /// Tools the current answer has called, in order, with whether each
     /// finished cleanly. Shown live: a model that goes quiet for ten seconds
     /// while resolving a dependency graph looks broken unless it says so.
@@ -1565,6 +1573,8 @@ impl AppState {
                 tools: RwSignal::new(Vec::new()),
                 conversation: RwSignal::new(Vec::new()),
                 pending: RwSignal::new(String::new()),
+                thinking: RwSignal::new(String::new()),
+                cut_short: RwSignal::new(false),
                 activity: RwSignal::new(Vec::new()),
                 streaming: RwSignal::new(false),
                 usage: RwSignal::new(None),

@@ -27,6 +27,11 @@ use serde_json::{Value, json};
 /// tool call with its arguments.
 fn answer(text: &str, call: Option<(&str, &str, &Value)>) -> String {
     let mut body = String::new();
+    // A reasoning model thinks first, in a field of its own.
+    body.push_str(&format!(
+        "data: {}\n\n",
+        json!({ "choices": [{ "delta": { "reasoning_content": "Reading first." } }] })
+    ));
     body.push_str(&format!(
         "data: {}\n\n",
         json!({ "choices": [{ "delta": { "content": text } }] })
@@ -233,4 +238,18 @@ async fn a_question_about_a_chapter_reads_the_chapter_before_answering() {
     let answer = history.last().unwrap();
     assert_eq!(answer.role, Role::Assistant);
     assert!(answer.text().contains("Exercise 2.2 asks for Kd"));
+
+    // What the model thought is kept for the reader — first, as it happened
+    // — and never replayed to the model, which would refuse its own
+    // reasoning as input.
+    assert!(
+        matches!(&answer.content[0], Content::Thinking { text } if text == "Reading first."),
+        "{:?}",
+        answer.content
+    );
+    assert!(
+        !bodies[1].contains("Reading first."),
+        "the second request replayed the reasoning: {}",
+        bodies[1]
+    );
 }

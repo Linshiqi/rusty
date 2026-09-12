@@ -2204,6 +2204,18 @@ usty`) holds `location.toml`
   and a fresh document gets a `(0, 0)` restore so it opens at the top. A
   `reveal` for the same path clears the pending viewport: a jump into a
   parked file lands on the target, not where the tab was left.
+- **A field nobody reads is a reply that never arrives.** Reasoning models
+  in the OpenAI dialect stream their thinking as `reasoning_content` (or
+  `reasoning`) beside an empty `content`, and can spend the whole
+  `max_tokens` there: the user saw a question with nothing under it and
+  `4096 out` on the meter, because the field was unread, the stream ended on
+  `length`, and the loop pushed no message for a turn with no text. Thinking
+  is `ChatEvent::ThinkingDelta` and `Content::Thinking` now — shown folded,
+  kept in the history, skipped by both providers on the way back (DeepSeek
+  rejects its own reasoning as input; Anthropic would want it signed) — and
+  `StopReason::MaxTokens` sets `ai.cut_short`, which the drawer says under
+  the answer with the number, because the returned history cannot carry a
+  fact about text that was never produced.
 - **Two round trips fired together answer in either order.** The settings
   page called `store_key` and then `refresh_key_state` back to back; the
   check overtook the write, "not saved" arrived and stayed, and the next

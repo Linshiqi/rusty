@@ -175,6 +175,15 @@ where
                 continue;
             };
 
+            let thought = choice
+                .delta
+                .reasoning_content
+                .or(choice.delta.reasoning)
+                .filter(|t| !t.is_empty());
+            if let Some(text) = thought {
+                yield ChatEvent::ThinkingDelta { text };
+            }
+
             if let Some(text) = choice.delta.content.filter(|t| !t.is_empty()) {
                 yield ChatEvent::TextDelta { text };
             }
@@ -341,6 +350,15 @@ struct Choice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    /// A reasoning model's thinking, streamed beside — and usually well
+    /// before — its `content`. DeepSeek and the servers that copy it spell
+    /// it `reasoning_content`; vLLM, Ollama and OpenRouter spell it
+    /// `reasoning`. Both are read, because a field nobody reads is a reply
+    /// that never arrives.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ToolCallDelta>,
 }
@@ -472,5 +490,46 @@ mod tests {
             })
         ));
         assert_eq!(events.len(), 7);
+    }
+
+    /// The failure this is written against: a reasoning model that spent its
+    /// whole budget thinking. Every token arrived as `reasoning_content`, the
+    /// stream ended on `length`, and with the field unread the window showed
+    /// a question with no answer under it and 4096 output tokens billed.
+    #[tokio::test]
+    async fn reasoning_is_an_event_of_its_own_and_a_length_stop_is_named() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me think\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\" about the gimbal.\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let events: Vec<ChatEvent> = replay(body)
+            .await
+            .into_iter()
+            .collect::<Result<_>>()
+            .expect("a clean stream");
+
+        assert!(
+            matches!(&events[0], ChatEvent::ThinkingDelta { text } if text == "Let me think"),
+            "{events:?}"
+        );
+        assert!(
+            matches!(&events[1], ChatEvent::ThinkingDelta { text } if text == " about the gimbal."),
+            "the other spelling of the field is read too: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ChatEvent::TextDelta { .. })),
+            "an empty content delta is not prose: {events:?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(ChatEvent::Done {
+                stop: StopReason::MaxTokens
+            })
+        ));
     }
 }

@@ -9,6 +9,22 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.19
+
+**Fixed — a reasoning model's answer never appeared.** Models that stream
+their reasoning — DeepSeek's thinking modes, Anthropic's extended thinking,
+and the local servers that copy the field — could spend the whole output
+budget thinking, and the drawer showed your question with nothing under it
+while the meter read 4096 tokens out. The reasoning now shows, folded under
+"Reasoning" and open while it streams, and the answer follows it. It is kept
+for you to read and is never sent back to the model.
+
+**Added — the drawer says when an answer was cut off.** When the model hits
+the output limit, a note under the answer says so, with the number, and
+opens the settings where the limit lives. A model that reasons spends part
+of that limit thinking, so the note matters most there — raise the limit
+for such a model.
+
 ## v0.6.18
 
 **Fixed — switching tabs lost your place.** Every document opened at the

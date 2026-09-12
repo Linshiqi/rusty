@@ -160,6 +160,9 @@ where
                     BlockDelta::TextDelta { text } => {
                         yield ChatEvent::TextDelta { text };
                     }
+                    BlockDelta::ThinkingDelta { thinking } => {
+                        yield ChatEvent::ThinkingDelta { text: thinking };
+                    }
                     BlockDelta::InputJsonDelta { partial_json } => {
                         if let Some((_, id)) = tool_ids.iter().find(|(i, _)| *i == index) {
                             yield ChatEvent::ToolCallDelta {
@@ -223,27 +226,33 @@ fn to_messages(request: &ChatRequest) -> Vec<Value> {
             let blocks: Vec<Value> = message
                 .content
                 .iter()
-                .map(|content| match content {
-                    Content::Text { text } => json!({ "type": "text", "text": text }),
-                    // An attached file is a text block framed as the file it
-                    // is — the same prose the OpenAI path sends.
-                    Content::Attachment { .. } => json!({
-                        "type": "text",
-                        "text": content.prose().unwrap_or_default(),
-                    }),
-                    Content::ToolUse { id, name, input } => json!({
-                        "type": "tool_use", "id": id, "name": name, "input": input
-                    }),
-                    Content::ToolResult {
-                        id,
-                        content,
-                        is_error,
-                    } => json!({
-                        "type": "tool_result",
-                        "tool_use_id": id,
-                        "content": content,
-                        "is_error": is_error,
-                    }),
+                .filter_map(|content| {
+                    Some(match content {
+                        Content::Text { text } => json!({ "type": "text", "text": text }),
+                        // An attached file is a text block framed as the file
+                        // it is — the same prose the OpenAI path sends.
+                        Content::Attachment { .. } => json!({
+                            "type": "text",
+                            "text": content.prose().unwrap_or_default(),
+                        }),
+                        // What the model thought is for the reader; sent back
+                        // it would be an unsigned thinking block, which the API
+                        // refuses.
+                        Content::Thinking { .. } => return None,
+                        Content::ToolUse { id, name, input } => json!({
+                            "type": "tool_use", "id": id, "name": name, "input": input
+                        }),
+                        Content::ToolResult {
+                            id,
+                            content,
+                            is_error,
+                        } => json!({
+                            "type": "tool_result",
+                            "tool_use_id": id,
+                            "content": content,
+                            "is_error": is_error,
+                        }),
+                    })
                 })
                 .collect();
             json!({ "role": role, "content": blocks })
@@ -306,6 +315,10 @@ enum ContentBlock {
 enum BlockDelta {
     TextDelta {
         text: String,
+    },
+    /// Extended thinking, when a model streams it. Shown, never sent back.
+    ThinkingDelta {
+        thinking: String,
     },
     InputJsonDelta {
         partial_json: String,

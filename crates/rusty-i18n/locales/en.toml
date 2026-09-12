@@ -558,6 +558,8 @@ context-attached = "Sent with your question: {path}"
 context-remove = "Do not include this file"
 context-add = "Include the open file"
 attached = "Attached: {path}"
+reasoning = "Reasoning"
+cut-short = "The answer stopped at the output limit of {max} tokens; a model that reasons spends part of it thinking."
 
 [toolchain]
 downloads-here = "QEMU and the debuggers rusty downloads live here"

@@ -190,6 +190,7 @@ impl Assistant {
 
             let mut stream = self.provider.chat(request).await?;
             let mut text = String::new();
+            let mut thinking = String::new();
             let mut calls = ToolCallAccumulator::default();
             let mut stop = StopReason::EndTurn;
 
@@ -197,6 +198,7 @@ impl Assistant {
                 let event = event?;
                 match &event {
                     ChatEvent::TextDelta { text: delta } => text.push_str(delta),
+                    ChatEvent::ThinkingDelta { text: delta } => thinking.push_str(delta),
                     ChatEvent::ToolCallStart { id, name } => calls.start(id.clone(), name.clone()),
                     ChatEvent::ToolCallDelta { id, partial_json } => calls.push(id, partial_json),
                     ChatEvent::Done { stop: reason } => stop = *reason,
@@ -207,6 +209,12 @@ impl Assistant {
 
             let tool_uses = calls.finish();
             let mut content = Vec::new();
+            // The thinking first, as it happened; a turn that is all thinking
+            // — the budget spent before the answer began — is still kept, so
+            // the transcript shows what the money bought.
+            if !thinking.is_empty() {
+                content.push(Content::Thinking { text: thinking });
+            }
             if !text.is_empty() {
                 content.push(Content::Text { text });
             }

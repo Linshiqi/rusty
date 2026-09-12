@@ -4,7 +4,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_ai::{
-    AgentEvent, ChatEvent, Content, Message, Preset, ProviderCheck, ProviderConfig, ToolDef,
+    AgentEvent, ChatEvent, Content, Message, Preset, ProviderCheck, ProviderConfig, StopReason,
+    ToolDef,
 };
 use rusty_i18n::t;
 
@@ -202,6 +203,8 @@ pub fn ask(state: AppState, question: String, context: Option<(String, String)>)
         })
     });
     state.ai.pending.set(String::new());
+    state.ai.thinking.set(String::new());
+    state.ai.cut_short.set(false);
     state.ai.activity.set(Vec::new());
     state.ai.usage.set(None);
     state.ai.streaming.set(true);
@@ -238,11 +241,19 @@ pub fn ask(state: AppState, question: String, context: Option<(String, String)>)
             // backend names a stop with exactly this message.
             if error.message == cmd::ai::STOPPED {
                 let mut history = state.ai.conversation.get_untracked();
+                let thought = state.ai.thinking.get_untracked();
                 let partial = state.ai.pending.get_untracked();
+                let mut content = Vec::new();
+                if !thought.is_empty() {
+                    content.push(Content::Thinking { text: thought });
+                }
                 if !partial.is_empty() {
-                    history.push(Message::assistant(vec![Content::Text {
+                    content.push(Content::Text {
                         text: format!("{partial}\n\n*{}*", t!("assistant.stopped")),
-                    }]));
+                    });
+                }
+                if !content.is_empty() {
+                    history.push(Message::assistant(content));
                 }
                 return Ok(history);
             }
@@ -255,6 +266,7 @@ pub fn ask(state: AppState, question: String, context: Option<(String, String)>)
             // next turn that the model never actually produced.
             state.ai.conversation.set(history);
             state.ai.pending.set(String::new());
+            state.ai.thinking.set(String::new());
             state.ai.streaming.set(false);
         },
     );
@@ -283,6 +295,19 @@ fn apply_event(state: AppState, event: AgentEvent) {
                 }
             });
         }
+        AgentEvent::Chat(ChatEvent::ThinkingDelta { text }) => {
+            state
+                .ai
+                .thinking
+                .update(|thinking| thinking.push_str(&text));
+        }
+        // The answer hit the output cap. The provider says so once, at the
+        // end of the stream, and the history that comes back cannot carry it
+        // — a model that spent its budget thinking produced no text to mark
+        // — so the window keeps the fact and says it under the answer.
+        AgentEvent::Chat(ChatEvent::Done {
+            stop: StopReason::MaxTokens,
+        }) => state.ai.cut_short.set(true),
         // The provider-level tool-call events restate what `ToolStarted` and
         // `ToolFinished` already say, but without the agent loop's knowledge of
         // whether the call succeeded. Rendering both would double every row.
@@ -294,6 +319,8 @@ fn apply_event(state: AppState, event: AgentEvent) {
 pub fn clear_conversation(state: AppState) {
     state.ai.conversation.set(Vec::new());
     state.ai.pending.set(String::new());
+    state.ai.thinking.set(String::new());
+    state.ai.cut_short.set(false);
     state.ai.activity.set(Vec::new());
     state.ai.usage.set(None);
 }
