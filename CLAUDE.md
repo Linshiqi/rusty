@@ -2216,6 +2216,21 @@ usty`) holds `location.toml`
   `StopReason::MaxTokens` sets `ai.cut_short`, which the drawer says under
   the answer with the number, because the returned history cannot carry a
   fact about text that was never produced.
+- **One output budget for every provider is possible only because a
+  provider that caps lower says so.** `DEFAULT_MAX_TOKENS` is 200 000, far
+  above any model's cap, so a reasoning model is never cut off by a default.
+  Anthropic, OpenAI and DeepSeek all refuse a larger `max_tokens` with a 400
+  that names the cap (`> 64000, which is the maximum allowed number of
+  output tokens`, `supports at most 16384 completion tokens`, `the valid
+  range of max_tokens is [1, 8192]`); `output_cap_in` reads the largest
+  number below the ask out of a refusal about output, the loop asks again at
+  that number, and `AppState::output_caps` keeps it for the session so the
+  refusal happens once per provider, not once per question. It reads only
+  the provider's words — never this crate's `answered 400` framing, whose
+  status code would read as a cap of 400 — and nothing under 256. The
+  setting itself is left alone: what the user chose and what the provider
+  takes are two facts, and the drawer's cut-off note uses the count the
+  provider reported rather than either.
 - **Two round trips fired together answer in either order.** The settings
   page called `store_key` and then `refresh_key_state` back to back; the
   check overtook the write, "not saved" arrived and stayed, and the next

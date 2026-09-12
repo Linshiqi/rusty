@@ -59,6 +59,9 @@ pub mod secrets;
 pub mod tools;
 
 #[cfg(feature = "backend")]
+use std::sync::atomic::{AtomicU32, Ordering};
+
+#[cfg(feature = "backend")]
 use futures_util::StreamExt;
 
 #[cfg(feature = "backend")]
@@ -129,6 +132,10 @@ pub struct Assistant {
     /// tools without concluding would otherwise spend the user's money in a
     /// loop — and with BYO keys that is their money, not ours.
     max_turns: usize,
+    /// The output cap the provider named while refusing `max_tokens`, when it
+    /// did; zero until then. Read by the host after a question so the next
+    /// one starts there instead of being refused again.
+    learned_cap: AtomicU32,
 }
 
 #[cfg(feature = "backend")]
@@ -138,8 +145,9 @@ impl Assistant {
             provider,
             tools: ToolRegistry::workbench(),
             system: SYSTEM_PROMPT.to_string(),
-            max_tokens: 4096,
+            max_tokens: DEFAULT_MAX_TOKENS,
             max_turns: 8,
+            learned_cap: AtomicU32::new(0),
         }
     }
 
@@ -179,16 +187,32 @@ impl Assistant {
             Vec::new()
         };
 
+        let mut max_tokens = self.max_tokens;
         for _ in 0..self.max_turns {
-            let request = ChatRequest {
-                system: Some(self.system.clone()),
-                messages: history.clone(),
-                tools: tools.clone(),
-                max_tokens: self.max_tokens,
-                temperature: None,
+            // A provider whose model caps output below what was asked refuses
+            // the request and names its cap in the refusal. Asking again at
+            // the named cap is not a guess — it is the provider's own number
+            // — and it is what lets one large default serve every provider.
+            // Each pass lowers the budget strictly, so this ends.
+            let mut stream = loop {
+                let request = ChatRequest {
+                    system: Some(self.system.clone()),
+                    messages: history.clone(),
+                    tools: tools.clone(),
+                    max_tokens,
+                    temperature: None,
+                };
+                match self.provider.chat(request).await {
+                    Ok(stream) => break stream,
+                    Err(error) => match output_cap_named_in(&error, max_tokens) {
+                        Some(cap) => {
+                            max_tokens = cap;
+                            self.learned_cap.store(cap, Ordering::Relaxed);
+                        }
+                        None => return Err(error),
+                    },
+                }
             };
-
-            let mut stream = self.provider.chat(request).await?;
             let mut text = String::new();
             let mut thinking = String::new();
             let mut calls = ToolCallAccumulator::default();
@@ -268,5 +292,131 @@ impl Assistant {
         }
 
         Ok(())
+    }
+
+    /// The output cap the provider named while refusing the budget it was
+    /// asked for, if it refused. The host remembers it for the next question,
+    /// so a provider is refused once per session rather than once per ask.
+    pub fn learned_cap(&self) -> Option<u32> {
+        match self.learned_cap.load(Ordering::Relaxed) {
+            0 => None,
+            cap => Some(cap),
+        }
+    }
+}
+
+/// The output cap a provider named in a refusal of `asked`, when it named one.
+///
+/// Only a refusal is read — a 4xx before the stream, or the error a server
+/// puts inside a 200 — and only the provider's own words, never this crate's
+/// framing: the status code in "answered 400" would otherwise read as a cap
+/// of 400.
+#[cfg(feature = "backend")]
+fn output_cap_named_in(error: &Error, asked: u32) -> Option<u32> {
+    match error {
+        Error::Http { status, body, .. } if (400..500).contains(status) => {
+            output_cap_in(body, asked)
+        }
+        Error::Upstream { message, .. } => output_cap_in(message, asked),
+        _ => None,
+    }
+}
+
+/// The cap named in a provider's message about output tokens: the largest
+/// whole number below `asked`, from a message that is about output at all.
+///
+/// Written against three refusals, verbatim in the tests: Anthropic's
+/// `max_tokens: 200000 > 64000, which is the maximum allowed number of
+/// output tokens for …`, OpenAI's `max_tokens is too large: 200000. This
+/// model supports at most 16384 completion tokens …`, and DeepSeek's `the
+/// valid range of max_tokens is [1, 8192]`. The largest number below the ask
+/// rather than the smallest, because a message names small numbers for other
+/// reasons; nothing under 256, because no model's output cap is.
+#[cfg(feature = "backend")]
+fn output_cap_in(message: &str, asked: u32) -> Option<u32> {
+    let lower = message.to_ascii_lowercase();
+    let about_output = [
+        "max_tokens",
+        "max tokens",
+        "output token",
+        "completion token",
+        "context length",
+        "maximum context",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !about_output {
+        return None;
+    }
+    lower
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == ','))
+        .filter(|token| {
+            token.chars().next().is_some_and(|c| c.is_ascii_digit())
+                && token.chars().all(|c| c.is_ascii_digit() || c == ',')
+        })
+        .filter_map(|token| token.replace(',', "").parse::<u32>().ok())
+        .filter(|&n| n >= 256 && n < asked)
+        .max()
+}
+
+#[cfg(all(test, feature = "backend"))]
+mod cap_tests {
+    use super::output_cap_in;
+
+    #[test]
+    fn the_cap_a_provider_names_is_read_off_its_refusal() {
+        assert_eq!(
+            output_cap_in(
+                "max_tokens: 200000 > 64000, which is the maximum allowed number of output \
+                 tokens for claude-sonnet-4-5-20250929",
+                200_000,
+            ),
+            Some(64_000),
+        );
+        assert_eq!(
+            output_cap_in(
+                "max_tokens is too large: 200000. This model supports at most 16384 \
+                 completion tokens, whereas you provided 200000.",
+                200_000,
+            ),
+            Some(16_384),
+        );
+        assert_eq!(
+            output_cap_in(
+                "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]",
+                200_000,
+            ),
+            Some(8_192),
+        );
+        assert_eq!(
+            output_cap_in(
+                "{\"error\":{\"message\":\"max_tokens is too large: 200,000. This model \
+                 supports at most 16,384 completion tokens\",\"code\":400}}",
+                200_000,
+            ),
+            Some(16_384),
+            "thousands separators are read, and a code beside the message is not a cap",
+        );
+    }
+
+    #[test]
+    fn a_refusal_about_something_else_names_no_cap() {
+        assert_eq!(
+            output_cap_in(
+                "The model `gpt-5-mini-2025` does not exist or you do not have access to it.",
+                200_000,
+            ),
+            None,
+        );
+        assert_eq!(
+            output_cap_in("max_tokens must be at least 1", 200_000),
+            None,
+            "no number below the ask that could be a cap",
+        );
+        assert_eq!(
+            output_cap_in("max_tokens: 200000 > 200000", 200_000),
+            None,
+            "the ask itself is not a cap below it",
+        );
     }
 }

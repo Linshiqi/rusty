@@ -9,6 +9,23 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.20
+
+**Changed — the output limit starts at 200,000 tokens.** A model that
+reasons spends part of its budget thinking before the answer begins, and
+the old default of 4,096 was gone before the first word. Profiles that
+still carried 4,096 — the old default was the only value there had ever
+been — read as the new one; a limit you set yourself is kept. A provider
+whose model allows less refuses the request and names its cap; rusty asks
+again at that cap and remembers it for the session, so the one default
+serves every provider without a second refusal. Settings ▸ Assistant now has
+a Max output field, and the note under a cut-off answer shows the count the
+provider actually stopped at.
+
+**Fixed — a switch's knob sat outside its track when on.** The toggles in
+Settings (Vim keys, and the others) drew the knob past the right edge of the
+track in the on position. It sits inside now.
+
 ## v0.6.19
 
 **Fixed — a reasoning model's answer never appeared.** Models that stream

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -110,6 +111,12 @@ pub struct AppState {
     /// left the loop running for up to eight more tool rounds, on the user's
     /// key.
     asking: Mutex<Option<(u64, CancellationToken)>>,
+    /// The output cap each provider named when it refused the configured
+    /// `max_tokens`, keyed by profile, endpoint and model, for the life of
+    /// the process. The setting stays what the user chose; this is what the
+    /// provider will actually take, learned once rather than refused on
+    /// every question.
+    output_caps: Mutex<HashMap<String, u32>>,
     /// Serialises every read-modify-write of `workbench.toml` from this
     /// process. See [`Self::update_workbench`].
     workbench: Mutex<()>,
@@ -364,6 +371,17 @@ impl AppState {
         if let Some((_, token)) = self.asking.lock().await.take() {
             token.cancel();
         }
+    }
+
+    /// The output cap this provider named earlier in the session, if it did.
+    pub async fn output_cap(&self, key: &str) -> Option<u32> {
+        self.output_caps.lock().await.get(key).copied()
+    }
+
+    /// Remember the cap a provider just named, so the next question starts
+    /// there instead of being refused again.
+    pub async fn learn_output_cap(&self, key: String, cap: u32) {
+        self.output_caps.lock().await.insert(key, cap);
     }
 
     // ─── workbench.toml ──────────────────────────────────────────────────────

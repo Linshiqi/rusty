@@ -90,7 +90,13 @@ fn from_choice(choice: &rusty_embed::AssistantChoice) -> Option<ProviderConfig> 
         kind: serde_json::from_value(serde_json::Value::String(choice.kind.clone())).ok()?,
         base_url: choice.base_url.clone(),
         model: choice.model.clone(),
-        max_tokens: choice.max_tokens.unwrap_or(4096),
+        // 4096 was the default for every profile written before the setting
+        // existed, and nothing could set it to anything else — so a stored
+        // 4096 is the old default, not a choice, and reads as the new one.
+        max_tokens: choice
+            .max_tokens
+            .filter(|&max| max != 4096)
+            .unwrap_or(rusty_ai::DEFAULT_MAX_TOKENS),
         temperature: choice.temperature,
         supports_tools: choice.supports_tools.unwrap_or(true),
     })

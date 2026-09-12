@@ -348,8 +348,17 @@ pub struct ProviderConfig {
 }
 
 fn default_max_tokens() -> u32 {
-    4096
+    DEFAULT_MAX_TOKENS
 }
+
+/// The output budget a new profile starts with.
+///
+/// Deliberately far above what any answer needs: a model that reasons spends
+/// its budget thinking first, and 4096 — the old default — was spent before
+/// the first word of the answer arrived. The number is a ceiling, not a
+/// target; a provider whose model caps output lower says so in its refusal,
+/// and the loop learns that cap from the refusal rather than guessing one.
+pub const DEFAULT_MAX_TOKENS: u32 = 200_000;
 
 fn default_true() -> bool {
     true

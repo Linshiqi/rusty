@@ -68,7 +68,15 @@ pub async fn ai_ask(
         })
         .await??
     };
-    let assistant = Assistant::new(provider).with_max_tokens(config.max_tokens);
+    // The budget is the setting, or the cap this provider named earlier in
+    // the session when it refused the setting — whichever is lower — so a
+    // provider is refused once per session, not once per question.
+    let cap_key = format!("{}\n{}\n{}", config.profile, config.base_url, config.model);
+    let budget = match state.output_cap(&cap_key).await {
+        Some(cap) => cap.min(config.max_tokens),
+        None => config.max_tokens,
+    };
+    let assistant = Assistant::new(provider).with_max_tokens(budget);
     let mut history = history;
 
     let (ticket, stop) = state.begin_ask().await;
@@ -93,6 +101,9 @@ pub async fn ai_ask(
         }
     };
     state.end_ask(ticket).await;
+    if let Some(cap) = assistant.learned_cap() {
+        state.learn_output_cap(cap_key, cap).await;
+    }
 
     outcome.map(|()| history)
 }

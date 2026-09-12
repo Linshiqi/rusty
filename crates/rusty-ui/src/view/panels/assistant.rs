@@ -119,10 +119,20 @@ fn Transcript() -> impl IntoView {
                         // nobody answered.
                         {move || {
                             state.ai.cut_short.get().then(|| {
+                                // The count the provider reported is where it
+                                // actually stopped — the setting may be higher
+                                // than the cap the provider named and applied.
                                 let max = state
                                     .ai
-                                    .config
-                                    .with(|config| config.as_ref().map_or(0, |c| c.max_tokens));
+                                    .usage
+                                    .get()
+                                    .map(|(_, output)| output)
+                                    .unwrap_or_else(|| {
+                                        state
+                                            .ai
+                                            .config
+                                            .with(|config| config.as_ref().map_or(0, |c| c.max_tokens))
+                                    });
                                 view! {
                                     <div class="flex max-w-[76ch] flex-wrap items-center gap-x-2 gap-y-1 rounded-[6px] bg-amber-fill px-2.5 py-1.5 text-caption leading-relaxed text-amber">
                                         <span>{t!("assistant.cut-short", max = max)}</span>

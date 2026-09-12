@@ -42,7 +42,7 @@ pub(super) fn Assistant() -> impl IntoView {
                 kind: ProviderKind::OpenAiCompatible,
                 base_url: String::new(),
                 model: String::new(),
-                max_tokens: 4096,
+                max_tokens: rusty_ai::DEFAULT_MAX_TOKENS,
                 temperature: None,
                 supports_tools: true,
             }),
@@ -76,6 +76,16 @@ pub(super) fn Assistant() -> impl IntoView {
     let (base_url, set_base_url) = field(|d| &d.base_url, |d, v| d.base_url = v);
     let (model, set_model) = field(|d| &d.model, |d, v| d.model = v);
     let (profile_name, set_profile) = field(|d| &d.profile, |d, v| d.profile = v);
+    // A number, unlike the fields above: anything that is not a positive
+    // whole number leaves the draft where it was.
+    let max_tokens = Signal::derive(move || draft.with(|d| d.max_tokens.to_string()));
+    let set_max_tokens = Callback::new(move |value: String| {
+        if let Ok(n) = value.trim().parse::<u32>()
+            && n > 0
+        {
+            draft.update(|d| d.max_tokens = n);
+        }
+    });
 
     view! {
         <Group title=t!("settings.assistant.model")>
@@ -163,6 +173,12 @@ pub(super) fn Assistant() -> impl IntoView {
                         }
                     })
             }}
+            <Row
+                label=t!("settings.assistant.max-tokens")
+                detail=t!("settings.assistant.max-tokens-detail")
+            >
+                <TextField value=max_tokens on_input=set_max_tokens width="w-[120px]" kind="number" />
+            </Row>
             <Row label=t!("settings.assistant.profile")>
                 <TextField value=profile_name on_input=set_profile width="w-[220px]" />
             </Row>

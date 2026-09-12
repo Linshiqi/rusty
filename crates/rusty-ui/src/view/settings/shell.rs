@@ -213,7 +213,10 @@ pub(super) fn Switch(#[prop(into)] on: Signal<bool>, on_toggle: Callback<bool>) 
             }
         >
             <span class=move || {
-                let base = "absolute top-[2px] size-4 rounded-full bg-white shadow-sm transition-transform";
+                // `left-0` is load-bearing: without it the knob's static
+                // position is the button's centred content box, and the
+                // translate for "on" carried it past the track's right edge.
+                let base = "absolute top-[2px] left-0 size-4 rounded-full bg-white shadow-sm transition-transform";
                 if on.get() {
                     format!("{base} translate-x-[16px]")
                 } else {
