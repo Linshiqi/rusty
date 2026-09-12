@@ -365,10 +365,16 @@ pub enum Divider {
     /// Where two editor groups meet, in permille of the editor area for the
     /// same reason as `GitSplit`: half is the right default at every width.
     EditorSplit,
+    /// The assistant drawer's width. Anchored to the right edge of the
+    /// window, so dragging left grows it — the dock's rule turned on its
+    /// side. It was a fixed 400px for a release, which is too narrow for a
+    /// chapter's formulas and too wide for a one-line answer, depending on
+    /// the afternoon.
+    Assistant,
 }
 
 impl Divider {
-    pub const ALL: [Divider; 9] = [
+    pub const ALL: [Divider; 10] = [
         Divider::Tree,
         Divider::Dock,
         Divider::DebugStack,
@@ -378,6 +384,7 @@ impl Divider {
         Divider::GitChanges,
         Divider::GitSplit,
         Divider::EditorSplit,
+        Divider::Assistant,
     ];
 
     /// Whether the line is vertical — a column split, dragged left and right.
@@ -390,6 +397,7 @@ impl Divider {
                 | Divider::GitChanges
                 | Divider::GitSplit
                 | Divider::EditorSplit
+                | Divider::Assistant
         )
     }
 
@@ -408,6 +416,8 @@ impl Divider {
             | Divider::EditorSplit => x - from_pointer,
             // Anchored to the bottom, so dragging up grows it.
             Divider::Dock | Divider::GitDetail => from_pointer - y,
+            // Anchored to the right, so dragging left grows it.
+            Divider::Assistant => from_pointer - x,
             // Anchored to the top, so dragging down grows it.
             Divider::GitMessage => y - from_pointer,
         }
@@ -427,6 +437,7 @@ impl Divider {
             Divider::GitMessage => 140.0,
             Divider::GitFiles => 380.0,
             Divider::GitChanges => 380.0,
+            Divider::Assistant => 400.0,
             // Permille: half and half.
             Divider::GitSplit | Divider::EditorSplit => 500.0,
         }
@@ -444,6 +455,9 @@ impl Divider {
             Divider::GitMessage => (40.0, 1000.0),
             Divider::GitFiles => (160.0, 1200.0),
             Divider::GitChanges => (220.0, 1200.0),
+            // Narrower than 300 and a formula wraps mid-fraction; wider than
+            // 900 and there is no editor left beside it on a laptop.
+            Divider::Assistant => (300.0, 900.0),
             // Neither side narrower than a seventh of the text.
             Divider::GitSplit => (150.0, 850.0),
             // Neither group narrower than a fifth of the area: a group that
@@ -463,6 +477,7 @@ impl Divider {
             Divider::GitChanges => "rusty.layout.git-changes",
             Divider::GitSplit => "rusty.layout.git-split",
             Divider::EditorSplit => "rusty.layout.editor-split",
+            Divider::Assistant => "rusty.layout.assistant",
         }
     }
 }
@@ -1430,6 +1445,8 @@ pub struct Layout {
     pub focus: RwSignal<Group>,
     /// Where the two groups meet, in permille of the editor area's width.
     pub editor_split: RwSignal<f64>,
+    /// The assistant drawer's width in pixels (`Divider::Assistant`).
+    pub assistant_width: RwSignal<f64>,
     /// The file tree folded away: a second click on the Files switcher, or
     /// Ctrl+B. Remembered across sessions, like the pin map's fold.
     pub tree_hidden: RwSignal<bool>,
@@ -1452,6 +1469,7 @@ impl Layout {
             Divider::GitChanges => self.git_changes_width,
             Divider::GitSplit => self.git_split,
             Divider::EditorSplit => self.editor_split,
+            Divider::Assistant => self.assistant_width,
         }
     }
 }
@@ -1716,6 +1734,10 @@ impl AppState {
                 editor_split: RwSignal::new(stored_size(
                     Divider::EditorSplit,
                     Divider::EditorSplit.default_size(),
+                )),
+                assistant_width: RwSignal::new(stored_size(
+                    Divider::Assistant,
+                    Divider::Assistant.default_size(),
                 )),
                 tree_hidden: RwSignal::new(stored_tree_hidden()),
                 quick_open: RwSignal::new(false),

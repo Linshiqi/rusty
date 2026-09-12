@@ -1155,6 +1155,9 @@ rationale lives in the code comment. Same for the assistant drawer: an
 empty transcript is one line and the composer — the paragraph about the
 tools, the four openers and the tool-name chips were read once and then in
 the way of every conversation after, and the tools are listed in Settings.
+The drawer's width is `Divider::Assistant`, anchored to the right so
+dragging left grows it, with the same default, bounds and storage key
+plumbing as every other divider; it was a fixed 400px for a release.
 
 **The open file goes with a question**, as VS Code sends the active editor:
 a chip above the composer names it, its × drops it for that question, and

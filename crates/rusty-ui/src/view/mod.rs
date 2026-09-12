@@ -38,7 +38,7 @@ use rusty_i18n::t;
 
 use crate::{
     controller,
-    state::AppState,
+    state::{AppState, Divider},
     view::{
         components::{Button, ButtonKind, Dot, ErrorBanner, Tone},
         icon::{Icon, IconView},
@@ -263,7 +263,14 @@ pub fn App() -> impl IntoView {
                 // The assistant, VSCode-chat style: a right-hand drawer the
                 // title-bar icon toggles, beside whatever panel is active.
                 <Show when=move || state.ai.open.get()>
-                    <aside class="flex w-[400px] flex-none flex-col border-l border-line bg-sidebar">
+                    // The drawer's left edge is a divider like the tree's
+                    // right edge; the handle draws the hairline, so the aside
+                    // carries no border of its own.
+                    <split::Handle divider=Divider::Assistant />
+                    <aside
+                        class="flex flex-none flex-col bg-sidebar"
+                        style=move || format!("width: {}px", state.layout.assistant_width.get())
+                    >
                         <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
                             <span class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
                                 {t!("chrome.assistant")}

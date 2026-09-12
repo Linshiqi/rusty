@@ -9,6 +9,13 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.21
+
+**Added — the assistant drawer resizes.** Drag its left edge to make it
+wider or narrower, between 300 and 900 pixels; it was a fixed 400. The
+width is remembered, and View ▸ Reset layout puts it back with the other
+dividers.
+
 ## v0.6.20
 
 **Changed — the output limit starts at 200,000 tokens.** A model that
