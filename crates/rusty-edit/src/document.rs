@@ -73,6 +73,12 @@ impl Files {
         crate::highlight::lines(&self.syntaxes, path, text).0
     }
 
+    /// Highlight a fenced code block by the language its fence names — what a
+    /// Markdown page asks for, where there is no path to read a grammar off.
+    pub fn highlight_snippet(&self, lang: &str, text: &str) -> Vec<crate::model::Line> {
+        crate::highlight::snippet(&self.syntaxes, lang, text)
+    }
+
     /// Read a file under `root`, highlighted.
     pub fn open(&self, root: &Path, relative: &str) -> Result<Document> {
         let path = resolve(root, relative)?;

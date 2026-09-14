@@ -568,7 +568,14 @@ pub fn math_html(tex: &str, display: bool) -> Result<String, String> {
         config,
     )
     .map_err(|error| error.to_string())?;
-    Ok(out)
+    // pulldown-latex 0.8 writes `\ `, `~` and `\nobreakspace` as the entity
+    // `&nbsp;` and then escapes it like any other text, so the page showed
+    // the six characters `&nbsp;` between the components of every tuple in
+    // a chapter that spaces them with `\ `. The one element it emits for
+    // those three commands is repaired here, exactly — a `\text{&nbsp;}`
+    // somebody typed stays the literal text it is, because that is not the
+    // whole of an `<mtext>`.
+    Ok(out.replace("<mtext>&amp;nbsp;</mtext>", "<mtext>&#160;</mtext>"))
 }
 
 // ─── rendering ───────────────────────────────────────────────────────────────
@@ -596,9 +603,87 @@ pub fn Markdown(
     /// pictures. Omitted for text that is not a file.
     #[prop(optional_no_strip)]
     base: Option<String>,
+    /// Still being written — an answer as it streams. Code blocks stay as
+    /// written until it settles: a block re-rendered on every delta would
+    /// ask the backend once per delta for a text about to change.
+    #[prop(optional)]
+    live: bool,
 ) -> impl IntoView {
     provide_context(PageBase(base));
+    provide_context(PageLive(live));
     view! { <div class="flex flex-col gap-2">{render(parse(&text))}</div> }
+}
+
+/// Whether the page is still arriving — see [`Markdown`]'s `live`.
+#[derive(Clone, Copy)]
+struct PageLive(bool);
+
+/// A fenced code block: in the editor's colours once the backend has read
+/// it, and as written until then — or for good, when the fence names no
+/// language, or one no grammar answers to, or there is no backend.
+///
+/// The runs come from `editor.snippets`, asked for on first sight and kept
+/// by content, so the block costs one request however many times the page
+/// re-renders and wherever else the same block appears.
+#[component]
+fn Snippet(lang: Option<String>, text: String) -> impl IntoView {
+    let state = crate::state::AppState::expect();
+    let live = use_context::<PageLive>().is_some_and(|live| live.0);
+    let key = lang
+        .as_deref()
+        .filter(|_| !live)
+        .map(|lang| crate::state::snippet_key(lang, &text));
+    if let (Some(lang), Some(_)) = (&lang, key) {
+        crate::controller::highlight_snippet(state, lang.clone(), text.clone());
+    }
+    let written = text.clone();
+    let runs = move || {
+        key.and_then(|key| {
+            state.editor.snippets.with(|snippets| {
+                snippets
+                    .get(&key)
+                    .filter(|lines| !lines.is_empty())
+                    .cloned()
+            })
+        })
+    };
+    view! {
+        <pre class=CODE_BLOCK>
+            {lang
+                .map(|lang| {
+                    view! { <div class="mb-1 text-caption text-label-4">{lang}</div> }
+                })}
+            {move || match runs() {
+                Some(lines) => highlighted(&lines).into_any(),
+                None => written.clone().into_any(),
+            }}
+        </pre>
+    }
+}
+
+/// Highlighted runs as the editor's echo draws them: one span per run, in
+/// the class the stylesheet owns for its token, lines joined by newlines.
+fn highlighted(lines: &[rusty_edit::Line]) -> AnyView {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let spans = line
+                .spans
+                .iter()
+                .map(|span| {
+                    let class = crate::view::panels::files::highlight::class_of(span.token);
+                    view! { <span class=class>{span.text.clone()}</span> }
+                })
+                .collect_view();
+            let newline = (index > 0).then_some("\n");
+            view! {
+                {newline}
+                {spans}
+            }
+        })
+        .collect_view()
+        .into_any()
 }
 
 fn render(nodes: Vec<Node>) -> AnyView {
@@ -609,18 +694,7 @@ fn node(node: Node) -> AnyView {
     match node {
         Node::Heading(level, text) => heading(level, spans(text)),
         Node::Para(text) => view! { <p class=PARA>{spans(text)}</p> }.into_any(),
-        Node::Code { lang, text } => view! {
-            <pre class=CODE_BLOCK>
-                {lang
-                    .map(|lang| {
-                        view! {
-                            <div class="mb-1 text-caption text-label-4">{lang}</div>
-                        }
-                    })}
-                {text}
-            </pre>
-        }
-        .into_any(),
+        Node::Code { lang, text } => view! { <Snippet lang=lang text=text /> }.into_any(),
         Node::Quote(inner) => quote(render(inner)),
         Node::List { start, items } => {
             let ordered = start.is_some();
@@ -1018,6 +1092,28 @@ mod tests {
             }]),
             "{nodes:?}"
         );
+    }
+
+    /// A chapter that spaces its tuples with `\ ` showed `(a,&nbsp;b)` with
+    /// the entity spelled out: pulldown-latex 0.8 escapes the `&nbsp;` it
+    /// writes for a control space. The repair is exact, so a literal
+    /// `&nbsp;` somebody typed inside `\text{}` is still shown as typed.
+    #[test]
+    fn a_control_space_is_a_space_and_not_the_word_nbsp() {
+        for tex in [r"a\ b", "a~b", r"a\nobreakspace b"] {
+            let out = math_html(tex, false).unwrap();
+            assert!(out.contains("<mtext>&#160;</mtext>"), "{tex}: {out}");
+            assert!(!out.contains("&amp;nbsp;"), "{tex}: {out}");
+        }
+        let typed = math_html(r"\text{A&nbsp;B}", false).unwrap();
+        assert!(
+            typed.contains("<mtext>A&amp;nbsp;B</mtext>"),
+            "a literal entity in text is the text it is: {typed}"
+        );
+        // The spacing commands that never went through the entity still
+        // come out as their widths.
+        let thin = math_html(r"a,\;\;b", false).unwrap();
+        assert_eq!(thin.matches("<mspace").count(), 2, "{thin}");
     }
 
     /// The converter answers MathML for a formula and a reason for a broken

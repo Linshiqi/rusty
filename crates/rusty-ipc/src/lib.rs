@@ -131,6 +131,10 @@ pub mod files {
     /// Bring a detached editor's file back into the main window.
     pub const REATTACH: &str = "reattach_editor_window";
     pub const HIGHLIGHT: &str = "highlight_text";
+    /// A fenced code block, highlighted by the language its fence names —
+    /// what the Markdown page asks for, where there is no path to read a
+    /// grammar off.
+    pub const HIGHLIGHT_SNIPPET: &str = "highlight_snippet";
     pub const OPEN_EXTERNAL: &str = "open_external";
     pub const FORMAT: &str = "format_text";
     pub const SEARCH: &str = "search_project";

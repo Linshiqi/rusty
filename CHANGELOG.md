@@ -9,6 +9,20 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.22
+
+**Added — code blocks in a Markdown page are highlighted.** A fenced block
+whose fence names a language — `rust`, `toml`, `bash`, `c`, `python` and
+the rest of the grammars the editor knows — is drawn in the same colours
+the editor uses for that language, in the page and in the assistant's
+answers. A block with no language, or one rusty has no grammar for, stays
+as written.
+
+**Fixed — formulas showed `&nbsp;` where a space belonged.** A formula
+spaced with `\ `, `~` or `\nobreakspace` rendered the six characters
+`&nbsp;` between its terms, so `(a,\ b)` read as `(a,&nbsp;b)`. It is a
+space now.
+
 ## v0.6.21
 
 **Added — the assistant drawer resizes.** Drag its left edge to make it

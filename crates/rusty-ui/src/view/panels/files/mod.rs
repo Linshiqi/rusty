@@ -22,7 +22,7 @@ mod editor;
 mod edits;
 mod find;
 mod folding;
-mod highlight;
+pub(crate) mod highlight;
 mod lens;
 mod modal;
 mod pairs;

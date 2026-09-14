@@ -849,6 +849,13 @@ pub struct Editor {
     /// in two panes is one file. Session state; the watcher drops an entry
     /// when its file changes on disk, so the next look re-reads it.
     pub images: RwSignal<HashMap<String, ImageLoad>>,
+    /// Fenced code blocks the Markdown page has had highlighted, by
+    /// [`snippet_key`] of their language and text: the runs once they
+    /// arrived, an empty list while they are on their way. Shared by both
+    /// groups like `images`, and keyed by content rather than by page, so
+    /// the same block in two chapters — or in a page and an answer — is one
+    /// request and can never be stale.
+    pub snippets: RwSignal<HashMap<u64, Vec<Line>>>,
     /// Which regions of the active document are collapsed.
     ///
     /// Session state, per tab, deliberately not persisted: a fold is where
@@ -899,6 +906,7 @@ impl Editor {
             expanded: RwSignal::new(Vec::new()),
             source_view: RwSignal::new(Vec::new()),
             images: RwSignal::new(HashMap::new()),
+            snippets: RwSignal::new(HashMap::new()),
             folds: RwSignal::new(rusty_edit::Folded::default()),
             stale: RwSignal::new(Vec::new()),
             watch_session: RwSignal::new(0),
@@ -924,6 +932,7 @@ impl Editor {
             vim_on: self.vim_on,
             source_view: self.source_view,
             images: self.images,
+            snippets: self.snippets,
             stale: self.stale,
             watch_session: self.watch_session,
             ..Self::fresh()
@@ -940,6 +949,17 @@ pub enum ImageLoad {
     Loading,
     Ready(String),
     Failed(String),
+}
+
+/// The key a fenced code block is cached under: its language and its text,
+/// hashed — a block is the same block wherever it appears, and a block that
+/// changed by one character is another one.
+pub fn snippet_key(lang: &str, text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lang.hash(&mut hasher);
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Which editor group a state value addresses. Two at most: VS Code's

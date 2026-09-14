@@ -165,6 +165,21 @@ pub async fn highlight_text(
         .map_err(|e| CommandError::new(format!("highlighting panicked: {e}")))
 }
 
+/// Highlight a fenced code block by the language its fence names, for the
+/// Markdown page. No project has to be open: a README in the assistant's
+/// answer is a page too.
+#[tauri::command]
+pub async fn highlight_snippet(
+    lang: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_edit::Line>, CommandError> {
+    let files = state.files();
+    tokio::task::spawn_blocking(move || files.highlight_snippet(&lang, &text))
+        .await
+        .map_err(|e| CommandError::new(format!("highlighting panicked: {e}")))
+}
+
 #[tauri::command]
 pub async fn save_file(
     path: String,

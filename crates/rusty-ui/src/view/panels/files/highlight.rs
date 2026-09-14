@@ -253,8 +253,10 @@ pub(super) fn overlay_semantic(line: Line, index: u32, semantic: &[SemanticSpan]
 /// Token to a class the stylesheet owns.
 ///
 /// Classes rather than inline colours, so the palette lives with the theme and
-/// a light window is not painted with a dark theme's syntax colours.
-fn class_of(token: Token) -> &'static str {
+/// a light window is not painted with a dark theme's syntax colours. The
+/// Markdown page's code blocks read the same map, so a fence and the file it
+/// was copied from are the same colours.
+pub(crate) fn class_of(token: Token) -> &'static str {
     match token {
         Token::Plain => "text-label",
         Token::Keyword => "tok-keyword",

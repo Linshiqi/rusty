@@ -8,7 +8,7 @@ mod assistant;
 mod crates;
 mod disk;
 mod features;
-mod files;
+pub(crate) mod files;
 pub mod git;
 mod memory;
 mod search;

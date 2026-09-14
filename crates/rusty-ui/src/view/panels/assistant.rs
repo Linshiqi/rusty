@@ -186,7 +186,7 @@ fn Streaming() -> impl IntoView {
                     .then(|| {
                         view! {
                             <div class="max-w-[76ch] text-body select-text">
-                                <crate::view::markdown::Markdown text=pending />
+                                <crate::view::markdown::Markdown text=pending live=true />
                             </div>
                         }
                     })}

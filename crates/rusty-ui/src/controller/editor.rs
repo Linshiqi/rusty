@@ -264,6 +264,52 @@ pub fn load_image(state: AppState, path: String) {
     });
 }
 
+/// Highlight a fenced code block for the Markdown page, once per distinct
+/// block.
+///
+/// The runs land in `editor.snippets` under a hash of the language and the
+/// text, and an empty entry goes in before the request leaves, so a page
+/// re-rendered on every keystroke asks for each block once. The same block
+/// in two chapters, or in a page and an answer, is one request. Without a
+/// backend — the trunk-only preview — the block stays as it was written.
+pub fn highlight_snippet(state: AppState, lang: String, text: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        lang: String,
+        text: String,
+    }
+
+    if !ipc::backend_available() {
+        return;
+    }
+    let key = crate::state::snippet_key(&lang, &text);
+    let asked = state
+        .editor
+        .snippets
+        .with_untracked(|snippets| snippets.contains_key(&key));
+    if asked {
+        return;
+    }
+    state.editor.snippets.update(|snippets| {
+        // A book's worth of blocks is a few hundred; a session that reads
+        // many books need not keep them all.
+        if snippets.len() > 2_000 {
+            snippets.clear();
+        }
+        snippets.insert(key, Vec::new());
+    });
+    let args = Args { lang, text };
+    spawn_local(async move {
+        if let Ok(lines) =
+            ipc::call::<_, Vec<rusty_edit::Line>>(cmd::files::HIGHLIGHT_SNIPPET, &args).await
+        {
+            state.editor.snippets.update(|snippets| {
+                snippets.insert(key, lines);
+            });
+        }
+    });
+}
+
 /// Re-read the active document from disk and replace it in place — the tail
 /// of a save, where disk and draft have just been made equal.
 fn reload_active(state: AppState, path: String) {

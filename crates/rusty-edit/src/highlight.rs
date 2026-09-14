@@ -9,7 +9,7 @@
 //! stack operations, and the top of the stack at each byte is what the grammar
 //! thinks that byte is.
 
-use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxSet};
+use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
 
 use crate::model::{Line, Span, Token};
 
@@ -56,18 +56,54 @@ pub fn lines(syntaxes: &SyntaxSet, path: &str, text: &str) -> (Vec<Line>, Option
         );
     }
 
-    let Some(syntax) = syntax else {
-        let plain = source
-            .map(|line| Line {
-                spans: vec![Span {
-                    text: line.to_string(),
-                    token: Token::Plain,
-                }],
-            })
-            .collect();
-        return (plain, None, truncated);
-    };
+    match syntax {
+        Some(syntax) => (
+            parse(syntaxes, syntax, source),
+            Some(syntax.name.clone()),
+            truncated,
+        ),
+        None => (plain(source), None, truncated),
+    }
+}
 
+/// Highlight a fenced code block by the language its fence names.
+///
+/// `rust`, `toml`, `bash`, `py`, `c` — an info string is resolved the way a
+/// Markdown renderer resolves one: by extension first, then by name without
+/// regard to case (syntect's `find_syntax_by_token`, written for exactly
+/// this). A block with no language, or one no grammar answers to, comes back
+/// plain rather than guessed at: the page shows it as it was written.
+pub fn snippet(syntaxes: &SyntaxSet, lang: &str, text: &str) -> Vec<Line> {
+    let lang = lang.trim();
+    let source = text.lines().take(MAX_LINES);
+    if lang.eq_ignore_ascii_case("toml") {
+        return source.map(toml_line).collect();
+    }
+    match syntaxes.find_syntax_by_token(lang) {
+        Some(syntax) if !lang.is_empty() => parse(syntaxes, syntax, source),
+        _ => plain(source),
+    }
+}
+
+/// Every line as one unstyled run.
+fn plain<'a>(source: impl Iterator<Item = &'a str>) -> Vec<Line> {
+    source
+        .map(|line| Line {
+            spans: vec![Span {
+                text: line.to_string(),
+                token: Token::Plain,
+            }],
+        })
+        .collect()
+}
+
+/// Run the grammar over `source` a line at a time, carrying the parse state
+/// across lines as syntect requires.
+fn parse<'a>(
+    syntaxes: &SyntaxSet,
+    syntax: &SyntaxReference,
+    source: impl Iterator<Item = &'a str>,
+) -> Vec<Line> {
     let mut state = ParseState::new(syntax);
     let mut stack = ScopeStack::new();
     let mut out = Vec::new();
@@ -106,7 +142,7 @@ pub fn lines(syntaxes: &SyntaxSet, path: &str, text: &str) -> (Vec<Line>, Option
         });
     }
 
-    (out, Some(syntax.name.clone()), truncated)
+    out
 }
 
 /// One line of TOML.
@@ -279,6 +315,38 @@ fn token_for(scope: Scope) -> Option<Token> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fence's info string is a language, not a path: `rust` has no
+    /// extension called `rust`, and `Rust` is how the grammar spells itself.
+    /// Both must land on the Rust grammar, TOML on the hand-rolled one, and
+    /// a language nobody has a grammar for on plain text — never a guess.
+    #[test]
+    fn a_fence_names_its_language_the_way_a_markdown_renderer_reads_it() {
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        for lang in ["rust", "Rust", "rs"] {
+            let lines = snippet(&syntaxes, lang, "fn main() {}\n");
+            let keyword = lines[0]
+                .spans
+                .iter()
+                .find(|span| span.token == Token::Keyword)
+                .unwrap_or_else(|| panic!("{lang}: no keyword in {:?}", lines[0].spans));
+            assert_eq!(keyword.text, "fn", "{lang}");
+        }
+        let toml = snippet(&syntaxes, "toml", "name = \"demo\"\n");
+        assert!(
+            toml[0]
+                .spans
+                .iter()
+                .any(|span| span.token == Token::Variable && span.text == "name "),
+            "{:?}",
+            toml[0].spans
+        );
+        for lang in ["", "nonesuch"] {
+            let plain = snippet(&syntaxes, lang, "let x = 1;\n");
+            assert_eq!(plain[0].spans.len(), 1, "{lang:?}: {:?}", plain[0].spans);
+            assert_eq!(plain[0].spans[0].token, Token::Plain, "{lang:?}");
+        }
+    }
 
     /// A whole real book, when `RUSTY_MD_CORPUS` names its `src/`: every
     /// chapter highlights in well under a second. Markdown grammars have

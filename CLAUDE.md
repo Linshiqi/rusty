@@ -1137,7 +1137,19 @@ notice that the file was not text. The fetched pictures live in
 `editor.images`, shared by both groups; the watcher drops an entry when its
 file changes on disk. A Leptos trap met on the way: `#[prop(optional, into)]`
 on an `Option<String>` prop *strips the Option* and the setter wants a
-`String`; `optional_no_strip` is the one that takes the `Option`.
+`String`; `optional_no_strip` is the one that takes the `Option`. A fenced
+code block is highlighted by the backend (`files::HIGHLIGHT_SNIPPET`,
+`highlight::snippet`), which resolves the fence's language the way a
+Markdown renderer does — extension first, then name without regard to
+case, syntect's `find_syntax_by_token` — and paints with the editor's own
+`class_of` map, so a fence and the file it was copied from are the same
+colours. The runs are cached in `editor.snippets` by a hash of language
+and text, shared by both groups: one request per distinct block however
+often the page re-renders, and never stale because the key is the content.
+An answer still streaming renders its blocks plain (`Markdown`'s `live`),
+since a block re-rendered on every delta would ask once per delta for a
+text about to change. No language, or one no grammar answers to, stays as
+written; so does everything under the trunk-only preview.
 
 **Settings are macOS System Settings' shapes, and prose is one line under
 the group.** `view/settings/shell.rs` has the three: a page is a title over
@@ -2234,6 +2246,18 @@ usty`) holds `location.toml`
   setting itself is left alone: what the user chose and what the provider
   takes are two facts, and the drawer's cut-off note uses the count the
   provider reported rather than either.
+- **pulldown-latex 0.8 escapes the entity it writes for a control space.**
+  `\ `, `~` and `\nobreakspace` come out as `<mtext>&amp;nbsp;</mtext>`, so
+  the page showed the six characters `&nbsp;` between the components of
+  every tuple in a chapter that spaces them with `\ ` — 379 lines of it in
+  one book. `math_html` repairs that one element exactly (`&#160;`), and
+  only that one: a literal `&nbsp;` typed inside `\text{}` is not the whole
+  of an `<mtext>` and stays as typed. Measured by printing what the
+  converter emits for each spacing command (`\,` `\;` `\:` `\!` `\quad` are
+  `<mspace>` and fine; `<` and `&` from `\&` come out raw inside `<mo>`
+  and survive only because the HTML tokenizer forgives them). When a
+  renderer shows markup as text, print the string it was handed before
+  blaming the browser.
 - **Two round trips fired together answer in either order.** The settings
   page called `store_key` and then `refresh_key_state` back to back; the
   check overtook the write, "not saved" arrived and stayed, and the next
