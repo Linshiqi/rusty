@@ -31,6 +31,91 @@ pub async fn create_entry(
     .await??)
 }
 
+/// Move an entry into a directory (`""` for the root), keeping its name.
+/// Answers with the new relative path; refuses a name that is taken.
+#[tauri::command]
+pub async fn move_entry(
+    from: String,
+    into: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("moving the entry", move || {
+        rusty_edit::move_entry(&root, &from, &into)
+    })
+    .await??)
+}
+
+/// Copy an entry into a directory, under a free name. Answers with the
+/// copy's relative path.
+#[tauri::command]
+pub async fn copy_entry(
+    from: String,
+    into: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("copying the entry", move || {
+        rusty_edit::copy_entry(&root, &from, &into)
+    })
+    .await??)
+}
+
+/// Rename an entry in place. Answers with the new relative path.
+#[tauri::command]
+pub async fn rename_entry(
+    from: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("renaming the entry", move || {
+        rusty_edit::rename_entry(&root, &from, &name)
+    })
+    .await??)
+}
+
+/// Move an entry to the recycle bin.
+#[tauri::command]
+pub async fn delete_entry(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("deleting the entry", move || {
+        rusty_edit::delete_entry(&root, &path)
+    })
+    .await??)
+}
+
+/// Show an entry in the platform's file manager, selected — Explorer's
+/// `/select`, Finder's `open -R`, and the containing folder elsewhere,
+/// where no file manager takes a selection portably.
+#[tauri::command]
+pub async fn reveal_entry(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    blocking("revealing the entry", move || {
+        let target = rusty_edit::absolute(&root, &path)?;
+        let mut command = if cfg!(target_os = "windows") {
+            let mut command = rusty_embed::process::command("explorer");
+            // One argument, no space after the comma: Explorer parses the
+            // switch and the path out of a single string.
+            command.arg(format!("/select,{}", target.display()));
+            command
+        } else if cfg!(target_os = "macos") {
+            let mut command = rusty_embed::process::command("open");
+            command.arg("-R").arg(&target);
+            command
+        } else {
+            let mut command = rusty_embed::process::command("xdg-open");
+            command.arg(target.parent().unwrap_or(&target));
+            command
+        };
+        command.spawn().map(|_| ()).map_err(|error| {
+            rusty_edit::Error::Io(format!("could not open the file manager: {error}"))
+        })
+    })
+    .await??;
+    Ok(())
+}
+
 /// A file in its own OS window — the same frontend, booted straight into
 /// the editor by a `detach` query parameter. Asking twice focuses the
 /// window that already exists instead of stacking a second copy.

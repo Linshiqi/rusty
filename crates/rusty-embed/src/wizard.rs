@@ -10,10 +10,12 @@
 //! So the generator invocation is a [`CommandPlan`] like any other, and the
 //! interesting output is [`explain`].
 
+use std::path::Path;
+
 use crate::{
     chip,
     error::{Error, Result},
-    model::{CommandPlan, Explanation, Runtime, ToolchainRequirement, WizardChoice},
+    model::{CommandPlan, Explanation, Runtime, ToolchainRequirement, WizardChoice, WizardLayout},
 };
 
 /// Options `esp-generate` understands, what each one costs, and what it cannot
@@ -156,6 +158,18 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         }
     }
 
+    // In the workspace layout the generator makes the *firmware* crate, under
+    // the project directory named after the choice; the scaffold around it
+    // is rusty's (`scaffold_workspace`). So the crate the generator is asked
+    // for is always `firmware` there, whatever the project is called.
+    let crate_name = match choice.layout {
+        WizardLayout::Single => choice.name.clone(),
+        WizardLayout::Workspace => {
+            valid_name(&choice.name)?;
+            "firmware".to_string()
+        }
+    };
+
     let (program, args, rationale) = match choice.runtime {
         Runtime::BareMetal => {
             let mut args = vec!["--headless".to_string(), "--chip".into(), chip.id.clone()];
@@ -163,7 +177,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
                 args.push("-o".into());
                 args.push(option.clone());
             }
-            args.push(choice.name.clone());
+            args.push(crate_name.clone());
             (
                 "esp-generate",
                 args,
@@ -178,7 +192,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
                 "esp-rs/esp-idf-template".into(),
                 "cargo".into(),
                 "--name".into(),
-                choice.name.clone(),
+                crate_name.clone(),
             ],
             "std projects come from the esp-idf-template rather than \
              esp-generate, because they link the ESP-IDF C framework.",
@@ -252,6 +266,24 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
         consequence: Some(format!("Builds for `{target}`.")),
     });
 
+    if choice.layout == WizardLayout::Workspace {
+        out.push(Explanation {
+            topic: "Two crates, one workspace".into(),
+            detail: format!(
+                "`core` holds the logic that touches no hardware, and `cargo test` at the \
+                 root runs it on this machine. `firmware` is the {} binary, excluded from \
+                 the workspace so the root's tests never try to build it for the host; \
+                 rusty builds, flashes and simulates it from its own directory.",
+                chip.name
+            ),
+            consequence: Some(format!(
+                "Creates `{name}/Cargo.toml`, `{name}/core/` and `{name}/firmware/`; the \
+                 firmware depends on `{name}-core`.",
+                name = choice.name
+            )),
+        });
+    }
+
     for option in &choice.options {
         if let Some((_, label, detail, _)) = OPTIONS.iter().find(|(id, ..)| id == option) {
             out.push(Explanation {
@@ -295,6 +327,197 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
     out
 }
 
+// ─── the workspace around a generated crate ──────────────────────────────────
+
+/// The files that make a directory holding a generated `firmware/` crate the
+/// standard embedded workspace: a root manifest that lists `core` and
+/// excludes `firmware`, a `core` crate with one function and one test, a
+/// README that says why the split exists, and the dependency line that lets
+/// the firmware call into `core`.
+///
+/// Written after the generator has succeeded, into files the generator did
+/// not make — every one is created rather than overwritten, so a generator
+/// that one day writes a root manifest of its own is a refusal here and not
+/// a silent replacement.
+pub fn scaffold_workspace(root: &Path, choice: &WizardChoice) -> Result<()> {
+    let name = valid_name(&choice.name)?;
+    let core = format!("{name}-core");
+    let chip = chip::by_id(&choice.chip)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| choice.chip.clone());
+
+    write_new(&root.join("Cargo.toml"), &root_manifest(name, &chip))?;
+    write_new(&root.join("core").join("Cargo.toml"), &core_manifest(&core))?;
+    write_new(&root.join("core").join("src").join("lib.rs"), CORE_LIB)?;
+    write_new(&root.join("README.md"), &readme(name, &core, &chip))?;
+    write_new(&root.join("rustfmt.toml"), "edition = \"2024\"\n")?;
+    write_new(&root.join(".gitignore"), "/target\n")?;
+    add_dependency(&root.join("firmware").join("Cargo.toml"), &core)
+}
+
+/// A name cargo accepts for a package, since the workspace layout turns it
+/// into `<name>-core`: letters, digits, `-` and `_`, starting with a letter
+/// or digit. The generator checks its own argument; this is the one it never
+/// sees.
+fn valid_name(name: &str) -> Result<&str> {
+    let ok = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric());
+    if ok {
+        Ok(name)
+    } else {
+        Err(Error::Refused {
+            detail: format!(
+                "`{name}` is not a name cargo accepts for a crate — use letters, digits, `-` \
+                 and `_`, starting with a letter or a digit."
+            ),
+        })
+    }
+}
+
+fn write_new(path: &Path, text: &str) -> Result<()> {
+    if path.exists() {
+        return Err(Error::Exists {
+            path: path.display().to_string(),
+        });
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    std::fs::write(path, text).map_err(|source| Error::Write {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+/// `core = { path = "../core" }` under the firmware's `[dependencies]`,
+/// inserted textually so everything the generator wrote — comments, order,
+/// version specs — survives byte for byte, as `migrate.rs` treats a manifest.
+fn add_dependency(manifest: &Path, core: &str) -> Result<()> {
+    let text = std::fs::read_to_string(manifest).map_err(|source| Error::Read {
+        path: manifest.display().to_string(),
+        source,
+    })?;
+    let line = format!("{core} = {{ path = \"../core\" }}\n");
+    if text.contains(&line) {
+        return Ok(());
+    }
+    let patched = match text.find("[dependencies]\n") {
+        Some(at) => {
+            let after = at + "[dependencies]\n".len();
+            format!("{}{line}{}", &text[..after], &text[after..])
+        }
+        None => format!("{}\n[dependencies]\n{line}", text.trim_end_matches('\n')),
+    };
+    std::fs::write(manifest, patched).map_err(|source| Error::Write {
+        path: manifest.display().to_string(),
+        source,
+    })
+}
+
+fn root_manifest(name: &str, chip: &str) -> String {
+    format!(
+        "# {name}: a workspace of two crates, and the split is the whole point.\n\
+         #\n\
+         # `core` is the part that touches no hardware, so `cargo test` at this root\n\
+         # runs it on this machine. `firmware` is the {chip} binary and holds every\n\
+         # line that reads a pin; a `use esp_hal` in `core` is a build break, which\n\
+         # is what keeps the logic testable at a desk.\n\
+         #\n\
+         # `firmware` is deliberately NOT a workspace member: it needs its own\n\
+         # toolchain and target, and `cargo test` at the root would try to build it\n\
+         # for the host. Build it from its own directory — rusty does.\n\
+         \n\
+         [workspace]\n\
+         members  = [\"core\"]\n\
+         exclude  = [\"firmware\"]\n\
+         resolver = \"3\"\n\
+         \n\
+         [workspace.package]\n\
+         version = \"0.1.0\"\n\
+         edition = \"2024\"\n"
+    )
+}
+
+fn core_manifest(core: &str) -> String {
+    format!(
+        "[package]\n\
+         name = \"{core}\"\n\
+         version.workspace = true\n\
+         edition.workspace = true\n\
+         \n\
+         [dependencies]\n"
+    )
+}
+
+const CORE_LIB: &str = "\
+//! The part of the firmware that touches no hardware.
+//!
+//! Everything here builds and tests on the host: `cargo test` at the
+//! workspace root runs it on this machine, with the standard library
+//! available to the tests and nothing else. Keep it that way — a `use
+//! esp_hal` here is a build break on purpose, because the moment the maths
+//! needs a pin it stops being testable at a desk.
+
+#![cfg_attr(not(test), no_std)]
+
+/// Hold a value inside the range an actuator accepts.
+///
+/// The smallest useful thing a control loop needs and the hardware does not
+/// provide — and the first thing worth a test, because a motor asked for
+/// 120% does something the desk cannot show.
+pub fn clamp(value: f32, min: f32, max: f32) -> f32 {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_value_outside_the_range_is_held_at_its_edge() {
+        assert_eq!(clamp(1.5, 0.0, 1.0), 1.0);
+        assert_eq!(clamp(-0.2, 0.0, 1.0), 0.0);
+        assert_eq!(clamp(0.4, 0.0, 1.0), 0.4);
+    }
+}
+";
+
+fn readme(name: &str, core: &str, chip: &str) -> String {
+    let ident = core.replace('-', "_");
+    format!(
+        "# {name}\n\
+         \n\
+         Two crates, and the split is the whole point.\n\
+         \n\
+         - `core/` — `{core}`: the logic that touches no hardware. `cargo test` at\n  \
+           this root runs it on this machine.\n\
+         - `firmware/` — the {chip} binary. Every line that reads a pin lives here,\n  \
+           and it is *excluded* from the workspace on purpose: it needs its own\n  \
+           toolchain and target, and `cargo test` at the root would otherwise try\n  \
+           to build it for the host.\n\
+         \n\
+         ```bash\n\
+         cargo test                              # the half that runs here\n\
+         cd firmware && cargo build --release    # the chip's half\n\
+         ```\n\
+         \n\
+         `firmware` depends on `{core}` (`{ident}` in Rust), so what the tests\n\
+         prove is what the board runs.\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +528,120 @@ mod tests {
             runtime,
             name: "blinky".to_string(),
             options: options.iter().map(|o| o.to_string()).collect(),
+            layout: WizardLayout::Single,
         }
+    }
+
+    fn workspace(chip: &str) -> WizardChoice {
+        WizardChoice {
+            layout: WizardLayout::Workspace,
+            ..choice(chip, Runtime::BareMetal, &[])
+        }
+    }
+
+    /// The generator makes the firmware crate under the project directory,
+    /// so it is asked for `firmware`, whatever the project is called.
+    #[test]
+    fn a_workspace_asks_the_generator_for_the_firmware_crate() {
+        let workspace_plan = plan(&workspace("esp32c3")).unwrap();
+        assert_eq!(workspace_plan.args.last().unwrap(), "firmware");
+        assert_eq!(
+            plan(&choice("esp32c3", Runtime::BareMetal, &[]))
+                .unwrap()
+                .args
+                .last()
+                .unwrap(),
+            "blinky",
+            "one crate keeps the project's own name"
+        );
+        let std = plan(&WizardChoice {
+            runtime: Runtime::EspIdf,
+            ..workspace("esp32c3")
+        })
+        .unwrap();
+        assert!(std.args.windows(2).any(|w| w == ["--name", "firmware"]));
+    }
+
+    #[test]
+    fn the_workspace_scaffold_lists_core_and_excludes_firmware() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("firmware/src")).unwrap();
+        std::fs::write(
+            root.join("firmware/Cargo.toml"),
+            "[package]\nname = \"firmware\"\nedition = \"2024\"\n\n[dependencies]\nesp-hal = \"1\"\n",
+        )
+        .unwrap();
+
+        scaffold_workspace(root, &workspace("esp32c3")).unwrap();
+
+        let manifest: toml::Table =
+            toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml")).unwrap()).unwrap();
+        let workspace_table = manifest["workspace"].as_table().unwrap();
+        assert_eq!(
+            workspace_table["members"].as_array().unwrap()[0].as_str(),
+            Some("core")
+        );
+        assert_eq!(
+            workspace_table["exclude"].as_array().unwrap()[0].as_str(),
+            Some("firmware")
+        );
+        assert!(root.join("core/src/lib.rs").is_file());
+        let core: toml::Table =
+            toml::from_str(&std::fs::read_to_string(root.join("core/Cargo.toml")).unwrap())
+                .unwrap();
+        assert_eq!(core["package"]["name"].as_str(), Some("blinky-core"));
+
+        // The dependency lands under the generator's own `[dependencies]`,
+        // and everything else in the manifest is untouched.
+        let firmware = std::fs::read_to_string(root.join("firmware/Cargo.toml")).unwrap();
+        assert!(
+            firmware.contains(
+                "[dependencies]\nblinky-core = { path = \"../core\" }\nesp-hal = \"1\"\n"
+            ),
+            "{firmware}"
+        );
+        assert!(firmware.starts_with("[package]\nname = \"firmware\""));
+        assert!(root.join("README.md").is_file());
+        assert!(root.join(".gitignore").is_file());
+
+        // Twice is a refusal, not a rewrite.
+        assert!(matches!(
+            scaffold_workspace(root, &workspace("esp32c3")),
+            Err(Error::Exists { .. })
+        ));
+    }
+
+    #[test]
+    fn a_name_cargo_would_refuse_is_refused_before_anything_is_generated() {
+        for bad in ["", "my project", "-lead", "驱动"] {
+            let refused = plan(&WizardChoice {
+                name: bad.to_string(),
+                ..workspace("esp32c3")
+            });
+            assert!(
+                matches!(refused, Err(Error::Refused { .. })),
+                "{bad:?} should be refused"
+            );
+        }
+        assert!(valid_name("cf-drone_rs2").is_ok());
+    }
+
+    #[test]
+    fn the_workspace_layout_is_explained_with_what_it_creates() {
+        let explanations = explain(&workspace("esp32c3"));
+        let note = explanations
+            .iter()
+            .find(|e| e.topic.contains("workspace"))
+            .expect("the layout is a commitment worth explaining");
+        assert!(note.detail.contains("ESP32-C3"));
+        assert!(note.consequence.as_deref().unwrap().contains("blinky-core"));
+        assert!(
+            !explain(&choice("esp32c3", Runtime::BareMetal, &[]))
+                .iter()
+                .any(|e| e.topic.contains("workspace")),
+            "one crate has nothing to say about a workspace"
+        );
     }
 
     #[test]
@@ -441,6 +777,7 @@ mod tests {
             runtime: Runtime::BareMetal,
             name: "firmware".into(),
             options: vec!["wifi".into()],
+            layout: WizardLayout::Single,
         };
 
         let error = plan(&choice).unwrap_err().to_string();
@@ -458,6 +795,7 @@ mod tests {
             runtime: Runtime::BareMetal,
             name: "firmware".into(),
             options: vec!["wifi".into(), "alloc".into(), "unstable-hal".into()],
+            layout: WizardLayout::Single,
         };
 
         let plan = plan(&choice).expect("a valid combination must plan");

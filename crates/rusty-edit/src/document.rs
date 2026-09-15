@@ -229,7 +229,7 @@ pub fn create(root: &Path, relative: &str, dir: bool) -> Result<()> {
 /// property: a `..` in one of them would read or overwrite anything the process
 /// can reach, and normalising it away would silently open a different file than
 /// the caller named.
-fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
+pub(crate) fn resolve(root: &Path, relative: &str) -> Result<PathBuf> {
     let candidate = Path::new(relative);
     let escapes = candidate.components().any(|component| {
         matches!(

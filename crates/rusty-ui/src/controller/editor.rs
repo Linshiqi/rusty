@@ -45,6 +45,242 @@ pub fn create_entry(state: AppState, path: String, dir: bool) {
     );
 }
 
+/// Where a moved or renamed path went, for everything that holds paths.
+///
+/// A file is the path itself; a directory is the path and everything under
+/// it, so `src` → `firmware/src` takes `src/main.rs` along. `None` for a
+/// path the move did not touch — `src2/a.rs` is not under `src`, which is
+/// why the separator is checked and not just the prefix.
+pub(crate) fn retarget(path: &str, from: &str, to: &str, is_dir: bool) -> Option<String> {
+    if path == from {
+        return Some(to.to_string());
+    }
+    if is_dir
+        && let Some(rest) = path.strip_prefix(from)
+        && rest.starts_with('/')
+    {
+        return Some(format!("{to}{rest}"));
+    }
+    None
+}
+
+/// Move the tabs, the parked editors, the document on screen, the expanded
+/// folders and the source-view choices along with a path that moved on disk.
+///
+/// Before the watcher hears about it, on purpose: its batch would find the
+/// old paths gone and mark every open file under them as vanished, when
+/// they are all still there under the new name. rust-analyzer learns the
+/// new name from the buffer the editor already holds.
+fn follow_move(state: AppState, from: &str, to: &str, is_dir: bool) {
+    let moved = |path: &str| retarget(path, from, to, is_dir);
+    for group in state.open_groups() {
+        group.editor.tabs.update(|tabs| {
+            for tab in tabs.iter_mut() {
+                if let Some(new) = moved(tab) {
+                    *tab = new;
+                }
+            }
+        });
+        let mut reopened = Vec::new();
+        group.editor.parked.update(|parked| {
+            for entry in parked.iter_mut() {
+                if let Some(new) = moved(&entry.document.path) {
+                    entry.document.path = new.clone();
+                    reopened.push((new, entry.draft.clone()));
+                }
+            }
+        });
+        let active = group
+            .editor
+            .document
+            .with_untracked(|d| d.as_ref().and_then(|d| moved(&d.path)));
+        if let Some(new) = active {
+            group.editor.document.update(|d| {
+                if let Some(d) = d {
+                    d.path = new.clone();
+                }
+            });
+            reopened.push((new, group.editor.draft.get_untracked()));
+        }
+        for (path, text) in reopened {
+            lsp_open_doc(path, text);
+        }
+    }
+    let rename_all = |list: &mut Vec<String>| {
+        for path in list.iter_mut() {
+            if let Some(new) = moved(path) {
+                *path = new;
+            }
+        }
+    };
+    state.editor.expanded.update(rename_all);
+    state.editor.source_view.update(rename_all);
+    state.editor.stale.update(rename_all);
+    // Pictures are cached by path; the next look re-reads them.
+    state
+        .editor
+        .images
+        .update(|images| images.retain(|path, _| moved(path).is_none()));
+    remember_tabs(state);
+}
+
+/// Move an entry into a directory (`""` for the root): a drop on the tree,
+/// or Cut followed by Paste. The backend answers with where it landed.
+pub fn move_entry(state: AppState, from: String, into: String, is_dir: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        from: String,
+        into: String,
+    }
+
+    if !state.has_project_now() {
+        return;
+    }
+    let args = Args {
+        from: from.clone(),
+        into,
+    };
+    track(
+        state,
+        async move { ipc::call::<_, String>(cmd::files::MOVE, &args).await },
+        move |to| {
+            if to != from {
+                follow_move(state, &from, &to, is_dir);
+            }
+            refresh_tree(state);
+        },
+    );
+}
+
+/// Copy an entry into a directory. The copy takes a free name where its
+/// own is taken, so pasting beside the original is ` copy`.
+pub fn copy_entry(state: AppState, from: String, into: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        from: String,
+        into: String,
+    }
+
+    if !state.has_project_now() {
+        return;
+    }
+    let args = Args { from, into };
+    track(
+        state,
+        async move { ipc::call::<_, String>(cmd::files::COPY, &args).await },
+        move |_created| refresh_tree(state),
+    );
+}
+
+/// Rename an entry in place. The open tabs follow, as after a move.
+pub fn rename_entry(state: AppState, from: String, name: String, is_dir: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        from: String,
+        name: String,
+    }
+
+    if !state.has_project_now() {
+        return;
+    }
+    let args = Args {
+        from: from.clone(),
+        name,
+    };
+    track(
+        state,
+        async move { ipc::call::<_, String>(cmd::files::RENAME, &args).await },
+        move |to| {
+            if to != from {
+                follow_move(state, &from, &to, is_dir);
+            }
+            refresh_tree(state);
+        },
+    );
+}
+
+/// Move an entry to the recycle bin, after asking. The question names the
+/// bin the platform has, and every tab under the entry closes with it.
+pub fn delete_entry(state: AppState, path: String, is_dir: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    if !state.has_project_now() {
+        return;
+    }
+    let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+    let question = if host_is_windows() {
+        t!("tree.delete-confirm-bin", name = name)
+    } else {
+        t!("tree.delete-confirm-trash", name = name)
+    };
+    spawn_local(async move {
+        // Through `ipc::confirm`, never `window.confirm`: see `close_tab`.
+        if !ipc::confirm(&question).await {
+            return;
+        }
+        let args = Args { path: path.clone() };
+        track(
+            state,
+            async move { ipc::call::<_, ()>(cmd::files::DELETE, &args).await },
+            move |()| {
+                close_under(state, &path, is_dir);
+                refresh_tree(state);
+            },
+        );
+    });
+}
+
+/// Close every tab at or under a path that is gone. Without asking: the
+/// question was asked about the file, and a draft of a deleted file has
+/// nowhere left to be saved.
+fn close_under(state: AppState, path: &str, is_dir: bool) {
+    for group in state.open_groups() {
+        let doomed: Vec<String> = group
+            .editor
+            .tabs
+            .get_untracked()
+            .into_iter()
+            .filter(|tab| retarget(tab, path, "", is_dir).is_some())
+            .collect();
+        for tab in doomed {
+            remove_tab(group, tab);
+        }
+    }
+}
+
+/// Select the entry in the platform's file manager.
+pub fn reveal_entry(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::files::REVEAL, &Args { path }).await },
+        |()| {},
+    );
+}
+
+/// Which desktop this window is on, for the words that differ: Explorer or
+/// Finder, the Recycle Bin or the Trash.
+pub fn host_is_windows() -> bool {
+    host_platform().starts_with("Win")
+}
+
+pub fn host_is_mac() -> bool {
+    host_platform().starts_with("Mac")
+}
+
+fn host_platform() -> String {
+    web_sys::window()
+        .and_then(|w| w.navigator().platform().ok())
+        .unwrap_or_default()
+}
+
 /// Float a file into its own OS window.
 pub fn detach_file(state: AppState, path: String) {
     #[derive(serde::Serialize)]
@@ -845,7 +1081,7 @@ pub fn format_then_save(
 
 #[cfg(test)]
 mod tab_tests {
-    use super::neighbour_after_close;
+    use super::{neighbour_after_close, retarget};
 
     fn tabs(names: &[&str]) -> Vec<String> {
         names.iter().map(|n| n.to_string()).collect()
@@ -879,5 +1115,26 @@ mod tab_tests {
     fn closing_a_tab_not_in_the_strip_is_a_no_op() {
         let strip = tabs(&["a.rs"]);
         assert_eq!(neighbour_after_close(&strip, "zz.rs"), None);
+    }
+
+    /// A directory takes everything under it; a file takes only itself; and
+    /// `src2` is not under `src`, however the prefix reads.
+    #[test]
+    fn a_moved_path_carries_what_is_under_it_and_nothing_beside_it() {
+        assert_eq!(
+            retarget("src/main.rs", "src", "firmware/src", true).as_deref(),
+            Some("firmware/src/main.rs")
+        );
+        assert_eq!(
+            retarget("src", "src", "firmware/src", true).as_deref(),
+            Some("firmware/src")
+        );
+        assert_eq!(retarget("src2/a.rs", "src", "firmware/src", true), None);
+        assert_eq!(
+            retarget("a.rs", "a.rs", "lib/b.rs", false).as_deref(),
+            Some("lib/b.rs")
+        );
+        assert_eq!(retarget("a.rs/x", "a.rs", "b.rs", false), None);
+        assert_eq!(retarget("README.md", "src", "firmware/src", true), None);
     }
 }

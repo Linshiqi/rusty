@@ -9,8 +9,8 @@ use rusty_i18n::t;
 use super::*;
 use crate::{
     controller,
-    state::AppState,
-    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator},
+    state::{AppState, TreeClip},
+    view::components::{ContextMenu, Empty, MenuItem, MenuSeparator, copy_to_clipboard},
     view::icon::{Icon, IconView},
 };
 
@@ -81,6 +81,16 @@ fn Tree() -> impl IntoView {
     let state = AppState::expect();
     let tree_menu = RwSignal::new(None::<(f64, f64, TreeTarget)>);
     provide_context(TreeMenu(tree_menu));
+    // Inline rename: the row whose name is an input right now.
+    let renaming = RwSignal::new(None::<String>);
+    provide_context(Renaming(renaming));
+    // Drag and drop within the tree: what is being carried, and the folder
+    // it would land in if released — highlighted, so the target is never a
+    // guess. `""` is the root.
+    let dragging = RwSignal::new(None::<TreeTarget>);
+    let drop_target = RwSignal::new(None::<String>);
+    provide_context(Dragging(dragging));
+    provide_context(DropTarget(drop_target));
     // A pending "New file" / "New folder": (directory it lands in, is_dir).
     // The name is typed into a strip under the header; Enter creates.
     let naming = RwSignal::new(None::<(String, bool)>);
@@ -177,7 +187,47 @@ fn Tree() -> impl IntoView {
             // Right-clicking the empty space targets the project root: rows
             // stop propagation, so only the sheet itself reaches this.
             <div
-                class="min-h-0 flex-1 overflow-auto pb-2"
+                class=move || {
+                    let base = "min-h-0 flex-1 overflow-auto pb-2";
+                    if drop_target.get().as_deref() == Some("") {
+                        format!("{base} ring-1 ring-rust/60 ring-inset")
+                    } else {
+                        base.to_string()
+                    }
+                }
+                // The empty space is the root: a drop here moves the entry
+                // out of whatever folder it was in. Rows stop propagation,
+                // so only the sheet itself reaches these.
+                on:dragover=move |event: ev::DragEvent| {
+                    let Some(carried) = dragging.get_untracked() else {
+                        return;
+                    };
+                    if drop_target_for(&carried, None).is_some() {
+                        event.prevent_default();
+                        if let Some(transfer) = event.data_transfer() {
+                            transfer.set_drop_effect("move");
+                        }
+                        if drop_target.get_untracked().as_deref() != Some("") {
+                            drop_target.set(Some(String::new()));
+                        }
+                    }
+                }
+                on:dragleave=move |_| {
+                    if drop_target.get_untracked().as_deref() == Some("") {
+                        drop_target.set(None);
+                    }
+                }
+                on:drop=move |event: ev::DragEvent| {
+                    event.prevent_default();
+                    let carried = dragging.get_untracked();
+                    dragging.set(None);
+                    drop_target.set(None);
+                    if let Some(carried) = carried
+                        && let Some(into) = drop_target_for(&carried, None)
+                    {
+                        controller::move_entry(state, carried.path, into, carried.is_dir);
+                    }
+                }
                 on:contextmenu=move |event: ev::MouseEvent| {
                     event.prevent_default();
                     tree_menu.set(Some((
@@ -207,17 +257,68 @@ fn Tree() -> impl IntoView {
                 let close = Callback::new(move |_| tree_menu.set(None));
                 let path = target.path.clone();
                 let is_dir = target.is_dir;
-                // Where a "New …" from this row lands: the directory itself,
-                // or a file's parent.
+                // Where a "New …" or a Paste from this row lands: the
+                // directory itself, or a file's parent.
                 let into = if is_dir {
                     path.clone()
                 } else {
                     path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
                 };
-                let (file_into, folder_into) = (into.clone(), into);
+                let (file_into, folder_into) = (into.clone(), into.clone());
+
+                // Paste is offered when something was cut or copied, and
+                // is greyed where it could only be refused — a cut folder
+                // over itself, an entry over the folder it is already in.
+                let clip = state.editor.clipboard.get();
+                let paste_ok = clip.as_ref().is_some_and(|clip| {
+                    !clip.cut
+                        || drop_target_for(
+                            &TreeTarget {
+                                path: clip.path.clone(),
+                                is_dir: clip.is_dir,
+                            },
+                            Some(&TreeTarget {
+                                path: into.clone(),
+                                is_dir: true,
+                            }),
+                        )
+                        .is_some()
+                });
+                let paste = {
+                    let into = into.clone();
+                    move || {
+                        let Some(clip) = state.editor.clipboard.get_untracked() else {
+                            return;
+                        };
+                        if clip.cut {
+                            controller::move_entry(state, clip.path, into.clone(), clip.is_dir);
+                            state.editor.clipboard.set(None);
+                        } else {
+                            controller::copy_entry(state, clip.path, into.clone());
+                        }
+                        tree_menu.set(None);
+                    }
+                };
+                let paste_row = clip.is_some().then(|| {
+                    let paste = paste.clone();
+                    view! {
+                        <MenuItem
+                            label=t!("context.tree-paste")
+                            disabled=!paste_ok
+                            on_select=Callback::new(move |_| paste())
+                        />
+                    }
+                });
+                let reveal_label = if controller::host_is_windows() {
+                    t!("context.tree-reveal-explorer")
+                } else if controller::host_is_mac() {
+                    t!("context.tree-reveal-finder")
+                } else {
+                    t!("context.tree-reveal")
+                };
 
                 // Right-clicking the empty sheet targets the project root:
-                // only creation makes sense there.
+                // creation, a paste, the root in the file manager, refresh.
                 if path.is_empty() {
                     return Some(
                         view! {
@@ -236,7 +337,15 @@ fn Tree() -> impl IntoView {
                                         tree_menu.set(None);
                                     })
                                 />
+                                {paste_row}
                                 <MenuSeparator />
+                                <MenuItem
+                                    label=reveal_label
+                                    on_select=Callback::new(move |_| {
+                                        controller::reveal_entry(state, String::new());
+                                        tree_menu.set(None);
+                                    })
+                                />
                                 <MenuItem
                                     label=t!("context.tree-refresh")
                                     on_select=Callback::new(move |_| {
@@ -250,44 +359,94 @@ fn Tree() -> impl IntoView {
                     );
                 }
 
-                let (open_path, copy_path, search_path, beside_path) =
+                let (open_path, search_path, beside_path, reveal_path) =
                     (path.clone(), path.clone(), path.clone(), path.clone());
+                let (cut_path, copy_path, rename_path, delete_path) =
+                    (path.clone(), path.clone(), path.clone(), path.clone());
+                let relative_path = path.clone();
+                let absolute = {
+                    let root = state
+                        .project
+                        .detected
+                        .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
+                        .unwrap_or_default();
+                    absolute_path(&root, &path)
+                };
+                let float = path.clone();
+                let Renaming(renaming) = expect_context::<Renaming>();
+                // VS Code's order: what opens it, where it is, the clipboard,
+                // the paths, then the two that change it.
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
-                            <MenuItem
-                                label=if is_dir { t!("context.tree-toggle") } else { t!("context.tree-open") }
-                                on_select=Callback::new(move |_| {
-                                    if is_dir {
-                                        state
-                                            .editor.expanded
-                                            .update(|open| {
-                                                match open.iter().position(|p| p == &open_path) {
-                                                    Some(at) => {
-                                                        open.remove(at);
+                            {if is_dir {
+                                view! {
+                                    <MenuItem
+                                        label=t!("context.tree-new-file")
+                                        on_select=Callback::new(move |_| {
+                                            naming.set(Some((file_into.clone(), false)));
+                                            tree_menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
+                                        label=t!("context.tree-new-folder")
+                                        on_select=Callback::new(move |_| {
+                                            naming.set(Some((folder_into.clone(), true)));
+                                            tree_menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
+                                        label=t!("context.tree-toggle")
+                                        on_select=Callback::new(move |_| {
+                                            state
+                                                .editor
+                                                .expanded
+                                                .update(|open| {
+                                                    match open.iter().position(|p| p == &open_path) {
+                                                        Some(at) => {
+                                                            open.remove(at);
+                                                        }
+                                                        None => open.push(open_path.clone()),
                                                     }
-                                                    None => open.push(open_path.clone()),
-                                                }
-                                            });
-                                    } else {
-                                        controller::open_file(state.focused(), open_path.clone());
-                                    }
+                                                });
+                                            tree_menu.set(None);
+                                        })
+                                    />
+                                }
+                                    .into_any()
+                            } else {
+                                view! {
+                                    <MenuItem
+                                        label=t!("context.tree-open")
+                                        on_select=Callback::new(move |_| {
+                                            controller::open_file(state.focused(), open_path.clone());
+                                            tree_menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
+                                        label=t!("context.tree-open-beside")
+                                        on_select=Callback::new(move |_| {
+                                            controller::open_beside(state.focused(), beside_path.clone());
+                                            tree_menu.set(None);
+                                        })
+                                    />
+                                    <MenuItem
+                                        label=t!("context.tree-open-window")
+                                        on_select=Callback::new(move |_| {
+                                            controller::detach_file(state, float.clone());
+                                            tree_menu.set(None);
+                                        })
+                                    />
+                                }
+                                    .into_any()
+                            }}
+                            <MenuItem
+                                label=reveal_label
+                                on_select=Callback::new(move |_| {
+                                    controller::reveal_entry(state, reveal_path.clone());
                                     tree_menu.set(None);
                                 })
                             />
-                            {(!is_dir)
-                                .then(|| {
-                                    let beside = beside_path.clone();
-                                    view! {
-                                        <MenuItem
-                                            label=t!("context.tree-open-beside")
-                                            on_select=Callback::new(move |_| {
-                                                controller::open_beside(state.focused(), beside.clone());
-                                                tree_menu.set(None);
-                                            })
-                                        />
-                                    }
-                                })}
                             <MenuItem
                                 label=t!("context.tree-search-scope")
                                 on_select=Callback::new(move |_| {
@@ -295,42 +454,64 @@ fn Tree() -> impl IntoView {
                                     tree_menu.set(None);
                                 })
                             />
-                            {(!is_dir)
-                                .then(|| {
-                                    let float = path.clone();
-                                    view! {
-                                        <MenuItem
-                                            label=t!("context.tree-open-window")
-                                            on_select=Callback::new(move |_| {
-                                                controller::detach_file(
-                                                    state,
-                                                    float.clone(),
-                                                );
-                                                tree_menu.set(None);
-                                            })
-                                        />
-                                    }
-                                })}
                             <MenuSeparator />
                             <MenuItem
-                                label=t!("context.tree-new-file")
+                                label=t!("context.tree-cut")
                                 on_select=Callback::new(move |_| {
-                                    naming.set(Some((file_into.clone(), false)));
+                                    state
+                                        .editor
+                                        .clipboard
+                                        .set(Some(TreeClip {
+                                            path: cut_path.clone(),
+                                            is_dir,
+                                            cut: true,
+                                        }));
                                     tree_menu.set(None);
                                 })
                             />
                             <MenuItem
-                                label=t!("context.tree-new-folder")
+                                label=t!("context.tree-copy")
                                 on_select=Callback::new(move |_| {
-                                    naming.set(Some((folder_into.clone(), true)));
+                                    state
+                                        .editor
+                                        .clipboard
+                                        .set(Some(TreeClip {
+                                            path: copy_path.clone(),
+                                            is_dir,
+                                            cut: false,
+                                        }));
                                     tree_menu.set(None);
                                 })
                             />
+                            {paste_row}
                             <MenuSeparator />
                             <MenuItem
                                 label=t!("context.tree-copy-path")
                                 on_select=Callback::new(move |_| {
-                                    copy_to_clipboard(&copy_path);
+                                    copy_to_clipboard(&absolute);
+                                    tree_menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label=t!("context.tree-copy-relative-path")
+                                on_select=Callback::new(move |_| {
+                                    copy_to_clipboard(&relative_path);
+                                    tree_menu.set(None);
+                                })
+                            />
+                            <MenuSeparator />
+                            <MenuItem
+                                label=t!("context.tree-rename")
+                                on_select=Callback::new(move |_| {
+                                    renaming.set(Some(rename_path.clone()));
+                                    tree_menu.set(None);
+                                })
+                            />
+                            <MenuItem
+                                label=t!("context.tree-delete")
+                                danger=true
+                                on_select=Callback::new(move |_| {
+                                    controller::delete_entry(state, delete_path.clone(), is_dir);
                                     tree_menu.set(None);
                                 })
                             />
@@ -351,11 +532,21 @@ fn Tree() -> impl IntoView {
 #[derive(Clone, Copy)]
 struct TreeMenu(RwSignal<Option<(f64, f64, TreeTarget)>>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeTarget {
     path: String,
     is_dir: bool,
 }
+
+/// The row being renamed inline, if any.
+#[derive(Clone, Copy)]
+struct Renaming(RwSignal<Option<String>>);
+
+/// The entry being dragged, and the folder a drop would land it in.
+#[derive(Clone, Copy)]
+struct Dragging(RwSignal<Option<TreeTarget>>);
+#[derive(Clone, Copy)]
+struct DropTarget(RwSignal<Option<String>>);
 
 /// Scope the project search to one path and go there.
 fn search_within(state: AppState, path: &str, is_dir: bool) {
@@ -438,35 +629,150 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                 }
             };
 
-            view! {
-                <button
-                    type="button"
-                    on:click=activate
-                    on:contextmenu=menu
-                    style=format!("padding-left: {}px", 10 + depth * 12)
-                    class=move || {
-                        let base = "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left \
-                                    text-callout transition-colors";
-                        if selected.get() {
-                            format!("{base} bg-selection text-rust")
-                        } else {
-                            format!("{base} text-label-2 hover:bg-sunken hover:text-label")
+            // Drag and drop. A row is both a thing to carry and, for a
+            // folder — or a file standing in for its folder — a place to
+            // drop. Every row stops the event on its way to the sheet, so
+            // an invalid target is refused rather than falling through to
+            // "the root".
+            let Renaming(renaming) = expect_context::<Renaming>();
+            let Dragging(dragging) = expect_context::<Dragging>();
+            let DropTarget(drop_target) = expect_context::<DropTarget>();
+            let target = TreeTarget {
+                path: path.clone(),
+                is_dir,
+            };
+            let cut = Signal::derive({
+                let path = path.clone();
+                move || {
+                    state
+                        .editor
+                        .clipboard
+                        .with(|clip| clip.as_ref().is_some_and(|c| c.cut && c.path == path))
+                }
+            });
+            let receiving = Signal::derive({
+                let path = path.clone();
+                move || is_dir && drop_target.get().as_deref() == Some(path.as_str())
+            });
+            let renaming_this = Signal::derive({
+                let path = path.clone();
+                move || renaming.get().as_deref() == Some(path.as_str())
+            });
+            let on_dragstart = {
+                let target = target.clone();
+                move |event: ev::DragEvent| {
+                    if let Some(transfer) = event.data_transfer() {
+                        let _ = transfer.set_data("text/plain", &target.path);
+                        transfer.set_effect_allowed("move");
+                    }
+                    dragging.set(Some(target.clone()));
+                }
+            };
+            let on_dragend = move |_| {
+                dragging.set(None);
+                drop_target.set(None);
+            };
+            let on_dragover = {
+                let target = target.clone();
+                move |event: ev::DragEvent| {
+                    event.stop_propagation();
+                    let Some(carried) = dragging.get_untracked() else {
+                        return;
+                    };
+                    match drop_target_for(&carried, Some(&target)) {
+                        Some(into) => {
+                            event.prevent_default();
+                            if let Some(transfer) = event.data_transfer() {
+                                transfer.set_drop_effect("move");
+                            }
+                            if drop_target.get_untracked().as_deref() != Some(into.as_str()) {
+                                drop_target.set(Some(into));
+                            }
+                        }
+                        None => {
+                            if drop_target.get_untracked().is_some() {
+                                drop_target.set(None);
+                            }
                         }
                     }
-                >
-                    <span class="w-3 shrink-0 text-center text-footnote text-label-3">
-                        {move || {
-                            if !is_dir {
-                                ""
-                            } else if open.get() {
-                                "▾"
-                            } else {
-                                "▸"
+                }
+            };
+            let on_drop = {
+                let target = target.clone();
+                move |event: ev::DragEvent| {
+                    event.stop_propagation();
+                    event.prevent_default();
+                    let carried = dragging.get_untracked();
+                    dragging.set(None);
+                    drop_target.set(None);
+                    if let Some(carried) = carried
+                        && let Some(into) = drop_target_for(&carried, Some(&target))
+                    {
+                        controller::move_entry(state, carried.path, into, carried.is_dir);
+                    }
+                }
+            };
+
+            let name = entry.name.clone();
+            let row_path = path.clone();
+            view! {
+                {move || {
+                    if renaming_this.get() {
+                        return view! {
+                            <RenameBox
+                                path=row_path.clone()
+                                original=name.clone()
+                                depth=depth
+                                is_dir=is_dir
+                            />
+                        }
+                            .into_any();
+                    }
+                    let name = name.clone();
+                    view! {
+                        <button
+                            type="button"
+                            draggable="true"
+                            on:click=activate.clone()
+                            on:contextmenu=menu.clone()
+                            on:dragstart=on_dragstart.clone()
+                            on:dragend=on_dragend
+                            on:dragover=on_dragover.clone()
+                            on:drop=on_drop.clone()
+                            style=format!("padding-left: {}px", 10 + depth * 12)
+                            class=move || {
+                                let base = "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left \
+                                            text-callout transition-colors";
+                                let tone = if selected.get() {
+                                    "bg-selection text-rust"
+                                } else {
+                                    "text-label-2 hover:bg-sunken hover:text-label"
+                                };
+                                let drop = if receiving.get() {
+                                    " bg-selection/60 ring-1 ring-rust/70 ring-inset"
+                                } else {
+                                    ""
+                                };
+                                let dim = if cut.get() { " opacity-50" } else { "" };
+                                format!("{base} {tone}{drop}{dim}")
                             }
-                        }}
-                    </span>
-                    <span class="truncate">{entry.name}</span>
-                </button>
+                        >
+                            <span class="w-3 shrink-0 text-center text-footnote text-label-3">
+                                {move || {
+                                    if !is_dir {
+                                        ""
+                                    } else if open.get() {
+                                        "▾"
+                                    } else {
+                                        "▸"
+                                    }
+                                }}
+                            </span>
+                            <span class="truncate">{name}</span>
+                        </button>
+                    }
+                        .into_any()
+                }}
 
                 <Show when=move || is_dir && open.get()>
                     <Level entries=children.clone() depth=depth + 1 />
@@ -475,4 +781,167 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
         })
         .collect_view()
         .into_any()
+}
+
+/// A row's name as an input: Enter renames, Escape gives up, and leaving
+/// the box commits what was typed, as VS Code does. The stem is selected
+/// on open, so typing replaces the name and keeps the extension.
+#[component]
+fn RenameBox(path: String, original: String, depth: usize, is_dir: bool) -> impl IntoView {
+    let state = AppState::expect();
+    let Renaming(renaming) = expect_context::<Renaming>();
+    let input: NodeRef<html::Input> = NodeRef::new();
+    let stem = original
+        .rfind('.')
+        .filter(|at| *at > 0 && !is_dir)
+        .unwrap_or(original.len());
+    Effect::new(move |_| {
+        if let Some(input) = input.get() {
+            let _ = input.focus();
+            let _ = input.set_selection_range(0, stem as u32);
+        }
+    });
+    let commit = {
+        let path = path.clone();
+        let original = original.clone();
+        move |value: String| {
+            renaming.set(None);
+            let value = value.trim().to_string();
+            if !value.is_empty() && value != original {
+                controller::rename_entry(state, path.clone(), value, is_dir);
+            }
+        }
+    };
+    let on_key = {
+        let commit = commit.clone();
+        move |event: ev::KeyboardEvent| match event.key().as_str() {
+            "Enter" => commit(event_target_value(&event)),
+            "Escape" => renaming.set(None),
+            _ => {}
+        }
+    };
+    let on_blur = move |event: ev::FocusEvent| {
+        // Escape already closed the box; a blur that follows it must not
+        // rename with the text that was being abandoned.
+        if renaming.get_untracked().as_deref() == Some(path.as_str()) {
+            commit(event_target_value(&event));
+        }
+    };
+    view! {
+        <div
+            class="flex w-full items-center gap-1.5 py-[2px] pr-2"
+            style=format!("padding-left: {}px", 10 + depth * 12)
+        >
+            <span class="w-3 shrink-0"></span>
+            <input
+                node_ref=input
+                type="text"
+                spellcheck="false"
+                value=original
+                class="min-w-0 flex-1 rounded-[4px] bg-sunken px-1 py-0 font-mono text-callout outline-none ring-1 ring-rust"
+                on:keydown=on_key
+                on:blur=on_blur
+                on:click=move |event: ev::MouseEvent| event.stop_propagation()
+            />
+        </div>
+    }
+}
+
+/// Where a drop would put `carried`: the folder under the pointer, a
+/// file's folder, or the root when `over` is the empty sheet — and `None`
+/// where nothing would move: the folder it is already in, or a folder
+/// inside itself.
+fn drop_target_for(carried: &TreeTarget, over: Option<&TreeTarget>) -> Option<String> {
+    let into = match over {
+        None => String::new(),
+        Some(row) if row.is_dir => row.path.clone(),
+        Some(row) => parent_of(&row.path),
+    };
+    if parent_of(&carried.path) == into {
+        return None;
+    }
+    if carried.is_dir && (into == carried.path || into.starts_with(&format!("{}/", carried.path))) {
+        return None;
+    }
+    Some(into)
+}
+
+fn parent_of(path: &str) -> String {
+    path.rsplit_once('/')
+        .map(|(dir, _)| dir.to_string())
+        .unwrap_or_default()
+}
+
+/// The path the OS knows the entry by, spelled with the root's own
+/// separators: what "Copy path" puts on the clipboard.
+fn absolute_path(root: &str, relative: &str) -> String {
+    let root = root.trim_end_matches(['/', '\\']);
+    if relative.is_empty() {
+        return root.to_string();
+    }
+    if root.contains('\\') {
+        format!("{root}\\{}", relative.replace('/', "\\"))
+    } else {
+        format!("{root}/{relative}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(path: &str, is_dir: bool) -> TreeTarget {
+        TreeTarget {
+            path: path.to_string(),
+            is_dir,
+        }
+    }
+
+    #[test]
+    fn a_drop_lands_in_the_folder_under_the_pointer_or_a_files_folder_or_the_root() {
+        let file = at("src/main.rs", false);
+        assert_eq!(
+            drop_target_for(&file, Some(&at("firmware", true))).as_deref(),
+            Some("firmware")
+        );
+        assert_eq!(
+            drop_target_for(&file, Some(&at("firmware/Cargo.toml", false))).as_deref(),
+            Some("firmware")
+        );
+        assert_eq!(drop_target_for(&file, None).as_deref(), Some(""));
+        // Already there: nothing to do, so nothing to offer.
+        assert_eq!(drop_target_for(&file, Some(&at("src", true))), None);
+        assert_eq!(drop_target_for(&file, Some(&at("src/lib.rs", false))), None);
+        assert_eq!(drop_target_for(&at("Cargo.toml", false), None), None);
+    }
+
+    #[test]
+    fn a_folder_never_drops_into_itself_or_below() {
+        let src = at("src", true);
+        assert_eq!(drop_target_for(&src, Some(&src)), None);
+        assert_eq!(drop_target_for(&src, Some(&at("src/驱动", true))), None);
+        assert_eq!(drop_target_for(&src, Some(&at("src/main.rs", false))), None);
+        assert_eq!(
+            drop_target_for(&src, Some(&at("firmware", true))).as_deref(),
+            Some("firmware")
+        );
+        // `src2` is beside `src`, not inside it.
+        assert_eq!(
+            drop_target_for(&src, Some(&at("src2", true))).as_deref(),
+            Some("src2")
+        );
+    }
+
+    #[test]
+    fn an_absolute_path_takes_the_roots_own_separators() {
+        assert_eq!(
+            absolute_path("E:\\work\\blinky", "src/main.rs"),
+            "E:\\work\\blinky\\src\\main.rs"
+        );
+        assert_eq!(
+            absolute_path("/home/a/blinky/", "src"),
+            "/home/a/blinky/src"
+        );
+        assert_eq!(absolute_path("E:\\work\\blinky\\", ""), "E:\\work\\blinky");
+    }
 }

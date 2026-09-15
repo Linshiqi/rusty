@@ -12,7 +12,7 @@
 
 use leptos::prelude::*;
 
-use rusty_embed::{Chip, Runtime, WizardChoice};
+use rusty_embed::{Chip, Runtime, WizardChoice, WizardLayout};
 
 use rusty_i18n::t;
 
@@ -84,6 +84,7 @@ pub fn Wizard() -> impl IntoView {
                         runtime: Runtime::BareMetal,
                         name: "firmware".to_string(),
                         options: Vec::new(),
+                        layout: WizardLayout::Single,
                     },
                 );
             }
@@ -474,6 +475,10 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     view! { <Split list=list detail=detail /> }
 }
 
+/// The detail pane's key for the layout row, beside the generator's option
+/// ids — a name none of them can be.
+const LAYOUT_TOPIC: &str = "layout";
+
 #[component]
 fn OptionsStep(choice: WizardChoice) -> impl IntoView {
     let state = AppState::expect();
@@ -481,8 +486,50 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
     // to whatever was last touched, so the pane is never blank.
     let focused = RwSignal::new(None::<String>);
     let chosen = choice.options.clone();
+    let layout = choice.layout;
+
+    // The shape of the project, above the generator's own options: one
+    // crate, or the workspace this workbench is built around. Explained in
+    // the same pane as the options, under the same pointer.
+    let layouts = [
+        (WizardLayout::Single, t!("wizard.layout-single")),
+        (WizardLayout::Workspace, t!("wizard.layout-workspace")),
+    ];
+    let layout_row = view! {
+        <div
+            class="mb-2 flex items-center justify-between gap-2 px-2"
+            on:mouseenter=move |_| focused.set(Some(LAYOUT_TOPIC.to_string()))
+        >
+            <span class="text-body text-label">{t!("wizard.layout")}</span>
+            <div class="inline-flex rounded-[7px] bg-sunken p-0.5">
+                {layouts
+                    .into_iter()
+                    .map(|(value, label)| {
+                        let on = layout == value;
+                        view! {
+                            <button
+                                type="button"
+                                on:click=move |_| amend(state, move |next| next.layout = value)
+                                class=move || {
+                                    let base = "h-[24px] rounded-[5px] px-2.5 text-callout transition-colors";
+                                    if on {
+                                        format!("{base} bg-content text-label shadow-sm")
+                                    } else {
+                                        format!("{base} text-label-2 hover:text-label")
+                                    }
+                                }
+                            >
+                                {label}
+                            </button>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+        </div>
+    };
 
     let list = view! {
+        {layout_row}
         {move || {
                 let chosen = chosen.clone();
                 state
@@ -557,6 +604,15 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
     let detail = view! {
         {move || {
                 let id = focused.get();
+                if id.as_deref() == Some(LAYOUT_TOPIC) {
+                    return view! {
+                        <DetailHeading title=t!("wizard.layout") />
+                        <p class="text-callout leading-relaxed text-label-2">
+                            {t!("wizard.layout-detail")}
+                        </p>
+                    }
+                        .into_any();
+                }
                 let option = state.wizard.options.with(|options| {
                     id.as_ref()
                         .and_then(|id| options.iter().find(|o| &o.id == id))

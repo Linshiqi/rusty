@@ -121,12 +121,29 @@ pub async fn create_project(
         )));
     }
 
+    // The workspace layout puts the generated crate *inside* the project
+    // directory as `firmware/`, so the generator runs there — the directory
+    // is made first, and the scaffold around the crate is written once the
+    // generator has succeeded.
+    let workspace = choice.layout == rusty_embed::WizardLayout::Workspace;
+    let run_in = if workspace {
+        std::fs::create_dir_all(&destination).map_err(|error| {
+            CommandError::new(format!(
+                "could not create {}: {error}",
+                destination.display()
+            ))
+        })?;
+        destination.clone()
+    } else {
+        parent.clone()
+    };
+
     // A missing generator is the most likely failure here and the one that most
     // needs an answer rather than a diagnosis. The tool table already knows how
     // to install every tool rusty drives; saying "not found" without it leaves
     // the user to search for a crate name.
     let session =
-        process::spawn(&plan, Some(&parent)).map_err(|e| {
+        process::spawn(&plan, Some(&run_in)).map_err(|e| {
             match toolchain::install_command(&plan.program) {
                 Some(install) => CommandError::new(format!(
                     "`{}` is not installed, so there is nothing to generate the project with. \
@@ -146,8 +163,22 @@ pub async fn create_project(
 
     state.release_session(&ours).await;
 
+    let generated = if workspace {
+        destination.join("firmware")
+    } else {
+        destination.clone()
+    };
     match code {
-        Some(0) | None if destination.exists() => Ok(destination.display().to_string()),
+        Some(0) | None if generated.exists() => {
+            if workspace {
+                let root = destination.clone();
+                blocking("writing the workspace", move || {
+                    wizard::scaffold_workspace(&root, &choice)
+                })
+                .await??;
+            }
+            Ok(destination.display().to_string())
+        }
         // The generator ran and refused — it cannot be missing, or the spawn
         // above would have failed. Suggesting `cargo install` here was simply
         // wrong, and it sent people to reinstall a tool that had just printed a

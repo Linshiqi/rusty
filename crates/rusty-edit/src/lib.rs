@@ -23,6 +23,8 @@ pub use tests_in::{Runnable, RunnableKind};
 #[cfg(feature = "backend")]
 mod document;
 #[cfg(feature = "backend")]
+mod entries;
+#[cfg(feature = "backend")]
 mod error;
 #[cfg(feature = "backend")]
 mod format;
@@ -40,6 +42,8 @@ mod watch;
 
 #[cfg(feature = "backend")]
 pub use document::{Files, create, read_bytes, save};
+#[cfg(feature = "backend")]
+pub use entries::{absolute, copy_entry, delete_entry, move_entry, rename_entry};
 #[cfg(feature = "backend")]
 pub use error::{Error, Result};
 #[cfg(feature = "backend")]

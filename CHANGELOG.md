@@ -9,6 +9,29 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.25
+
+**Added — the file tree moves things.** Drag a file or a folder onto a
+folder to move it there, onto the empty space below the tree to move it to
+the project root; the folder that will receive it is highlighted while you
+drag, and a folder never drops into itself. Open tabs follow the file. A
+move onto a name that already exists is refused rather than replacing
+anything.
+
+**Added — the tree's right-click menu has what VS Code's has.** Cut, Copy
+and Paste (a copy pasted beside its original becomes `name copy`), Rename
+in place, Delete to the Recycle Bin or Trash after a confirmation, Copy
+path and Copy relative path, and Reveal in File Explorer or Finder. A
+folder's menu starts with New file and New folder, a file's with Open and
+Open to the side, as in VS Code.
+
+**Added — the wizard can create a workspace.** Choose *Workspace* under
+Options and the new project is two crates: `core`, whose logic touches no
+hardware and whose tests run on this machine with `cargo test` at the
+root, and `firmware`, the chip's binary, excluded from the workspace so
+those tests never try to build it for the host — the layout rusty already
+builds, flashes and simulates from the firmware's own directory.
+
 ## v0.6.24
 
 **Added — Ctrl+wheel resizes a Markdown page.** Hold Ctrl and scroll over

@@ -847,6 +847,8 @@ pub struct Editor {
     /// Directories the user has opened. Collapsed by default, because a tree
     /// that unfolds everything is a list.
     pub expanded: RwSignal<Vec<String>>,
+    /// The tree's Cut or Copy, waiting for its Paste.
+    pub clipboard: RwSignal<Option<TreeClip>>,
     /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
     /// the editor derives from it.
     pub zoom: RwSignal<f64>,
@@ -926,6 +928,7 @@ impl Editor {
             reveal: RwSignal::new(None),
             viewport: RwSignal::new(None),
             expanded: RwSignal::new(Vec::new()),
+            clipboard: RwSignal::new(None),
             source_view: RwSignal::new(Vec::new()),
             images: RwSignal::new(HashMap::new()),
             snippets: RwSignal::new(HashMap::new()),
@@ -951,6 +954,7 @@ impl Editor {
         Editor {
             tree: self.tree,
             expanded: self.expanded,
+            clipboard: self.clipboard,
             zoom: self.zoom,
             page_zoom: self.page_zoom,
             vim_on: self.vim_on,
@@ -1542,6 +1546,19 @@ pub struct Dock {
     /// automatically when the user scrolls up, which is the only way to read
     /// something in a stream that is still moving.
     pub follow: RwSignal<bool>,
+}
+
+/// What the tree's Cut or Copy took, until Paste uses it.
+///
+/// A Cut entry is drawn dimmed until it lands, as VS Code draws it; a Copy
+/// stays available for another paste. In `Editor` rather than in the tree
+/// component, so switching panels between the cut and the paste does not
+/// lose it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeClip {
+    pub path: String,
+    pub is_dir: bool,
+    pub cut: bool,
 }
 
 /// An update's way from found to installed.

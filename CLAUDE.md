@@ -716,6 +716,63 @@ and a new branch.
   fetch produces; it is a no-op until the panel has been opened once, so a
   project nobody looks at the history of costs no `git log` per save.
 
+## The tree's own verbs
+
+Drag-and-drop and the right-click menu do to an entry what VS Code's
+explorer does: move, cut, copy, paste, rename, delete, copy the path, reveal
+it in the file manager. `rusty_edit::entries` is the backend — confined to
+the root like every other write, every answer the relative path it produced
+— and `controller::follow_move` is why a tab survives its file moving.
+
+- **HTML5 drag and drop needs `dragDropEnabled: false` on the window.** With
+  the default, WebView2 routes drops to Tauri's own file-drop handler and
+  the page's `dragover`/`drop` never fire on Windows; the tree's drop
+  worked in a browser and did nothing in the app. Nothing in rusty used the
+  native drop events, so nothing was lost.
+- **A row stops the drag events, valid target or not.** Otherwise a drag
+  over an invalid row — a folder over itself — bubbled to the sheet and was
+  offered the root. `drop_target_for` is the pure rule (a file's row stands
+  for its folder; a folder never accepts itself or anything below it; the
+  folder an entry is already in is not a move) and the highlight follows it,
+  so the target is never a guess.
+- **Paths that move take their state with them, before the watcher hears.**
+  `follow_move` retargets the tabs, the parked editors, the document on
+  screen, the expanded folders, the source-view choices and the stale list
+  in both groups, and re-announces moved `.rs` buffers to rust-analyzer
+  under the new name. `retarget` checks the separator, not the prefix —
+  `src2/a.rs` is not under `src`. The watcher's batch, arriving later,
+  finds the old paths gone and nothing open under them.
+- **Move refuses an existing name; copy takes a free one.** An editor that
+  silently replaces a file eats work, so a move or rename onto a taken name
+  is `Error::Exists`; a copy pasted where its name is taken is ` copy`,
+  ` copy 2`… before the extension, because pasting beside the original is
+  the ordinary case. A directory into itself is `IntoItself`; a rename with
+  a separator in it is `BadName` — a rename is a name, a path is a move to
+  somewhere the tree did not show.
+- **Delete is the recycle bin, never `remove_dir_all`** (`trash`), asked
+  first through `ipc::confirm` with the platform's own word for the bin.
+  Every tab under the entry closes without a second question: the file is
+  gone and a draft of it has nowhere to be saved.
+- **Reveal is Explorer's `/select,<path>` as one argument** — a space after
+  the comma makes Explorer open the home folder — `open -R` on macOS, and
+  the containing folder through `xdg-open` elsewhere, where no file manager
+  takes a selection portably.
+
+## Two crates from the wizard
+
+`WizardLayout::Workspace` makes the layout the rest of this file keeps
+describing — host-testable crates as members, the bare-metal crate
+excluded — instead of one crate. `wizard::scaffold_workspace` writes it
+*around* the generator's output: the generator runs inside the project
+directory and is asked for a crate named `firmware`, whatever the project
+is called, and the root manifest, `core/`, the README and the
+`<name>-core` dependency line are rusty's, written after the generator
+succeeded and never over a file that exists. The name the generator never
+sees is checked as a crate name first (`valid_name`), because it becomes
+`<name>-core` and cargo would refuse it minutes later. `firmware` needs no
+`[workspace]` of its own: the root's `exclude` is what tells cargo it is
+not a member, and rusty then finds it exactly as it finds cf-drone-rs's.
+
 ## Following the disk
 
 The workbench is never the only thing writing to a checkout. `rusty_edit::watch`

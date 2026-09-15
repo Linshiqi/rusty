@@ -41,6 +41,22 @@ pub enum Error {
     #[error("{path} already exists")]
     Exists { path: String },
 
+    /// Moving or copying something that is not there — a tree that has
+    /// moved on under the menu.
+    #[error("{path} does not exist")]
+    NotFound { path: String },
+
+    /// A directory dragged into itself or below itself: a rename that can
+    /// never finish, refused by name rather than attempted.
+    #[error("{path} cannot be moved into itself")]
+    IntoItself { path: String },
+
+    /// A rename asked for with a separator in it, or with no name at all.
+    /// A rename is a name; a path is a move to somewhere the tree did not
+    /// show.
+    #[error("{name:?} is not a file name")]
+    BadName { name: String },
+
     /// A file asked for as a picture that is bigger than this window will
     /// load as one. Named with the size, so "will not show" reads as a limit
     /// rather than a broken image.

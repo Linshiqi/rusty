@@ -9,11 +9,30 @@ use super::Runtime;
 pub struct WizardChoice {
     pub chip: String,
     pub runtime: Runtime,
-    /// Crate name for the new project.
+    /// Crate name for the new project — and, in the workspace layout, the
+    /// name of the root directory and the prefix of the `-core` crate.
     pub name: String,
     /// Generator option ids, e.g. `embassy`, `wifi`, `alloc`.
     #[serde(default)]
     pub options: Vec<String>,
+    /// One crate, or the split this workbench is built around.
+    #[serde(default)]
+    pub layout: WizardLayout,
+}
+
+/// The shape of a new project.
+///
+/// `Single` is what the generator makes: one crate that is the firmware.
+/// `Workspace` is the standard embedded layout — host-testable crates as
+/// workspace members and the bare-metal crate *excluded*, so `cargo test` at
+/// the root runs on this machine and never tries to build `no_std` for the
+/// host — which is also the layout `project::firmware_root` was written for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WizardLayout {
+    #[default]
+    Single,
+    Workspace,
 }
 
 /// A generator option, with what turning it on costs.

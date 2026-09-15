@@ -137,6 +137,16 @@ pub mod files {
     pub const BLOB: &str = "read_blob";
     pub const SAVE: &str = "save_file";
     pub const CREATE: &str = "create_entry";
+    /// What the tree's drag-and-drop and its right-click menu do to an
+    /// entry. Each answers with the relative path it produced, because the
+    /// open tabs move with the file.
+    pub const MOVE: &str = "move_entry";
+    pub const COPY: &str = "copy_entry";
+    pub const RENAME: &str = "rename_entry";
+    /// To the recycle bin, never for ever.
+    pub const DELETE: &str = "delete_entry";
+    /// Select the entry in the platform's file manager.
+    pub const REVEAL: &str = "reveal_entry";
     pub const DETACH: &str = "open_editor_window";
     /// Bring a detached editor's file back into the main window.
     pub const REATTACH: &str = "reattach_editor_window";

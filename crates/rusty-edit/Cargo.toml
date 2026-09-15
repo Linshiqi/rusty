@@ -34,10 +34,13 @@ thiserror = { version = "2.0.20", optional = true }
 # workbench is never the only thing writing to a checkout, and until this the
 # window showed whatever it read when the project was opened.
 notify = { version = "8.0.0", optional = true }
+# The tree's Delete goes to the recycle bin, never `remove_dir_all`: a
+# right-click is not a place to lose a directory for ever.
+trash = { version = "5.2.9", optional = true }
 
 [features]
 default = ["backend"]
-backend = ["dep:syntect", "dep:ignore", "dep:grep-matcher", "dep:grep-regex", "dep:grep-searcher", "dep:thiserror", "dep:notify"]
+backend = ["dep:syntect", "dep:ignore", "dep:grep-matcher", "dep:grep-regex", "dep:grep-searcher", "dep:thiserror", "dep:notify", "dep:trash"]
 
 [lints]
 workspace = true
