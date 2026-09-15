@@ -82,14 +82,42 @@ pub struct CompletionItem {
     /// The range the insertion replaces, when the server said. Without it the
     /// caller replaces the word being typed.
     pub edit: Option<EditRange>,
-    /// Where the item stood in the server's reply — the handle for
-    /// `completionItem/resolve`, which is how an item that is not yet in
-    /// scope brings its `use` line along when accepted.
+    /// Where the item stood in the server's reply — the handle, with
+    /// [`CompletionList::reply`], for `completionItem/resolve`, which is how
+    /// an item that is not yet in scope brings its `use` line along when
+    /// accepted.
     pub index: u32,
     /// The server's short note beside the label: for an item that would be
     /// imported, ` (use esp_hal::gpio::Output)` — the one thing the row has
-    /// to say before the user commits to it.
+    /// to say before the user commits to it — and `(…)` for a function.
     pub label_detail: Option<String>,
+    /// What the typed word is matched against, when that is not the label:
+    /// rust-analyzer's postfix `.if` filters as `if`.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// `insert` is a snippet — `$0` and `${1:x}` placeholders, which the
+    /// editor expands rather than inserts.
+    #[serde(default)]
+    pub snippet: bool,
+    /// The type or signature the row shows at its right edge.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// One `textDocument/completion` answer.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionList {
+    pub items: Vec<CompletionItem>,
+    /// The server left out what a longer word might bring — rust-analyzer
+    /// always says so, because its imports are searched by the word typed.
+    /// Such a list is asked for again as the word grows, never only
+    /// narrowed.
+    pub incomplete: bool,
+    /// Which answer this is. An accepted item is resolved against the
+    /// server's own copy of the answer it came from, and the popup asks on
+    /// every keystroke, so the newest answer is often not that one.
+    pub reply: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

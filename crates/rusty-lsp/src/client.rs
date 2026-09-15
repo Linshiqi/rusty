@@ -18,13 +18,13 @@
 //!   re-request instead, and the puller thread owns freshness.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     process::Child,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -37,7 +37,7 @@ use crate::{
     convert, discover,
     error::{Error, Result},
     model::{
-        ActionEdit, CodeActionFix, CompletionItem, HoverInfo, Location, LspEvent, SemanticSpan,
+        ActionEdit, CodeActionFix, CompletionList, HoverInfo, Location, LspEvent, SemanticSpan,
         SignatureInfo,
     },
     positions::{Encoding, content_change, scalar_to_character},
@@ -63,6 +63,11 @@ const EXIT_GRACE: Duration = Duration::from_millis(500);
 /// Ctrl+. into a six-minute wait.
 const MAX_RESOLVES: usize = 8;
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many completion answers are kept for resolving an accepted item. The
+/// popup asks again on every keystroke, so the answer an item was picked
+/// from is usually the newest or one behind it; four is margin.
+const KEPT_REPLIES: usize = 4;
 
 /// A running rust-analyzer, and the documents it has been shown.
 pub struct LspClient {
@@ -97,6 +102,13 @@ struct Doc {
     text: String,
 }
 
+/// One completion answer as the server sent it.
+struct Reply {
+    path: String,
+    number: u64,
+    items: Vec<Value>,
+}
+
 /// Everything the session's threads share: the writer, the correlation
 /// table, the documents, and what the handshake learned.
 pub(crate) struct Shared {
@@ -111,11 +123,15 @@ pub(crate) struct Shared {
     /// reader is gone and no reply will come.
     pending: Mutex<HashMap<i64, Sender<Option<Value>>>>,
     docs: Mutex<HashMap<String, Doc>>,
-    /// The latest completion reply, raw, with the path it answered for: the
-    /// items the frontend sees are converted copies, and `completionItem/
-    /// resolve` needs the server's own item — its `data` in particular — so
-    /// the accepted one is looked up here by index.
-    completions: Mutex<Option<(String, Vec<Value>)>>,
+    /// The latest completion answers, raw, each with the path it answered
+    /// for and its number: the items the frontend sees are converted copies,
+    /// and `completionItem/resolve` needs the server's own item — its `data`
+    /// in particular — so the accepted one is looked up here by answer and
+    /// index. Newest last, at most [`KEPT_REPLIES`].
+    completions: Mutex<VecDeque<Reply>>,
+    /// Numbers the completion answers, from 1 — far short of 2^53 in any
+    /// session, so it crosses the wire as a plain JSON number.
+    replies: AtomicU64,
     /// The server's work in progress, by token — what `$/progress` has begun
     /// and not yet ended. Summarised into `LspEvent::Progress` on change.
     progress: Mutex<BTreeMap<String, Progress>>,
@@ -168,7 +184,8 @@ impl LspClient {
             poke: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
-            completions: Mutex::new(None),
+            completions: Mutex::new(VecDeque::new()),
+            replies: AtomicU64::new(1),
             progress: Mutex::new(BTreeMap::new()),
             next_id: AtomicI64::new(1),
             alive: AtomicBool::new(true),
@@ -294,7 +311,7 @@ impl LspClient {
 
     /// What could complete at this position. Columns are scalars, as
     /// everywhere on the frontend side.
-    pub fn completion(&self, path: &str, line: u32, col: u32) -> Result<Vec<CompletionItem>> {
+    pub fn completion(&self, path: &str, line: u32, col: u32) -> Result<CompletionList> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/completion",
@@ -310,29 +327,42 @@ impl LspClient {
             .or_else(|| result.as_array())
             .cloned()
             .unwrap_or_default();
-        *self.shared.completions.lock().expect("lsp completions") = Some((path.to_string(), raw));
-        Ok(convert::completion_items(
-            &result,
-            &text,
-            self.shared.encoding(),
-        ))
+        let number = self.shared.replies.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut kept = self.shared.completions.lock().expect("lsp completions");
+            kept.push_back(Reply {
+                path: path.to_string(),
+                number,
+                items: raw,
+            });
+            while kept.len() > KEPT_REPLIES {
+                kept.pop_front();
+            }
+        }
+        let mut list = convert::completion_items(&result, &text, self.shared.encoding());
+        list.reply = number;
+        Ok(list)
     }
 
     /// The edits an accepted completion makes besides its insertion — the
     /// `use` line for an item that was not in scope — fetched from the
-    /// server for the `index`th item of the latest reply for `path`.
+    /// server for the `index`th item of answer `reply` for `path`.
     ///
-    /// Empty when the reply has since been replaced by one for another
-    /// position: the insertion has already happened by then, and an import
-    /// added for the wrong item would be worse than none. Items that carried
-    /// their edits eagerly are answered without a round trip.
-    pub fn resolve_completion(&self, path: &str, index: u32) -> Result<Vec<ActionEdit>> {
+    /// Empty when that answer is no longer kept, or was for another file:
+    /// the insertion has already happened by then, and an import added for
+    /// the wrong item would be worse than none. Items that carried their
+    /// edits eagerly are answered without a round trip.
+    pub fn resolve_completion(
+        &self,
+        path: &str,
+        reply: u64,
+        index: u32,
+    ) -> Result<Vec<ActionEdit>> {
         let item = {
-            let latest = self.shared.completions.lock().expect("lsp completions");
-            match latest.as_ref() {
-                Some((for_path, items)) if for_path == path => items.get(index as usize).cloned(),
-                _ => None,
-            }
+            let kept = self.shared.completions.lock().expect("lsp completions");
+            kept.iter()
+                .find(|answer| answer.number == reply && answer.path == path)
+                .and_then(|answer| answer.items.get(index as usize).cloned())
         };
         let Some(item) = item else {
             return Ok(Vec::new());
@@ -827,6 +857,14 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     // diagnostics — type errors, unresolved names — are the ones the editor
     // needs live anyway.
     options.insert("checkOnSave".into(), json!(false));
+    // A function completes with its parentheses and the caret between them.
+    // rust-analyzer's default fills the arguments in as placeholders to tab
+    // through, which works only in an editor that walks tabstops; this one
+    // places the caret and leaves the arguments to the signature card.
+    options.insert(
+        "completion".into(),
+        json!({ "callable": { "snippets": "add_parentheses" } }),
+    );
 
     let params = json!({
         "processId": std::process::id(),
@@ -844,8 +882,13 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 // asks the client to re-request instead, and freshness becomes
                 // this client's job, which it can actually do.
                 "diagnostic": { "relatedDocumentSupport": false },
-                // No snippet support declared, so inserts arrive as plain text
-                // rather than `$0` placeholders nothing here interprets.
+                // Snippets on: a function arrives as `name($0)` and a macro
+                // as `println!($0)`, parentheses placed and the caret between
+                // them, as VS Code has it, and postfix templates (`.if`,
+                // `.match`) exist at all. The editor expands the placeholders
+                // itself. `labelDetailsSupport` keeps the label a bare name:
+                // without it rust-analyzer glues ` (use …)` onto the label,
+                // and the row cannot set the note apart from the name.
                 // `resolveSupport` for `additionalTextEdits` is what turns on
                 // rust-analyzer's imports-on-the-fly: it will not offer an
                 // item that is not yet in scope unless the client can fetch
@@ -855,7 +898,8 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 // no `Output`, no import — while VS Code offered both.
                 "completion": {
                     "completionItem": {
-                        "snippetSupport": false,
+                        "snippetSupport": true,
+                        "labelDetailsSupport": true,
                         "resolveSupport": { "properties": ["additionalTextEdits"] },
                     },
                 },
@@ -1202,10 +1246,74 @@ mod tests {
             let hover = scope.spawn(|| client.hover("a.rs", 0, 3));
             assert!(saw(&seen, "textDocument/hover"), "{:?}", methods(&seen));
             let completion = client.completion("a.rs", 0, 3).expect("completion");
-            assert_eq!(completion[0].label, "later");
+            assert_eq!(completion.items[0].label, "later");
             let hover = hover.join().unwrap().expect("hover").expect("some hover");
             assert_eq!(hover.text, "the hover");
         });
+    }
+
+    /// An accepted item is resolved against the answer it came from, even
+    /// after newer ones — the popup asks on every keystroke — and never
+    /// against another answer's item at the same index.
+    #[test]
+    fn an_item_is_resolved_against_its_own_answer() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, _seen) = fake_server(|message, writer| match method(message) {
+            "textDocument/completion" => {
+                let col = message["params"]["position"]["character"].as_u64().unwrap();
+                let items = json!([{ "label": format!("at{col}"), "data": col }]);
+                reply(
+                    writer,
+                    message,
+                    json!({ "isIncomplete": true, "items": items }),
+                );
+                true
+            }
+            "completionItem/resolve" => {
+                let col = message["params"]["data"].as_u64().unwrap();
+                let at = json!({ "line": 0, "character": 0 });
+                reply(
+                    writer,
+                    message,
+                    json!({
+                        "label": format!("at{col}"),
+                        "additionalTextEdits": [{
+                            "range": { "start": at, "end": at },
+                            "newText": format!("use at{col};\n"),
+                        }],
+                    }),
+                );
+                true
+            }
+            _ => default_handle(message, writer),
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+
+        let first = client.completion("a.rs", 0, 1).expect("first");
+        let second = client.completion("a.rs", 0, 2).expect("second");
+        assert!(first.incomplete, "the server said so");
+        assert_ne!(first.reply, second.reply);
+        let edits = client
+            .resolve_completion("a.rs", first.reply, 0)
+            .expect("resolve");
+        assert_eq!(
+            edits[0].new_text, "use at1;\n",
+            "the first answer's own item"
+        );
+        assert!(
+            client
+                .resolve_completion("a.rs", second.reply + 100, 0)
+                .expect("unknown answer")
+                .is_empty()
+        );
+        assert!(
+            client
+                .resolve_completion("b.rs", second.reply, 0)
+                .expect("another file")
+                .is_empty()
+        );
     }
 
     /// The server dies with a request outstanding. The caller must hear so

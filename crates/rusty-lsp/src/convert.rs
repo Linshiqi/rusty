@@ -12,8 +12,8 @@ use serde_json::Value;
 use crate::{
     error::{Error, Result},
     model::{
-        ActionEdit, CompletionItem, DiagSeverity, EditRange, FileDiagnostic, HoverInfo,
-        SemanticSpan, SignatureInfo,
+        ActionEdit, CompletionItem, CompletionList, DiagSeverity, EditRange, FileDiagnostic,
+        HoverInfo, SemanticSpan, SignatureInfo,
     },
     positions::{Encoding, byte_of_character, character_to_scalar},
     uri::same_file_uri,
@@ -51,18 +51,18 @@ pub(crate) fn edit_range(text: &str, range: &Value, encoding: Encoding) -> Optio
 }
 
 /// How many completion items cross the bridge, after sorting. The popup
-/// shows nine and filters the rest as the word grows; four hundred is far
-/// past what any prefix narrows to, and keeps a `use`-everything reply of
-/// thousands from being serialised twice per keystroke.
-const MAX_COMPLETIONS: usize = 400;
+/// filters and ranks what arrives itself, and asks again while the server
+/// says its answer is incomplete; a thousand is past what any prefix
+/// narrows to, and keeps a `use`-everything reply of thousands from crossing
+/// on every keystroke. It was four hundred, cut before any filtering, and a
+/// large scope lost `println!` and `Vec` to the alphabet before `pr` was
+/// typed.
+const MAX_COMPLETIONS: usize = 1000;
 
 /// A `textDocument/completion` reply. It is `CompletionItem[]` or a
-/// `CompletionList`; both hold items.
-pub(crate) fn completion_items(
-    result: &Value,
-    text: &str,
-    encoding: Encoding,
-) -> Vec<CompletionItem> {
+/// `CompletionList`; both hold items, and only the second can say it is
+/// incomplete. `reply` is left for the client to number.
+pub(crate) fn completion_items(result: &Value, text: &str, encoding: Encoding) -> CompletionList {
     let items = result
         .get("items")
         .and_then(Value::as_array)
@@ -89,11 +89,15 @@ pub(crate) fn completion_items(
         let sort = item["sortText"].as_str().unwrap_or(label);
         (sort.to_string(), label.to_string())
     });
-    items
+    let items = items
         .into_iter()
         .take(MAX_COMPLETIONS)
         .map(|(index, item)| {
             let label = item["label"].as_str().unwrap_or_default().to_string();
+            let filter = item["filterText"]
+                .as_str()
+                .filter(|filter| *filter != label)
+                .map(str::to_string);
             let edit = item["textEdit"].as_object();
             let insert = edit
                 .and_then(|e| e.get("newText"))
@@ -112,9 +116,22 @@ pub(crate) fn completion_items(
                 edit: range,
                 index,
                 label_detail: item["labelDetails"]["detail"].as_str().map(str::to_string),
+                filter,
+                snippet: item["insertTextFormat"].as_u64() == Some(2),
+                description: item["labelDetails"]["description"]
+                    .as_str()
+                    .map(str::to_string),
             }
         })
-        .collect()
+        .collect();
+    CompletionList {
+        items,
+        incomplete: result
+            .get("isIncomplete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reply: 0,
+    }
 }
 
 /// The edits an accepted completion makes *besides* the insertion — for
@@ -628,7 +645,7 @@ mod tests {
                 },
             }],
         });
-        let items = completion_items(&reply, text, Encoding::Utf8);
+        let items = completion_items(&reply, text, Encoding::Utf8).items;
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind.as_deref(), Some("method"));
         assert_eq!(items[0].insert, "frobnicate()");
@@ -650,7 +667,7 @@ mod tests {
         // Same rank as the crowd: the label decides, alphabetically.
         items.push(json!({ "label": "aaa", "sortText": "ffffffff" }));
         let reply = json!({ "items": items });
-        let got = completion_items(&reply, "", Encoding::Utf8);
+        let got = completion_items(&reply, "", Encoding::Utf8).items;
         assert_eq!(got.len(), MAX_COMPLETIONS);
         assert_eq!(got[0].label, "len");
         assert_eq!(got[1].label, "aaa");
@@ -660,8 +677,57 @@ mod tests {
         assert_eq!(got[2].index, 0);
         // An item without sortText ranks by its label.
         let bare = json!({ "items": [{ "label": "zeta" }, { "label": "alpha" }] });
-        let got = completion_items(&bare, "", Encoding::Utf8);
+        let got = completion_items(&bare, "", Encoding::Utf8).items;
         assert_eq!(got[0].label, "alpha");
+    }
+
+    /// What the popup needs besides the text: whether to ask again as the
+    /// word grows, which items are snippets to expand, what an item filters
+    /// as when that is not its label, and the type to show beside it.
+    #[test]
+    fn a_reply_carries_its_incompleteness_snippets_filters_and_descriptions() {
+        let reply = json!({
+            "isIncomplete": true,
+            "items": [
+                {
+                    "label": "push",
+                    "kind": 2,
+                    "insertTextFormat": 2,
+                    "insertText": "push($0)",
+                    "labelDetails": { "detail": "(…)", "description": "fn(&mut self, T)" },
+                },
+                {
+                    "label": "if",
+                    "filterText": "if",
+                    "kind": 15,
+                    "insertTextFormat": 2,
+                    "insertText": "if ${1:cond} {\n\t$0\n}",
+                },
+                { "label": "if expr {}", "filterText": "if", "kind": 15 },
+            ],
+        });
+        let list = completion_items(&reply, "", Encoding::Utf8);
+        assert!(list.incomplete);
+        let push = list.items.iter().find(|i| i.label == "push").unwrap();
+        assert!(push.snippet);
+        assert_eq!(push.insert, "push($0)");
+        assert_eq!(push.label_detail.as_deref(), Some("(…)"));
+        assert_eq!(push.description.as_deref(), Some("fn(&mut self, T)"));
+        let keyword = list.items.iter().find(|i| i.label == "if").unwrap();
+        assert_eq!(
+            keyword.filter, None,
+            "a filter that is the label says nothing"
+        );
+        let postfix = list.items.iter().find(|i| i.label == "if expr {}").unwrap();
+        assert_eq!(postfix.filter.as_deref(), Some("if"));
+        assert!(
+            !postfix.snippet,
+            "plain text unless the server says snippet"
+        );
+
+        // A bare array cannot say it is incomplete.
+        let bare = completion_items(&json!([{ "label": "x" }]), "", Encoding::Utf8);
+        assert!(!bare.incomplete);
     }
 
     /// An edit for another file makes the whole action multi-file, and a
@@ -702,7 +768,7 @@ mod flyimport_tests {
             "sortText": "7fffffff",
             "data": { "position": 1 },
         }] });
-        let items = completion_items(&reply, text, Encoding::Utf8);
+        let items = completion_items(&reply, text, Encoding::Utf8).items;
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].index, 0);
         assert_eq!(

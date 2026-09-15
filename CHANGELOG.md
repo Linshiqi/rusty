@@ -9,6 +9,29 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.27
+
+**Fixed — code completion is reliable.** The list opens on the first letter
+of a word, as VS Code's does, and keeps asking rust-analyzer as the word
+grows, so it no longer stays frozen at what the first two letters found, or
+stays away for a whole word because rust-analyzer was busy for a moment. A
+list that arrives after you have moved on — pressed Enter, moved the caret,
+typed past the word — is dropped, instead of opening where the caret went
+and taking your next Enter.
+
+**Changed — completion matches the way VS Code does.** Matching is fuzzy:
+`itr` finds `iter` and `hm` finds `HashMap`, while names that start with
+what you typed come first, in rust-analyzer's order. Accepting a function
+or a macro adds its parentheses with the caret between them and shows the
+signature, and postfix templates such as `.if` and `.match` are offered.
+Each row shows the item's type or signature, Up and Down wrap round, the
+selection goes back to the best match as you type, and Escape closes the
+list before it leaves Vim's insert mode.
+
+**Fixed — the import added by accepting a completion could come from
+another item** when the list had been asked for again in between. It is
+now fetched for the list the item was picked from.
+
 ## v0.6.26
 
 **Changed — the Git panel is fast.** A save anywhere in the project used to

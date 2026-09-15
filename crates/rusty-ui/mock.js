@@ -311,7 +311,8 @@
     lsp_complete: (a) => {
       window.__mock.completes.push(a);
       const start = a.col - 2;
-      return ITEMS.map((i) => ({ ...i, edit: { startLine: a.line, startCol: start, endLine: a.line, endCol: a.col, newText: i.insert } }));
+      const items = ITEMS.map((i, index) => ({ ...i, index, edit: { startLine: a.line, startCol: start, endLine: a.line, endCol: a.col, newText: i.insert } }));
+      return { items, incomplete: false, reply: 1 };
     },
     lsp_hover: (a) => ({
       text: "```rust\npub struct Radio {\n    gain: u32,\n}\n```\n---\nA struct providing radio control. See `Radio::new()`.",

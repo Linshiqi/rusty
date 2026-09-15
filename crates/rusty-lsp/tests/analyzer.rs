@@ -133,10 +133,11 @@ fn rust_analyzer_end_to_end() {
         client
             .completion("src/main.rs", call_line, partial_col)
             .ok()
-            .filter(|items| items.iter().any(|i| i.label.starts_with("frobnicate")))
+            .filter(|list| list.items.iter().any(|i| i.label.starts_with("frobnicate")))
     })
     .expect("completion never offered `frobnicate`");
     let item = completions
+        .items
         .iter()
         .find(|i| i.label.starts_with("frobnicate"))
         .unwrap();

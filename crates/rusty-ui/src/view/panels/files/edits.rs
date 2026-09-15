@@ -159,7 +159,7 @@ pub(super) fn apply_history(
     set_buffer(state, area, &text);
     let _ = area.set_selection_start(Some(caret));
     let _ = area.set_selection_end(Some(caret));
-    state.editor.completion.set(None);
+    controller::dismiss_completion(state);
     state.editor.signature.set(None);
     keep_caret_in_view(area, state, scroller);
     controller::schedule_pulse(state);

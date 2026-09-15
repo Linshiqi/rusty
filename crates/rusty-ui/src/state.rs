@@ -128,7 +128,7 @@ pub struct EditHistory {
     pub last_push: f64,
 }
 
-/// A completion request's results, anchored where they were asked for.
+/// A completion answer, anchored where it was asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionPopup {
     pub path: String,
@@ -138,6 +138,26 @@ pub struct CompletionPopup {
     /// edit range of its own.
     pub word_start: u32,
     pub items: Vec<rusty_lsp::CompletionItem>,
+    /// Ask again as the word grows, rather than only narrowing `items`.
+    pub incomplete: bool,
+    /// The server's number for this answer, for resolving an accepted item.
+    pub reply: u64,
+    /// The ask this answers — see [`CompletionAsk`]. An answer to an older
+    /// ask never replaces one to a newer.
+    pub asked: u64,
+}
+
+/// What the completion popup is waiting on. Every ask is numbered, and so
+/// is every dismissal; an answer is shown only while the word it was asked
+/// about is still the word being typed — same file, same line, same start.
+/// An answer used to be shown wherever it landed: type `foo` and Enter
+/// quickly, and the popup for `foo` opened on the line below and took the
+/// next Enter.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CompletionAsk {
+    pub count: u64,
+    /// Path, line and word start of the word being completed, while one is.
+    pub anchor: Option<(String, u32, u32)>,
 }
 
 /// Whether the language server behind the editor is up.
@@ -824,6 +844,8 @@ pub struct Editor {
     pub hover: RwSignal<Option<(String, EditRange, String)>>,
     /// The completion popup, when one is up.
     pub completion: RwSignal<Option<CompletionPopup>>,
+    /// What the popup is waiting on. Not reactive: nothing draws it.
+    pub completion_ask: StoredValue<CompletionAsk>,
     /// The signature card: which file and line it hangs over, and what it says.
     pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
     /// Quick fixes offered at the caret, when the user asked (Ctrl+.).
@@ -925,6 +947,7 @@ impl Editor {
             pulse_gen: RwSignal::new(0),
             hover: RwSignal::new(None),
             completion: RwSignal::new(None),
+            completion_ask: StoredValue::new(CompletionAsk::default()),
             signature: RwSignal::new(None),
             actions: RwSignal::new(None),
             semantic: RwSignal::new(None),

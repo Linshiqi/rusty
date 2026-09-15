@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use rusty_lsp::{CompletionItem, HoverInfo, Location, LspClient, LspEvent};
+use rusty_lsp::{CompletionList, HoverInfo, Location, LspClient, LspEvent};
 use tauri::{State, ipc::Channel};
 
 use crate::{error::CommandError, state::AppState};
@@ -126,9 +126,9 @@ pub async fn lsp_complete(
     line: u32,
     col: u32,
     state: State<'_, AppState>,
-) -> Result<Vec<CompletionItem>, CommandError> {
+) -> Result<CompletionList, CommandError> {
     let Some(client) = state.lsp().await else {
-        return Ok(Vec::new());
+        return Ok(CompletionList::default());
     };
     Ok(
         tokio::task::spawn_blocking(move || client.completion(&path, line, col))
@@ -138,10 +138,12 @@ pub async fn lsp_complete(
 }
 
 /// The edits an accepted completion makes besides the insertion — the
-/// import for an item that was not in scope.
+/// import for an item that was not in scope. `reply` names the answer the
+/// item was picked from.
 #[tauri::command]
 pub async fn lsp_resolve_completion(
     path: String,
+    reply: u64,
     index: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::ActionEdit>, CommandError> {
@@ -149,7 +151,7 @@ pub async fn lsp_resolve_completion(
         return Ok(Vec::new());
     };
     Ok(
-        tokio::task::spawn_blocking(move || client.resolve_completion(&path, index))
+        tokio::task::spawn_blocking(move || client.resolve_completion(&path, reply, index))
             .await
             .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
     )

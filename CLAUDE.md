@@ -484,7 +484,44 @@ positioned in a coordinate system that is not the document's.
   methods for `v.` and dropped `len`; typing `le` then narrowed the popup to
   nothing — an editor with no completion, reported in exactly those words,
   while every request and reply was correct. `convert::completion_items`
-  sorts first and caps at 400.
+  sorts first and caps at 1,000 — it was 400, cut before any filtering,
+  and a large scope lost `println!` and `Vec` to the alphabet before `pr`
+  was typed.
+- **Completion asks on the first letter and keeps asking while the answer
+  is incomplete** (`complete::ask_for`, pure and tested) — VS Code's rule,
+  and the one rust-analyzer is built for: it marks every answer incomplete,
+  because its imports are searched by the word typed. The editor used to ask
+  once per word, on the second letter, and never again, so an ask that
+  failed or came back empty while the index warmed up meant no completion
+  for that word at all — "unreliable, unusable", in the user's words. A
+  word already showing is asked about again 40 ms after the typing pauses;
+  deleting widens an open popup and never opens one; an ask that fails is
+  made once more if it is still the latest, because rust-analyzer cancels a
+  request an edit overtakes (`content modified`).
+- **An answer is shown only while its word is still the word being typed.**
+  Every ask is numbered and anchored to its file, line and word start
+  (`state::CompletionAsk`); every dismissal bumps the number. The popup
+  closes when the caret leaves the word — an arrow, Home or End, a click,
+  Enter, Backspace past the word's start, a character that ends it — and
+  an answer landing after that is dropped. It used to be shown wherever it
+  landed: `foo` and a quick Enter opened the popup for `foo` on the next
+  line, and the next Enter accepted it. The first answer for a word is
+  shown the moment it arrives even with later asks for the same word out;
+  an older answer never replaces a newer one.
+- **The popup ranks what it shows** (`complete::ranked`): names that start
+  with the word first, in the server's order, an exact-case start ahead;
+  then names the word only fuzzily matches, the first character at a word
+  start — `itr` finds `iter`, `hm` finds `HashMap`, `ln` does not find
+  `println`. `filterText` stands in for the label when the server sends one.
+  The keyboard's row goes back to the first on every narrowing (kept, it
+  became another item that Enter accepted), and Up and Down wrap.
+- **Snippets are on, and expanded by the editor** (`complete::expand_snippet`,
+  pure and tested): a function arrives as `name($0)` and a macro as
+  `println!($0)`, and accepting puts the caret between the parentheses and
+  asks for the signature. Only the first tabstop is honoured, so the client
+  asks rust-analyzer for `callable.snippets: "add_parentheses"` rather than
+  its default of arguments to tab through. Escape closes the popup before
+  Vim sees it, as the suggest widget's does in VS Code.
 - **rust-analyzer offers an unimported item only to a client that can
   resolve `additionalTextEdits` lazily.** `enable_imports_on_the_fly` is
   gated on `completionItem.resolveSupport` naming that property — computing
@@ -492,11 +529,15 @@ positioned in a coordinate system that is not the document's.
   gets no `Output` for `Out` in a file that lacks the import, and no
   `Output::new` after, since the path does not resolve. Reported as "still
   no completion", with a hover of `{unknown}` for the variable, which was
-  correct. The client declares it; `completion()` keeps the raw reply;
-  `resolve_completion(path, index)` asks `completionItem/resolve` for the
-  accepted item and the frontend splices the edits above the caret, shifting
-  it by what was inserted. `label_detail` carries the ` (use …)` note so the
-  row says what accepting it will add.
+  correct. The client declares it; `completion()` keeps the last four raw
+  answers, numbered; `resolve_completion(path, reply, index)` asks
+  `completionItem/resolve` for the accepted item of *its own* answer — the
+  popup asks on every keystroke, and the newest answer is often not the one
+  an item was picked from — and the frontend splices the edits above the
+  caret, shifting it by what was inserted. `label_detail` carries the
+  ` (use …)` note so the row says what accepting it will add, and it is a
+  field of its own only because the client declares `labelDetailsSupport`:
+  without it rust-analyzer glues the note onto the label.
 
 ## Two editor groups
 

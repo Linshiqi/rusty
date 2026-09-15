@@ -83,10 +83,14 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     let opens_up =
         move |line: u32| line_in_view(line).is_some_and(|(top, height)| top > height * 0.55);
 
-    // Which completion row the keyboard is on. Reset when a new popup arrives.
+    // Which completion row the keyboard is on: the first, whenever the list
+    // changes — a new answer, or a letter that narrows it. Kept across a
+    // narrowing, the row under the keyboard became another item, which Enter
+    // then accepted.
     let picked = RwSignal::new(0usize);
     Effect::new(move |_| {
-        let _ = state.editor.completion.get();
+        state.editor.completion.track();
+        state.editor.draft.track();
         picked.set(0);
     });
     let picked_action = RwSignal::new(0usize);
@@ -228,6 +232,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             // yet, so re-deriving it is exact and needs no second signal to
             // keep in step with every programmatic `set_value`.
             let screen_was = screen(state);
+            // Typing, or deleting: a deletion widens a popup that is open and
+            // never opens one.
+            let typing = screen_now.len() >= screen_was.len();
             let (new, folds) = rusty_edit::fold::splice(
                 &state.editor.draft.get_untracked(),
                 &state.editor.folds.get_untracked(),
@@ -244,7 +251,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             }
 
             if let Some(element) = area.get_untracked() {
-                typed_triggers(state, &path, is_rust, &element);
+                typed_triggers(state, &path, is_rust, &element, typing);
             }
         }
     };
@@ -793,7 +800,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 // Ctrl+Click asks where this is defined — the
                                 // gesture every editor has taught.
                                 if !(event.ctrl_key() || event.meta_key()) || !is_rust {
-                                    state.editor.completion.set(None);
+                                    controller::dismiss_completion(state);
                                     state.editor.signature.set(None);
                                     state.editor.actions.set(None);
                                     return;
@@ -938,6 +945,30 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             // `stop_propagation` on the taken ones is the
                             // half that matters: without it a `d` in normal
                             // mode would also reach the window listener.
+                            // The popup's Escape comes before Vim's, as the
+                            // suggest widget's does in VS Code: the first
+                            // press closes the list, the second leaves insert
+                            // mode. Vim taking it first left the popup drawn,
+                            // with Tab still accepting into it. An ask still
+                            // on its way is forgotten either way.
+                            if event.key() == "Escape" {
+                                let showing =
+                                    state.editor.completion.with_untracked(|popup| {
+                                        popup.as_ref().is_some_and(|popup| {
+                                            !visible_items(
+                                                popup,
+                                                &state.editor.draft.get_untracked(),
+                                            )
+                                            .is_empty()
+                                        })
+                                    });
+                                controller::dismiss_completion(state);
+                                if showing {
+                                    event.prevent_default();
+                                    event.stop_propagation();
+                                    return;
+                                }
+                            }
                             if state.editor.vim_on.get_untracked()
                                 && let Some(element) = area.get_untracked()
                                 && vim_key(state, &element, scroller, &event)
@@ -1044,27 +1075,23 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             // something. `Some` alone was the test, and a
                             // popup narrowed to nothing — `v.xyz` — was
                             // invisible yet still ate Enter and Tab.
-                            let popup_shows = state.editor.completion.with_untracked(|popup| {
-                                popup.as_ref().is_some_and(|popup| {
-                                    !visible_items(popup, &state.editor.draft.get_untracked())
-                                        .is_empty()
+                            let shown = state.editor.completion.with_untracked(|popup| {
+                                popup.as_ref().map_or(0, |popup| {
+                                    visible_items(popup, &state.editor.draft.get_untracked())
+                                        .len()
                                 })
                             });
-                            if !popup_shows
-                                && state.editor.completion.with_untracked(Option::is_some)
-                            {
-                                state.editor.completion.set(None);
-                            }
-                            if popup_shows {
+                            if shown > 0 {
                                 match event.key().as_str() {
+                                    // Round the ends, as VS Code's list does.
                                     "ArrowDown" => {
                                         event.prevent_default();
-                                        picked.update(|i| *i += 1);
+                                        picked.update(|i| *i = (*i + 1) % shown);
                                         return;
                                     }
                                     "ArrowUp" => {
                                         event.prevent_default();
-                                        picked.update(|i| *i = i.saturating_sub(1));
+                                        picked.update(|i| *i = (*i + shown - 1) % shown);
                                         return;
                                     }
                                     "Enter" | "Tab" => {
@@ -1078,17 +1105,24 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                         }
                                         return;
                                     }
-                                    "Escape" => {
-                                        event.prevent_default();
-                                        // Swallowed here so the window's own
-                                        // Escape handling does not also close
-                                        // an overlay behind the editor.
-                                        event.stop_propagation();
-                                        state.editor.completion.set(None);
-                                        return;
-                                    }
                                     _ => {}
                                 }
+                            }
+                            // Moving the caret leaves the word the popup is
+                            // about, and an answer still on its way would
+                            // open it wherever the caret had gone.
+                            if matches!(
+                                event.key().as_str(),
+                                "ArrowLeft"
+                                    | "ArrowRight"
+                                    | "ArrowUp"
+                                    | "ArrowDown"
+                                    | "Home"
+                                    | "End"
+                                    | "PageUp"
+                                    | "PageDown"
+                            ) {
+                                controller::dismiss_completion(state);
                             }
                             if event.key() == "Escape"
                                 && state.editor.signature.with_untracked(Option::is_some)
@@ -1186,6 +1220,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                             line,
                                             col,
                                             start,
+                                            true,
                                         );
                                     }
                                 }
@@ -1203,6 +1238,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             }
                             if event.key() == "Enter" {
                                 event.prevent_default();
+                                // A new line is not the word an answer on its
+                                // way was asked for.
+                                controller::dismiss_completion(state);
                                 if let Some(element) = area.get_untracked() {
                                     let (from, to) = doc_selection(&element, state);
                                     // A selection is replaced by the newline,
@@ -1245,7 +1283,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     if let Some(edit) = pairs::on_type(&draft, from, to, ch) {
                                         event.prevent_default();
                                         apply_edit(&element, state, &edit);
-                                        typed_triggers(state, &path, is_rust, &element);
+                                        typed_triggers(state, &path, is_rust, &element, true);
                                         return;
                                     }
                                 }
@@ -1261,6 +1299,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     {
                                         event.prevent_default();
                                         apply_edit(&element, state, &edit);
+                                        typed_triggers(state, &path, is_rust, &element, false);
                                         return;
                                     }
                                 }
@@ -1607,7 +1646,13 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                         .map(|(index, item)| {
                                             let selected = index == chosen;
                                             let kind = item.kind.clone().unwrap_or_default();
-                                            let detail = item.detail.clone().unwrap_or_default();
+                                            // The type or signature, as the
+                                            // server shows it beside the name.
+                                            let detail = item
+                                                .description
+                                                .clone()
+                                                .or_else(|| item.detail.clone())
+                                                .unwrap_or_default();
                                             view! {
                                                 <button
                                                     type="button"
@@ -1657,19 +1702,23 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     }
 }
 
-/// What a typed character asks the server for, judged by the character now
-/// behind the caret: `.` and `::` open completion, the second letter of a
-/// word opens it, `(` and `,` ask for the signature, `)` drops it, and any
-/// other character ends the word the popup was about.
+/// What a change to the text asks the server for, judged by what now sits
+/// behind the caret: completion by [`ask_for`]'s rules — the first letter of
+/// a word, `.` and `::`, the word again while its answer is incomplete, and
+/// a close when the caret has left the word — and the signature card by the
+/// parentheses, `(` and `,` asking and `)` dropping it.
 ///
 /// Shared by the input event and by the keys the editor types on the
-/// browser's behalf — a bracket pair, a step over a closer — which never
-/// reach the input event because they were `preventDefault`ed.
+/// browser's behalf — a bracket pair, a step over a closer, a Backspace
+/// inside an empty pair — which never reach the input event because they
+/// were `preventDefault`ed. `typing` is false for a deletion, which widens a
+/// popup that is open and never opens one.
 fn typed_triggers(
     state: AppState,
     path: &str,
     is_rust: bool,
     element: &web_sys::HtmlTextAreaElement,
+    typing: bool,
 ) {
     if !is_rust {
         return;
@@ -1686,43 +1735,38 @@ fn typed_triggers(
     let before: Vec<char> = line_text.chars().take(col as usize).collect();
     let last = before.last().copied();
 
-    let popup_open = state.editor.completion.with_untracked(Option::is_some);
-    match last {
-        // `foo.` and `foo::` are the moments completion answers a question
-        // the typist actually has.
-        Some('.') => {
-            controller::request_completion(state, path.to_string(), line, col, col);
-        }
-        Some(':') if before.len() >= 2 && before[before.len() - 2] == ':' => {
-            controller::request_completion(state, path.to_string(), line, col, col);
-        }
-        // Inside a word. Once the popup is open the filter narrows it
-        // reactively off the draft, so there is nothing to do — but *opening*
-        // it was the gap: only `.` and `::` ever did, so typing an identifier
-        // offered nothing at all, which reads as an editor with no completion
-        // rather than one with a deliberate trigger.
-        //
-        // On the second character, not the first: rust-analyzer answers a
-        // one-letter prefix with the entire visible scope, which is a
-        // thousand rows to draw and filter for a question nobody has asked
-        // yet. One request per word, not per key — after this the popup is
-        // open and this arm does nothing.
-        Some(c) if c.is_alphanumeric() || c == '_' => {
-            let word = before
-                .iter()
-                .rev()
-                .take_while(|c| c.is_alphanumeric() || **c == '_')
-                .count();
-            if !popup_open && word == 2 {
-                let start = col - word as u32;
-                controller::request_completion(state, path.to_string(), line, col, start);
-            }
-        }
-        // Anything else ends the word the popup was about.
-        _ => {
-            if popup_open {
-                state.editor.completion.set(None);
-            }
+    // What the popup is about: the one showing, or the word still waiting
+    // for its first answer — which counts as incomplete, since nobody has
+    // said otherwise yet.
+    let showing = state
+        .editor
+        .completion
+        .with_untracked(|popup| {
+            popup
+                .as_ref()
+                .filter(|popup| popup.path == path)
+                .map(|popup| Showing {
+                    line: popup.line,
+                    word_start: popup.word_start,
+                    incomplete: popup.incomplete,
+                })
+        })
+        .or_else(|| {
+            state.editor.completion_ask.with_value(|ask| {
+                ask.anchor.as_ref().filter(|(asked, ..)| asked == path).map(
+                    |(_, line, word_start)| Showing {
+                        line: *line,
+                        word_start: *word_start,
+                        incomplete: true,
+                    },
+                )
+            })
+        });
+    match ask_for(&before, line, showing, typing) {
+        Ask::Keep => {}
+        Ask::Close => controller::dismiss_completion(state),
+        Ask::Complete { word_start, now } => {
+            controller::request_completion(state, path.to_string(), line, col, word_start, now);
         }
     }
 

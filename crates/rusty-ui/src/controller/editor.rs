@@ -643,7 +643,7 @@ fn clear_editor_transients(state: AppState) {
     // file they would collapse whatever happens to be at those lines, which
     // is a file that opens with its middle missing.
     state.editor.folds.set(rusty_edit::Folded::default());
-    state.editor.completion.set(None);
+    dismiss_completion(state);
     state.editor.signature.set(None);
     state.editor.hover.set(None);
     state.editor.semantic.set(None);
