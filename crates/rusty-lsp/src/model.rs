@@ -64,7 +64,34 @@ pub enum LspEvent {
     Progress {
         text: Option<String>,
     },
+    /// What rust-analyzer says about *itself*. A server that failed to load
+    /// the workspace — `cargo metadata` refused, the toolchain it pins is
+    /// missing, a manifest does not parse — still lexes and parses every
+    /// file, so syntax errors keep arriving while completion, hover and
+    /// go-to-definition answer nothing at all, for ever. That state used to
+    /// look exactly like a working one. It arrives through
+    /// `experimental/serverStatus`, which the handshake asks for, and
+    /// through `window/showMessage`.
+    #[serde(rename_all = "camelCase")]
+    Health {
+        level: HealthLevel,
+        /// What went wrong, in the server's own words.
+        message: Option<String>,
+    },
     Exited {},
+}
+
+/// How rust-analyzer describes its own state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HealthLevel {
+    /// Loaded, and answering.
+    Ok,
+    /// Answering, with something degraded — one linked project of several
+    /// failed to load.
+    Warning,
+    /// Not loaded: it can parse a file, and nothing more.
+    Error,
 }
 
 /// One completion the server offered.

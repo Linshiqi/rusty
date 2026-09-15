@@ -1452,6 +1452,12 @@ pub struct Lsp {
     /// What the server is busy with, while it is — `Indexing 26% …` — so an
     /// empty completion reads as "not yet" rather than "none".
     pub progress: RwSignal<Option<String>>,
+    /// What the server says about itself, once it has said anything worse
+    /// than `ok`: the level and the reason. A rust-analyzer that failed to
+    /// load the workspace still parses every file, so the squiggles arrive
+    /// and nothing else ever does — the one broken state that used to look
+    /// exactly like a working one.
+    pub health: RwSignal<Option<(rusty_lsp::HealthLevel, Option<String>)>>,
 }
 
 /// A running simulation: the board, the plot, the trace, the tunables.
@@ -1912,6 +1918,7 @@ impl AppState {
                 session: RwSignal::new(0),
                 diagnostics: RwSignal::new(HashMap::new()),
                 progress: RwSignal::new(None),
+                health: RwSignal::new(None),
             },
             sim: Sim {
                 display: RwSignal::new(String::new()),

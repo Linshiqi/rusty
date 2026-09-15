@@ -357,6 +357,9 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
     match event {
         LspEvent::Ready {} => {
             state.lsp.status.set(LspStatus::Ready);
+            // A new session says nothing about itself until it does; the
+            // last one's verdict is not this one's.
+            state.lsp.health.set(None);
             // A file opened before the server came up was never announced —
             // in either group.
             for group in state.open_groups() {
@@ -391,8 +394,26 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
             });
         }
         LspEvent::Progress { text } => state.lsp.progress.set(text),
+        // The difference between "nothing completes here" and "no crate at
+        // all": kept in the status bar until the server says otherwise, and
+        // said once in the dock, where the reason can be read. Once, not per
+        // notification — rust-analyzer repeats its state on every change.
+        LspEvent::Health { level, message } => {
+            let next = (level != rusty_lsp::HealthLevel::Ok).then_some((level, message));
+            if state.lsp.health.with_untracked(|now| *now != next) {
+                if let Some((_, Some(text))) = &next {
+                    state.push_log(LogLine {
+                        stream: LogStream::Stderr,
+                        text: format!("rust-analyzer: {text}"),
+                        level: Some(LogLevel::Warn),
+                    });
+                }
+                state.lsp.health.set(next);
+            }
+        }
         LspEvent::Exited {} => {
             state.lsp.progress.set(None);
+            state.lsp.health.set(None);
             if state.lsp.status.get_untracked() == LspStatus::Ready {
                 state.lsp.status.set(LspStatus::Off);
             }

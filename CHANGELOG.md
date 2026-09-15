@@ -9,6 +9,18 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.28
+
+**Fixed — when rust-analyzer cannot load your project, rusty now says so.**
+A language server that fails to load a workspace — a manifest it cannot
+read, a member directory that is not there, a toolchain it cannot find —
+carries on parsing files, so errors still appear in the panel while
+completion, hover and go-to-definition quietly answer nothing at all, for
+as long as the window stays open. That looked exactly like a working
+editor. The status bar now turns red with *rust-analyzer: workspace not
+loaded*, its tooltip carries the server's own reason, and that reason is
+written once into Output.
+
 ## v0.6.27
 
 **Fixed — code completion is reliable.** The list opens on the first letter

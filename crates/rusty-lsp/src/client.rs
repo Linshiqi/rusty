@@ -37,8 +37,8 @@ use crate::{
     convert, discover,
     error::{Error, Result},
     model::{
-        ActionEdit, CodeActionFix, CompletionList, HoverInfo, Location, LspEvent, SemanticSpan,
-        SignatureInfo,
+        ActionEdit, CodeActionFix, CompletionList, HealthLevel, HoverInfo, Location, LspEvent,
+        SemanticSpan, SignatureInfo,
     },
     positions::{Encoding, content_change, scalar_to_character},
     pull, rpc,
@@ -873,6 +873,12 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
             // Offer utf-8 first: rust-analyzer takes it, and then "character"
             // means bytes, which is the cheap direction for a Rust client.
             "general": { "positionEncodings": ["utf-8", "utf-16"] },
+            // Ask rust-analyzer to say how it is getting on. Without this it
+            // reports a failure to load the workspace to nobody, and a
+            // server that can only parse is indistinguishable from one that
+            // answers everything: the squiggles arrive, the completions are
+            // empty, and nothing on screen says which of the two it is.
+            "experimental": { "serverStatusNotification": true },
             "textDocument": {
                 "synchronization": { "didSave": true },
                 "publishDiagnostics": {},
@@ -1030,7 +1036,37 @@ fn dispatch(shared: &Shared, message: Value) {
         (None, Some(method)) if method == "$/progress" => {
             shared.progress(&message["params"]);
         }
-        // Logs, show-message: narration, not state.
+        // The server's own health — see [`LspEvent::Health`]. `quiescent` is
+        // not carried: what the editor needs to say is whether the workspace
+        // loaded, and a health of `ok` while still indexing is already told
+        // by the progress line.
+        (None, Some(method)) if method == "experimental/serverStatus" => {
+            let params = &message["params"];
+            let level = match params["health"].as_str() {
+                Some("error") => HealthLevel::Error,
+                Some("warning") => HealthLevel::Warning,
+                _ => HealthLevel::Ok,
+            };
+            let _ = shared.events.send(LspEvent::Health {
+                level,
+                message: params["message"].as_str().map(str::to_string),
+            });
+        }
+        // A message the server asked to have shown. Only the two that name a
+        // failure travel; `info` and `log` are narration.
+        (None, Some(method)) if method == "window/showMessage" => {
+            let params = &message["params"];
+            let level = match params["type"].as_u64() {
+                Some(1) => HealthLevel::Error,
+                Some(2) => HealthLevel::Warning,
+                _ => return,
+            };
+            let _ = shared.events.send(LspEvent::Health {
+                level,
+                message: params["message"].as_str().map(str::to_string),
+            });
+        }
+        // Logs: narration, not state.
         _ => {}
     }
 }
@@ -1250,6 +1286,47 @@ mod tests {
             let hover = hover.join().unwrap().expect("hover").expect("some hover");
             assert_eq!(hover.text, "the hover");
         });
+    }
+
+    /// A server that could not load the workspace says so, and the session
+    /// passes it on. Without it, a rust-analyzer that can only parse looks
+    /// exactly like one that answers everything: the file still gets its
+    /// syntax errors, and every completion is empty for ever.
+    #[test]
+    fn the_servers_own_health_reaches_the_frontend() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, _seen) = fake_server(|message, writer| {
+            if method(message) == "initialized" {
+                let _ = rpc::write_message(
+                    writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "experimental/serverStatus",
+                        "params": {
+                            "health": "error",
+                            "quiescent": true,
+                            "message": "cargo metadata failed",
+                        },
+                    }),
+                );
+            }
+            default_handle(message, writer)
+        });
+        let (_client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Some(LspEvent::Health { level, message }) => {
+                    assert_eq!(level, HealthLevel::Error);
+                    assert_eq!(message.as_deref(), Some("cargo metadata failed"));
+                    return;
+                }
+                Some(_) => continue,
+                None => panic!("the health notification never arrived"),
+            }
+        }
     }
 
     /// An accepted item is resolved against the answer it came from, even

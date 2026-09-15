@@ -538,6 +538,22 @@ positioned in a coordinate system that is not the document's.
   ` (use …)` note so the row says what accepting it will add, and it is a
   field of its own only because the client declares `labelDetailsSupport`:
   without it rust-analyzer glues the note onto the label.
+- **A rust-analyzer that failed to load the workspace looks exactly like one
+  that works.** It still lexes and parses, so the squiggles keep arriving
+  while every completion, hover and jump answers nothing — for ever, with
+  the status bar green and nothing on screen saying why. The handshake asks
+  for `experimental.serverStatusNotification`; that notification and an
+  error-level `window/showMessage` both travel as `LspEvent::Health`, the
+  status bar turns crimson with the server's own reason in its tooltip, and
+  the dock gets the sentence once (once, not per notification: rust-analyzer
+  repeats its state on every change). Found on a report of "completion is
+  still missing" from another machine, where the project and the server were
+  both fine here. `cargo run -p rusty-lsp --example complete_probe --
+  <project> <file> [target]` is the headless check that splits the two
+  halves: it starts the server the way the app does, asks for `imp`,
+  `impl Qu` and `impl core::` every two seconds until they answer, and
+  prints what the popup would keep — `["impl", "impl for"]`,
+  `["Quaternion"]` — beside how long the server took to get there.
 
 ## Two editor groups
 

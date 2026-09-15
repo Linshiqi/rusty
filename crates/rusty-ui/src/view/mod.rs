@@ -808,9 +808,29 @@ fn StatusBar() -> impl IntoView {
                 let lsp = state.lsp.status.get();
                 (state.has_project() && lsp != crate::state::LspStatus::Off)
                     .then(|| {
+                        // What the server said about itself, and why: the
+                        // reason takes the tooltip's place, since a failure
+                        // nobody can read is a colour and nothing more.
+                        let health = state.lsp.health.get();
+                        let title = match &health {
+                            Some((_, Some(why))) => why.clone(),
+                            _ => t!("status.lsp-hint"),
+                        };
                         let (text, tone) = match lsp {
                             crate::state::LspStatus::Starting => {
                                 (t!("status.lsp-starting"), Tone::Neutral)
+                            }
+                            // A server that did not load the workspace comes
+                            // before everything else it might be doing: it
+                            // still parses, so the squiggles arrive and every
+                            // completion, hover and jump is empty for ever,
+                            // which is the one broken state that reads as a
+                            // working one.
+                            _ if matches!(health, Some((rusty_lsp::HealthLevel::Error, _))) => {
+                                (t!("status.lsp-broken"), Tone::Crimson)
+                            }
+                            _ if matches!(health, Some((rusty_lsp::HealthLevel::Warning, _))) => {
+                                (t!("status.lsp-degraded"), Tone::Amber)
                             }
                             // Busy comes before errors: while the index is
                             // being built, both the diagnostics and the
@@ -833,7 +853,7 @@ fn StatusBar() -> impl IntoView {
                             <Status
                                 text=text
                                 tone=tone
-                                title=t!("status.lsp-hint")
+                                title=title
                                 on_click=Callback::new(move |_| {
                                     state.show_dock(crate::state::DockTab::Problems)
                                 })
