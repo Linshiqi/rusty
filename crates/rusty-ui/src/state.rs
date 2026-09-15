@@ -552,6 +552,10 @@ pub fn local_take(key: &str) -> Option<String> {
 /// pair of numbers before this.
 pub const EDITOR_ZOOM_RANGE: (f64, f64) = (0.6, 2.4);
 
+/// The Markdown page's scale, the same span: a chapter read at arm's length
+/// wants the same reach a listing does.
+pub const PAGE_ZOOM_RANGE: (f64, f64) = (0.6, 2.4);
+
 /// The interface scale — the slider's own range.
 pub const UI_ZOOM_RANGE: (f64, f64) = (0.7, 1.6);
 
@@ -569,6 +573,18 @@ fn stored_zoom() -> f64 {
         .and_then(|v| v.parse::<f64>().ok())
         .map(|z| z.clamp(EDITOR_ZOOM_RANGE.0, EDITOR_ZOOM_RANGE.1))
         .unwrap_or(1.0)
+}
+
+/// The page's scale from last time.
+fn stored_page_zoom() -> f64 {
+    local_get("rusty.page.zoom")
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|z| z.clamp(PAGE_ZOOM_RANGE.0, PAGE_ZOOM_RANGE.1))
+        .unwrap_or(1.0)
+}
+
+pub fn remember_page_zoom(zoom: f64) {
+    local_set("rusty.page.zoom", &format!("{zoom:.2}"));
 }
 
 /// The interface scale from last time.
@@ -834,6 +850,12 @@ pub struct Editor {
     /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
     /// the editor derives from it.
     pub zoom: RwSignal<f64>,
+    /// The Markdown page's scale (Ctrl+wheel over a page), separate from the
+    /// editor's: prose and a listing are read at different sizes, and one
+    /// knob for both meant a chapter made comfortable left the code beside
+    /// it oversized. Applied as CSS `zoom` on the page, so figures, formulas
+    /// and code blocks grow with the text and the column re-wraps.
+    pub page_zoom: RwSignal<f64>,
     /// Files the user asked to see as source rather than as what they draw:
     /// a Markdown file's page, an SVG's picture.
     ///
@@ -911,6 +933,7 @@ impl Editor {
             stale: RwSignal::new(Vec::new()),
             watch_session: RwSignal::new(0),
             zoom: RwSignal::new(stored_zoom()),
+            page_zoom: RwSignal::new(stored_page_zoom()),
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
         }
@@ -929,6 +952,7 @@ impl Editor {
             tree: self.tree,
             expanded: self.expanded,
             zoom: self.zoom,
+            page_zoom: self.page_zoom,
             vim_on: self.vim_on,
             source_view: self.source_view,
             images: self.images,

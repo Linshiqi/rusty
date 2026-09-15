@@ -9,6 +9,15 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.24
+
+**Added — Ctrl+wheel resizes a Markdown page.** Hold Ctrl and scroll over
+a page to make its text larger or smaller, the way the editor's text
+already resizes. The page has its own size, separate from the editor's,
+and remembers it; figures, formulas and code blocks grow with the text and
+the column re-wraps. Settings ▸ Editor has a *Page text size* stepper
+beside the editor's.
+
 ## v0.6.23
 
 **Added — updates install from inside the app.** Shortly after launch,

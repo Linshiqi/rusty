@@ -20,16 +20,6 @@ use super::*;
 #[component]
 pub(super) fn EditorSettings() -> impl IntoView {
     let state = AppState::expect();
-    let step = move |by: f64| {
-        let (min, max) = crate::state::EDITOR_ZOOM_RANGE;
-        let next = if by == 0.0 {
-            1.0
-        } else {
-            (state.editor.zoom.get_untracked() + by * 0.1).clamp(min, max)
-        };
-        state.editor.zoom.set(next);
-        crate::state::remember_zoom(next);
-    };
 
     view! {
         <Group footer=t!("settings.editor.text-size-note")>
@@ -40,31 +30,63 @@ pub(super) fn EditorSettings() -> impl IntoView {
                 />
             </Row>
             <Row label=t!("settings.editor.text-size")>
-                <div class="inline-flex items-center rounded-[7px] bg-sunken p-0.5">
-                    <button
-                        type="button"
-                        class="h-[24px] rounded-[5px] px-2.5 text-callout text-label-2 hover:bg-content hover:text-label"
-                        on:click=move |_| step(-1.0)
-                    >
-                        "A−"
-                    </button>
-                    <span class="tnum w-[5ch] text-center font-mono text-callout text-label">
-                        {move || format!("{:.0}%", state.editor.zoom.get() * 100.0)}
-                    </span>
-                    <button
-                        type="button"
-                        class="h-[24px] rounded-[5px] px-2.5 text-callout text-label-2 hover:bg-content hover:text-label"
-                        on:click=move |_| step(1.0)
-                    >
-                        "A+"
-                    </button>
-                </div>
-                <Button
-                    label=t!("settings.editor.reset")
-                    kind=ButtonKind::Quiet
-                    on_click=Callback::new(move |_| step(0.0))
+                <ZoomStepper
+                    zoom=state.editor.zoom
+                    range=crate::state::EDITOR_ZOOM_RANGE
+                    remember=crate::state::remember_zoom
+                />
+            </Row>
+            // The page's own, because prose and a listing are read at
+            // different sizes; Ctrl+wheel over a page moves the same number.
+            <Row label=t!("settings.editor.page-size")>
+                <ZoomStepper
+                    zoom=state.editor.page_zoom
+                    range=crate::state::PAGE_ZOOM_RANGE
+                    remember=crate::state::remember_page_zoom
                 />
             </Row>
         </Group>
+    }
+}
+
+/// `A−  100%  A+  Reset` over one zoom factor: a tenth per press, clamped
+/// to the range, remembered through the given door.
+#[component]
+fn ZoomStepper(zoom: RwSignal<f64>, range: (f64, f64), remember: fn(f64)) -> impl IntoView {
+    let step = move |by: f64| {
+        let (min, max) = range;
+        let next = if by == 0.0 {
+            1.0
+        } else {
+            (zoom.get_untracked() + by * 0.1).clamp(min, max)
+        };
+        zoom.set(next);
+        remember(next);
+    };
+    view! {
+        <div class="inline-flex items-center rounded-[7px] bg-sunken p-0.5">
+            <button
+                type="button"
+                class="h-[24px] rounded-[5px] px-2.5 text-callout text-label-2 hover:bg-content hover:text-label"
+                on:click=move |_| step(-1.0)
+            >
+                "A−"
+            </button>
+            <span class="tnum w-[5ch] text-center font-mono text-callout text-label">
+                {move || format!("{:.0}%", zoom.get() * 100.0)}
+            </span>
+            <button
+                type="button"
+                class="h-[24px] rounded-[5px] px-2.5 text-callout text-label-2 hover:bg-content hover:text-label"
+                on:click=move |_| step(1.0)
+            >
+                "A+"
+            </button>
+        </div>
+        <Button
+            label=t!("settings.editor.reset")
+            kind=ButtonKind::Quiet
+            on_click=Callback::new(move |_| step(0.0))
+        />
     }
 }

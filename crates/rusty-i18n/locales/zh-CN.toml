@@ -358,7 +358,8 @@ different-hal-hint = "固件对 HAL 的每一处调用都不一样。向导会�
 vim = "Vim 键位"
 vim-detail = "普通、插入、可视三种模式；当前模式显示在状态栏。"
 text-size = "文字大小"
-text-size-note = "在编辑器里也可以用 Ctrl+= 和 Ctrl+- 调整。"
+page-size = "页面文字大小"
+text-size-note = "在编辑器或 Markdown 页面上按住 Ctrl 滚动滚轮也能调整；编辑器里还可以用 Ctrl+= 和 Ctrl+-。"
 reset = "重置"
 
 [settings.keyboard]

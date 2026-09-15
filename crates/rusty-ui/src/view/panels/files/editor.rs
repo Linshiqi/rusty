@@ -151,15 +151,42 @@ pub(crate) fn Editor() -> impl IntoView {
                 .source_view
                 .with(|v| v.contains(&document.path))
         {
+            // Ctrl+wheel scales the page as it scales the editor's font —
+            // its own factor, remembered on its own. CSS `zoom` rather than
+            // a font size: the figures, the formulas and the code blocks
+            // grow with the prose, and the 80ch column re-wraps to the new
+            // size instead of overflowing.
+            let page_zoom = state.editor.page_zoom;
+            let on_wheel = Callback::new(move |event: ev::WheelEvent| {
+                if !event.ctrl_key() {
+                    return;
+                }
+                event.prevent_default();
+                let step = if event.delta_y() < 0.0 {
+                    1.1
+                } else {
+                    1.0 / 1.1
+                };
+                let (min, max) = crate::state::PAGE_ZOOM_RANGE;
+                page_zoom.update(|z| *z = (*z * step).clamp(min, max));
+                crate::state::remember_page_zoom(page_zoom.get_untracked());
+            });
             return view! {
                 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
                     <TabStrip />
                     <Header document=document.clone() />
-                    <Scroller path=document.path.clone() class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                    <Scroller
+                        path=document.path.clone()
+                        class="min-h-0 flex-1 overflow-y-auto px-6 py-4"
+                        on_wheel=on_wheel
+                    >
                         // The draft, not the saved text: switching to the page
                         // after an edit must show the edit, or the toggle reads
                         // as having lost it.
-                        <div class="mx-auto max-w-[80ch]">
+                        <div
+                            class="mx-auto max-w-[80ch]"
+                            style=move || format!("zoom:{:.2}", page_zoom.get())
+                        >
                             {move || {
                                 let text = state.editor.draft.get();
                                 // The file's own path is what its figures
@@ -263,7 +290,15 @@ fn Picture(path: String, from_draft: bool) -> impl IntoView {
 /// a caret to place first. Tagged with the group so parking reads this
 /// group's offset and never the other's.
 #[component]
-fn Scroller(path: String, #[prop(into)] class: String, children: Children) -> impl IntoView {
+fn Scroller(
+    path: String,
+    #[prop(into)] class: String,
+    /// The page's Ctrl+wheel zoom. On the scroller rather than on the
+    /// column inside it, so the gesture works over the margins too.
+    #[prop(optional)]
+    on_wheel: Option<Callback<ev::WheelEvent>>,
+    children: Children,
+) -> impl IntoView {
     let state = AppState::expect();
     let scroller: NodeRef<html::Div> = NodeRef::new();
     Effect::new(move |_| {
@@ -306,7 +341,16 @@ fn Scroller(path: String, #[prop(into)] class: String, children: Children) -> im
         );
     });
     view! {
-        <div node_ref=scroller data-scroller=state.group.index().to_string() class=class>
+        <div
+            node_ref=scroller
+            data-scroller=state.group.index().to_string()
+            class=class
+            on:wheel=move |event: ev::WheelEvent| {
+                if let Some(on_wheel) = on_wheel {
+                    on_wheel.run(event);
+                }
+            }
+        >
             {children()}
         </div>
     }

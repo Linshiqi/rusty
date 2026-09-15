@@ -1261,7 +1261,9 @@ usty`) holds `location.toml`
 - Per-project, team-shared things live in the project's `.rusty/`, where they
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
   which is what the canvas editor writes) and user-defined parts (`parts/`).
-- Theme, divider positions, the editor's text zoom, the interface scale, the
+- Theme, divider positions, the editor's text zoom, the Markdown page's
+  zoom (its own factor: prose and a listing are read at different sizes),
+  the interface scale, the
   file tree's fold, the Git panel's diff layout (one column or side by side)
   and the locale *cache* are localStorage, and that is all that is. (The pin
   map's collapsed state was on this list while the map floated over the

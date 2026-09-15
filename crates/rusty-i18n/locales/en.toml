@@ -384,7 +384,8 @@ different-hal-hint = "Every call your firmware makes to the HAL differs. The wiz
 vim = "Vim keys"
 vim-detail = "Normal, insert and visual modes; the mode shows in the status bar."
 text-size = "Text size"
-text-size-note = "Ctrl+= and Ctrl+- change the text size in the editor as well."
+page-size = "Page text size"
+text-size-note = "Ctrl+wheel over the editor or a Markdown page changes its size too; Ctrl+= and Ctrl+- work in the editor."
 reset = "Reset"
 
 [settings.keyboard]
