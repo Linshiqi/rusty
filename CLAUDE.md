@@ -68,12 +68,17 @@ cd crates/rusty-app && cargo tauri dev
 # the script says why in its header.
 scripts/bundle-tools.sh
 
-# Release: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and
-# .github/workflows/release.yml builds installers on Windows (NSIS), macOS
-# (universal DMG) and Ubuntu (deb + AppImage), plus rusty-cli for each, and
-# publishes a GitHub Release. The tag is stamped into tauri.conf.json *and*
-# the workspace manifest, so the app, its updater and `rusty-cli --version`
-# all say the same number. The Tauri updater keypair is in the repo secrets
+# Release: bump the version in Cargo.toml's [workspace.package] and in
+# crates/rusty-app/tauri.conf.json, add the `## v<version>` section to
+# CHANGELOG.md (rusty-app's tests/version_sync.rs holds the three to one
+# number), commit, then push a tag (`git tag v0.2.0 && git push origin
+# v0.2.0`) and .github/workflows/release.yml builds installers on Windows
+# (NSIS), macOS (universal DMG) and Ubuntu (deb + AppImage), plus rusty-cli
+# for each, and publishes a GitHub Release. The workflow also stamps the tag
+# into tauri.conf.json *and* the workspace manifest as a safety net — the
+# repository said 0.6.12 for twelve releases while the installers were
+# right, and every development build called itself 0.6.12 and was offered
+# its own release as an update. The Tauri updater keypair is in the repo secrets
 # (`cargo tauri signer generate`, then TAURI_SIGNING_PRIVATE_KEY and
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD; the public half is `plugins.updater`
 # in tauri.conf.json), so every build emits signed updater artifacts and the
