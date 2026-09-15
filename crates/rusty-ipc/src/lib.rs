@@ -47,7 +47,17 @@ pub mod workbench {
     /// Display language. `None` means follow the system.
     pub const LOCALE: &str = "display_locale";
     pub const SET_LOCALE: &str = "set_display_locale";
+    /// Is there a newer rusty. The check runs the Tauri updater against the
+    /// release feed, so what it finds is also what the three below can
+    /// fetch, hold and apply — in that order, because a hundred-megabyte
+    /// download that ends by restarting the app has to be cancellable, and
+    /// the restart has to be the user's gesture, not the download's end.
     pub const UPDATE: &str = "check_update";
+    pub const UPDATE_DOWNLOAD: &str = "download_update";
+    pub const UPDATE_CANCEL: &str = "cancel_update";
+    pub const UPDATE_APPLY: &str = "apply_update";
+    /// Stop prompting about the version the last check found.
+    pub const UPDATE_SKIP: &str = "skip_update";
     pub const OPEN_URL: &str = "open_url";
 }
 

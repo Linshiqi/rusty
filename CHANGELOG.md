@@ -9,6 +9,21 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.23
+
+**Added — updates install from inside the app.** Shortly after launch,
+rusty asks the release feed whether a newer version exists. When one does,
+a sheet shows what changed — the same notes you are reading now — with
+*Download and install*, *Later* and *Skip this version*. The download runs
+in the background while you keep working, its signature is checked against
+the key built into the app before anything is kept, and the update installs
+when you choose *Restart now*. Help ▸ *Check for updates…* asks at any time
+and says what it found either way, and Settings ▸ Updates shows the same.
+
+**Fixed — `rusty-cli --version` reported 0.6.12 on every release since.**
+The release stamped its version into the app alone; the CLI carries it too
+now.
+
 ## v0.6.22
 
 **Added — code blocks in a Markdown page are highlighted.** A fenced block

@@ -739,14 +739,6 @@ pub async fn scaffold_c_interop(
     .await?
 }
 
-/// Is there a newer rusty? Blocking work — ureq is synchronous — so it
-/// goes to a blocking thread rather than stalling the async runtime for as
-/// long as a proxy takes to time out.
-#[tauri::command]
-pub async fn check_update() -> Answer<rusty_embed::UpdateStatus> {
-    blocking("the update check", rusty_embed::update::check).await
-}
-
 /// A link rusty may hand to the desktop, or why not.
 ///
 /// Only https, and only RFC 3986's own alphabet with every `%` a complete

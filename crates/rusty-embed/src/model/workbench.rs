@@ -68,18 +68,47 @@ pub struct RelocateReport {
 }
 
 /// What an update check found.
+///
+/// The check goes through the Tauri updater against the release feed
+/// (`latest.json`), so a `newer` answer is one the app can also *install*:
+/// the feed named a signed artifact for this platform. What the feed did not
+/// carry is absent rather than invented — a release with no notes says so.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
     /// The running build.
     pub current: String,
-    /// The newest published version, when the check reached GitHub.
+    /// The newest published version, when the check reached the feed.
     pub latest: Option<String>,
-    /// Where to get it.
+    /// The release page for `latest`, for anyone who would rather download.
     pub url: Option<String>,
     /// True only when `latest` is genuinely ahead of `current`.
     pub newer: bool,
     /// Why the check could not answer — no network is the normal state of a
     /// workbench on a bench, so this is a note rather than an error.
     pub note: Option<String>,
+    /// The release notes for `latest`, as Markdown — the CHANGELOG section
+    /// the release was published with.
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// When `latest` was published, as `YYYY-MM-DD`.
+    #[serde(default)]
+    pub date: Option<String>,
+    /// The user asked not to be prompted about `latest` again. The launch
+    /// check stays quiet for it; a check asked for by hand shows it anyway,
+    /// because a menu item that finds nothing while a newer build exists is a
+    /// menu item people stop trusting.
+    #[serde(default)]
+    pub skipped: bool,
+}
+
+/// How far an update's download has got.
+///
+/// `total` is the server's `Content-Length`, absent when it sent none — a
+/// bar with no end is drawn as activity rather than as progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgress {
+    pub received: u64,
+    pub total: Option<u64>,
 }

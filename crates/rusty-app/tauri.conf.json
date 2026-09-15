@@ -44,8 +44,11 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGQTY5NkI1QUI2MzlEMDYKUldRR25XT3J0WmFtWDFYTW9EUjh6NGYxYkEzK1JlYmVVbUdnbnB3Y0xJbHZDZ1Nla0ZmL1Z3WHUK",
       "endpoints": [
-        "https://github.com/Linshiqi/rusty-releases/releases/latest/download/latest.json"
-      ]
+        "https://github.com/Linshiqi/rusty/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

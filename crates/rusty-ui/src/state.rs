@@ -1520,6 +1520,24 @@ pub struct Dock {
     pub follow: RwSignal<bool>,
 }
 
+/// An update's way from found to installed.
+///
+/// `Ready` outlives the sheet on purpose: dismissed with a verified download
+/// held, Settings ▸ Updates still offers the restart, and the launch check's
+/// sheet is not shown twice for the same thing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum UpdateStage {
+    #[default]
+    Idle,
+    /// A check the user asked for is in flight.
+    Checking,
+    Downloading,
+    /// Downloaded and its signature verified; a restart installs it.
+    Ready,
+    /// The restart is under way. Nothing more to click.
+    Applying,
+}
+
 /// The window itself — recents, shortcuts, updates, and whether something
 /// is in flight.
 #[derive(Clone, Copy)]
@@ -1540,6 +1558,13 @@ pub struct Workbench {
     pub capturing: RwSignal<Option<String>>,
     /// The last update check's answer. `None` while one is in flight.
     pub update: RwSignal<Option<rusty_embed::UpdateStatus>>,
+    /// The update sheet is up — after a check that found something, or one
+    /// the user asked for, which shows its answer whatever it is.
+    pub update_open: RwSignal<bool>,
+    /// Where an update is between found and installed.
+    pub update_stage: RwSignal<UpdateStage>,
+    /// Bytes so far and the total, while one downloads.
+    pub update_progress: RwSignal<Option<rusty_embed::UpdateProgress>>,
     /// Whether a flash or monitor session is attached right now.
     ///
     /// One at a time by construction: the backend stops the previous session
@@ -1775,6 +1800,9 @@ impl AppState {
                 keybinds: RwSignal::new(HashMap::new()),
                 capturing: RwSignal::new(None),
                 update: RwSignal::new(None),
+                update_open: RwSignal::new(false),
+                update_stage: RwSignal::new(UpdateStage::Idle),
+                update_progress: RwSignal::new(None),
                 session_running: RwSignal::new(false),
                 in_flight: RwSignal::new(0),
                 error: RwSignal::new(None),

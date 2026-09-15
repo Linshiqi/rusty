@@ -46,7 +46,7 @@ pub use project::{
     ScaffoldReport, Severity,
 };
 pub use registers::{Peripheral, Register, RegisterField, RegisterMap};
-pub use repo::{RELEASES_API, REPO, REPO_ISSUES, REPO_RELEASES};
+pub use repo::{REPO, REPO_ISSUES, REPO_RELEASES};
 // Only the `.rusty/sim.toml` writer needs it, and that is backend-side; on
 // wasm the re-export would be an unused import.
 pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
@@ -56,4 +56,6 @@ pub use sim::{Drive, Emulator, SimDebug, SimPlan, SimTool};
 pub use symbol::{Fill, Graphic, MM_PX, Pin, PinKind, Symbol};
 pub use toolchain::{ToolStatus, Toolchain, ToolchainReport, ToolchainStatus};
 pub use wizard::{Explanation, WizardChoice, WizardOption};
-pub use workbench::{AssistantChoice, ProjectTabs, RelocateReport, StorageLocation, UpdateStatus};
+pub use workbench::{
+    AssistantChoice, ProjectTabs, RelocateReport, StorageLocation, UpdateProgress, UpdateStatus,
+};

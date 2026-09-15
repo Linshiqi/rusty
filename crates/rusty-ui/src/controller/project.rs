@@ -376,6 +376,7 @@ pub fn restore(state: AppState) {
     refresh_toolchain(state);
 
     load_recents(state);
+    schedule_update_check(state);
 
     spawn_local(async move {
         // Nothing open is the normal cold-start state, not a failure worth

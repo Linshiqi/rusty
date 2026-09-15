@@ -54,6 +54,8 @@ pub enum Action {
     OpenSettings,
     /// The environment check, on purpose rather than because it interrupted.
     CheckEnvironment,
+    /// Ask the release feed for a newer rusty, and show what it answered.
+    CheckUpdates,
     SetTheme(Theme),
     ResetLayout,
     /// Scaffold C interop, in whichever direction.
@@ -601,6 +603,10 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                     &t!("menu.help.check-environment"),
                     None,
                 ),
+                // Beside it, the other "is this machine current" question.
+                // The launch check asks on its own; this is for anyone who
+                // wants the answer now, and it says it either way.
+                entry(Action::CheckUpdates, &t!("menu.help.check-updates"), None),
                 Item::Separator,
                 entry(Action::OpenSettings, &t!("menu.help.shortcuts"), None),
                 entry(
@@ -630,6 +636,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             controller::refresh_toolchain(state);
             controller::open_setup(state);
         }
+        Action::CheckUpdates => controller::check_update(state, true),
         Action::ShowPanel("assistant") => state.ai.open.set(true),
         Action::ShowPanel(id) => {
             // Silently ignoring a blocked panel would leave the palette looking

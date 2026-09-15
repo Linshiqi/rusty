@@ -71,10 +71,15 @@ scripts/bundle-tools.sh
 # Release: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and
 # .github/workflows/release.yml builds installers on Windows (NSIS), macOS
 # (universal DMG) and Ubuntu (deb + AppImage), plus rusty-cli for each, and
-# publishes a GitHub Release. With the Tauri updater keypair in the repo
-# secrets (`cargo tauri signer generate`, then TAURI_SIGNING_PRIVATE_KEY and
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD), it also emits signed updater
-# artifacts and latest.json — the feed the in-app updater will poll.
+# publishes a GitHub Release. The tag is stamped into tauri.conf.json *and*
+# the workspace manifest, so the app, its updater and `rusty-cli --version`
+# all say the same number. The Tauri updater keypair is in the repo secrets
+# (`cargo tauri signer generate`, then TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD; the public half is `plugins.updater`
+# in tauri.conf.json), so every build emits signed updater artifacts and the
+# publish job merges them into latest.json — the feed the running app polls
+# a moment after launch, with the tag's CHANGELOG section as its `notes`.
+# See "Updating itself" below.
 
 # The simulation pipeline, proven end to end on a real project without the
 # window: detect, plan, build, image, boot in Espressif QEMU, count serial
@@ -889,6 +894,50 @@ install that is a workbench and one that is a list of things to go and find.
   `LIBCLANG_PATH` when the user has none. The user's environment is never
   written; `tools::find` consults the same directories so the panel cannot
   report absent what the build would find.
+
+## Updating itself
+
+The running app asks the release feed a moment after launch, and when a
+newer version exists a sheet shows the release's own notes with *Download
+and install*, *Later* and *Skip this version*. `crates/rusty-app/src/update.rs`
+drives `tauri-plugin-updater`; nothing in the WebView calls the plugin, so
+it needs no capability.
+
+- **Four commands, not one, because the shape is a hundred-megabyte download
+  that ends by restarting the app.** `check_update` answers with an
+  `UpdateStatus` and parks the plugin's `Update` in `AppState`;
+  `download_update` streams progress on a channel and verifies the signature
+  before a byte is kept; `apply_update` installs and restarts; `skip_update`
+  writes `skipped_update` to `workbench.toml`. Download and restart are two
+  gestures on purpose — an update that restarted the workbench the moment
+  its download happened to finish would take an unsaved edit with it — and
+  the verified bytes wait in `AppState` (`UpdateStage::Ready`), so the
+  restart is still on offer from Settings ▸ Updates after the sheet is put
+  away. A Tauri command cannot be cancelled from the WebView, so the fetch
+  runs as a task whose abort handle the state holds: the slot rule again.
+- **The launch check fails silently; the manual one says what it found either
+  way.** No network is the normal state of a bench, and a red banner at every
+  launch teaches people to dismiss banners; but Help ▸ *Check for updates…*
+  opens the sheet whatever the answer, because a menu item that sometimes
+  does nothing is one people stop trusting. The manual check also ignores a
+  skipped version — skipping is about not being *interrupted*.
+- **On Windows `install` never returns.** The plugin hands the NSIS installer
+  to the shell with `/P /R` (passive, restart the app) and calls
+  `std::process::exit(0)` itself, after `cleanup_before_exit`. On macOS and
+  Linux it replaces the bundle and returns, and `app.restart()` is what picks
+  the new one up. So `apply_update`'s answer never arrives on Windows, and
+  the frontend treats that as normal.
+- **The whole flow is testable without a release.** Debug builds honour
+  `RUSTY_UPDATE_FEED=<url>` as the endpoint (the plugin allows plain http in
+  debug builds only, with a warning), and a fake installer signed with the
+  real private key verifies against the pubkey in the config — the
+  scratchpad's `feed/serve_feed.py` serves both. Never take that test as far
+  as *Restart now* against a fake artifact: see the previous point.
+- **The feed's `notes` are the release body**, written to `release-notes.md`
+  by the publish job and read by both the feed merge and the release step,
+  so the sheet and the release page cannot say two different things. The
+  sheet draws them with the Markdown page, so they are written for the
+  person reading it and for nobody else.
 
 ## The gutter, and one line height
 
@@ -1741,9 +1790,12 @@ usty`) holds `location.toml`
   application at …", so the log looks like a successful build that failed at
   the end. The section carries the public half of whatever is in
   `TAURI_SIGNING_PRIVATE_KEY`; a mismatched pair builds fine and only fails
-  later, when an update will not verify. Note that the *plugin* is not a
-  dependency: the config alone is what the bundler wants, and
-  `update::check` still only checks and links.
+  later, when an update will not verify. The plugin arrived ten releases
+  after the config did (v0.6.23), and in between `plugins.updater.endpoints`
+  pointed at the retired public mirror while nothing read it — the check in
+  use went to the GitHub API by a constant of its own. `tests/updater_config.rs`
+  pins the endpoint to `REPO_RELEASES` now, because a wrong one is an app
+  that can never find an update and never says why.
 - **`tauri.conf.json` rejects unknown fields**, so a `"//comment"` key fails the
   build with "unknown configuration field" and a misleading suggestion to update
   your Tauri crates. Explain the config here instead.
@@ -2265,6 +2317,16 @@ usty`) holds `location.toml`
   describes. A re-read that depends on a write goes in the write's success
   callback, which is where `store_key` runs it now. The same shape waits
   wherever a view calls two controllers in a row.
+- **A controller that clears a signal and later compares against it
+  compares against nothing.** `check_update` set the last answer to `None`
+  so the sheet would show the new one, and its completion closure then read
+  that same signal to decide whether the verified download was for the same
+  version — it never was, and a manual re-check put a downloaded update
+  back to "Download and install". Read what a decision needs into a local
+  *before* the reset, and hand the local to the closure. Found by driving
+  the sheet over CDP; the stage is on the dialog as `data-stage` now, so
+  a driven test asserts on the state and not on which buttons it guesses
+  the state produced.
 
 ## The sheet
 

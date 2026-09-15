@@ -30,6 +30,7 @@ mod setup;
 pub mod split;
 pub mod terminal;
 pub mod transport;
+mod update;
 pub mod waves;
 
 use leptos::prelude::*;
@@ -208,6 +209,7 @@ pub fn App() -> impl IntoView {
                 // leave a window with no way out.
                 <setup::SetupSheet />
                 <clone::CloneSheet />
+                <update::UpdateSheet />
                 <Sidebar />
                 <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
                     // Over the working area, not in its flow. As a row above

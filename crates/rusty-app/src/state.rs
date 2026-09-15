@@ -117,6 +117,17 @@ pub struct AppState {
     /// provider will actually take, learned once rather than refused on
     /// every question.
     output_caps: Mutex<HashMap<String, u32>>,
+    /// The update the last check found, held for the download that may
+    /// follow — and the installer's verified bytes once it has, until they
+    /// are applied. Two slots because they have two lifetimes: a re-check
+    /// that names the same version keeps a download, one that names another
+    /// drops it.
+    update: Mutex<Option<tauri_plugin_updater::Update>>,
+    downloaded: Mutex<Option<Vec<u8>>>,
+    /// The download in flight, so Cancel can end it — the slot rule again:
+    /// a Tauri command cannot be cancelled from the WebView, so the fetch
+    /// runs as a task and this is how it is reached.
+    downloading: Mutex<Option<tokio::task::AbortHandle>>,
     /// Serialises every read-modify-write of `workbench.toml` from this
     /// process. See [`Self::update_workbench`].
     workbench: Mutex<()>,
@@ -437,6 +448,41 @@ impl AppState {
 
     pub async fn session_input(&self) -> Option<rusty_embed::process::Input> {
         self.session_input.lock().await.clone()
+    }
+
+    /// Remember what the update check found. A download already verified
+    /// stays only if it is for this same version.
+    pub async fn hold_update(&self, update: Option<tauri_plugin_updater::Update>) {
+        let mut held = self.update.lock().await;
+        let same_version = match (&*held, &update) {
+            (Some(before), Some(after)) => before.version == after.version,
+            _ => false,
+        };
+        if !same_version {
+            *self.downloaded.lock().await = None;
+        }
+        *held = update;
+    }
+
+    pub async fn pending_update(&self) -> Option<tauri_plugin_updater::Update> {
+        self.update.lock().await.clone()
+    }
+
+    pub async fn hold_download(&self, bytes: Option<Vec<u8>>) {
+        *self.downloaded.lock().await = bytes;
+    }
+
+    pub async fn take_download(&self) -> Option<Vec<u8>> {
+        self.downloaded.lock().await.take()
+    }
+
+    /// Replace the download in flight, handing back whatever was there so
+    /// the caller can abort it.
+    pub async fn set_downloading(
+        &self,
+        task: Option<tokio::task::AbortHandle>,
+    ) -> Option<tokio::task::AbortHandle> {
+        std::mem::replace(&mut *self.downloading.lock().await, task)
     }
 
     pub async fn set_pins(&self, pins: Option<crate::simulate::PinChannel>) {

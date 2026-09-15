@@ -14,6 +14,7 @@ mod simulate;
 mod state;
 mod stream;
 mod terminal;
+mod update;
 mod window;
 
 fn main() {
@@ -29,6 +30,11 @@ fn main() {
         // Scoped in capabilities/default.json to opening directories, nothing
         // more — the app has no reason to read or write arbitrary paths.
         .plugin(tauri_plugin_dialog::init())
+        // In-app updates. The plugin owns the check, the signed download and
+        // the install; `update.rs` drives it and nothing in the WebView calls
+        // it directly, so it needs no capability of its own. Its endpoint
+        // and public key are `plugins.updater` in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
         // The tools the installer shipped — the emulator, the debuggers,
         // the flasher and the LLDB adapter, under `bundled/` in the resource
@@ -74,7 +80,11 @@ fn main() {
             commands::set_disk_auto_sweep,
             commands::proxy_setting,
             commands::set_proxy_setting,
-            commands::check_update,
+            update::check_update,
+            update::download_update,
+            update::cancel_update,
+            update::apply_update,
+            update::skip_update,
             commands::open_url,
             commands::keybinds,
             commands::set_keybind,
@@ -229,7 +239,9 @@ mod wire_names {
 
     #[test]
     fn every_constant_names_a_real_handler() {
-        use crate::{ai, commands, debug, files, flash, git, lsp, simulate, terminal, window};
+        use crate::{
+            ai, commands, debug, files, flash, git, lsp, simulate, terminal, update, window,
+        };
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
@@ -268,7 +280,11 @@ mod wire_names {
             cmd::disk::SET_AUTO_SWEEP => commands::set_disk_auto_sweep,
             cmd::workbench::PROXY => commands::proxy_setting,
             cmd::workbench::SET_PROXY => commands::set_proxy_setting,
-            cmd::workbench::UPDATE => commands::check_update,
+            cmd::workbench::UPDATE => update::check_update,
+            cmd::workbench::UPDATE_DOWNLOAD => update::download_update,
+            cmd::workbench::UPDATE_CANCEL => update::cancel_update,
+            cmd::workbench::UPDATE_APPLY => update::apply_update,
+            cmd::workbench::UPDATE_SKIP => update::skip_update,
             cmd::workbench::OPEN_URL => commands::open_url,
             cmd::workbench::KEYBINDS => commands::keybinds,
             cmd::workbench::SET_KEYBIND => commands::set_keybind,

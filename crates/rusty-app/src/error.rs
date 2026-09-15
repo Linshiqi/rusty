@@ -79,6 +79,12 @@ impl From<rusty_ai::Error> for CommandError {
     }
 }
 
+impl From<tauri_plugin_updater::Error> for CommandError {
+    fn from(error: tauri_plugin_updater::Error) -> Self {
+        Self::from_source(&error)
+    }
+}
+
 impl From<rusty_embed::Error> for CommandError {
     fn from(error: rusty_embed::Error) -> Self {
         Self::from_source(&error)

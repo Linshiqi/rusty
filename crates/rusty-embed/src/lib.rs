@@ -88,8 +88,6 @@ pub mod toolchain;
 #[cfg(feature = "backend")]
 pub mod tools;
 #[cfg(feature = "backend")]
-pub mod update;
-#[cfg(feature = "backend")]
 pub mod wizard;
 
 #[cfg(feature = "backend")]

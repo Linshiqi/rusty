@@ -209,6 +209,15 @@ pub struct WorkbenchState {
     /// `recent_projects` is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_tabs: Vec<ProjectTabs>,
+    /// A version the user asked not to be prompted about again. The
+    /// automatic check at launch stays quiet about it; the next release, or
+    /// a check asked for by hand, is offered as usual.
+    ///
+    /// A file rather than the WebView's storage because the backend is what
+    /// decides whether to prompt, and a second window must not re-ask what
+    /// the first was told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update: Option<String>,
 }
 
 /// How many projects keep their tab strip. Beyond this the oldest is dropped:
@@ -280,6 +289,8 @@ mod file {
         pub assistant: Option<Assistant>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub open_tabs: Vec<Tabs>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub skipped_update: Option<String>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -338,6 +349,7 @@ mod file {
                         second_active: t.second_active,
                     })
                     .collect(),
+                skipped_update: file.skipped_update,
             }
         }
     }
@@ -372,6 +384,7 @@ mod file {
                         second_active: t.second_active.clone(),
                     })
                     .collect(),
+                skipped_update: state.skipped_update.clone(),
             }
         }
     }
@@ -667,6 +680,7 @@ mod tests {
                 second: vec!["src/lib.rs".into()],
                 second_active: Some("src/lib.rs".into()),
             }],
+            skipped_update: Some("0.9.9".into()),
         };
         save_workbench_at(&path, &state).unwrap();
         let back = workbench_at(&path);
@@ -680,6 +694,7 @@ mod tests {
         assert_eq!(back.terminal_shell, state.terminal_shell);
         assert_eq!(back.assistant, state.assistant);
         assert_eq!(back.open_tabs, state.open_tabs);
+        assert_eq!(back.skipped_update, state.skipped_update);
         assert!(
             !path
                 .with_extension(format!("toml.{}.tmp", std::process::id()))

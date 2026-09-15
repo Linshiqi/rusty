@@ -128,15 +128,30 @@ jobs:
 
       # The tag is the version. Stamping it here means a release is one
       # gesture — the tag — not a version-bump commit plus a matching tag.
-      - name: Stamp the tag's version into tauri.conf.json
+      #
+      # Both files: tauri.conf.json is what the app and its updater call
+      # themselves, and the workspace manifest is `CARGO_PKG_VERSION` — what
+      # `rusty-cli --version` prints. Only the first was stamped for ten
+      # releases, so every CLI in that stretch reported 0.6.12.
+      - name: Stamp the tag's version into tauri.conf.json and Cargo.toml
         shell: python
         run: |
-          import json, os
+          import json, os, re
           version = os.environ["GITHUB_REF_NAME"].lstrip("v")
           path = "crates/rusty-app/tauri.conf.json"
           conf = json.load(open(path, encoding="utf-8"))
           conf["version"] = version
           json.dump(conf, open(path, "w", encoding="utf-8"), indent=2)
+
+          manifest = open("Cargo.toml", encoding="utf-8").read()
+          head, sep, tail = manifest.partition("[workspace.package]")
+          assert sep, "Cargo.toml has no [workspace.package] table"
+          tail, count = re.subn(
+              r'^version = "[^"]*"', f'version = "{version}"', tail, count=1, flags=re.M
+          )
+          assert count == 1, "no version under [workspace.package]"
+          with open("Cargo.toml", "w", encoding="utf-8", newline="") as out:
+              out.write(head + sep + tail)
 
       - name: Build the app bundle
         working-directory: crates/rusty-app
@@ -234,24 +249,6 @@ jobs:
           path: assets
           merge-multiple: true
 
-      # latest.json: every platform's signed entry in one feed.
-      - name: Merge the updater feed
-        shell: python
-        run: |
-          import datetime, glob, json, os
-          platforms = {}
-          for fragment in glob.glob("assets/feed-*.json"):
-              platforms.update(json.load(open(fragment)))
-              os.remove(fragment)
-          if platforms:
-              feed = {
-                  "version": os.environ["GITHUB_REF_NAME"].lstrip("v"),
-                  "pub_date": datetime.datetime.now(datetime.timezone.utc)
-                      .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                  "platforms": platforms,
-              }
-              json.dump(feed, open("assets/latest.json", "w"), indent=2)
-
       # The body users read. Taken from CHANGELOG.md, never generated.
       #
       # `generate_release_notes: true` builds the body from the commits
@@ -259,6 +256,11 @@ jobs:
       # messages describe internals in detail. Publishing them into a public
       # release would put the whole history where the source deliberately is
       # not. Anything users should read is written for them by hand.
+      #
+      # Written to a file beside the assets rather than a step output: the
+      # feed below carries the same text as its `notes`, which is what the
+      # app's update sheet shows, so the release page and the sheet cannot
+      # say two different things.
       - name: The section of CHANGELOG.md for this tag
         shell: python
         run: |
@@ -274,9 +276,27 @@ jobs:
           )
           body = (found.group(1).strip() if found else
                   "Installers for Windows, macOS and Linux are attached below.")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"body<<EOF\n{body}\nEOF\n")
-        id: notes
+          open("release-notes.md", "w", encoding="utf-8").write(body + "\n")
+
+      # latest.json: every platform's signed entry in one feed, with the
+      # notes the sheet shows before anyone downloads.
+      - name: Merge the updater feed
+        shell: python
+        run: |
+          import datetime, glob, json, os
+          platforms = {}
+          for fragment in glob.glob("assets/feed-*.json"):
+              platforms.update(json.load(open(fragment)))
+              os.remove(fragment)
+          if platforms:
+              feed = {
+                  "version": os.environ["GITHUB_REF_NAME"].lstrip("v"),
+                  "notes": open("release-notes.md", encoding="utf-8").read().strip(),
+                  "pub_date": datetime.datetime.now(datetime.timezone.utc)
+                      .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "platforms": platforms,
+              }
+              json.dump(feed, open("assets/latest.json", "w"), indent=2)
 
       # Published here. It was a second, public repository while the source
       # was private — GITHUB_TOKEN cannot cross repositories, so that needed a
@@ -284,5 +304,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: false
-          body: ${{ steps.notes.outputs.body }}
+          body_path: release-notes.md
           files: assets/*
