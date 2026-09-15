@@ -279,7 +279,11 @@ pub mod ai {
 pub mod git {
     pub const HISTORY: &str = "git_history";
     pub const COMMIT: &str = "git_commit";
-    pub const BRANCHES: &str = "git_branches";
+    /// Every branch and tag, with each branch's tracking — one question.
+    pub const REFS: &str = "git_refs";
+    /// A fingerprint of the repository's own files, read without running
+    /// git: what the panel compares to know whether anything moved.
+    pub const STAMP: &str = "git_stamp";
     /// The working tree: branch, upstream, every changed path.
     pub const STATUS: &str = "git_status";
     pub const STASHES: &str = "git_stashes";

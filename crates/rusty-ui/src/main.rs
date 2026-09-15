@@ -14,6 +14,7 @@
 mod command;
 mod controller;
 mod format;
+mod gitlog;
 mod i18n;
 mod ipc;
 mod state;

@@ -6,8 +6,11 @@
 //! message with a newline or a tab in it is ordinary and a parser that split
 //! on either would tear commits in half.
 
+use std::collections::HashMap;
+
 use crate::model::{
-    Branch, ChangeKind, Commit, FileChange, RefKind, RefLabel, Stash, Status, StatusEntry,
+    Branch, ChangeKind, Commit, CommitDetail, FileChange, RefKind, RefLabel, Refs, Stash, Status,
+    StatusEntry, Tag,
 };
 
 /// The format string [`log`] reads. Hash, parents, author, email, author time,
@@ -51,84 +54,152 @@ fn commit(record: &str) -> Option<Commit> {
     })
 }
 
-/// `%D`: `HEAD -> main, origin/main, tag: v0.4.0`.
+/// `%D`, asked for with `--decorate=full`: `HEAD -> refs/heads/main,
+/// refs/remotes/origin/main, tag: refs/tags/v0.4.0`.
 ///
-/// A remote-tracking branch is told from a local one by the slash, because
-/// that is all the format carries. A local branch named `feature/x` will be
-/// drawn as remote; the alternative is a second `git remote` round trip per
-/// log, and the label is still the right text.
+/// Full names, because the short form tells a remote-tracking branch from a
+/// local one only by a slash — and `feature/x` is a local branch. It was
+/// drawn as a remote, and the panel then refused to check it out or delete
+/// it. `origin/HEAD` is a pointer rather than a branch and `refs/stash` has
+/// a view of its own, so neither is a label. The short spelling is still
+/// read, the old way, for a caller that did not ask for full names.
 pub fn decorations(text: &str) -> Vec<RefLabel> {
     let mut labels = Vec::new();
+    let label = |kind: RefKind, name: &str| RefLabel {
+        kind,
+        name: name.to_string(),
+    };
     for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         if let Some(name) = part.strip_prefix("HEAD -> ") {
-            labels.push(RefLabel {
-                kind: RefKind::Head,
-                name: name.to_string(),
-            });
+            let name = name.strip_prefix("refs/heads/").unwrap_or(name);
+            labels.push(label(RefKind::Head, name));
         } else if part == "HEAD" {
-            labels.push(RefLabel {
-                kind: RefKind::Head,
-                name: String::new(),
-            });
+            labels.push(label(RefKind::Head, ""));
         } else if let Some(name) = part.strip_prefix("tag: ") {
-            labels.push(RefLabel {
-                kind: RefKind::Tag,
-                name: name.to_string(),
-            });
+            labels.push(label(
+                RefKind::Tag,
+                name.strip_prefix("refs/tags/").unwrap_or(name),
+            ));
+        } else if let Some(name) = part.strip_prefix("refs/heads/") {
+            labels.push(label(RefKind::Branch, name));
+        } else if let Some(name) = part.strip_prefix("refs/remotes/") {
+            if !name.ends_with("/HEAD") {
+                labels.push(label(RefKind::Remote, name));
+            }
+        } else if part.starts_with("refs/") {
+            // `refs/stash`, notes, anything else a tool keeps under refs/.
         } else if part.contains('/') {
-            labels.push(RefLabel {
-                kind: RefKind::Remote,
-                name: part.to_string(),
-            });
+            labels.push(label(RefKind::Remote, part));
         } else {
-            labels.push(RefLabel {
-                kind: RefKind::Branch,
-                name: part.to_string(),
-            });
+            labels.push(label(RefKind::Branch, part));
         }
     }
     labels
 }
 
-/// `git show --name-status --format=`: one `M\tpath` line per file, renames
-/// as `R100\told\tnew`.
-pub fn name_status(text: &str) -> Vec<(String, ChangeKind)> {
-    text.lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-            let status = parts.next()?.trim();
-            let first = parts.next()?;
-            let kind = match status.chars().next()? {
-                'A' => ChangeKind::Added,
-                'M' => ChangeKind::Modified,
-                'D' => ChangeKind::Deleted,
-                'R' => ChangeKind::Renamed,
-                _ => ChangeKind::Other,
-            };
-            // A rename names both; the file the commit leaves behind is the
-            // new one.
-            let path = match kind {
-                ChangeKind::Renamed => parts.next().unwrap_or(first),
-                _ => first,
-            };
-            Some((path.to_string(), kind))
-        })
-        .collect()
+/// The format [`detail`] reads: the log's fields, then the whole message.
+pub const DETAIL_FORMAT: &str = "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1f%B%x1e";
+
+/// One commit opened, out of one `git show --format=DETAIL_FORMAT --raw
+/// --numstat -p`: the record and its message up to the record separator,
+/// then three readings of the diff — `--raw` for each file's kind,
+/// `--numstat` for its counts, the patch for its text.
+///
+/// One process where there were seven. Every `git` costs about sixty
+/// milliseconds to start on Windows before it does anything, and opening a
+/// commit ran seven of them one after another.
+pub fn detail(text: &str) -> Option<CommitDetail> {
+    let (record, rest) = text.split_once('\x1e')?;
+    let record = record.trim_start_matches('\n');
+    let commit = commit(record)?;
+    let body = record
+        .splitn(8, '\x1f')
+        .nth(7)
+        .unwrap_or("")
+        .trim_end()
+        .to_string();
+    let parts = diff_parts(rest);
+    Some(CommitDetail {
+        commit,
+        body,
+        files: files(parts.kinds, parts.counts, parts.patches),
+    })
 }
 
-/// `git show --numstat --format=`: `added\tremoved\tpath`, `-` for binary.
-/// Renames arrive as `old => new` or `dir/{old => new}/file`; the name the
-/// file ends up with is what is kept.
+/// The three readings of one diff, as [`diff_parts`] separates them.
+pub struct DiffParts {
+    pub kinds: Vec<(String, ChangeKind)>,
+    pub counts: Vec<(String, Option<u32>, Option<u32>)>,
+    pub patches: Vec<(String, String)>,
+}
+
+/// `--raw --numstat -p` output split into its three readings. Everything
+/// before the first `diff --git` is raw lines (`:`-prefixed) and numstat
+/// lines; everything from it on is the patch, where a line that happens to
+/// start with a digit is text and not a count.
+pub fn diff_parts(text: &str) -> DiffParts {
+    let (head, patch) = if text.starts_with("diff --git ") {
+        ("", text)
+    } else {
+        match text.find("\ndiff --git ") {
+            Some(at) => (&text[..at + 1], &text[at + 1..]),
+            None => (text, ""),
+        }
+    };
+    let mut kinds = Vec::new();
+    let mut counts = Vec::new();
+    for line in head.lines() {
+        if let Some(raw) = line.strip_prefix(':') {
+            kinds.extend(raw_line(raw));
+        } else if let Some(count) = numstat_line(line) {
+            counts.push(count);
+        }
+    }
+    DiffParts {
+        kinds,
+        counts,
+        patches: split_patch(patch),
+    }
+}
+
+/// One `--raw` line after its colon: `100644 100644 abc def M\tpath`, or
+/// `… R100\told\tnew` for a rename, whose new name is the one kept.
+fn raw_line(raw: &str) -> Option<(String, ChangeKind)> {
+    let (meta, paths) = raw.split_once('\t')?;
+    let status = meta.split_whitespace().last()?;
+    let kind = match status.chars().next()? {
+        'A' => ChangeKind::Added,
+        'M' => ChangeKind::Modified,
+        'D' => ChangeKind::Deleted,
+        'R' => ChangeKind::Renamed,
+        _ => ChangeKind::Other,
+    };
+    let mut paths = paths.split('\t');
+    let first = paths.next()?;
+    let path = match kind {
+        ChangeKind::Renamed => paths.next().unwrap_or(first),
+        _ => first,
+    };
+    Some((path.to_string(), kind))
+}
+
+/// `--numstat`: `added\tremoved\tpath`, `-` for binary. Renames arrive as
+/// `old => new` or `dir/{old => new}/file`; the name the file ends up with
+/// is what is kept.
 pub fn numstat(text: &str) -> Vec<(String, Option<u32>, Option<u32>)> {
-    text.lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-            let added = parts.next()?.trim().parse().ok();
-            let removed = parts.next()?.trim().parse().ok();
-            let path = rename_target(parts.next()?);
-            Some((path, added, removed))
-        })
-        .collect()
+    text.lines().filter_map(numstat_line).collect()
+}
+
+fn numstat_line(line: &str) -> Option<(String, Option<u32>, Option<u32>)> {
+    let mut parts = line.split('\t');
+    let added = parts.next()?.trim();
+    let removed = parts.next()?.trim();
+    let counted = |field: &str| field == "-" || field.chars().all(|c| c.is_ascii_digit());
+    if added.is_empty() || !counted(added) || !counted(removed) {
+        return None;
+    }
+    let path = rename_target(parts.next()?);
+    Some((path, added.parse().ok(), removed.parse().ok()))
 }
 
 /// `dir/{old => new}/file` → `dir/new/file`; `old => new` → `new`.
@@ -147,63 +218,99 @@ fn rename_target(spelling: &str) -> String {
 
 /// A whole-commit patch split per file, keyed by the file's new path.
 ///
-/// Splits on `diff --git` headers and reads the path off `+++ b/…`, falling
-/// back to `--- a/…` for a deletion (whose `+++` is `/dev/null`).
+/// One pass, one block per `diff --git` header, the path read inside the
+/// block: `rename to`, then `+++ b/…`, then `--- a/…` for a deletion (whose
+/// `+++` is `/dev/null`), then the header itself for a file with no text
+/// lines at all — a binary one. Only the block's header is read for it: a
+/// line of content that starts with `+++` is text, not a header, so the
+/// search stops at the first `@@`.
+///
+/// It used to search the *whole* patch again for every `--- a/` line, which
+/// is quadratic, and a commit touching a few hundred files paused the panel
+/// for exactly that long.
 pub fn split_patch(patch: &str) -> Vec<(String, String)> {
     let mut files = Vec::new();
-    let mut current: Option<(Option<String>, String)> = None;
+    let mut block = String::new();
+    let mut flush = |block: &mut String| {
+        if block.is_empty() {
+            return;
+        }
+        let text = std::mem::take(block);
+        if let Some(path) = block_path(&text) {
+            files.push((path, text));
+        }
+    };
     for line in patch.split_inclusive('\n') {
         if line.starts_with("diff --git ") {
-            if let Some((Some(path), text)) = current.take() {
-                files.push((path, text));
-            }
-            current = Some((None, String::new()));
+            flush(&mut block);
         }
-        if let Some((path, text)) = current.as_mut() {
-            if path.is_none() {
-                if let Some(rest) = line.strip_prefix("+++ b/") {
-                    *path = Some(rest.trim_end().to_string());
-                } else if let Some(rest) = line.strip_prefix("--- a/")
-                    && !patch_has_plus_for(rest, patch)
-                {
-                    *path = Some(rest.trim_end().to_string());
-                }
-            }
-            text.push_str(line);
+        if !block.is_empty() || line.starts_with("diff --git ") {
+            block.push_str(line);
         }
     }
-    if let Some((Some(path), text)) = current {
-        files.push((path, text));
-    }
+    flush(&mut block);
     files
 }
 
-/// Whether a `+++ b/<path>` line exists anywhere — the cheap way to know a
-/// `--- a/` line is a deletion's rather than a modification's first half.
-fn patch_has_plus_for(path: &str, patch: &str) -> bool {
-    let needle = format!("+++ b/{}", path.trim_end());
-    patch.lines().any(|l| l.trim_end() == needle)
+/// The path one file's block of a patch is about.
+fn block_path(block: &str) -> Option<String> {
+    let mut lines = block.lines();
+    let header = lines.next()?;
+    let mut deleted = None;
+    for line in lines {
+        if line.starts_with("@@") {
+            break;
+        }
+        if let Some(path) = line.strip_prefix("rename to ") {
+            return Some(path.trim_end().to_string());
+        }
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            if let Some(path) = rest.strip_prefix("b/") {
+                return Some(path.trim_end().to_string());
+            }
+            // `+++ /dev/null`: a deletion, named on its `---` line.
+            break;
+        }
+        if let Some(path) = line.strip_prefix("--- a/") {
+            deleted = Some(path.trim_end().to_string());
+        }
+    }
+    deleted.or_else(|| header_path(header))
 }
 
-/// Assemble one commit's files from the three answers.
+/// `diff --git a/<p> b/<p>`, read where the two names are the same — the
+/// only case the header alone can be split unambiguously, since a path may
+/// contain ` b/`. A rename's block carries `rename to` instead.
+fn header_path(header: &str) -> Option<String> {
+    let rest = header.strip_prefix("diff --git ")?;
+    let len = rest.len().checked_sub(5)?;
+    if len % 2 != 0 {
+        return None;
+    }
+    let half = len / 2;
+    let old = rest.get(2..2 + half)?;
+    let new = rest.get(5 + half..)?;
+    (rest.starts_with("a/") && rest.get(2 + half..5 + half)? == " b/" && old == new)
+        .then(|| new.to_string())
+}
+
+/// Assemble one commit's files from the three readings. Keyed lookups: the
+/// linear search per file this replaced was quadratic in a large commit.
 pub fn files(
-    statuses: Vec<(String, ChangeKind)>,
-    stats: Vec<(String, Option<u32>, Option<u32>)>,
+    kinds: Vec<(String, ChangeKind)>,
+    counts: Vec<(String, Option<u32>, Option<u32>)>,
     patches: Vec<(String, String)>,
 ) -> Vec<FileChange> {
-    statuses
+    let counts: HashMap<String, (Option<u32>, Option<u32>)> = counts
+        .into_iter()
+        .map(|(path, added, removed)| (path, (added, removed)))
+        .collect();
+    let mut patches: HashMap<String, String> = patches.into_iter().collect();
+    kinds
         .into_iter()
         .map(|(path, kind)| {
-            let (added, removed) = stats
-                .iter()
-                .find(|(p, _, _)| *p == path)
-                .map(|(_, a, r)| (*a, *r))
-                .unwrap_or((None, None));
-            let patch = patches
-                .iter()
-                .find(|(p, _)| *p == path)
-                .map(|(_, text)| text.clone())
-                .unwrap_or_default();
+            let (added, removed) = counts.get(&path).copied().unwrap_or((None, None));
+            let patch = patches.remove(&path).unwrap_or_default();
             FileChange {
                 path,
                 kind,
@@ -215,39 +322,120 @@ pub fn files(
         .collect()
 }
 
-/// The format [`branches`] reads: short name, `*` when checked out, the
-/// upstream's short name, the tip's short hash — on tabs.
-pub const BRANCH_FORMAT: &str =
-    "%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(objectname:short)";
+/// The format [`refs`] reads, one ref a line and fields on `\x1f`: the full
+/// ref name, `*` when checked out, the upstream's full name, how it tracks
+/// it (`ahead 1, behind 2`, or `gone`), the hash, the commit an annotated
+/// tag peels to, when it was made, what it points at if it is symbolic, and
+/// its subject — last, so nothing after it can be torn by what it contains.
+pub const REFS_FORMAT: &str = "%(refname)%1f%(HEAD)%1f%(upstream)%1f%(upstream:track,nobracket)%1f%(objectname)%1f%(*objectname)%1f%(creatordate:unix)%1f%(symref)%1f%(subject)";
 
-/// Branches out of `git branch -a --format=BRANCH_FORMAT`.
+/// Branches and tags out of `git for-each-ref --format=REFS_FORMAT
+/// refs/heads refs/remotes refs/tags`.
 ///
-/// `origin/HEAD` is a pointer at another remote branch, not a branch anyone
-/// checks out, and is dropped.
-pub fn branches(text: &str) -> Vec<Branch> {
-    text.lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-            let name = parts.next()?.trim().to_string();
-            if name.is_empty() || name.ends_with("/HEAD") {
-                return None;
-            }
-            let current = parts.next()?.trim() == "*";
-            let upstream = parts
-                .next()
-                .map(str::trim)
-                .filter(|u| !u.is_empty())
-                .map(str::to_string);
-            let tip = parts.next().unwrap_or("").trim().to_string();
-            Some(Branch {
-                remote: name.contains('/'),
-                name,
-                current,
-                upstream,
-                tip,
-            })
-        })
-        .collect()
+/// Local or remote is the ref's namespace, never a slash in its name, and a
+/// symbolic ref — `origin/HEAD` — points at a branch rather than being one.
+pub fn refs(text: &str) -> Refs {
+    let mut out = Refs::default();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.splitn(9, '\x1f').collect();
+        let [
+            refname,
+            head,
+            upstream,
+            track,
+            id,
+            peeled,
+            time,
+            symref,
+            subject,
+        ] = fields[..]
+        else {
+            continue;
+        };
+        if !symref.trim().is_empty() {
+            continue;
+        }
+        let time = time.trim().parse().unwrap_or(0);
+        let id = id.trim().to_string();
+        let subject = subject.trim_end().to_string();
+        if let Some(name) = refname.strip_prefix("refs/heads/") {
+            let (ahead, behind, gone) = tracking(track);
+            out.branches.push(Branch {
+                name: name.to_string(),
+                current: head.trim() == "*",
+                remote: false,
+                upstream: short_ref(upstream),
+                tip: id.chars().take(7).collect(),
+                id,
+                ahead,
+                behind,
+                gone,
+                time,
+                subject,
+                remote_name: None,
+            });
+        } else if let Some(name) = refname.strip_prefix("refs/remotes/") {
+            out.branches.push(Branch {
+                name: name.to_string(),
+                current: false,
+                remote: true,
+                upstream: None,
+                tip: id.chars().take(7).collect(),
+                id,
+                ahead: 0,
+                behind: 0,
+                gone: false,
+                time,
+                subject,
+                remote_name: name.split('/').next().map(str::to_string),
+            });
+        } else if let Some(name) = refname.strip_prefix("refs/tags/") {
+            let peeled = peeled.trim();
+            out.tags.push(Tag {
+                name: name.to_string(),
+                id: if peeled.is_empty() {
+                    id
+                } else {
+                    peeled.to_string()
+                },
+                time,
+                subject,
+            });
+        }
+    }
+    out.branches
+        .sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+    out.tags
+        .sort_by(|a, b| b.time.cmp(&a.time).then_with(|| a.name.cmp(&b.name)));
+    out
+}
+
+/// `%(upstream:track,nobracket)`: empty in step, `ahead 1`, `behind 2`,
+/// `ahead 1, behind 2`, or `gone`.
+fn tracking(track: &str) -> (u32, u32, bool) {
+    let track = track.trim();
+    if track == "gone" {
+        return (0, 0, true);
+    }
+    let (mut ahead, mut behind) = (0, 0);
+    for part in track.split(',').map(str::trim) {
+        if let Some(n) = part.strip_prefix("ahead ") {
+            ahead = n.trim().parse().unwrap_or(0);
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            behind = n.trim().parse().unwrap_or(0);
+        }
+    }
+    (ahead, behind, false)
+}
+
+/// `refs/remotes/origin/main` → `origin/main`; `refs/heads/x` → `x`.
+fn short_ref(full: &str) -> Option<String> {
+    let full = full.trim();
+    let short = full
+        .strip_prefix("refs/remotes/")
+        .or_else(|| full.strip_prefix("refs/heads/"))
+        .unwrap_or(full);
+    (!short.is_empty()).then(|| short.to_string())
 }
 
 /// The format [`stashes`] reads: the ref (`stash@{0}`), the subject, the
@@ -513,20 +701,210 @@ mod tests {
         );
     }
 
+    /// Full names: a local branch with a slash is a branch, `origin/HEAD` is
+    /// no label, the stash is none either, and a tag keeps its short name.
     #[test]
-    fn name_status_reads_renames_as_their_new_name() {
-        let listed =
-            name_status("M\tsrc/lib.rs\nA\tsrc/new.rs\nD\told.rs\nR100\tfrom.rs\tto.rs\nT\tlink\n");
+    fn full_decorations_tell_a_slashed_local_branch_from_a_remote() {
+        let labels = decorations(
+            "HEAD -> refs/heads/main, refs/heads/feature/x, refs/remotes/origin/main, \
+             refs/remotes/origin/HEAD, tag: refs/tags/v1.0, refs/stash",
+        );
         assert_eq!(
-            listed,
+            labels,
             vec![
-                ("src/lib.rs".to_string(), ChangeKind::Modified),
-                ("src/new.rs".to_string(), ChangeKind::Added),
-                ("old.rs".to_string(), ChangeKind::Deleted),
-                ("to.rs".to_string(), ChangeKind::Renamed),
-                ("link".to_string(), ChangeKind::Other),
+                RefLabel {
+                    kind: RefKind::Head,
+                    name: "main".into()
+                },
+                RefLabel {
+                    kind: RefKind::Branch,
+                    name: "feature/x".into()
+                },
+                RefLabel {
+                    kind: RefKind::Remote,
+                    name: "origin/main".into()
+                },
+                RefLabel {
+                    kind: RefKind::Tag,
+                    name: "v1.0".into()
+                },
             ]
         );
+    }
+
+    /// One `git show --raw --numstat -p` answer, as git 2.52 wrote it: the
+    /// record with a two-paragraph message, then raw lines for a change, an
+    /// addition, a rename and a binary file, their counts, and the patch —
+    /// whose content lines start with digits and `+++` without being read as
+    /// counts or headers.
+    #[test]
+    fn one_show_carries_the_record_the_message_and_every_file() {
+        let text = concat!(
+            "20d12f8de4db7a9000627bf3c1d8ca9ecc8500db\x1f59ea8cd0\x1fcs3\x1fcs3@x\x1f",
+            "1756940000\x1fThe subject\x1fHEAD -> refs/heads/main\x1f",
+            "The subject\n\nThe body, with a tab\there.\n\x1e\n\n",
+            ":100644 100644 aaaaaaa bbbbbbb M\tsrc/lib.rs\n",
+            ":000000 100644 0000000 ccccccc A\tsrc/new file.rs\n",
+            ":100644 100644 ddddddd eeeeeee R087\told/name.rs\tnew/name.rs\n",
+            ":100644 100644 fffffff 1111111 M\tlogo.png\n",
+            "2\t1\tsrc/lib.rs\n",
+            "1\t0\tsrc/new file.rs\n",
+            "3\t3\t{old => new}/name.rs\n",
+            "-\t-\tlogo.png\n",
+            "\n",
+            "diff --git a/src/lib.rs b/src/lib.rs\n",
+            "index aaaaaaa..bbbbbbb 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n",
+            "@@ -1,2 +1,3 @@\n 12\n-3\t4\tnot a count\n+++ not a header\n+5\n",
+            "diff --git a/src/new file.rs b/src/new file.rs\n",
+            "new file mode 100644\nindex 0000000..ccccccc\n--- /dev/null\n+++ b/src/new file.rs\n",
+            "@@ -0,0 +1 @@\n+fn new() {}\n",
+            "diff --git a/old/name.rs b/new/name.rs\n",
+            "similarity index 87%\nrename from old/name.rs\nrename to new/name.rs\n",
+            "--- a/old/name.rs\n+++ b/new/name.rs\n@@ -1 +1 @@\n-a\n+b\n",
+            "diff --git a/logo.png b/logo.png\n",
+            "index fffffff..1111111 100644\nBinary files a/logo.png and b/logo.png differ\n",
+        );
+        let detail = detail(text).expect("parses");
+        assert_eq!(detail.commit.summary, "The subject");
+        assert_eq!(detail.body, "The subject\n\nThe body, with a tab\there.");
+        assert_eq!(detail.commit.refs[0].name, "main");
+        let summary: Vec<(&str, ChangeKind, Option<u32>, Option<u32>)> = detail
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.kind, f.added, f.removed))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("src/lib.rs", ChangeKind::Modified, Some(2), Some(1)),
+                ("src/new file.rs", ChangeKind::Added, Some(1), Some(0)),
+                ("new/name.rs", ChangeKind::Renamed, Some(3), Some(3)),
+                ("logo.png", ChangeKind::Modified, None, None),
+            ]
+        );
+        assert!(detail.files[0].patch.contains("+++ not a header\n"));
+        assert!(detail.files[1].patch.contains("+fn new() {}"));
+        assert!(detail.files[2].patch.contains("rename to new/name.rs"));
+        assert!(
+            detail.files[3].patch.contains("Binary files"),
+            "a binary file is named off its header"
+        );
+    }
+
+    #[test]
+    fn a_header_splits_only_where_both_names_agree() {
+        assert_eq!(
+            header_path("diff --git a/a b/c.png b/a b/c.png").as_deref(),
+            Some("a b/c.png")
+        );
+        assert_eq!(header_path("diff --git a/x b/y"), None);
+        assert_eq!(
+            header_path("diff --git a/中文.png b/中文.png").as_deref(),
+            Some("中文.png")
+        );
+    }
+
+    /// A real `for-each-ref` answer: the current branch ahead and behind, a
+    /// slashed local branch whose upstream is gone, a remote branch, the
+    /// remote's HEAD pointer, an annotated tag peeling to its commit and a
+    /// lightweight one.
+    #[test]
+    fn refs_read_branches_by_namespace_and_tags_peeled() {
+        let line = |fields: [&str; 9]| format!("{}\n", fields.join("\x1f"));
+        let text = [
+            line([
+                "refs/heads/main",
+                "*",
+                "refs/remotes/origin/main",
+                "ahead 2, behind 1",
+                "aaaaaaaa11",
+                "",
+                "1756940000",
+                "",
+                "The tip",
+            ]),
+            line([
+                "refs/heads/feature/x",
+                " ",
+                "refs/remotes/origin/feature/x",
+                "gone",
+                "bbbbbbbb22",
+                "",
+                "1756930000",
+                "",
+                "Work",
+            ]),
+            line([
+                "refs/remotes/origin/main",
+                " ",
+                "",
+                "",
+                "cccccccc33",
+                "",
+                "1756920000",
+                "",
+                "Theirs",
+            ]),
+            line([
+                "refs/remotes/origin/HEAD",
+                " ",
+                "",
+                "",
+                "cccccccc33",
+                "",
+                "1756920000",
+                "refs/remotes/origin/main",
+                "Theirs",
+            ]),
+            line([
+                "refs/tags/v1.0",
+                " ",
+                "",
+                "",
+                "tagobject44",
+                "dddddddd44",
+                "1756910000",
+                "",
+                "Release one",
+            ]),
+            line([
+                "refs/tags/v0.9",
+                " ",
+                "",
+                "",
+                "eeeeeeee55",
+                "",
+                "1756900000",
+                "",
+                "An old commit",
+            ]),
+        ]
+        .concat();
+        let refs = refs(&text);
+        let names: Vec<(&str, bool)> = refs
+            .branches
+            .iter()
+            .map(|b| (b.name.as_str(), b.remote))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("feature/x", false), ("main", false), ("origin/main", true)],
+            "locals by name, then remotes; origin/HEAD is not a branch"
+        );
+        let main = &refs.branches[1];
+        assert!(main.current);
+        assert_eq!((main.ahead, main.behind, main.gone), (2, 1, false));
+        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(main.tip, "aaaaaaa");
+        assert!(refs.branches[0].gone);
+        assert_eq!(refs.branches[2].remote_name.as_deref(), Some("origin"));
+        assert_eq!(refs.branches[2].local_name(), "main");
+        assert_eq!(refs.tags[0].name, "v1.0");
+        assert_eq!(
+            refs.tags[0].id, "dddddddd44",
+            "an annotated tag names its commit"
+        );
+        assert_eq!(refs.tags[1].id, "eeeeeeee55");
     }
 
     #[test]
@@ -559,18 +937,5 @@ mod tests {
         assert!(files[0].1.contains("+new\n"));
         assert_eq!(files[1].0, "gone.rs");
         assert!(files[1].1.contains("-bye\n"));
-    }
-
-    #[test]
-    fn branches_mark_the_current_one_and_drop_the_remote_head_pointer() {
-        let text = "master\t*\torigin/master\t20d12f8\nfeature\t\t\tabc1234\norigin/HEAD\t\t\t20d12f8\norigin/master\t\t\t20d12f8\n";
-        let listed = branches(text);
-        assert_eq!(listed.len(), 3, "origin/HEAD is not a branch");
-        assert!(listed[0].current);
-        assert_eq!(listed[0].upstream.as_deref(), Some("origin/master"));
-        assert!(!listed[1].current);
-        assert_eq!(listed[1].upstream, None);
-        assert!(listed[2].remote);
-        assert!(!listed[0].remote);
     }
 }

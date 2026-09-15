@@ -11,7 +11,7 @@
 
 use base64::Engine;
 use rusty_embed::{CommandPlan, LogLine, process};
-use rusty_git::{Branch, CommitDetail, GitIdentity, History, Stash, Status};
+use rusty_git::{CommitDetail, GitIdentity, GitStamp, History, Refs, Stash, Status};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -47,11 +47,22 @@ pub async fn git_commit(id: String, state: State<'_, AppState>) -> Answer<Commit
     Ok(blocking("git show", move || rusty_git::repo::commit(&root, &id)).await??)
 }
 
-/// Local and remote-tracking branches, the current one marked.
+/// Every branch, local and remote-tracking, and every tag.
 #[tauri::command]
-pub async fn git_branches(state: State<'_, AppState>) -> Answer<Vec<Branch>> {
+pub async fn git_refs(state: State<'_, AppState>) -> Answer<Refs> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(blocking("git branch", move || rusty_git::repo::branches(&root)).await??)
+    Ok(blocking("git for-each-ref", move || rusty_git::repo::refs(&root)).await??)
+}
+
+/// The repository's fingerprint: what the panel compares to decide what, if
+/// anything, to read again. No `git` runs for it after the first call.
+#[tauri::command]
+pub async fn git_stamp(state: State<'_, AppState>) -> Answer<GitStamp> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("reading the repository's stamp", move || {
+        rusty_git::repo::stamp(&root)
+    })
+    .await??)
 }
 
 /// Where the working tree stands.

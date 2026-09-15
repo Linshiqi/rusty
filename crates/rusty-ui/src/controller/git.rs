@@ -1,20 +1,35 @@
-//! The repository: its history, its working tree, its branches and stashes,
-//! and the commands that move any of them.
+//! The repository: its history, its working tree, its branches, tags and
+//! stashes, and the commands that move any of them.
 //!
-//! Two kinds of call, on purpose. **Reads** — the log, a commit, the status,
-//! the stash list, one path's diff — are IPC calls that answer with model
-//! types and never touch the dock. **Writes** run as visible dock commands
-//! through the same runner every `cargo` and `espflash` uses, so the exact
-//! `git` line and everything git says back are readable, and a failure on a
-//! dirty tree or a rejected push is a paragraph in the dock rather than a
-//! banner nobody can act on. The one exception is staging: `git add` on a
-//! file is instant and reversible, and a dock line per click would bury the
-//! commands that matter under the ones that do not.
+//! Two kinds of call, on purpose. **Reads** — the log, the refs, a commit,
+//! the status, the stash list, one path's diff — are IPC calls that answer
+//! with model types and never touch the dock. **Writes** run as visible dock
+//! commands through the same runner every `cargo` and `espflash` uses, so
+//! the exact `git` line and everything git says back are readable, and a
+//! failure on a dirty tree or a rejected push is a paragraph in the dock
+//! rather than a banner nobody can act on. The one exception is staging:
+//! `git add` on a file is instant and reversible, and a dock line per click
+//! would bury the commands that matter under the ones that do not.
+//!
+//! **Read only what moved, and draw only what changed.** The panel used to
+//! re-read everything — nine `git` processes — after every save anywhere in
+//! the project, and set every signal whether or not the answer differed, so
+//! the whole history was rebuilt each time. Now a save re-reads the status
+//! alone; anything else is decided by the repository's stamp
+//! (`rusty_git::GitStamp`), which costs no `git` at all and is also asked
+//! every few seconds while the panel is showing — how a commit made in a
+//! terminal, which the file watcher cannot see, reaches the panel. Every
+//! answer is compared with what is on screen before it is set, and one of
+//! each read is in flight at a time (`state::ReadGate`).
+
+use std::time::Duration;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_git::{Branch, ChangeKind, CommitDetail, GitIdentity, History, Stash, Status};
+use rusty_git::{
+    ChangeKind, CommitDetail, GitIdentity, GitOperation, GitStamp, History, Refs, Stash, Status,
+};
 use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
@@ -22,16 +37,49 @@ use rusty_i18n::t;
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, CloneDraft, ImagePair, ImageSide, ImageSource, remember_split},
+    state::{
+        AppState, CloneDraft, GitMode, GitRead, ImagePair, ImageSide, ImageSource, PromptKind,
+        RefPrompt, remember_split,
+    },
 };
+
+/// How many opened commits are kept for a second look.
+const CACHED_COMMITS: usize = 32;
+
+/// Set a signal only when the value is not already what it holds. Every
+/// read's answer goes through this: an unchanged history set again rebuilt
+/// every row of the log.
+fn set_if_changed<T: PartialEq + Send + Sync + 'static>(signal: RwSignal<T>, value: T) {
+    if signal.with_untracked(|current| *current != value) {
+        signal.set(value);
+    }
+}
+
+fn begin(state: AppState, read: GitRead) -> bool {
+    let mut go = false;
+    state.git.gate.update_value(|gate| go = gate.begin(read));
+    go
+}
+
+fn finish(state: AppState, read: GitRead) -> bool {
+    let mut again = false;
+    state
+        .git
+        .gate
+        .update_value(|gate| again = gate.finish(read));
+    again
+}
+
+// ─── reads ───────────────────────────────────────────────────────────────────
 
 /// The log for the chosen branch, or for every branch.
 ///
 /// Not through `track`: a project that is not a repository is an ordinary
 /// thing to open, and "not inside a git repository" belongs in the panel
-/// that asked, not on the banner over the whole window.
+/// that asked, not on the banner over the whole window. An answer for a
+/// filter or a length no longer asked for is dropped and asked again.
 pub fn load_history(state: AppState) {
-    if !state.has_project_now() {
+    if !state.has_project_now() || !begin(state, GitRead::History) {
         return;
     }
     #[derive(serde::Serialize)]
@@ -43,87 +91,191 @@ pub fn load_history(state: AppState) {
         rev: state.git.rev.get_untracked(),
         limit: state.git.limit.get_untracked(),
     };
+    let asked = (args.rev.clone(), args.limit);
     spawn_local(async move {
-        match ipc::call::<_, History>(cmd::git::HISTORY, &args).await {
-            Ok(history) => {
-                state.git.history.set(Some(history));
-                state.git.unavailable.set(None);
-                state.git.not_a_repo.set(false);
+        let answer = ipc::call::<_, History>(cmd::git::HISTORY, &args).await;
+        let again = finish(state, GitRead::History);
+        let current = (
+            state.git.rev.get_untracked(),
+            state.git.limit.get_untracked(),
+        );
+        if current == asked {
+            match answer {
+                Ok(history) => {
+                    set_if_changed(state.git.history, Some(history));
+                    set_if_changed(state.git.unavailable, None);
+                    set_if_changed(state.git.not_a_repo, false);
+                }
+                Err(error) => {
+                    state.git.history.set(None);
+                    state
+                        .git
+                        .not_a_repo
+                        .set(error.kind.as_deref() == Some("not-a-repository"));
+                    state.git.unavailable.set(Some(error.message));
+                }
             }
-            Err(error) => {
-                state.git.history.set(None);
-                state
-                    .git
-                    .not_a_repo
-                    .set(error.kind.as_deref() == Some("not-a-repository"));
-                state.git.unavailable.set(Some(error.message));
-            }
+            set_if_changed(state.git.loaded, true);
         }
-        state.git.loaded.set(true);
+        if again || current != asked {
+            load_history(state);
+        }
     });
 }
 
-/// The branches, for the strip above the log. Quiet on failure: the history
-/// call has already said why, once.
-pub fn load_branches(state: AppState) {
-    if !state.has_project_now() {
+/// Every branch and tag. Quiet on failure: the history has already said
+/// why, once.
+pub fn load_refs(state: AppState) {
+    if !state.has_project_now() || !begin(state, GitRead::Refs) {
         return;
     }
     spawn_local(async move {
-        if let Ok(branches) = ipc::call::<_, Vec<Branch>>(cmd::git::BRANCHES, &()).await {
-            state.git.branches.set(branches);
+        if let Ok(Refs { branches, tags }) = ipc::get::<Refs>(cmd::git::REFS).await {
+            set_if_changed(state.git.branches, branches);
+            set_if_changed(state.git.tags, tags);
+        }
+        if finish(state, GitRead::Refs) {
+            load_refs(state);
         }
     });
 }
 
-/// Where the working tree stands. Quiet on failure, like the branches.
+/// Where the working tree stands. Quiet on failure, like the refs.
 pub fn load_status(state: AppState) {
-    if !state.has_project_now() {
+    if !state.has_project_now() || !begin(state, GitRead::Status) {
         return;
     }
     spawn_local(async move {
-        if let Ok(status) = ipc::call::<_, Status>(cmd::git::STATUS, &()).await {
-            state.git.status.set(Some(status));
+        if let Ok(status) = ipc::get::<Status>(cmd::git::STATUS).await {
+            set_if_changed(state.git.status, Some(status));
+        }
+        if finish(state, GitRead::Status) {
+            load_status(state);
         }
     });
 }
 
 pub fn load_stashes(state: AppState) {
-    if !state.has_project_now() {
+    if !state.has_project_now() || !begin(state, GitRead::Stashes) {
         return;
     }
     spawn_local(async move {
-        if let Ok(stashes) = ipc::call::<_, Vec<Stash>>(cmd::git::STASHES, &()).await {
-            state.git.stashes.set(stashes);
+        if let Ok(stashes) = ipc::get::<Vec<Stash>>(cmd::git::STASHES).await {
+            set_if_changed(state.git.stashes, stashes);
+        }
+        if finish(state, GitRead::Stashes) {
+            load_stashes(state);
         }
     });
 }
 
-/// Everything again. What the watcher calls after every batch and the
-/// refresh button calls on demand — a no-op until the panel has asked once,
-/// so a project nobody has looked at the history of costs no `git log` per
-/// save.
-pub fn refresh_git(state: AppState) {
-    if !state.git.loaded.get_untracked() {
-        return;
-    }
-    load_history(state);
-    load_branches(state);
-    load_status(state);
-    load_stashes(state);
-}
-
-/// Every read at once — the panel opening, or a project changing under it.
+/// Every read at once — the panel opening on a project, or the refresh
+/// button. The stamp is taken beside them as the baseline later probes are
+/// compared with; taken before the answers arrive, a change racing them is
+/// seen again rather than missed.
 pub fn load_git(state: AppState) {
+    take_stamp(state);
     load_history(state);
-    load_branches(state);
+    load_refs(state);
     load_status(state);
     load_stashes(state);
     load_identity(state);
 }
 
+fn take_stamp(state: AppState) {
+    spawn_local(async move {
+        if let Ok(stamp) = ipc::get::<GitStamp>(cmd::git::STAMP).await {
+            state.git.stamp.set_value(Some(stamp));
+        }
+    });
+}
+
+/// Ask whether the repository moved since it was last read, and read again
+/// only what did. No `git` runs for the question — see `GitStamp` — so this
+/// is what the panel asks every few seconds while it is showing.
+pub fn probe_git(state: AppState) {
+    if !state.git.loaded.get_untracked() || !state.has_project_now() {
+        return;
+    }
+    spawn_local(async move {
+        let Ok(stamp) = ipc::get::<GitStamp>(cmd::git::STAMP).await else {
+            return;
+        };
+        let before = state.git.stamp.get_value();
+        state.git.stamp.set_value(Some(stamp));
+        let Some(before) = before else {
+            return;
+        };
+        let stale = stamp.stale_since(&before);
+        if stale.history {
+            load_history(state);
+        }
+        if stale.refs {
+            load_refs(state);
+        }
+        if stale.status {
+            load_status(state);
+        }
+        if stale.stashes {
+            load_stashes(state);
+        }
+    });
+}
+
+/// What the file watcher calls after every batch — a no-op until the panel
+/// has been opened once, so a project nobody has looked at the history of
+/// costs nothing per save. A saved file changes the working tree and
+/// nothing git keeps, so the status is re-read and the rest is left to the
+/// stamp: a checkout or a pull in a terminal moves HEAD or the refs too.
+pub fn refresh_git(state: AppState) {
+    if !state.git.loaded.get_untracked() {
+        return;
+    }
+    load_status(state);
+    probe_git(state);
+}
+
+/// The panel was mounted. A project it has shown before is only probed:
+/// the panel is rebuilt every time it is switched to, and it read
+/// everything again and dropped the opened commit each time. A project it
+/// has not shown starts clean.
+pub fn open_git_panel(state: AppState, root: String) {
+    let known = state
+        .git
+        .root
+        .with_value(|shown| shown.as_deref() == Some(root.as_str()));
+    if known && state.git.loaded.get_untracked() {
+        probe_git(state);
+        return;
+    }
+    state.git.root.set_value(Some(root));
+    state.git.stamp.set_value(None);
+    state.git.cache.set_value(Vec::new());
+    state.git.history.set(None);
+    state.git.branches.set(Vec::new());
+    state.git.tags.set(Vec::new());
+    state.git.status.set(None);
+    state.git.stashes.set(Vec::new());
+    state.git.unavailable.set(None);
+    state.git.not_a_repo.set(false);
+    state.git.loaded.set(false);
+    state.git.selected.set(None);
+    state.git.detail.set(None);
+    state.git.file.set(None);
+    state.git.rev.set(None);
+    state.git.limit.set(rusty_git::LIMIT);
+    state.git.diff.set(None);
+    state.git.diff_for.set(None);
+    state.git.prompt.set(None);
+    state.git.query.set(String::new());
+    state.git.reveal.set(None);
+    state.git.amend.set(false);
+    state.git.menu.set(None);
+    load_git(state);
+}
+
 /// Who a commit would be signed as. Read with the rest of the panel and
-/// again after every write, since the identity form is one of the writes.
+/// again after the identity form, which is one of the writes.
 pub fn load_identity(state: AppState) {
     if !state.has_project_now() {
         return;
@@ -134,6 +286,29 @@ pub fn load_identity(state: AppState) {
         }
     });
 }
+
+/// After any command that changed the repository: read everything back —
+/// compared before it is drawn, so what did not move is not redrawn — take
+/// a new baseline, and let the tree and the open files follow the disk.
+fn after_git(state: AppState) {
+    take_stamp(state);
+    load_history(state);
+    load_refs(state);
+    load_status(state);
+    load_stashes(state);
+    refresh_tree(state);
+}
+
+/// A `git` line in the dock, then `after_git`.
+fn git(state: AppState, args: Vec<String>) {
+    run_args_at_root_then(state, "git", args, move |_| after_git(state));
+}
+
+fn words(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| (*arg).to_string()).collect()
+}
+
+// ─── identity and init ───────────────────────────────────────────────────────
 
 /// `git config user.name` and `user.email` — for every repository unless
 /// `local`, the two scopes git's own hint offers. Two dock commands, the
@@ -167,12 +342,14 @@ pub fn set_identity(state: AppState, name: String, email: String, local: bool) {
 /// up with the working tree as untracked changes and no history — the
 /// ordinary state of a project that has just started keeping one.
 pub fn git_init(state: AppState) {
-    run_args_at_root_then(state, "git", vec!["init".to_string()], move |code| {
+    run_args_at_root_then(state, "git", words(&["init"]), move |code| {
         if code == Some(0) {
             after_git(state);
         }
     });
 }
+
+// ─── the log ─────────────────────────────────────────────────────────────────
 
 /// Show one branch's history, or every branch's when `rev` is `None`.
 pub fn show_rev(state: AppState, rev: Option<String>) {
@@ -194,33 +371,164 @@ pub fn set_split(state: AppState, on: bool) {
     remember_split(on);
 }
 
+/// Whether a name is a full hash, which names one content for ever — the
+/// only kind of name an opened commit is kept under. `stash@{0}` names a
+/// different stash after every push or pop.
+fn is_hash(id: &str) -> bool {
+    matches!(id.len(), 40 | 64) && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn cached(state: AppState, id: &str) -> Option<CommitDetail> {
+    state
+        .git
+        .cache
+        .with_value(|cache| cache.iter().find(|detail| detail.commit.id == id).cloned())
+}
+
+fn remember(state: AppState, detail: CommitDetail) {
+    state.git.cache.update_value(|cache| {
+        cache.retain(|kept| kept.commit.id != detail.commit.id);
+        cache.insert(0, detail);
+        cache.truncate(CACHED_COMMITS);
+    });
+}
+
 /// Open a commit: its message, its files, their patches.
+///
+/// The commit on screen stays there, dimmed, until the new one arrives: it
+/// used to be cleared first, and the pane collapsed to a strip and grew
+/// back on every click. One seen before is shown at once, from the cache.
 pub fn select_commit(state: AppState, id: String) {
     #[derive(serde::Serialize)]
     struct Args {
         id: String,
     }
     state.git.selected.set(Some(id.clone()));
-    state.git.detail.set(None);
-    state.git.file.set(None);
+    if let Some(detail) = cached(state, &id) {
+        state.git.detail_loading.set(false);
+        show_detail(state, detail);
+        return;
+    }
+    state.git.detail_loading.set(true);
     let args = Args { id: id.clone() };
     track(
         state,
-        async move { ipc::call::<_, CommitDetail>(cmd::git::COMMIT, &args).await },
+        async move {
+            let answer = ipc::call::<_, CommitDetail>(cmd::git::COMMIT, &args).await;
+            if answer.is_err() {
+                state.git.detail_loading.set(false);
+            }
+            answer
+        },
         move |detail| {
             // A later click wins: the answer to an earlier one arriving after
             // it must not replace what the user is looking at now.
             if state.git.selected.get_untracked().as_deref() != Some(id.as_str()) {
                 return;
             }
-            let first = detail.files.first().map(|f| f.path.clone());
-            state.git.detail.set(Some(detail));
-            match first {
-                Some(path) => show_commit_file(state, path),
-                None => state.git.file.set(None),
+            state.git.detail_loading.set(false);
+            if is_hash(&id) {
+                remember(state, detail.clone());
             }
+            show_detail(state, detail);
         },
     );
+}
+
+/// Put an opened commit on screen, keeping the file that was showing when
+/// the new commit touched it too — walking down the log reading one file's
+/// history is what that is for — and the first file otherwise.
+fn show_detail(state: AppState, detail: CommitDetail) {
+    let kept = state
+        .git
+        .file
+        .get_untracked()
+        .filter(|path| detail.files.iter().any(|file| &file.path == path));
+    let path = kept.or_else(|| detail.files.first().map(|file| file.path.clone()));
+    state.git.detail.set(Some(detail));
+    match path {
+        Some(path) => show_commit_file(state, path),
+        None => state.git.file.set(None),
+    }
+}
+
+/// Move the selection `step` rows through the log — the arrow keys. The
+/// row is selected and scrolled to at once; it is *opened* only once the
+/// keys stop, since holding an arrow down passes rows faster than a commit
+/// can be read.
+pub fn select_step(state: AppState, step: i64) {
+    let next = state.git.history.with_untracked(|history| {
+        let rows = &history.as_ref()?.rows;
+        if rows.is_empty() {
+            return None;
+        }
+        let at = state.git.selected.with_untracked(|selected| {
+            selected
+                .as_ref()
+                .and_then(|id| rows.iter().position(|row| &row.commit.id == id))
+        });
+        let target = match at {
+            Some(at) => (at as i64 + step).clamp(0, rows.len() as i64 - 1) as usize,
+            None => 0,
+        };
+        Some(rows[target].commit.id.clone())
+    });
+    let Some(id) = next else {
+        return;
+    };
+    if state.git.selected.get_untracked().as_deref() == Some(id.as_str()) {
+        return;
+    }
+    state.git.selected.set(Some(id.clone()));
+    state.git.reveal.set(Some(id.clone()));
+    set_timeout(
+        move || {
+            if state.git.selected.get_untracked().as_deref() == Some(id.as_str()) {
+                select_commit(state, id);
+            }
+        },
+        Duration::from_millis(140),
+    );
+}
+
+/// Go to the commit a branch or a tag names: select it and scroll the log
+/// to it. A tip older than the rows loaded, or on a branch the filter
+/// hides, is shown by filtering the log to `rev` and selecting it there.
+pub fn reveal_ref(state: AppState, id: String, rev: Option<String>) {
+    if state.git.mode.get_untracked() != GitMode::History {
+        state.git.mode.set(GitMode::History);
+    }
+    let loaded = state.git.history.with_untracked(|history| {
+        history
+            .as_ref()
+            .is_some_and(|history| history.rows.iter().any(|row| row.commit.id == id))
+    });
+    if !loaded && let Some(rev) = rev {
+        show_rev(state, Some(rev));
+    }
+    state.git.reveal.set(Some(id.clone()));
+    select_commit(state, id);
+}
+
+/// The next row the search matches after the selected one, or the one
+/// before it — Enter and Shift+Enter in the search box.
+pub fn step_search(state: AppState, forward: bool) {
+    let query = state.git.query.get_untracked();
+    let target = state.git.history.with_untracked(|history| {
+        let rows = &history.as_ref()?.rows;
+        let hits = crate::gitlog::hits(rows, &query);
+        let at = state.git.selected.with_untracked(|selected| {
+            selected
+                .as_ref()
+                .and_then(|id| rows.iter().position(|row| &row.commit.id == id))
+        });
+        let hit = crate::gitlog::step_hit(&hits, at, forward)?;
+        Some(rows[hit].commit.id.clone())
+    });
+    if let Some(id) = target {
+        state.git.reveal.set(Some(id.clone()));
+        select_commit(state, id);
+    }
 }
 
 /// Show one of the opened commit's files — its patch, or, for an image, the
@@ -228,6 +536,7 @@ pub fn select_commit(state: AppState, id: String) {
 /// and the commit itself, less whichever side an added or deleted file does
 /// not have.
 pub fn show_commit_file(state: AppState, path: String) {
+    state.git.diff_whole.set(false);
     state.git.file.set(Some(path.clone()));
     if !rusty_git::is_image_path(&path) {
         return;
@@ -325,6 +634,8 @@ pub fn open_commit_window(state: AppState, target: String) {
     );
 }
 
+// ─── clone ───────────────────────────────────────────────────────────────────
+
 /// Open the clone dialog, empty.
 pub fn open_clone_dialog(state: AppState) {
     state.git.clone.set(Some(CloneDraft::default()));
@@ -333,7 +644,7 @@ pub fn open_clone_dialog(state: AppState) {
 /// Ask the OS for the folder the clone lands in.
 pub fn choose_clone_folder(state: AppState) {
     spawn_local(async move {
-        match ipc::pick_folder(&rusty_i18n::t!("git.clone-into")).await {
+        match ipc::pick_folder(&t!("git.clone-into")).await {
             Ok(Some(folder)) => state.git.clone.update(|draft| {
                 if let Some(draft) = draft {
                     draft.into = Some(folder);
@@ -403,6 +714,8 @@ pub fn clone_repository(state: AppState) {
     );
 }
 
+// ─── the working tree ────────────────────────────────────────────────────────
+
 /// One working-tree path's diff, for the Changes view.
 pub fn load_diff(state: AppState, path: String, staged: bool, untracked: bool) {
     #[derive(serde::Serialize)]
@@ -412,8 +725,8 @@ pub fn load_diff(state: AppState, path: String, staged: bool, untracked: bool) {
         untracked: bool,
     }
     let key = (path.clone(), staged);
+    state.git.diff_whole.set(false);
     state.git.diff_for.set(Some(key.clone()));
-    state.git.diff.set(None);
     // An image is compared as pictures: what was committed against the index
     // for a staged change, the index against the disk for an unstaged one —
     // and a file git has never seen has no old side at all.
@@ -443,7 +756,7 @@ pub fn load_diff(state: AppState, path: String, staged: bool, untracked: bool) {
         async move { ipc::call::<_, String>(cmd::git::DIFF, &args).await },
         move |text| {
             if state.git.diff_for.get_untracked().as_ref() == Some(&key) {
-                state.git.diff.set(Some(text));
+                set_if_changed(state.git.diff, Some(text));
             }
         },
     );
@@ -490,21 +803,20 @@ pub fn discard(state: AppState, path: String, staged: bool, untracked: bool) {
     } else {
         t!("git.discard-unstaged-confirm", path = path.clone())
     };
-    let args: Vec<&str> = if untracked {
-        vec!["clean", "-f", "--", &path]
+    let args = if untracked {
+        words(&["clean", "-f", "--", &path])
     } else if staged {
-        vec![
+        words(&[
             "restore",
             "--source=HEAD",
             "--staged",
             "--worktree",
             "--",
             &path,
-        ]
+        ])
     } else {
-        vec!["restore", "--", &path]
+        words(&["restore", "--", &path])
     };
-    let args: Vec<String> = args.into_iter().map(String::from).collect();
     // The answer arrives asynchronously in the app (a native dialog through
     // the dialog plugin) and synchronously in a browser; `ipc::confirm`
     // hides the difference. The first version read `window.confirm` as a
@@ -515,7 +827,7 @@ pub fn discard(state: AppState, path: String, staged: bool, untracked: bool) {
             return;
         }
         forget_diff_of(state, &path);
-        run_args_at_root_then(state, "git", args, move |_| after_git(state));
+        git(state, args);
     });
 }
 
@@ -531,12 +843,11 @@ pub fn open_from_git(state: AppState, path: String) {
 /// One file into a stash, index and tree both, untracked included — Fork's
 /// "Stash 1 File".
 pub fn stash_file(state: AppState, path: String) {
-    let args = ["stash", "push", "--include-untracked", "--", &path]
-        .into_iter()
-        .map(String::from)
-        .collect();
     forget_diff_of(state, &path);
-    run_args_at_root_then(state, "git", args, move |_| after_git(state));
+    git(
+        state,
+        words(&["stash", "push", "--include-untracked", "--", &path]),
+    );
 }
 
 /// The diff pane shows one path; if that path is about to stop being a
@@ -551,13 +862,6 @@ fn forget_diff_of(state: AppState, path: &str) {
         state.git.diff.set(None);
         state.git.images.set(None);
     }
-}
-
-/// After any command that changed the repository: read everything back, and
-/// let the tree and the open files follow the disk.
-fn after_git(state: AppState) {
-    refresh_git(state);
-    refresh_tree(state);
 }
 
 /// Commit what is staged, with the message being written — or amend the
@@ -628,46 +932,31 @@ pub fn amend_toggle(state: AppState, on: bool) {
     );
 }
 
-/// Check a commit out by hash — a detached HEAD, said so in the dock.
+// ─── commits ─────────────────────────────────────────────────────────────────
+
+/// Check a commit or a tag out — a detached HEAD, said so in the dock.
 pub fn checkout_commit(state: AppState, id: String) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec!["checkout".to_string(), "--detach".to_string(), id],
-        move |_| after_git(state),
-    );
+    git(state, words(&["checkout", "--detach", &id]));
 }
 
 /// Apply one commit's change on top of the current branch.
 pub fn cherry_pick(state: AppState, id: String) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec!["cherry-pick".to_string(), id],
-        move |_| after_git(state),
-    );
+    git(state, words(&["cherry-pick", &id]));
 }
 
 /// A new commit undoing an old one. `--no-edit` takes git's own message —
 /// an editor would open on a terminal nobody is watching.
 pub fn revert_commit(state: AppState, id: String) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec!["revert".to_string(), "--no-edit".to_string(), id],
-        move |_| after_git(state),
-    );
+    git(state, words(&["revert", "--no-edit", &id]));
 }
+
+// ─── stashes ─────────────────────────────────────────────────────────────────
 
 /// Stash the working tree, untracked files included — "everything I have"
 /// is what the button says — with the note if one was written.
 pub fn stash_save(state: AppState) {
     let note = state.git.stash_note.get_untracked();
-    let mut args = vec![
-        "stash".to_string(),
-        "push".to_string(),
-        "--include-untracked".to_string(),
-    ];
+    let mut args = words(&["stash", "push", "--include-untracked"]);
     if !note.trim().is_empty() {
         args.push("-m".to_string());
         args.push(note);
@@ -693,92 +982,212 @@ pub fn stash_drop(state: AppState, index: u32) {
 }
 
 fn stash_command(state: AppState, verb: &'static str, index: u32) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec![
-            "stash".to_string(),
-            verb.to_string(),
-            format!("stash@{{{index}}}"),
-        ],
-        move |_| {
-            // A popped or dropped stash may be the one opened below the
-            // list, and `stash@{0}` now names a different one — or nothing.
-            state.git.selected.set(None);
-            state.git.detail.set(None);
-            after_git(state);
-        },
-    );
-}
-
-/// Check a branch out. Through the command runner at the project root, so
-/// the command and everything git says land in the dock where every other
-/// command's do — a checkout that fails on a dirty tree has to be readable.
-pub fn checkout(state: AppState, branch: String) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec!["checkout".to_string(), branch],
-        move |_| after_git(state),
-    );
-}
-
-/// Create a branch and switch to it, from `from` when given — the branch
-/// selected in the strip — and from HEAD otherwise.
-pub fn branch_create(state: AppState, name: String, from: Option<String>) {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return;
-    }
-    let mut args = vec!["checkout".to_string(), "-b".to_string(), name];
-    if let Some(from) = from {
-        args.push(from);
-    }
-    state.git.new_branch.set(None);
-    state.git.branch_from.set(None);
+    let args = vec![
+        "stash".to_string(),
+        verb.to_string(),
+        format!("stash@{{{index}}}"),
+    ];
     run_args_at_root_then(state, "git", args, move |_| {
+        // A popped or dropped stash may be the one opened below the
+        // list, and `stash@{0}` now names a different one — or nothing.
+        state.git.selected.set(None);
+        state.git.detail.set(None);
+        after_git(state);
+    });
+}
+
+// ─── branches ────────────────────────────────────────────────────────────────
+
+/// The remote a push or a new upstream goes to: the current branch's own
+/// upstream's, else `origin` when there is one, else the first remote any
+/// branch is on — and `origin` when nothing says, which is git's own
+/// default name for the one it cloned from.
+fn default_remote(state: AppState) -> String {
+    let upstream_remote = state.git.status.with_untracked(|status| {
+        status
+            .as_ref()
+            .and_then(|s| s.upstream.as_deref())
+            .and_then(|upstream| upstream.split('/').next())
+            .map(str::to_string)
+    });
+    if let Some(remote) = upstream_remote {
+        return remote;
+    }
+    state.git.branches.with_untracked(|branches| {
+        let remotes: Vec<&str> = branches
+            .iter()
+            .filter_map(|b| b.remote_name.as_deref())
+            .collect();
+        if remotes.contains(&"origin") {
+            "origin".to_string()
+        } else {
+            remotes
+                .first()
+                .map(|remote| (*remote).to_string())
+                .unwrap_or_else(|| "origin".to_string())
+        }
+    })
+}
+
+/// The arguments that check out `name`. A local branch by name; a remote
+/// one through the local branch of the same name when there is one, and a
+/// new local branch tracking it otherwise — checking a remote branch out by
+/// its own name would detach HEAD, which is never what a double-click on
+/// `origin/feature` means.
+pub(crate) fn checkout_args(
+    name: &str,
+    remote: bool,
+    local: &str,
+    local_exists: bool,
+) -> Vec<String> {
+    if !remote {
+        words(&["checkout", name])
+    } else if local_exists {
+        words(&["checkout", local])
+    } else {
+        words(&["checkout", "--track", name])
+    }
+}
+
+/// Check a branch out. Through the dock, so a checkout refused on a dirty
+/// tree is readable there.
+pub fn checkout_branch(state: AppState, name: String, remote: bool) {
+    let (local, exists) = state.git.branches.with_untracked(|branches| {
+        let local = branches
+            .iter()
+            .find(|b| b.name == name)
+            .map(|b| b.local_name().to_string())
+            .unwrap_or_else(|| name.clone());
+        let exists = branches.iter().any(|b| !b.remote && b.name == local);
+        (local, exists)
+    });
+    let args = checkout_args(&name, remote, &local, exists);
+    run_args_at_root_then(state, "git", args, move |_| {
+        // The filter was the branch being left, or the one arrived at; either
+        // way the whole graph is the useful view after a switch.
         state.git.rev.set(None);
         after_git(state);
     });
 }
 
+/// Open the name field.
+pub fn open_prompt(state: AppState, kind: PromptKind) {
+    let value = match &kind {
+        PromptKind::Rename { from } => from.clone(),
+        _ => String::new(),
+    };
+    state.git.prompt.set(Some(RefPrompt { kind, value }));
+}
+
+/// Carry out the name field: make the branch, rename one, or make the tag.
+/// A name git would refuse is not sent — the field says why instead.
+pub fn submit_prompt(state: AppState) {
+    let Some(prompt) = state.git.prompt.get_untracked() else {
+        return;
+    };
+    let name = prompt.value.trim().to_string();
+    if rusty_git::ref_name_problem(&name).is_some() {
+        return;
+    }
+    state.git.prompt.set(None);
+    match prompt.kind {
+        PromptKind::Branch { from } => {
+            let mut args = words(&["checkout", "-b", &name]);
+            args.extend(from);
+            run_args_at_root_then(state, "git", args, move |_| {
+                state.git.rev.set(None);
+                after_git(state);
+            });
+        }
+        PromptKind::Rename { from } => {
+            if from != name {
+                git(state, words(&["branch", "-m", &from, &name]));
+            }
+        }
+        PromptKind::Tag { at } => git(state, words(&["tag", &name, &at])),
+    }
+}
+
 /// Delete a local branch — the safe way. `-d` refuses a branch whose work
 /// is not merged anywhere, and that refusal in the dock is the right answer;
 /// `-D` is a decision to make with a terminal, not a button.
-pub fn branch_delete(state: AppState, name: String) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec!["branch".to_string(), "-d".to_string(), name],
-        move |_| {
+pub fn delete_branch(state: AppState, name: String) {
+    run_args_at_root_then(state, "git", words(&["branch", "-d", &name]), move |_| {
+        if state.git.rev.get_untracked().as_deref() == Some(name.as_str()) {
             state.git.rev.set(None);
-            after_git(state);
-        },
-    );
-}
-
-pub fn fetch(state: AppState) {
-    run_args_at_root_then(
-        state,
-        "git",
-        vec![
-            "fetch".to_string(),
-            "--all".to_string(),
-            "--prune".to_string(),
-        ],
-        move |_| after_git(state),
-    );
-}
-
-pub fn pull(state: AppState) {
-    run_args_at_root_then(state, "git", vec!["pull".to_string()], move |_| {
-        after_git(state)
+        }
+        after_git(state);
     });
 }
 
-/// Push the current branch. With no upstream yet, set one on `origin` —
-/// what the first push of a new branch wants, and what a bare `git push`
-/// refuses with a hint nobody reads.
+/// Delete a branch on its remote — everybody's copy, so it asks first.
+pub fn delete_remote_branch(state: AppState, name: String) {
+    let (remote, branch) = state.git.branches.with_untracked(|branches| {
+        branches
+            .iter()
+            .find(|b| b.name == name)
+            .map(|b| {
+                (
+                    b.remote_name
+                        .clone()
+                        .unwrap_or_else(|| "origin".to_string()),
+                    b.local_name().to_string(),
+                )
+            })
+            .unwrap_or_else(|| ("origin".to_string(), name.clone()))
+    });
+    let question = t!("git.delete-remote-confirm", name = name.clone());
+    spawn_local(async move {
+        if ipc::confirm(&question).await {
+            git(state, words(&["push", &remote, "--delete", &branch]));
+        }
+    });
+}
+
+/// Merge a branch into the one checked out. `--no-edit` takes git's own
+/// message; a conflict stops it, and the panel's banner then offers the way
+/// on and the way back.
+pub fn merge_into_current(state: AppState, name: String) {
+    git(state, words(&["merge", "--no-edit", &name]));
+}
+
+/// Rebase the branch checked out onto another — it rewrites the current
+/// branch's commits, so it asks first.
+pub fn rebase_onto(state: AppState, name: String) {
+    let current = state.git.branches.with_untracked(|branches| {
+        branches
+            .iter()
+            .find(|b| b.current)
+            .map(|b| b.name.clone())
+            .unwrap_or_default()
+    });
+    let question = t!("git.rebase-confirm", current = current, onto = name.clone());
+    spawn_local(async move {
+        if ipc::confirm(&question).await {
+            git(state, words(&["rebase", &name]));
+        }
+    });
+}
+
+/// Push a local branch that is not the one checked out: to its upstream's
+/// remote, or with `-u` to the default remote when it has none yet.
+pub fn push_branch(state: AppState, name: String) {
+    let upstream = state.git.branches.with_untracked(|branches| {
+        branches
+            .iter()
+            .find(|b| !b.remote && b.name == name)
+            .and_then(|b| b.upstream.clone())
+    });
+    let args = match upstream.as_deref().and_then(|u| u.split('/').next()) {
+        Some(remote) => words(&["push", remote, &name]),
+        None => words(&["push", "-u", &default_remote(state), &name]),
+    };
+    git(state, args);
+}
+
+/// Push the current branch. With no upstream yet, set one — what the first
+/// push of a new branch wants, and what a bare `git push` refuses with a
+/// hint nobody reads.
 pub fn push(state: AppState) {
     let (head, upstream) = state.git.status.with_untracked(|s| {
         s.as_ref()
@@ -789,9 +1198,116 @@ pub fn push(state: AppState) {
     if upstream.is_none()
         && let Some(head) = head
     {
-        args.push("-u".to_string());
-        args.push("origin".to_string());
-        args.push(head);
+        args.extend(words(&["-u", &default_remote(state), &head]));
     }
-    run_args_at_root_then(state, "git", args, move |_| after_git(state));
+    git(state, args);
+}
+
+pub fn fetch(state: AppState) {
+    git(state, words(&["fetch", "--all", "--prune"]));
+}
+
+pub fn pull(state: AppState) {
+    git(state, words(&["pull"]));
+}
+
+// ─── tags ────────────────────────────────────────────────────────────────────
+
+/// Delete a tag here. A pushed tag stays on the remote, which the question
+/// says.
+pub fn delete_tag(state: AppState, name: String) {
+    let question = t!("git.delete-tag-confirm", name = name.clone());
+    spawn_local(async move {
+        if ipc::confirm(&question).await {
+            git(state, words(&["tag", "-d", &name]));
+        }
+    });
+}
+
+/// Push one tag. By its full name, since a branch may share it.
+pub fn push_tag(state: AppState, name: String) {
+    let remote = default_remote(state);
+    git(
+        state,
+        words(&["push", &remote, &format!("refs/tags/{name}")]),
+    );
+}
+
+// ─── an operation left half done ─────────────────────────────────────────────
+
+fn operation(state: AppState) -> Option<GitOperation> {
+    state
+        .git
+        .status
+        .with_untracked(|status| status.as_ref().and_then(|s| s.operation))
+}
+
+/// Carry on with the merge, rebase, cherry-pick or revert that stopped:
+/// once the conflicts are resolved and staged, this is the commit it was
+/// waiting for. No editor opens — the dock's git runs with `GIT_EDITOR=true`
+/// — so the message git prepared is the one used.
+pub fn continue_operation(state: AppState) {
+    let args = match operation(state) {
+        Some(GitOperation::Merge) => words(&["commit", "--no-edit"]),
+        Some(GitOperation::Rebase) => words(&["rebase", "--continue"]),
+        Some(GitOperation::CherryPick) => words(&["cherry-pick", "--continue"]),
+        Some(GitOperation::Revert) => words(&["revert", "--continue"]),
+        None => return,
+    };
+    git(state, args);
+}
+
+/// Go back to before the operation started. Conflicts already resolved are
+/// thrown away with it, so it asks first.
+pub fn abort_operation(state: AppState) {
+    let verb = match operation(state) {
+        Some(GitOperation::Merge) => "merge",
+        Some(GitOperation::Rebase) => "rebase",
+        Some(GitOperation::CherryPick) => "cherry-pick",
+        Some(GitOperation::Revert) => "revert",
+        None => return,
+    };
+    let question = t!("git.abort-confirm");
+    spawn_local(async move {
+        if ipc::confirm(&question).await {
+            git(state, words(&[verb, "--abort"]));
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{checkout_args, is_hash};
+
+    #[test]
+    fn a_remote_branch_is_checked_out_through_a_local_one() {
+        assert_eq!(
+            checkout_args("main", false, "main", true),
+            ["checkout", "main"]
+        );
+        assert_eq!(
+            checkout_args("origin/feature/x", true, "feature/x", true),
+            ["checkout", "feature/x"],
+            "the local branch of that name, when there is one"
+        );
+        assert_eq!(
+            checkout_args("origin/feature/x", true, "feature/x", false),
+            ["checkout", "--track", "origin/feature/x"],
+            "a new one tracking it, when there is not — never a detached HEAD"
+        );
+    }
+
+    #[test]
+    fn only_a_full_hash_is_kept_as_a_name_for_one_content() {
+        assert!(is_hash("20d12f8de4db7a9000627bf3c1d8ca9ecc8500db"));
+        assert!(
+            !is_hash("20d12f8"),
+            "a short hash can come to name two commits"
+        );
+        assert!(
+            !is_hash("stash@{0}"),
+            "a stash's name moves with every push"
+        );
+        assert!(!is_hash("HEAD"));
+    }
 }

@@ -371,10 +371,12 @@ pub enum Divider {
     /// chapter's formulas and too wide for a one-line answer, depending on
     /// the afternoon.
     Assistant,
+    /// The Git panel's branch and tag list against everything else.
+    GitSidebar,
 }
 
 impl Divider {
-    pub const ALL: [Divider; 10] = [
+    pub const ALL: [Divider; 11] = [
         Divider::Tree,
         Divider::Dock,
         Divider::DebugStack,
@@ -385,6 +387,7 @@ impl Divider {
         Divider::GitSplit,
         Divider::EditorSplit,
         Divider::Assistant,
+        Divider::GitSidebar,
     ];
 
     /// Whether the line is vertical — a column split, dragged left and right.
@@ -398,6 +401,7 @@ impl Divider {
                 | Divider::GitSplit
                 | Divider::EditorSplit
                 | Divider::Assistant
+                | Divider::GitSidebar
         )
     }
 
@@ -413,7 +417,8 @@ impl Divider {
             | Divider::GitFiles
             | Divider::GitChanges
             | Divider::GitSplit
-            | Divider::EditorSplit => x - from_pointer,
+            | Divider::EditorSplit
+            | Divider::GitSidebar => x - from_pointer,
             // Anchored to the bottom, so dragging up grows it.
             Divider::Dock | Divider::GitDetail => from_pointer - y,
             // Anchored to the right, so dragging left grows it.
@@ -438,6 +443,7 @@ impl Divider {
             Divider::GitFiles => 380.0,
             Divider::GitChanges => 380.0,
             Divider::Assistant => 400.0,
+            Divider::GitSidebar => 240.0,
             // Permille: half and half.
             Divider::GitSplit | Divider::EditorSplit => 500.0,
         }
@@ -455,6 +461,7 @@ impl Divider {
             Divider::GitMessage => (40.0, 1000.0),
             Divider::GitFiles => (160.0, 1200.0),
             Divider::GitChanges => (220.0, 1200.0),
+            Divider::GitSidebar => (160.0, 520.0),
             // Narrower than 300 and a formula wraps mid-fraction; wider than
             // 900 and there is no editor left beside it on a laptop.
             Divider::Assistant => (300.0, 900.0),
@@ -478,6 +485,7 @@ impl Divider {
             Divider::GitSplit => "rusty.layout.git-split",
             Divider::EditorSplit => "rusty.layout.editor-split",
             Divider::Assistant => "rusty.layout.assistant",
+            Divider::GitSidebar => "rusty.layout.git-sidebar",
         }
     }
 }
@@ -1126,12 +1134,41 @@ pub struct Git {
     /// switches; cleared by the commit that uses it.
     pub message: RwSignal<String>,
     pub stash_note: RwSignal<String>,
-    /// The name of a branch being created, while the field is open.
-    pub new_branch: RwSignal<Option<String>>,
-    /// What that field creates from when it was opened on a commit rather
-    /// than on the strip: the commit's hash. `None` means the selected
-    /// branch, or HEAD.
-    pub branch_from: RwSignal<Option<String>>,
+    /// Every tag, newest first — the sidebar's third section.
+    pub tags: RwSignal<Vec<rusty_git::Tag>>,
+    /// The name being typed for a new branch, a rename or a new tag, while
+    /// the field is open, and what it is for.
+    pub prompt: RwSignal<Option<RefPrompt>>,
+    /// Text to find in the log: part of a hash, an author, words of a
+    /// subject. Rows that do not match are dimmed rather than hidden, so the
+    /// graph's lines still join up.
+    pub query: RwSignal<String>,
+    /// Narrows the sidebar's branches and tags.
+    pub ref_filter: RwSignal<String>,
+    /// Sidebar sections folded away: `local`, `remote:<name>`, `tags`.
+    pub folded: RwSignal<Vec<String>>,
+    /// A commit the log should scroll into view, once — set by a click on a
+    /// branch, a tag or a search hit, cleared by the log when it has.
+    pub reveal: RwSignal<Option<String>>,
+    /// A commit is being read while the previous one stays on screen. It
+    /// used to be cleared first, and the pane collapsed to a strip and grew
+    /// back on every click.
+    pub detail_loading: RwSignal<bool>,
+    /// Draw the whole of a diff too long to draw at once.
+    pub diff_whole: RwSignal<bool>,
+    /// The repository's fingerprint as of the last reads — see
+    /// `rusty_git::GitStamp`. Not reactive: nothing draws it.
+    pub stamp: StoredValue<Option<rusty_git::GitStamp>>,
+    /// The project root the loaded state belongs to. The panel is rebuilt
+    /// every time it is switched to, and read everything again each time
+    /// until this told a return from a new project.
+    pub root: StoredValue<Option<String>>,
+    /// Commits opened recently, keyed by their full hash. A hash names one
+    /// content for ever, so nothing here goes stale; a stash's name does not
+    /// and is never kept.
+    pub cache: StoredValue<Vec<rusty_git::CommitDetail>>,
+    /// Which reads are in flight and which were asked for again meanwhile.
+    pub gate: StoredValue<ReadGate>,
     /// Side by side rather than one column, for every diff the panel shows.
     /// Remembered in this window (localStorage): it is a way of reading, not
     /// a fact about the project, and re-choosing it every launch is the
@@ -1205,8 +1242,106 @@ pub struct GitMenu {
     pub target: GitTarget,
 }
 
+/// The name field for a branch or a tag: what it will make, and what has
+/// been typed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefPrompt {
+    pub kind: PromptKind,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PromptKind {
+    /// A new branch from a commit or a branch (`None`: HEAD), checked out
+    /// once it is made.
+    Branch { from: Option<String> },
+    /// A new name for a local branch.
+    Rename { from: String },
+    /// A new tag on a commit.
+    Tag { at: String },
+}
+
+/// The four reads the panel makes, as indices into [`ReadGate`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitRead {
+    History,
+    Refs,
+    Status,
+    Stashes,
+}
+
+impl GitRead {
+    fn slot(self) -> usize {
+        match self {
+            GitRead::History => 0,
+            GitRead::Refs => 1,
+            GitRead::Status => 2,
+            GitRead::Stashes => 3,
+        }
+    }
+}
+
+/// At most one of each read in flight, and one more after it when asked
+/// again meanwhile — never a queue. A burst of saves asked for the status
+/// once per save, and each answer arrived, was compared and was drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadGate {
+    running: [bool; 4],
+    again: [bool; 4],
+}
+
+impl ReadGate {
+    /// Whether to start the read now. When one is already running, it is
+    /// marked to run once more when that one finishes, and this is no.
+    pub fn begin(&mut self, read: GitRead) -> bool {
+        let slot = read.slot();
+        if self.running[slot] {
+            self.again[slot] = true;
+            false
+        } else {
+            self.running[slot] = true;
+            true
+        }
+    }
+
+    /// The read finished. Whether it was asked for again while it ran.
+    pub fn finish(&mut self, read: GitRead) -> bool {
+        let slot = read.slot();
+        self.running[slot] = false;
+        std::mem::take(&mut self.again[slot])
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    /// A second ask while one read runs is one more run afterwards, however
+    /// many times it is asked; a different read is its own.
+    #[test]
+    fn a_read_asked_for_while_running_runs_once_more_and_no_more() {
+        let mut gate = ReadGate::default();
+        assert!(gate.begin(GitRead::Status));
+        assert!(!gate.begin(GitRead::Status));
+        assert!(!gate.begin(GitRead::Status));
+        assert!(gate.begin(GitRead::History), "another read is not held up");
+        assert!(gate.finish(GitRead::Status), "asked again while it ran");
+        assert!(gate.begin(GitRead::Status));
+        assert!(!gate.finish(GitRead::Status), "and not again after that");
+        assert!(!gate.finish(GitRead::History));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GitTarget {
+    /// A branch in the sidebar, local or remote-tracking.
+    Branch {
+        name: String,
+        remote: bool,
+        current: bool,
+    },
+    /// A tag in the sidebar, with the commit it names.
+    Tag { name: String, id: String },
     /// A commit, by full hash — or a stash by its `stash@{n}` name.
     Commit { id: String },
     /// A path in a commit's file list, relative to the root: open it, copy
@@ -1495,6 +1630,8 @@ pub struct Layout {
     pub editor_split: RwSignal<f64>,
     /// The assistant drawer's width in pixels (`Divider::Assistant`).
     pub assistant_width: RwSignal<f64>,
+    /// The Git panel's branch list, in pixels (`Divider::GitSidebar`).
+    pub git_sidebar_width: RwSignal<f64>,
     /// The file tree folded away: a second click on the Files switcher, or
     /// Ctrl+B. Remembered across sessions, like the pin map's fold.
     pub tree_hidden: RwSignal<bool>,
@@ -1518,6 +1655,7 @@ impl Layout {
             Divider::GitSplit => self.git_split,
             Divider::EditorSplit => self.editor_split,
             Divider::Assistant => self.assistant_width,
+            Divider::GitSidebar => self.git_sidebar_width,
         }
     }
 }
@@ -1711,8 +1849,18 @@ impl AppState {
                 diff_for: RwSignal::new(None),
                 message: RwSignal::new(String::new()),
                 stash_note: RwSignal::new(String::new()),
-                new_branch: RwSignal::new(None),
-                branch_from: RwSignal::new(None),
+                tags: RwSignal::new(Vec::new()),
+                prompt: RwSignal::new(None),
+                query: RwSignal::new(String::new()),
+                ref_filter: RwSignal::new(String::new()),
+                folded: RwSignal::new(Vec::new()),
+                reveal: RwSignal::new(None),
+                detail_loading: RwSignal::new(false),
+                diff_whole: RwSignal::new(false),
+                stamp: StoredValue::new(None),
+                root: StoredValue::new(None),
+                cache: StoredValue::new(Vec::new()),
+                gate: StoredValue::new(ReadGate::default()),
                 split: RwSignal::new(stored_split()),
                 limit: RwSignal::new(rusty_git::LIMIT),
                 amend: RwSignal::new(false),
@@ -1824,6 +1972,10 @@ impl AppState {
                 assistant_width: RwSignal::new(stored_size(
                     Divider::Assistant,
                     Divider::Assistant.default_size(),
+                )),
+                git_sidebar_width: RwSignal::new(stored_size(
+                    Divider::GitSidebar,
+                    Divider::GitSidebar.default_size(),
                 )),
                 tree_hidden: RwSignal::new(stored_tree_hidden()),
                 quick_open: RwSignal::new(false),

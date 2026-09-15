@@ -80,6 +80,13 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     command
 }
 
+/// Whether a planned program is git, by its file name: `git`, `git.exe`, or
+/// a path ending in either.
+fn is_git(program: &str) -> bool {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    name.eq_ignore_ascii_case("git") || name.eq_ignore_ascii_case("git.exe")
+}
+
 /// A child's PATH: the parent's, then every directory in `extra` it does not
 /// already carry, in order. Appended, not prepended — see [`command`].
 fn child_path(existing: &OsStr, extra: Vec<PathBuf>) -> Option<std::ffi::OsString> {
@@ -213,6 +220,17 @@ impl Stopper {
 /// Start the planned command.
 pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> {
     let mut command = command(&plan.program);
+    // A `git` the dock runs has nobody to type into an editor or a password
+    // prompt. A merge, rebase or cherry-pick continued from the Git panel
+    // would otherwise open `$GIT_EDITOR` on a pipe and wait for ever, and an
+    // HTTPS remote with no credential helper would wait on a terminal prompt
+    // nobody can see. `true` as the editor keeps the message git prepared; a
+    // credential helper with a window of its own still asks.
+    if is_git(&plan.program) {
+        command
+            .env("GIT_EDITOR", "true")
+            .env("GIT_TERMINAL_PROMPT", "0");
+    }
     command
         .args(&plan.args)
         .stdout(Stdio::piped())

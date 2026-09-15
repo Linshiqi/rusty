@@ -57,6 +57,8 @@ pub enum Icon {
     /// file and new folder.
     FilePlus,
     FolderPlus,
+    /// A funnel: narrow a list to what matches — the Git log to one branch.
+    Filter,
 }
 
 impl Icon {
@@ -141,6 +143,7 @@ impl Icon {
             Icon::FolderPlus => {
                 "M2.5 5.5a1 1 0 0 1 1-1h4.3l1.6 1.6h7.1a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1zM10 8.5v5M7.5 11h5"
             }
+            Icon::Filter => "M3.5 4.5h13L11.5 10.5V15l-3 1.5v-6z",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

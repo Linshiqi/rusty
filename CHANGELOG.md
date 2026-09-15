@@ -9,6 +9,43 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.26
+
+**Changed — the Git panel is fast.** A save anywhere in the project used to
+re-read the whole repository — nine `git` runs — and redraw every row of
+the history. Now a save re-reads the working tree alone, and everything
+else is decided by a fingerprint of the repository's own files, taken
+without running `git` at all. The history draws the rows on screen instead
+of all thousand; clicking a commit runs one `git` instead of four, keeps
+the commit you were reading on screen until the next one arrives, and
+shows a commit opened before at once. A commit, checkout or fetch made in a
+terminal appears within a few seconds without pressing refresh. A very long
+diff draws its first 1,500 lines and offers the rest.
+
+**Added — branches, remotes and tags down the side, as Fork has them.**
+Each local branch shows how far it is ahead of and behind its upstream, and
+says so when the upstream has been deleted. A click goes to the commit, a
+double-click checks the branch out — a remote branch as a local branch
+tracking it — and the funnel shows that branch's history alone. Right-click
+a branch to merge it into the current one, rebase onto it, rename, push or
+delete it (on the remote too); a tag to check it out, push or delete it; a
+commit to put a branch or a tag on it. The row above shows what is checked
+out and how it stands against its upstream, and Pull and Push show how many
+commits they would move.
+
+**Added — search the history.** Type part of a hash, a subject, an author
+or a branch name: the commits that match stay bright, Enter and Shift+Enter
+step through them, and the box says which match you are on. The arrow keys,
+Page Up and Down, Home and End walk the log.
+
+**Added — a merge, rebase, cherry-pick or revert that stops on a conflict
+says so** at the top of the panel, with how many files still conflict and
+Continue and Abort. Names for a new branch, a rename or a new tag are
+checked as you type, with git's reason, instead of failing afterwards.
+
+**Fixed — a local branch with a slash in its name** (`feature/x`) was drawn
+in the history as a remote branch.
+
 ## v0.6.25
 
 **Added — the file tree moves things.** Drag a file or a folder onto a

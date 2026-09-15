@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 /// few enough that the request is a fraction of a second on a large one.
 /// Here rather than beside the `git` call because the panel names the number
 /// in its "showing the newest…" line, and the panel compiles without `git`.
-pub const LIMIT: usize = 400;
+///
+/// It was 400 while every row was a DOM node: the log draws only the rows on
+/// screen now, so what bounds it is `git log` and the wire, not the page.
+pub const LIMIT: usize = 1000;
 
 /// What a decoration on a commit is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,11 +127,78 @@ pub struct Branch {
     pub name: String,
     /// Checked out.
     pub current: bool,
+    /// A remote-tracking branch — read off `refs/remotes/`, never off a slash
+    /// in the name: `feature/x` is an ordinary local branch.
     pub remote: bool,
     /// The branch this one tracks, when it does.
     pub upstream: Option<String>,
     /// The short hash of its tip.
     pub tip: String,
+    /// The full hash of its tip — what the history's rows are keyed by, so a
+    /// click on the branch can find its commit.
+    #[serde(default)]
+    pub id: String,
+    /// Commits here its upstream does not have, and the reverse.
+    #[serde(default)]
+    pub ahead: u32,
+    #[serde(default)]
+    pub behind: u32,
+    /// It tracks an upstream the remote has since deleted.
+    #[serde(default)]
+    pub gone: bool,
+    /// Its tip's commit time, seconds since the epoch.
+    #[serde(default)]
+    pub time: u64,
+    /// Its tip's subject line.
+    #[serde(default)]
+    pub subject: String,
+    /// For a remote-tracking branch, the remote it belongs to: `origin` for
+    /// `origin/feature/x`.
+    #[serde(default)]
+    pub remote_name: Option<String>,
+}
+
+impl Branch {
+    /// The name without its remote: `feature/x` for `origin/feature/x`, and
+    /// the name itself for a local branch — what a checkout of a remote
+    /// branch names the local one it creates.
+    pub fn local_name(&self) -> &str {
+        match &self.remote_name {
+            Some(remote) => self
+                .name
+                .strip_prefix(remote.as_str())
+                .and_then(|rest| rest.strip_prefix('/'))
+                .unwrap_or(&self.name),
+            None => &self.name,
+        }
+    }
+}
+
+/// A tag, with the commit it names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub name: String,
+    /// The commit the tag names — peeled, so an annotated tag gives its commit
+    /// rather than the tag object, which no row of the history is keyed by.
+    pub id: String,
+    /// When it was made: the tagger's date for an annotated tag, the commit's
+    /// for a lightweight one.
+    pub time: u64,
+    /// The tag's message, or the commit's subject for a lightweight tag.
+    pub subject: String,
+}
+
+/// Every branch, local and remote-tracking, and every tag — one
+/// `for-each-ref`, where branches and tags were two questions before and
+/// tags were not asked at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Refs {
+    /// Local branches first, by name, then remote-tracking ones by name.
+    pub branches: Vec<Branch>,
+    /// Newest first.
+    pub tags: Vec<Tag>,
 }
 
 /// One path the working tree or the index differs in.
@@ -160,6 +230,136 @@ pub struct Status {
     pub ahead: u32,
     pub behind: u32,
     pub entries: Vec<StatusEntry>,
+    /// A merge, rebase, cherry-pick or revert stopped half way — on a
+    /// conflict, usually. The panel says so above everything else, with the
+    /// two ways out, because a repository in that state refuses most of what
+    /// the panel offers and git's refusal names the state, not the way out.
+    #[serde(default)]
+    pub operation: Option<GitOperation>,
+}
+
+/// An operation git has started and not finished, read off the files it
+/// leaves in the git directory while it waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitOperation {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+/// A fingerprint of the repository's own files — `HEAD` and its log, the
+/// refs, the index, the stash — made from their sizes and times, with no
+/// `git` run at all.
+///
+/// The panel compares one with the last to decide what to read again. Before
+/// it, every save anywhere in the project re-ran the whole panel — nine `git`
+/// processes and the history redrawn — while a commit made in a terminal,
+/// which touches nothing the file watcher sees, was never noticed at all.
+///
+/// Each part fits in 53 bits, because it crosses the wire as a JSON number
+/// and a JavaScript number holds no more: a full 64-bit hash is not a safe
+/// integer there, the frontend's deserialiser refused every stamp, and every
+/// probe failed without a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStamp {
+    /// `HEAD`, its reflog, and the marker files of an operation in progress.
+    pub head: u64,
+    /// Every ref under `refs/` but the stash, and `packed-refs`.
+    pub refs: u64,
+    pub index: u64,
+    /// `refs/stash` and its reflog, which is the stash list.
+    pub stash: u64,
+}
+
+/// What a newer stamp says has to be read again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Stale {
+    pub history: bool,
+    pub refs: bool,
+    pub status: bool,
+    pub stashes: bool,
+}
+
+impl Stale {
+    pub fn any(&self) -> bool {
+        self.history || self.refs || self.status || self.stashes
+    }
+}
+
+impl GitStamp {
+    /// What moved between `before` and this one. A commit, a checkout, a
+    /// fetch or a new tag moves HEAD or the refs, and the log, the branches
+    /// and the status's ahead-behind all follow those; staging moves only the
+    /// index; a stash moves only the stash.
+    pub fn stale_since(&self, before: &GitStamp) -> Stale {
+        let moved = self.head != before.head || self.refs != before.refs;
+        Stale {
+            history: moved,
+            refs: moved,
+            status: moved || self.index != before.index,
+            stashes: self.stash != before.stash,
+        }
+    }
+}
+
+/// Why git would refuse a name for a branch or a tag — the rules of `git
+/// check-ref-format --branch`, checked before the command runs so the field
+/// says what is wrong while it is being typed, not the dock afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefNameProblem {
+    Empty,
+    /// A space, a tab, a newline.
+    Whitespace,
+    /// One of `~ ^ : ? * [ \` or a control character.
+    Character(char),
+    /// A leading `-`, which git would read as an option.
+    Dash,
+    /// `..` anywhere, a component starting with `.`, or a trailing `.`.
+    Dot,
+    /// A leading or trailing `/`, or `//`.
+    Slash,
+    /// A component ending in `.lock`, which is git's own lock-file suffix.
+    Lock,
+    /// `HEAD`, `@`, or `@{`.
+    Reserved,
+}
+
+/// `None` when git would take `name` as a branch or a tag.
+pub fn ref_name_problem(name: &str) -> Option<RefNameProblem> {
+    if name.is_empty() {
+        return Some(RefNameProblem::Empty);
+    }
+    if name == "HEAD" || name == "@" || name.contains("@{") {
+        return Some(RefNameProblem::Reserved);
+    }
+    if name.chars().any(char::is_whitespace) {
+        return Some(RefNameProblem::Whitespace);
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| c.is_control() || "~^:?*[\\".contains(*c))
+    {
+        return Some(RefNameProblem::Character(bad));
+    }
+    if name.starts_with('-') {
+        return Some(RefNameProblem::Dash);
+    }
+    if name.starts_with('/') || name.ends_with('/') || name.contains("//") {
+        return Some(RefNameProblem::Slash);
+    }
+    if name.contains("..")
+        || name.ends_with('.')
+        || name.split('/').any(|part| part.starts_with('.'))
+    {
+        return Some(RefNameProblem::Dot);
+    }
+    if name.split('/').any(|part| part.ends_with(".lock")) {
+        return Some(RefNameProblem::Lock);
+    }
+    None
 }
 
 /// One stash.
@@ -217,6 +417,104 @@ pub fn image_mime(path: &str) -> Option<&'static str> {
         "avif" => "image/avif",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod ref_tests {
+    use super::*;
+
+    #[test]
+    fn names_git_would_refuse_are_refused_with_the_reason_git_has() {
+        for good in ["main", "feature/x", "fix-12", "v1.2.0", "中文分支", "a_b"] {
+            assert_eq!(ref_name_problem(good), None, "{good} is a fine name");
+        }
+        let cases = [
+            ("", RefNameProblem::Empty),
+            ("my branch", RefNameProblem::Whitespace),
+            ("a:b", RefNameProblem::Character(':')),
+            ("what?", RefNameProblem::Character('?')),
+            ("-x", RefNameProblem::Dash),
+            ("a..b", RefNameProblem::Dot),
+            (".hidden", RefNameProblem::Dot),
+            ("x/.y", RefNameProblem::Dot),
+            ("end.", RefNameProblem::Dot),
+            ("/x", RefNameProblem::Slash),
+            ("x/", RefNameProblem::Slash),
+            ("a//b", RefNameProblem::Slash),
+            ("x.lock", RefNameProblem::Lock),
+            ("a.lock/b", RefNameProblem::Lock),
+            ("HEAD", RefNameProblem::Reserved),
+            ("@", RefNameProblem::Reserved),
+            ("x@{1}", RefNameProblem::Reserved),
+        ];
+        for (name, problem) in cases {
+            assert_eq!(ref_name_problem(name), Some(problem), "{name:?}");
+        }
+    }
+
+    /// A stamp that moved only in the index asks for the status and nothing
+    /// else; one that moved in the refs asks for the history, the branches
+    /// and the status; the stash stands alone.
+    #[test]
+    fn a_stamp_says_which_reads_are_stale() {
+        let before = GitStamp {
+            head: 1,
+            refs: 2,
+            index: 3,
+            stash: 4,
+        };
+        assert!(!before.stale_since(&before).any());
+        let staged = GitStamp { index: 9, ..before };
+        assert_eq!(
+            staged.stale_since(&before),
+            Stale {
+                status: true,
+                ..Stale::default()
+            }
+        );
+        let committed = GitStamp {
+            head: 8,
+            refs: 7,
+            ..before
+        };
+        let stale = committed.stale_since(&before);
+        assert!(stale.history && stale.refs && stale.status && !stale.stashes);
+        let stashed = GitStamp { stash: 5, ..before };
+        assert_eq!(
+            stashed.stale_since(&before),
+            Stale {
+                stashes: true,
+                ..Stale::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_remote_branch_names_its_local_counterpart_without_the_remote() {
+        let branch = |name: &str, remote: Option<&str>| Branch {
+            name: name.into(),
+            current: false,
+            remote: remote.is_some(),
+            upstream: None,
+            tip: String::new(),
+            id: String::new(),
+            ahead: 0,
+            behind: 0,
+            gone: false,
+            time: 0,
+            subject: String::new(),
+            remote_name: remote.map(str::to_string),
+        };
+        assert_eq!(
+            branch("origin/feature/x", Some("origin")).local_name(),
+            "feature/x"
+        );
+        assert_eq!(branch("feature/x", None).local_name(), "feature/x");
+        assert_eq!(
+            branch("upstream/main", Some("upstream")).local_name(),
+            "main"
+        );
+    }
 }
 
 #[cfg(test)]

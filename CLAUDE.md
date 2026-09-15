@@ -554,18 +554,110 @@ written for one group — every component, controller and effect reads
 ## The Git panel
 
 The repository, with Fork as the reference for what it should look like.
-Three views (`state::GitMode`) behind one branch picker — a button showing
-the checked-out branch, marked, or the branch the log is filtered to when
-that is another one, opening a menu of them all with the filter in force
-highlighted (a repository with thirty branches is ordinary and thirty chips
-are a paragraph nobody reads; and the checked-out branch used to be repeated
-beside the button, which read as clutter): *History* — a graph
-of lanes beside the commits, labels on the commits that carry branches and
-tags, a commit opened below with its files and each file's patch; *Changes*
-— the working tree as staged and unstaged lists, a file's diff, the commit
-box; *Stashes*. The branch row's right end carries refresh, fetch, pull, push
-and a new branch.
+Down the left, every ref (`view/panels/git/sidebar.rs`): the local branches,
+each with how far it is ahead of and behind its upstream and whether that
+upstream is gone; the remotes' branches, grouped by remote; the tags. A
+click goes to the commit, a double-click checks a branch out, the funnel on
+hover shows that branch's history alone, and a right-click offers the rest.
+Beside it three views (`state::GitMode`): *History* — a graph of lanes
+beside the commits, labels on the commits that carry branches and tags, a
+commit opened below with its files and each file's patch; *Changes* — the
+working tree as staged and unstaged lists, a file's diff, the commit box;
+*Stashes*. One row above everything: what is checked out and how it stands
+against its upstream (a click goes to it), the filter in force, a search
+over the log that dims what does not match and steps through what does, and
+refresh, fetch, pull and push — pull and push carrying the counts they
+would move — and a new branch.
 
+It was a picker: a menu of branch names whose rows *filtered the log*, with
+checkout and delete appearing only once a filter was chosen, so seeing a
+branch and switching to it were one gesture and everything else took two.
+The view is a directory, one module per region, where it was one file of
+1,750 lines.
+
+- **A `git` process is the unit of cost, and it is about 58 ms on Windows**
+  before git does any work. The panel was slow because it spent them
+  freely: every save anywhere re-read everything — nine processes — and a
+  click on a commit was four (`rev-parse` to ask whether this was a
+  repository, then `--name-status`, `--numstat` and the patch as three
+  `git show`s). A click is one `git show --raw --numstat -p` now, taken
+  apart by `parse::diff_parts`; the refs are one `for-each-ref`, whose
+  `%(upstream:track)` gives ahead, behind and gone without a `rev-list
+  --count` per branch; and "is this a repository" is asked only after
+  something has failed (`inside_work_tree`), never before every read.
+- **Read only what moved** (`rusty_git::GitStamp`). The stamp is the sizes
+  and modification times of what git itself rewrites — `HEAD` and its
+  reflog, the refs tree and `packed-refs`, the index, the stash — read with
+  no `git` at all, and `stale_since` says which reads a difference
+  invalidates: HEAD or a ref moving means history, refs and status; the
+  index alone, the status; the stash, the stash list. A save re-reads the
+  status and asks the stamp about the rest, and the panel asks the stamp
+  every 2.5 s while it is showing — which is how a commit made in a
+  terminal, invisible to the watcher, arrives. Where the git directory is
+  comes from one `rev-parse --git-dir --git-common-dir` per root, cached, so
+  a worktree's stamp reads the refs it shares. **Each part is folded to 53
+  bits**, because the stamp crosses the wire as JSON numbers: a full 64-bit
+  FNV is not a safe integer in JavaScript, `serde_wasm_bindgen` refused
+  every stamp, and the probe failed silently on every call while every Rust
+  test passed. Found by committing in a terminal beside the running app and
+  watching the log not move.
+- **Nothing is set that did not change, and no read runs twice at once.**
+  Every answer goes through `set_if_changed` — an unchanged history set
+  again rebuilt every row — and `state::ReadGate` keeps one of each read in
+  flight with at most one more asked for, so a burst of saves is two reads,
+  not ten. A history answer for a filter or a length no longer asked for is
+  dropped and asked again.
+- **Background reads take no locks** (`GIT_OPTIONAL_LOCKS=0`). `git status`
+  refreshes the index as a side effect and takes `index.lock` to do it, so a
+  status every few seconds would sooner or later collide with the user's own
+  `git commit` in a terminal: `Unable to create '…/index.lock': File exists`.
+- **The log draws a screen of rows, not the log.** Every row is 26 px, so
+  the rows in view are division (`crate::gitlog::window`, pure and tested):
+  a spacer as tall as the whole log keeps the scrollbar honest, and only the
+  rows in view and a dozen each side exist — the ones above because a row
+  draws the lines that *leave* it. Rows are keyed on what they draw
+  (`gitlog::row_key`), and a row's selection and search match are its own
+  memos, so a click repaints two rows. A thousand commits were a thousand
+  SVGs, all rebuilt whenever the selection moved.
+- **The opened commit stays on screen while the next one is read**, dimmed:
+  it used to be cleared first, and the pane collapsed and grew back on every
+  click. The last 32 opened are kept by hash, which names one content for
+  ever — never under `stash@{n}`, which names a different stash after every
+  push. The frame, the file list and the patch are three closures with three
+  keys, so picking a file redraws the patch alone, and a patch past 1,500
+  rows draws that many and offers the rest. The arrows walk the log and the
+  commit opens once they stop (140 ms), since holding a key passes rows
+  faster than a commit can be read.
+- **Switching to the panel is not opening it.** The panel is rebuilt
+  whenever it is switched to, and it read everything again and dropped the
+  opened commit each time; a root it has shown is only probed now
+  (`open_git_panel`), and a new root starts clean.
+- **Decorations are read in full** (`--decorate=full`) and a label's kind
+  comes from its namespace. In the short form a local `feature/x` cannot be
+  told from a remote's `origin/x`, and was drawn as a remote.
+- **A remote branch checked out becomes a local branch tracking it**
+  (`checkout_args`: the local branch of that name when it exists, `--track`
+  otherwise). Checking out `origin/feature` by its own name detaches HEAD,
+  which is never what a double-click on it meant.
+- **What rewrites history or reaches other people asks first; what git
+  refuses safely does not.** Deleting a branch on its remote (`push <remote>
+  --delete`), rebasing the current branch, deleting a tag — whose pushed
+  copy stays, and the question says so — and aborting a stopped operation go
+  through `ipc::confirm`. Merge, `branch -d` and push do not: git's own
+  refusal in the dock is the right answer to a mistake there.
+- **A name git would refuse is refused while it is typed.** One field serves
+  a new branch — from HEAD, or from the branch, tag or commit whose menu
+  opened it — a rename and a new tag, and `ref_name_problem`
+  (`check-ref-format`'s rules, pure and tested) says under it what is wrong
+  and disables OK, where the dock used to say `is not a valid branch name`
+  after the command.
+- **A merge, rebase, cherry-pick or revert that stops says so above
+  everything** (`Status.operation`, read off `MERGE_HEAD`, `rebase-merge/`
+  and their kind in the git directory — no process): how many conflicts are
+  open, Continue (disabled while any are) and Abort. Continue is `commit
+  --no-edit` for a merge and `--continue` for the rest, and dock commands
+  run `git` with `GIT_EDITOR=true`, because a `--continue` that opened an
+  editor nobody can see would hold the dock for ever.
 - **Reads are IPC; writes are dock commands.** The log, a commit, the status,
   the stash list and one path's diff answer with model types and touch
   nothing. Commit, stash, checkout, branch, fetch, pull and push run through
@@ -604,17 +696,22 @@ and a new branch.
   is drawn once per side, as Fork draws it — one header across both columns
   crossed the centre line, and a row crossing it reads as a layout that has
   come apart.
-- **The right-click menu is local to the thing under the pointer**: a commit
-  offers copy hash, a branch from here, a detached checkout, cherry-pick and
-  revert; a commit's file offers open and copy path; a file in the Changes
-  view offers Fork's list — stage or unstage, discard (asking first, in
-  words that say whether the file goes back to the index or to the last
-  commit; an untracked file is deleted, `clean -f` on that one path), stage
-  all, stash this file, copy path and full path. Which list it was clicked
-  in travels with the target (`GitTarget::Change`), because discard means
-  three different things across the two lists. Every write in it is the same
-  dock command a button would run, and the panel's own `contextmenu` handler
-  swallows the browser's menu everywhere else.
+- **The right-click menu is local to the thing under the pointer**: a branch
+  offers checkout, merge into and rebase onto the branch checked out (named
+  in the item, since "current" says nothing about which that is), a branch
+  from it, rename, push, delete — or delete on the remote — its history
+  alone and its name; a tag, a detached checkout, a branch from it, push,
+  delete and its name; a commit, its hash long and short, a branch or a tag
+  on it, a detached checkout, cherry-pick and revert; a commit's file, open
+  and copy path; a file in the Changes view, Fork's list — stage or
+  unstage, discard (asking first, in words that say whether the file goes
+  back to the index or to the last commit; an untracked file is deleted,
+  `clean -f` on that one path), stage all, stash this file, copy path and
+  full path. Which list it was clicked in travels with the target
+  (`GitTarget::Change`), because discard means three different things
+  across the two lists. Every write in it is the same dock command a button
+  would run, and the panel's own `contextmenu` handler swallows the
+  browser's menu everywhere else.
 - **A commit asks who you are before git refuses.** `git_identity` reads
   `user.name` and `user.email` as `git config --get` resolves them (exit 1
   is "unset", an answer); when either is missing the commit box shows a
@@ -652,8 +749,7 @@ and a new branch.
   under tests pinning the real output.
 - **Branch delete is `-d`, never `-D`.** A branch whose work is merged
   nowhere is refused, and that refusal in the dock is the right answer;
-  force-deleting is a decision for a terminal, not a button. The new-branch
-  field creates from the branch selected in the strip, or from HEAD.
+  force-deleting is a decision for a terminal, not a button.
 - **A push with no upstream sets one** (`-u origin <head>`), because a bare
   `git push` on a new branch refuses with a hint nobody reads. Stash is
   `push --include-untracked` — "everything I have" is what the button says.
@@ -676,9 +772,11 @@ and a new branch.
   a commit graph is the same colours in every client that draws one, and a
   lane that changed colour with the theme would read as a different branch.
 - **`git`, not libgit2.** Every question is one invocation with a machine
-  format — `%x1f`/`%x1e` separators for the log, because a subject can carry
-  tabs and newlines; `--name-status` and `--numstat` for the files; the patch
-  split on `diff --git`. The user's own git, config, credentials and hooks;
+  format — `%x1f`/`%x1e` separators for the log and the commit, because a
+  subject can carry tabs and newlines; `%1f` fields for `for-each-ref`;
+  `--raw` and `--numstat` for the files, in the same `git show` as the
+  patch, which is split on `diff --git` in one pass. The user's own git,
+  config, credentials and hooks;
   `GIT_PAGER=cat` and `GIT_TERMINAL_PROMPT=0` because a git that waited on
   either would hang the panel. Not a repository is a sentence in the panel,
   not the banner: it is an ordinary thing to open — and the one refusal the
@@ -708,13 +806,17 @@ and a new branch.
   project and shows `Detail` standalone. Hide folds the pane to a strip and
   is session state.
 - **After any write, everything is read back** (`after_git`): history,
-  branches, status and stashes, and the tree — so the panel never shows a
-  state git has already left. The open files follow through the watcher like
-  any other change to the checkout.
-- **The history follows the disk.** `.git/` is a dot directory and unwatched,
-  so the refresh rides on the working-tree batches a commit, checkout or
-  fetch produces; it is a no-op until the panel has been opened once, so a
-  project nobody looks at the history of costs no `git log` per save.
+  refs, status and stashes — each compared with what is drawn before it is
+  set — a new stamp as the baseline, and the tree, so the panel never shows
+  a state git has already left. The open files follow through the watcher
+  like any other change to the checkout.
+- **The history follows the disk, including the part the watcher cannot
+  see.** `.git/` is a dot directory and unwatched: a working-tree batch
+  re-reads the status and asks the stamp about the rest, and the stamp is
+  asked on a timer while the panel shows, which is what catches a commit,
+  checkout or fetch made in a terminal. Both are no-ops until the panel has
+  been opened once, so a project nobody looks at the history of costs no
+  `git` per save.
 
 ## The tree's own verbs
 
