@@ -228,6 +228,14 @@ pub fn status(root: &Path) -> Result<Status> {
     )?;
     let mut status = parse::status(&text);
     status.operation = dirs(root).ok().and_then(|dirs| operation(&dirs.git));
+    // git does not descend into another repository, so one shows as a single
+    // untracked directory; the ones with no commits are the ones git will
+    // refuse to add. A metadata read each, and only for untracked directories.
+    for entry in &mut status.entries {
+        if entry.untracked && entry.path.ends_with('/') {
+            entry.nested = is_empty_repository(&root.join(entry.path.trim_end_matches('/')));
+        }
+    }
     Ok(status)
 }
 
@@ -287,7 +295,12 @@ pub fn stage(root: &Path, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    let mut args = vec!["add", "--"];
+    // `--ignore-errors`: one path git cannot index — an empty repository
+    // inside this one, a file another program holds open — used to stop the
+    // whole add, so "Stage all" staged nothing and named the wrong reason.
+    // The rest are staged now, and the failure still comes back naming the
+    // path that did not go in.
+    let mut args = vec!["add", "--ignore-errors", "--"];
     args.extend(paths.iter().map(String::as_str));
     run(root, &args).map(drop)
 }
@@ -388,15 +401,67 @@ fn run_bytes<S: AsRef<str>>(root: &Path, args: &[S], ok: &[i32]) -> Result<Vec<u
                 .next()
                 .unwrap_or("")
                 .to_string(),
-            detail: String::from_utf8_lossy(&output.stderr)
-                .trim()
-                .lines()
-                .next()
-                .unwrap_or("no message")
-                .to_string(),
+            detail: failure_detail(&String::from_utf8_lossy(&output.stderr)),
         });
     }
     Ok(output.stdout)
+}
+
+/// What a failed `git` said, as the lines that are the failure.
+///
+/// The first line of stderr was taken, and git writes its warnings first: on
+/// a machine with `core.autocrlf=true`, staging a file with LF endings prints
+/// `warning: in the working copy of '.gitignore', LF will be replaced by
+/// CRLF…` before anything else, so a stage that failed on something real
+/// was reported as that harmless warning — and the reason, three lines down,
+/// was dropped. The `error:` and `fatal:` lines are the failure, in git's
+/// order; with none, whatever is not a warning or a hint; with nothing else,
+/// all of it rather than nothing.
+pub(crate) fn failure_detail(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let failures: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("error:") || line.starts_with("fatal:"))
+        .collect();
+    let chosen = if !failures.is_empty() {
+        failures
+    } else {
+        let plain: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|line| !line.starts_with("warning:") && !line.starts_with("hint:"))
+            .collect();
+        if plain.is_empty() { lines } else { plain }
+    };
+    if chosen.is_empty() {
+        return "no message".to_string();
+    }
+    chosen.into_iter().take(6).collect::<Vec<_>>().join("\n")
+}
+
+/// Whether `dir` holds a git repository that has never had a commit: a
+/// `.git` directory with no branch under `refs/heads` and no `packed-refs`.
+///
+/// The one test rusty applies before it will remove a `.git` — the wizard
+/// after esp-generate, and the Git panel when asked to fold such a
+/// directory into the repository around it. A repository with any branch is
+/// somebody's history and is never this.
+pub fn is_empty_repository(dir: &Path) -> bool {
+    let git = dir.join(".git");
+    if !git.is_dir() {
+        return false;
+    }
+    let has_branch = git
+        .join("refs")
+        .join("heads")
+        .read_dir()
+        .is_ok_and(|mut entries| entries.any(|entry| entry.is_ok()));
+    !has_branch && !git.join("packed-refs").exists()
 }
 
 /// No console window for a child of the GUI on Windows.
@@ -876,6 +941,56 @@ mod tests {
         assert!(stashed.stale_since(&committed).stashes);
     }
 
+    /// The report: on a machine with `core.autocrlf=true`, "Stage all" over
+    /// a file with LF endings and an empty repository inside this one said
+    /// only the CRLF warning, and staged nothing. The warning is not the
+    /// failure, and one path git cannot add is not a reason to add none.
+    #[test]
+    fn a_stage_that_meets_an_empty_repository_stages_the_rest_and_names_it() {
+        let Some(dir) = repository() else {
+            eprintln!("skipping: git is not available on this machine");
+            return;
+        };
+        let root = dir.path();
+        git_in(root, &["config", "core.autocrlf", "true"]);
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        std::fs::create_dir_all(root.join("firmware/src")).unwrap();
+        std::fs::write(root.join("firmware/src/main.rs"), "fn main() {}\n").unwrap();
+        let init = git_out(&root.join("firmware"), &["init", "-q", "."]);
+        assert_eq!(init.status.code(), Some(0), "{init:?}");
+
+        let listed = status(root).expect("status");
+        let nested = listed
+            .entries
+            .iter()
+            .find(|entry| entry.path == "firmware/")
+            .expect("git lists the repository as one untracked directory");
+        assert!(nested.nested, "{nested:?}");
+        assert!(
+            listed
+                .entries
+                .iter()
+                .filter(|entry| entry.path != "firmware/")
+                .all(|entry| !entry.nested),
+            "only the empty repository is marked",
+        );
+
+        let failure = stage(root, &[".gitignore".into(), "firmware/".into()])
+            .expect_err("git refuses the empty repository");
+        let said = failure.to_string();
+        assert!(
+            said.contains("does not have a commit checked out"),
+            "the reason, not the warning in front of it: {said}",
+        );
+        assert!(!said.contains("LF will be replaced"), "{said}");
+
+        let staged = git_out(root, &["diff", "--cached", "--name-only"]);
+        assert!(
+            String::from_utf8_lossy(&staged.stdout).contains(".gitignore"),
+            "the rest went in: {staged:?}",
+        );
+    }
+
     /// A remote exists the moment it is added — before any fetch has put a
     /// branch under `refs/remotes/`, which is exactly when somebody who has
     /// just connected a repository to GitHub goes looking for it — and the
@@ -981,5 +1096,42 @@ mod tests {
             Err(Error::NotARepository { .. }) | Err(Error::Spawn { .. }) => {}
             other => panic!("expected a refusal, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::failure_detail;
+
+    /// git's own words from the reproduction, in git's order: two warnings,
+    /// the error, the fatal line. The warnings are not the failure.
+    #[test]
+    fn the_failure_is_the_error_lines_not_the_warnings_before_them() {
+        let stderr = "warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it\n\
+                      warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it\n\
+                      error: 'firmware/' does not have a commit checked out\n\
+                      fatal: adding files failed\n";
+        assert_eq!(
+            failure_detail(stderr),
+            "error: 'firmware/' does not have a commit checked out\nfatal: adding files failed"
+        );
+    }
+
+    /// A refusal git words without a prefix keeps its words; hints go; and a
+    /// stderr of nothing but warnings is still said rather than lost.
+    #[test]
+    fn unprefixed_words_stay_hints_go_and_warnings_alone_are_kept() {
+        let ignored = "The following paths are ignored by one of your .gitignore files:\n\
+                       target\n\
+                       hint: Use -f if you really want to add them.\n";
+        assert_eq!(
+            failure_detail(ignored),
+            "The following paths are ignored by one of your .gitignore files:\ntarget"
+        );
+        assert_eq!(
+            failure_detail("warning: something odd\n"),
+            "warning: something odd"
+        );
+        assert_eq!(failure_detail("  \n"), "no message");
     }
 }

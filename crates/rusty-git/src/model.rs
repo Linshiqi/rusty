@@ -237,6 +237,12 @@ pub struct StatusEntry {
     pub untracked: bool,
     /// A merge left it with conflict markers.
     pub conflicted: bool,
+    /// An untracked directory that is a git repository of its own with no
+    /// commits — what esp-generate left in a firmware crate before rusty
+    /// removed it. git will not add it (`does not have a commit checked
+    /// out`), and nothing in it is in this repository until its `.git` goes.
+    #[serde(default)]
+    pub nested: bool,
 }
 
 /// Where the working tree stands.

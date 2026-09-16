@@ -9,6 +9,28 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.36
+
+**Fixed — "Stage all" no longer stages nothing because of one file, and a
+failure says what actually went wrong.** In a project where one path could
+not be staged, nothing was staged and the error shown was a harmless line
+about line endings (`LF will be replaced by CRLF`) — git prints that warning
+first and the real reason further down, which rusty dropped. Everything that
+can be staged now is, and the message is git's actual error.
+
+**Added — an empty repository inside a project is recognised and can be
+folded in.** A workspace generated with an older rusty keeps the generator's
+own empty `.git` inside `firmware/`, which git refuses to stage. Its row in
+Changes now says *empty repository*, "Stage all" leaves it out, and
+right-clicking it offers *Include in this repository…*: its `.git` goes to the
+recycle bin (only ever one with no commits, checked again first) and its files
+become ordinary files of the project. rust-analyzer restarts briefly while it
+happens.
+
+**Fixed — moving something to the recycle bin could fail at random.** Deleting
+from the file tree sometimes failed with an internal error, depending on which
+background thread happened to run it. It works every time now.
+
 ## v0.6.35
 
 **Fixed — Vim's visual mode can select to the right.** Pressing `v` and then

@@ -168,7 +168,22 @@ pub(super) fn GitContextMenu() -> impl IntoView {
                 } else {
                     t!("git.discard")
                 };
+                let nested = !staged
+                    && state.git.status.with_untracked(|s| {
+                        s.as_ref()
+                            .is_some_and(|s| s.entries.iter().any(|e| e.path == toggle && e.nested))
+                    });
+                let include = toggle.clone();
                 view! {
+                    {nested
+                        .then(|| {
+                            view! {
+                                {item(state, t!("git.include-nested"), false, move || {
+                                    controller::include_nested(state, include.clone())
+                                })}
+                                <MenuSeparator />
+                            }
+                        })}
                     {item(state, t!("git.open-file"), false, move || controller::open_from_git(state, open.clone()))}
                     <MenuSeparator />
                     {item(state, stage_one, false, move || controller::stage(state, vec![toggle.clone()], !staged))}

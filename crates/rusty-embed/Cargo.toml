@@ -31,6 +31,10 @@ rustc-demangle = { version = "0.1.28", optional = true }
 # time; the default feature set keeps it, and a packager who cannot have it can
 # turn it off and lose only the board-name guess.
 serialport = { version = "4.9.0", optional = true }
+# One rule for "a repository with no commits", shared with the Git panel —
+# the wizard removes such a `.git` after esp-generate, and the panel offers
+# to for a project generated before it did.
+rusty-git = { path = "../rusty-git", optional = true }
 
 # Finding Visual Studio's `link.exe` the way rustc does, so the Toolchain
 # panel cannot call a linker missing that rustc would use. Already in the
@@ -46,6 +50,7 @@ backend = [
     "dep:object",
     "dep:rustc-demangle",
     "dep:serialport",
+    "dep:rusty-git",
     "dep:cc",
 ]
 

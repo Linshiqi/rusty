@@ -113,6 +113,16 @@ pub fn copy_entry(root: &Path, from: &str, into: &str) -> Result<String> {
 }
 
 /// Move `path` to the platform's recycle bin.
+///
+/// On a thread of its own. On Windows the recycle bin is a COM call, and
+/// `trash` initialises COM on the calling thread in apartment mode — which
+/// fails with `RPC_E_CHANGED_MODE` on a thread something else in the process
+/// already initialised the other way, and `trash` *panics* rather than
+/// returning the error. The app runs this on a runtime's pooled worker, so
+/// whether a Delete worked depended on which thread it landed on: measured
+/// as "task panicked: Call to CoInitializeEx failed. HRESULT(0x80010106)".
+/// A fresh thread has no such history, and a panic on it is an error here
+/// rather than a dead task.
 pub fn delete_entry(root: &Path, path: &str) -> Result<()> {
     let source = existing(root, path)?;
     if path.is_empty() {
@@ -120,8 +130,12 @@ pub fn delete_entry(root: &Path, path: &str) -> Result<()> {
             path: path.to_string(),
         });
     }
-    trash::delete(&source)
-        .map_err(|error| Error::Io(format!("could not move {path} to the recycle bin: {error}")))
+    let failed =
+        |why: String| Error::Io(format!("could not move {path} to the recycle bin: {why}"));
+    std::thread::spawn(move || trash::delete(&source).map_err(|error| error.to_string()))
+        .join()
+        .map_err(|_| failed("the system call failed".to_string()))?
+        .map_err(failed)
 }
 
 /// The absolute path of an entry, for handing to the platform's file

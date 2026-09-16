@@ -299,6 +299,9 @@ pub mod git {
     pub const STASHES: &str = "git_stashes";
     /// Every remote the config names, fetched from yet or not.
     pub const REMOTES: &str = "git_remotes";
+    /// Fold an empty repository inside this one into it: its `.git` to the
+    /// recycle bin, and only when it has no commits.
+    pub const INCLUDE_NESTED: &str = "git_include_nested";
     /// One path's diff — index against HEAD, or tree against index.
     pub const DIFF: &str = "git_diff";
     /// Put paths in the index, or take them out. Quiet: everything that

@@ -788,8 +788,11 @@ pub fn stage(state: AppState, paths: Vec<String>, on: bool) {
     let args = Args { paths, on };
     track(
         state,
-        async move { ipc::call::<_, ()>(cmd::git::STAGE, &args).await },
-        move |()| {
+        async move {
+            let answer = ipc::call::<_, ()>(cmd::git::STAGE, &args).await;
+            // Read back whichever way it went: a stage that failed on one
+            // path still staged the others (`--ignore-errors`), and a list
+            // that did not move would say they were not.
             load_status(state);
             // The diff showing is of a side that may have just moved.
             if let Some((path, staged)) = state.git.diff_for.get_untracked() {
@@ -800,8 +803,41 @@ pub fn stage(state: AppState, paths: Vec<String>, on: bool) {
                 });
                 load_diff(state, path, staged, untracked);
             }
+            answer
         },
+        move |()| {},
     );
+}
+
+/// Fold an empty repository inside the project into it — asked first, since
+/// its `.git` is removed (to the recycle bin). The backend checks again that
+/// it has no commits.
+pub fn include_nested(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+    let question = t!("git.include-nested-confirm", path = path.clone());
+    spawn_local(async move {
+        if !ipc::confirm(&question).await {
+            return;
+        }
+        let args = Args { path };
+        track(
+            state,
+            async move {
+                let answer = ipc::call::<_, ()>(cmd::git::INCLUDE_NESTED, &args).await;
+                // The backend stopped rust-analyzer to move the directory;
+                // it comes back whichever way that went.
+                start_lsp(state);
+                answer
+            },
+            move |()| {
+                load_status(state);
+                refresh_tree(state);
+            },
+        );
+    });
 }
 
 /// Throw a file's changes away — the one write in this panel that cannot be

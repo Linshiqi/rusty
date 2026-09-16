@@ -325,6 +325,13 @@ impl AppState {
         self.lsp.lock().await.clone()
     }
 
+    /// Take the language server out, for a caller that needs it gone before
+    /// it acts. Dropping what comes back — once any request holding it has
+    /// finished — shuts the process down and waits for it.
+    pub async fn take_lsp(&self) -> Option<Arc<rusty_lsp::LspClient>> {
+        self.lsp.lock().await.take()
+    }
+
     /// Register the project's language server, dropping — and thereby killing —
     /// whatever it replaces.
     /// Register the language server, burying whatever it replaces — off this

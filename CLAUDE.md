@@ -1006,6 +1006,29 @@ The view is a directory, one module per region, where it was one file of
   `-`) — not parsed, because git takes `https://`, `git@host:path` and a
   plain directory alike. Every remote command puts `--` before what was
   typed.
+- **A failed `git` is reported by its `error:` and `fatal:` lines, not its
+  first line.** git writes warnings first, and on a machine with
+  `core.autocrlf=true` staging any file with LF endings begins with
+  `warning: in the working copy of '.gitignore', LF will be replaced by
+  CRLF…` — so a stage that failed on something real was reported as that
+  warning, and the reason three lines down was dropped. `failure_detail` is
+  the rule, with git's own stderr from the reproduction as its test.
+- **Staging is `add --ignore-errors`, so one path cannot stage nothing.**
+  The reported case was "Stage all" in a workspace generated before the
+  wizard removed esp-generate's `git init`: `firmware/` is a repository of
+  its own with no commits, git refuses it (`does not have a commit checked
+  out`) and, without the flag, stages none of the others either. The rest
+  go in now and the failure still names the path. `Status` marks such a
+  directory (`StatusEntry.nested`, `repo::is_empty_repository` — the one
+  rule the wizard also uses): its row says *empty repository*, "Stage all"
+  leaves it out, and its menu offers *Include in this repository…*, which
+  moves its `.git` to the recycle bin after checking again that it has no
+  commits. **rust-analyzer is stopped around that move and started again**:
+  on Windows it holds the directories it watches open, and the move failed
+  with "Some operations were aborted" (and `mv` with "Permission denied")
+  until the server was stopped, measured. The same hold is why a crate's
+  `src` cannot be renamed from outside while the server runs; the tree's
+  own verbs meet it too, and nothing here addresses that yet.
 - **A commit asks who you are before git refuses.** `git_identity` reads
   `user.name` and `user.email` as `git config --get` resolves them (exit 1
   is "unset", an answer); when either is missing the commit box shows a
@@ -1147,6 +1170,12 @@ the root like every other write, every answer the relative path it produced
   somewhere the tree did not show.
 - **Delete is the recycle bin, never `remove_dir_all`** (`trash`), asked
   first through `ipc::confirm` with the platform's own word for the bin.
+  **On a thread of its own**: the recycle bin is a COM call, `trash`
+  initialises COM in apartment mode, and on a pooled runtime thread that
+  something else had already initialised the other way it *panics* —
+  `Call to CoInitializeEx failed. HRESULT(0x80010106)` — so whether a
+  Delete worked depended on which worker it landed on. A fresh thread has
+  no such history, and a panic there becomes an error.
   Every tab under the entry closes without a second question: the file is
   gone and a draft of it has nowhere to be saved.
 - **Reveal is Explorer's `/select,<path>` as one argument** — a space after

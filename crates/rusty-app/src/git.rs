@@ -95,6 +95,60 @@ pub async fn git_remotes(state: State<'_, AppState>) -> Answer<Vec<Remote>> {
     Ok(blocking("git config", move || rusty_git::repo::remotes(&root)).await??)
 }
 
+/// Make an empty repository inside the project part of the project: its
+/// `.git` goes to the recycle bin and the files beside it stay. Refused for a
+/// repository with any commit — that is somebody's history, and removing it
+/// is a decision for a terminal, not a menu item. Checked here again rather
+/// than trusted from the status the frontend drew, which may be stale.
+///
+/// **rust-analyzer is stopped first**, and the frontend starts it again
+/// whatever happens. It watches the directories it loads, and on Windows a
+/// directory somebody holds open cannot be moved: the recycle bin answered
+/// "Some operations were aborted" for a `.git` the server had open, `mv`
+/// said "Permission denied", and both succeeded the moment the server was
+/// stopped — measured, on a project whose firmware crate held such a `.git`.
+#[tauri::command]
+pub async fn git_include_nested(path: String, state: State<'_, AppState>) -> Answer<()> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let folder = path.trim_end_matches('/').to_string();
+    let git = format!("{folder}/.git");
+    blocking("include repository", {
+        let (root, folder) = (root.clone(), folder.clone());
+        move || -> Answer<()> {
+            let dir = rusty_edit::absolute(&root, &folder)?;
+            if rusty_git::repo::is_empty_repository(&dir) {
+                Ok(())
+            } else {
+                Err(CommandError::new(format!(
+                    "{folder}/ is not an empty repository — it has commits of its own, so                      rusty will not remove its .git"
+                )))
+            }
+        }
+    })
+    .await??;
+
+    let server = state.take_lsp().await;
+    blocking("include repository", move || -> Answer<()> {
+        // The last handle, unless a request is still out: dropping it asks
+        // the server to exit and waits for the process.
+        drop(server);
+        // A request in flight holds the server a moment longer; the move is
+        // tried again for a few seconds before its refusal is believed.
+        let mut attempt = 0;
+        loop {
+            match rusty_edit::delete_entry(&root, &git) {
+                Ok(()) => return Ok(()),
+                Err(_) if attempt < 10 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    })
+    .await?
+}
+
 /// One path's diff, for the Changes view.
 #[tauri::command]
 pub async fn git_diff(

@@ -371,19 +371,9 @@ pub fn scaffold_workspace(root: &Path, choice: &WizardChoice) -> Result<()> {
 /// never this function's to delete. Best effort — a project that is
 /// otherwise written must not fail over a directory the user can remove.
 fn unnest_repository(firmware: &Path) {
-    let git = firmware.join(".git");
-    if !git.is_dir() {
-        return;
+    if rusty_git::repo::is_empty_repository(firmware) {
+        let _ = std::fs::remove_dir_all(firmware.join(".git"));
     }
-    let has_refs = git
-        .join("refs")
-        .join("heads")
-        .read_dir()
-        .is_ok_and(|mut entries| entries.any(|entry| entry.is_ok()));
-    if has_refs || git.join("packed-refs").exists() {
-        return;
-    }
-    let _ = std::fs::remove_dir_all(&git);
 }
 
 /// A name cargo accepts for a package, since the workspace layout turns it

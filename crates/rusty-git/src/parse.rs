@@ -572,6 +572,7 @@ pub fn status(text: &str) -> Status {
                 unstaged: Some(ChangeKind::Added),
                 untracked: true,
                 conflicted: false,
+                nested: false,
             }),
             // `!` is ignored files, asked for by nobody here.
             _ => None,
@@ -594,6 +595,7 @@ fn changed(token: &str, path: &str) -> StatusEntry {
         unstaged,
         untracked: false,
         conflicted: false,
+        nested: false,
     }
 }
 

@@ -118,7 +118,14 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
     if entries.is_empty() {
         return ().into_any();
     }
-    let all: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+    // An empty repository inside this one is left out of "Stage all": git
+    // refuses it, and its row already says why and offers the way in, so a
+    // banner about it on every stage-all would say nothing new.
+    let all: Vec<String> = entries
+        .iter()
+        .filter(|e| !e.nested)
+        .map(|e| e.path.clone())
+        .collect();
     let count = entries.len();
     let all_label = if staged {
         t!("git.unstage-all")
@@ -160,6 +167,7 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                 let (show, open, menu, toggle, lit) =
                     (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
                 let untracked = entry.untracked;
+                let nested = entry.nested && !staged;
                 let class = move || {
                     let on = state
                         .git
@@ -198,6 +206,17 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                         >
                             {path}
                         </button>
+                        {nested
+                            .then(|| {
+                                view! {
+                                    <span
+                                        class="shrink-0 font-sans text-caption text-amber"
+                                        title=t!("git.nested-hint")
+                                    >
+                                        {t!("git.nested")}
+                                    </span>
+                                }
+                            })}
                         <button
                             type="button"
                             title=title
