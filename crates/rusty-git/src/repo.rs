@@ -748,7 +748,15 @@ mod tests {
 
     /// Run git in `dir` as the tests' author, succeeding or panicking.
     fn git_in(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = git_out(dir, args);
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    }
+
+    /// `git`, with an identity, answering rather than asserting — for the
+    /// calls that are *expected* to fail, which still need the identity or
+    /// they fail for the wrong reason.
+    fn git_out(dir: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
             .args(args)
             .current_dir(dir)
             .env("GIT_AUTHOR_NAME", "Test")
@@ -756,8 +764,7 @@ mod tests {
             .env("GIT_COMMITTER_NAME", "Test")
             .env("GIT_COMMITTER_EMAIL", "t@x")
             .output()
-            .expect("git runs");
-        assert!(output.status.success(), "git {args:?}: {output:?}");
+            .expect("git runs")
     }
 
     /// The bug the full decorations fix: a local branch with a slash in its
@@ -853,12 +860,23 @@ mod tests {
         git_in(root, &["checkout", "-q", "main"]);
         std::fs::write(root.join("a.txt"), "ours\n").unwrap();
         git_in(root, &["commit", "-q", "-am", "ours"]);
-        let merged = Command::new("git")
-            .args(["merge", "other"])
-            .current_dir(root)
-            .output()
-            .expect("git runs");
-        assert!(!merged.status.success(), "the merge conflicts");
+        // Through the same door as every other call here, because it needs
+        // the identity: a runner has no `user.email`, and `git merge` asks
+        // for one *before* it merges — "Committer identity unknown", exit
+        // 128, no `MERGE_HEAD`, nothing merged. This passed on any desk with
+        // a global git config and failed on every runner for weeks.
+        let merged = git_out(root, &["merge", "other"]);
+        // And on the conflict specifically, not on the failure. `!success`
+        // was true for a merge that never happened, so the one assertion
+        // standing between this test and its own environment said nothing:
+        // git exits 1 for a conflict and 128 for a refusal.
+        assert_eq!(
+            merged.status.code(),
+            Some(1),
+            "the merge conflicts: {}{}",
+            String::from_utf8_lossy(&merged.stdout),
+            String::from_utf8_lossy(&merged.stderr),
+        );
 
         let status = status(root).expect("status");
         assert_eq!(status.operation, Some(GitOperation::Merge));

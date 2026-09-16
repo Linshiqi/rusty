@@ -24,6 +24,11 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
+# A runner has no global git config, and tests that shell out to `git` mean
+# it. This is that environment, and it is how a CI-only failure is found in
+# a minute rather than in a release.
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test --workspace
+
 # The frontend links only the model layers, so these must stay green
 cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
   -p rusty-edit -p rusty-lsp -p rusty-dbg -p rusty-git --no-default-features \
@@ -2303,6 +2308,18 @@ usty`) holds `location.toml`
   printed Leptos's "outside a reactive tracking context" four times per
   launch. `has_project_now()` / `active_path_now()` are the untracked forms
   for that side; the tracked ones are for views and effects.
+- **A test that asserts a command *failed* has asserted nothing.**
+  `a_conflicted_merge_is_named_until_it_is_aborted` ran `git merge` without
+  the identity every other call in that file sets, and checked
+  `!status.success()`. A runner has no `user.email`, so git refused before
+  merging at all — "Committer identity unknown", exit 128, no `MERGE_HEAD`
+  — and that assertion passed, leaving the next line to fail with nothing
+  explaining why. It was red on every runner for weeks and green on any
+  desk with a global git config. Assert on the *specific* failure: git exits
+  1 for a conflict and 128 for a refusal, and the two mean opposite things.
+  **`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test
+  --workspace` is the runner's environment**, and reproduces this class in
+  one line rather than one release.
 - **A test that tolerates an absent tool has to say so in code, not in a
   comment.** `is_some_and` on an `Option` is `false` for `None`, so a test
   written to *pass* on a machine with no gdb was the one that failed there —
