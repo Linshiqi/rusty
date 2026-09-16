@@ -37,8 +37,8 @@ use crate::{
     convert, discover,
     error::{Error, Result},
     model::{
-        ActionEdit, CodeActionFix, CodeActions, CompletionList, HealthLevel, HoverInfo, Location,
-        LspEvent, SemanticSpan, SignatureInfo,
+        ActionEdit, CodeActionFix, CodeActions, CompletionList, FileDiagnostic, HealthLevel,
+        HoverInfo, Location, LspEvent, SemanticSpan, SignatureInfo,
     },
     positions::{Encoding, content_change, scalar_to_character},
     pull, rpc,
@@ -154,6 +154,20 @@ pub(crate) struct Shared {
     /// only arrive after `initialized`, so the default is never actually used.
     encoding: OnceLock<Encoding>,
     semantic_legend: OnceLock<Vec<String>>,
+    /// What each source last said about each file. `pulled` is
+    /// rust-analyzer's own analysis, asked for per open document; `pushed`
+    /// is what it publishes unasked — with pull negotiated, only the `cargo
+    /// check` run. The frontend is always sent the two together
+    /// ([`Shared::emit_diagnostics`]): sent as they arrived, each one replaced
+    /// the other, and a rustc error showed for three seconds and then an
+    /// empty pull took it away.
+    pub(crate) pulled: Mutex<HashMap<String, Vec<FileDiagnostic>>>,
+    pub(crate) pushed: Mutex<HashMap<String, Vec<FileDiagnostic>>>,
+    /// Whether rust-analyzer last said it had nothing left to load. The step
+    /// to `true` is when the check runs: a workspace reload clears the
+    /// check's results and does not run it again, and opening a project runs
+    /// it not at all until something is saved.
+    quiescent: AtomicBool,
     pub(crate) root: PathBuf,
     pub(crate) events: Sender<LspEvent>,
 }
@@ -209,6 +223,9 @@ impl LspClient {
             alive: AtomicBool::new(true),
             encoding: OnceLock::new(),
             semantic_legend: OnceLock::new(),
+            pulled: Mutex::new(HashMap::new()),
+            pushed: Mutex::new(HashMap::new()),
+            quiescent: AtomicBool::new(false),
             root: root.to_path_buf(),
             events: events_tx,
         });
@@ -799,6 +816,28 @@ impl Drop for LspClient {
 }
 
 impl Shared {
+    /// Tell the frontend what is wrong in `path`, from both sources at once.
+    pub(crate) fn emit_diagnostics(&self, path: &str) {
+        let pulled = self
+            .pulled
+            .lock()
+            .expect("lsp pulled")
+            .get(path)
+            .cloned()
+            .unwrap_or_default();
+        let pushed = self
+            .pushed
+            .lock()
+            .expect("lsp pushed")
+            .get(path)
+            .cloned()
+            .unwrap_or_default();
+        let _ = self.events.send(LspEvent::Diagnostics {
+            path: path.to_string(),
+            items: pull::merged(&pulled, &pushed),
+        });
+    }
+
     pub(crate) fn poke_pull(&self, path: &str) {
         if let Some(poke) = self.poke.lock().expect("lsp poke").as_ref() {
             let _ = poke.send(path.to_string());
@@ -954,14 +993,19 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     }
     options.insert("cargo".into(), Value::Object(cargo));
     options.insert("check".into(), json!({ "allTargets": false }));
-    // Off, deliberately. Embedded projects here use `build-std`, and
-    // `cargo check` under build-std emits messages for packages that are not
-    // in `cargo metadata` — rust-analyzer logs an error storm and, when the
-    // run completes, publishes empty diagnostics that wipe the native ones.
-    // Observed as: squiggles appear for a few seconds, then vanish. Native
-    // diagnostics — type errors, unresolved names — are the ones the editor
-    // needs live anyway.
-    options.insert("checkOnSave".into(), json!(false));
+    // On. It was off for a month on a wrong reading of one symptom: squiggles
+    // that appeared for a few seconds and vanished were blamed on `build-std`,
+    // and native diagnostics were said to cover "type errors, unresolved
+    // names" anyway. Measured with `examples/diag_probe`, neither holds.
+    // rust-analyzer's own analysis says nothing about `pub v: Vector3d` with
+    // no such type, an unused import or a borrow error — only rustc does,
+    // so an editor without the check showed those in Output after a build
+    // and nowhere else. And the vanishing was this client sending the check's
+    // results and the pulled ones as they arrived, each replacing the other;
+    // they are merged now (`Shared::emit_diagnostics`). A build-std firmware
+    // project watched for four minutes with the check on produced no storm
+    // and no wipe.
+    options.insert("checkOnSave".into(), json!(true));
     // A function completes with its parentheses and the caret between them.
     // rust-analyzer's default fills the arguments in as placeholders to tab
     // through, which works only in an editor that walks tabstops; this one
@@ -1147,6 +1191,17 @@ fn dispatch(shared: &Shared, message: Value) {
         // by the progress line.
         (None, Some(method)) if method == "experimental/serverStatus" => {
             let params = &message["params"];
+            // Settled after loading: run the check. rust-analyzer runs it on
+            // a save and at no other time, and a reload clears its results —
+            // measured on a workspace sharing `core` with its firmware, the
+            // errors arrived, the build-data reload wiped them, and nothing
+            // brought them back until the next save.
+            let quiescent = params["quiescent"].as_bool().unwrap_or(false);
+            if quiescent && !shared.quiescent.swap(true, Ordering::AcqRel) {
+                let _ = shared.notify("rust-analyzer/runFlycheck", json!({ "textDocument": null }));
+            } else if !quiescent {
+                shared.quiescent.store(false, Ordering::Release);
+            }
             let level = match params["health"].as_str() {
                 Some("error") => HealthLevel::Error,
                 Some("warning") => HealthLevel::Warning,

@@ -114,6 +114,12 @@ cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
 # to be awaited before the window could draw anything of the new project.
 cargo run -p rusty-core --example open_cost -- <project>
 
+# Every diagnostic the editor is sent for a file, with who said it --
+# `rust-analyzer` for its own analysis, `rustc` for the check -- and when.
+# The check for "the error is in Output but not in the editor": whether the
+# server never sent it, or sent it and something took it away.
+cargo run -p rusty-lsp --example diag_probe -- <project> <file> [seconds]
+
 # Which files rusty will draw dimmed in a project, and every file the scan
 # read to decide -- the check for a report of a file wrongly dim, or one
 # that should be and is not. `rusty_edit::modules` refuses wherever it
@@ -717,6 +723,24 @@ positioned in a coordinate system that is not the document's.
   detects at the *opened root*, which for the standard embedded layout has
   no chip, so it passes none — and one run with the server's own stderr let
   out named both the cause and the fallback in a single line.
+- **Copy, cut and paste with nothing selected act on the whole line**, as
+  VS Code's `editor.emptySelectionClipboard` does (`files/clip.rs`, pure and
+  tested). Ctrl+C puts the caret's line and a break on the clipboard; Ctrl+X
+  takes the line out, break and all, the caret keeping its column in
+  characters; Ctrl+V of *that* text — compared with `\r\n` made plain,
+  because the Windows clipboard hands `\n` back that way — goes in above the
+  caret's line wherever the caret is, rather than into the middle of it.
+  Without a selection the browser's copy and cut do nothing, so the keys did
+  nothing. In Vim's normal mode the one selected character is the block
+  cursor, so it counts as nothing selected; a visual-mode cut is the
+  editor's own, since the read-only textarea would copy and delete nothing.
+  **Paste reads the `paste` event, never `navigator.clipboard.readText()`**:
+  the read waits on a permission this WebView never answers — measured as a
+  hang — while the event carries the text with the key press. A browser
+  neither pastes into a read-only field nor tells the page it was asked, so
+  Ctrl+V in Vim's modal states makes the textarea writable for that one
+  paste (`open_for_paste`) and `paste_into` makes it read-only again the
+  moment the text arrives; a timeout covers a paste that never does.
 - **Auto-save is not `save_file`, and it is not a format.** Off by default
   (`auto_save` in `workbench.toml`), it writes a second after typing stops
   — VS Code's `files.autoSave: afterDelay`. It cannot reuse Ctrl+S's path:
@@ -948,6 +972,26 @@ The view is a directory, one module per region, where it was one file of
   across the two lists. Every write in it is the same dock command a button
   would run, and the panel's own `contextmenu` handler swallows the
   browser's menu everywhere else.
+- **Remotes are read from the config, not inferred from their branches.**
+  The sidebar used to group `refs/remotes/` by remote name, so a remote
+  nothing had been fetched from did not exist on screen — and neither did
+  anywhere to add one: a repository made with `git init` could not be
+  connected to GitHub from the panel at all, and Push ran `push -u origin
+  main` into git's "'origin' does not appear to be a git repository".
+  `repo::remotes` is one `git config -z --get-regexp` over `url` and
+  `pushurl` (exit 1 is "none"; a name may hold dots, so it is what lies
+  between `remote.` and the suffix), read only when the config moves — the
+  stamp's `config` part — since remotes change far less than anything else
+  here. The section is always drawn, with `+` on its heading; a remote with
+  no branches says so; a right-click fetches, changes the URL, renames,
+  copies the URL or removes it (asked first). **Push with no remote opens
+  the remote form and pushes once it is added**, told the remote's name
+  directly, because the list is still being read again when git's `remote
+  add` returns. Names follow a branch's rules plus "not taken"; a URL is
+  refused only for what git would misread (empty, a line break, a leading
+  `-`) — not parsed, because git takes `https://`, `git@host:path` and a
+  plain directory alike. Every remote command puts `--` before what was
+  typed.
 - **A commit asks who you are before git refuses.** `git_identity` reads
   `user.name` and `user.email` as `git config --get` resolves them (exit 1
   is "unset", an answer); when either is missing the commit box shows a
@@ -1784,12 +1828,34 @@ usty`) holds `location.toml`
 - **`procMacro.enable: false` is not a lighter mode — it is poison.** It
   takes the built-in derives down with it, sysroot trait resolution collapses,
   and any open file containing an `impl` with `&self` gets *no diagnostics at
-  all*, silently. Leave proc macros on; the only thing rusty disables is
-  flycheck (`checkOnSave: false`), because `cargo check` under `build-std`
-  emits messages for packages `cargo metadata` never listed and r-a drowns.
-  Probed live with `--example probe`, which injects an in-buffer error and
-  asserts it is still present at the end of a 45s watch, on a host project
-  and on a real Xtensa `build-std` project.
+  all*, silently. Leave proc macros on. Probed live with `--example probe`,
+  which injects an in-buffer error and asserts it is still present at the
+  end of a 45s watch, on a host project and on a real Xtensa `build-std`
+  project.
+- **rust-analyzer's own analysis is not the compiler, so the check is on.**
+  It was off for a month (`checkOnSave: false`) on a wrong reading of one
+  symptom — squiggles that appeared for a few seconds and vanished were
+  blamed on `build-std` — beside a claim that native diagnostics cover
+  "type errors, unresolved names". Measured with `examples/diag_probe`:
+  rust-analyzer says nothing about `pub v: Vector3d` with no such type, an
+  unused import or a borrow error; only rustc does. The user found it as
+  "errors only show in Output after a build". **The vanishing was this
+  client**: with pull negotiated, rust-analyzer *pushes* only the check's
+  results and answers *pulls* with its own — confirmed in its `main_loop.rs`
+  — and the client sent each to the frontend as it arrived, so an empty pull
+  replaced a rustc error three seconds after it came. `Shared` keeps `pulled`
+  and `pushed` per file and always sends `pull::merged`, which also drops
+  exact repeats: a `core` shared by the host workspace and the firmware's is
+  checked twice and reported twice. An empty push clears only the check's
+  part. **And the check has to be started.** rust-analyzer runs it on a save
+  and at no other time, and a workspace reload clears its results — measured
+  as the errors arriving, being wiped at 58 s by the build-data reload, and
+  not coming back — so the client sends `rust-analyzer/runFlycheck` each time
+  `experimental/serverStatus` turns `quiescent`. A build-std firmware project
+  watched for four minutes with the check on produced no storm and no wipe.
+  The Files tree colours what the check finds (`tree::problem_mark`): a file
+  with errors red with the count, warnings amber, a folder in the colour of
+  the worst thing inside it — and never for a hint.
 - **A flattened `"cargo.buildScripts.enable"` key beside a `"cargo"` object is
   silently ignored** in rust-analyzer's initializationOptions. The first
   attempt at the fix above failed while looking applied, because the sibling
@@ -2419,6 +2485,16 @@ usty`) holds `location.toml`
   on a button and guarded nothing. Twelve lines of comment explained a guard
   that was not there. When an attribute exists to enforce something, grep for
   it on the element it belongs to.
+- **A `prop:` name is a JavaScript property name, and those are
+  case-sensitive.** The same guard, moved back onto the textarea, was still
+  `prop:readonly` — which sets an expando called `readonly` that nothing
+  reads; the DOM's property is `readOnly`. `t.readOnly` was `false` in Vim's
+  normal mode for as long as the guard had existed, so an IME could still
+  type there. Found only because the clipboard work needed the textarea to
+  refuse a paste and read the property back. It is the boolean attribute now
+  (`readonly=move || …`), which a browser reflects into the property itself.
+  `prop:checked` and `prop:value` are fine: their DOM names are lowercase.
+  Check any other `prop:` against the property's real spelling.
 - **An effect that reads the state its own request produces is a loop.** The
   Registers tab re-read the selected peripheral on every `debug.session`
   change; the read's answer arrives *as* a session change. Key such an effect

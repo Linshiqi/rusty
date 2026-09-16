@@ -17,6 +17,7 @@
 //! reader is actually looking for when they open this directory.
 
 mod caret;
+mod clip;
 mod complete;
 mod editor;
 mod edits;

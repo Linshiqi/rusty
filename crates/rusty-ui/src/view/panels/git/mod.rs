@@ -40,14 +40,14 @@ use std::time::Duration;
 
 use leptos::{ev, html, prelude::*};
 
-use rusty_git::{GitOperation, RefNameProblem};
+use rusty_git::{GitOperation, RefNameProblem, RemoteProblem};
 use rusty_i18n::t;
 
 use crate::view::icon::{Icon, IconView};
 use crate::view::split;
 use crate::{
     controller,
-    state::{AppState, Divider, GitMode, PromptKind},
+    state::{AppState, Divider, GitMode, PromptKind, PromptProblem},
     view::components::{Button, ButtonKind, Empty},
 };
 
@@ -193,6 +193,16 @@ fn TopBar() -> impl IntoView {
                 .unwrap_or((0, 0, false))
         })
     });
+    // Nowhere to push to: the button still works — it opens the remote form
+    // and pushes once there is one — and its tooltip says that is what a
+    // click will do.
+    let no_remote = Memo::new(move |_| {
+        state.git.remotes.with(Vec::is_empty)
+            && state
+                .git
+                .branches
+                .with(|branches| branches.iter().all(|b| !b.remote))
+    });
     view! {
         <div class="flex flex-wrap items-center gap-2 border-b border-line px-3 py-1.5">
             <HeadChip />
@@ -239,7 +249,9 @@ fn TopBar() -> impl IntoView {
                 type="button"
                 title=move || {
                     let (ahead, _, tracked) = counts.get();
-                    if !tracked {
+                    if !tracked && no_remote.get() {
+                        t!("git.push-no-remote")
+                    } else if !tracked {
                         t!("git.push-upstream")
                     } else if ahead > 0 {
                         t!("git.push-count", count = ahead)
@@ -412,9 +424,9 @@ fn SearchBox() -> impl IntoView {
     }
 }
 
-/// The name field for a new branch, a rename or a new tag. It says what git
-/// would object to while the name is typed, and will not send a name git
-/// would refuse.
+/// The field for a new branch, a rename, a new tag — or a remote: a new one
+/// by name and URL, a new name, a new URL. It says what git would object to
+/// while it is typed, and will not send anything git would refuse.
 #[component]
 fn PromptRow() -> impl IntoView {
     let state = AppState::expect();
@@ -427,19 +439,40 @@ fn PromptRow() -> impl IntoView {
             .with(|p| p.as_ref().map(|p| p.kind.clone()))
     });
     let input: NodeRef<html::Input> = NodeRef::new();
+    let url_input: NodeRef<html::Input> = NodeRef::new();
     Effect::new(move |_| {
-        if kind.with(Option::is_some)
-            && let Some(input) = input.get()
-        {
+        let Some(kind) = kind.get() else {
+            return;
+        };
+        // A new remote opens with its name filled in, so the caret goes
+        // where the typing is: the URL. Everything else selects its one
+        // field, ready to be typed over.
+        let named = state
+            .git
+            .prompt
+            .with_untracked(|p| p.as_ref().is_some_and(|p| !p.value.is_empty()));
+        if matches!(kind, PromptKind::Remote { .. }) && named {
+            if let Some(url) = url_input.get() {
+                let _ = url.focus();
+            }
+        } else if let Some(input) = input.get() {
             let _ = input.focus();
             input.select();
         }
     });
     let problem = Memo::new(move |_| {
-        state.git.prompt.with(|p| {
-            p.as_ref()
-                .and_then(|p| rusty_git::ref_name_problem(p.value.trim()))
-        })
+        let remotes = state.git.remotes.get();
+        state
+            .git
+            .prompt
+            .with(|p| p.as_ref().and_then(|p| p.problem(&remotes)))
+    });
+    let shown = Memo::new(move |_| {
+        let remotes = state.git.remotes.get();
+        state
+            .git
+            .prompt
+            .with(|p| p.as_ref().and_then(|p| p.shown_problem(&remotes)))
     });
     let short = |id: &str| -> String {
         if id.len() == 40 {
@@ -457,6 +490,18 @@ fn PromptRow() -> impl IntoView {
             PromptKind::Branch { from: None } => t!("git.prompt-branch"),
             PromptKind::Rename { from } => t!("git.prompt-rename", from = from.clone()),
             PromptKind::Tag { at } => t!("git.prompt-tag", at = short(at)),
+            PromptKind::Remote { push: true } => t!("git.prompt-remote-push"),
+            PromptKind::Remote { push: false } => t!("git.prompt-remote"),
+            PromptKind::RenameRemote { from } => {
+                t!("git.prompt-remote-rename", from = from.clone())
+            }
+            PromptKind::RemoteUrl { name } => t!("git.prompt-remote-url", name = name.clone()),
+        };
+        let adding_remote = matches!(kind, PromptKind::Remote { .. });
+        let (placeholder, width) = match &kind {
+            PromptKind::Remote { .. } => (t!("git.remote-name-placeholder"), "w-[9rem]"),
+            PromptKind::RemoteUrl { .. } => (t!("git.remote-url-placeholder"), "w-[26rem]"),
+            _ => (String::new(), "w-[22rem]"),
         };
         let cancel = move || state.git.prompt.set(None);
         Some(view! {
@@ -466,7 +511,8 @@ fn PromptRow() -> impl IntoView {
                     node_ref=input
                     type="text"
                     spellcheck="false"
-                    class="h-[26px] w-[22rem] max-w-full rounded-[6px] bg-content px-2.5 font-mono text-footnote outline-none ring-1 ring-rust"
+                    placeholder=placeholder
+                    class=format!("h-[26px] {width} max-w-full rounded-[6px] bg-content px-2.5 font-mono text-footnote outline-none ring-1 ring-rust placeholder:text-label-4")
                     prop:value=move || state.git.prompt.with(|p| p.as_ref().map(|p| p.value.clone()).unwrap_or_default())
                     on:input=move |event| {
                         let value = event_target_value(&event);
@@ -482,11 +528,34 @@ fn PromptRow() -> impl IntoView {
                         _ => {}
                     }
                 />
+                {adding_remote
+                    .then(|| {
+                        view! {
+                            <input
+                                node_ref=url_input
+                                type="text"
+                                spellcheck="false"
+                                placeholder=t!("git.remote-url-placeholder")
+                                class="h-[26px] w-[26rem] max-w-full rounded-[6px] bg-content px-2.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust placeholder:text-label-4"
+                                prop:value=move || state.git.prompt.with(|p| p.as_ref().map(|p| p.url.clone()).unwrap_or_default())
+                                on:input=move |event| {
+                                    let value = event_target_value(&event);
+                                    state.git.prompt.update(|p| {
+                                        if let Some(p) = p {
+                                            p.url = value;
+                                        }
+                                    });
+                                }
+                                on:keydown=move |event: ev::KeyboardEvent| match event.key().as_str() {
+                                    "Enter" => controller::submit_prompt(state),
+                                    "Escape" => state.git.prompt.set(None),
+                                    _ => {}
+                                }
+                            />
+                        }
+                    })}
                 <span class="text-footnote text-crimson">
-                    {move || {
-                        let typed = state.git.prompt.with(|p| p.as_ref().is_some_and(|p| !p.value.trim().is_empty()));
-                        problem.get().filter(|_| typed).map(name_problem)
-                    }}
+                    {move || shown.get().map(prompt_problem)}
                 </span>
                 <span class="flex-1" />
                 <Button
@@ -498,6 +567,19 @@ fn PromptRow() -> impl IntoView {
                 <Button label=t!("git.cancel") on_click=Callback::new(move |_| cancel()) />
             </div>
         })
+    }
+}
+
+/// Why the field cannot be sent, in words.
+fn prompt_problem(problem: PromptProblem) -> String {
+    match problem {
+        PromptProblem::Name(name) | PromptProblem::Remote(RemoteProblem::Name(name)) => {
+            name_problem(name)
+        }
+        PromptProblem::Remote(RemoteProblem::Exists) => t!("git.remote-exists"),
+        PromptProblem::Remote(RemoteProblem::UrlEmpty) => t!("git.url-empty"),
+        PromptProblem::Remote(RemoteProblem::UrlControl) => t!("git.url-control"),
+        PromptProblem::Remote(RemoteProblem::UrlDash) => t!("git.url-dash"),
     }
 }
 

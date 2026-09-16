@@ -4,7 +4,9 @@
 //! the user's own `git`: their config, their credentials, their hooks. And
 //! every one costs about sixty milliseconds to *start* on Windows before it
 //! reads a byte, so the count is the budget: the log is one process, the
-//! refs one, the status one, the stash list one, and a commit opened is one.
+//! refs one, the status one, the stash list one, a commit opened is one, and
+//! the remotes are one — asked only when the config has moved, since a
+//! remote changes far less often than anything else here.
 //! There used to be a `rev-parse` in front of each of them to ask "is this a
 //! repository?" — asked now only when a command has already failed, where
 //! the answer decides which refusal to give.
@@ -25,7 +27,9 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use crate::graph;
-use crate::model::{CommitDetail, GitOperation, GitStamp, History, RefKind, Refs, Stash, Status};
+use crate::model::{
+    CommitDetail, GitOperation, GitStamp, History, RefKind, Refs, Remote, Stash, Status,
+};
 use crate::parse;
 
 #[derive(Debug, thiserror::Error)]
@@ -189,6 +193,24 @@ pub fn refs(root: &Path) -> Result<Refs> {
         ],
     )?;
     Ok(parse::refs(&text))
+}
+
+/// Every remote the config names, whether or not anything has been fetched
+/// from it — the branches under `refs/remotes/` cannot say that a remote
+/// exists until the first fetch or push. Exit 1 is `--get-regexp`'s "nothing
+/// matched": a repository with no remotes, not a failure.
+pub fn remotes(root: &Path) -> Result<Vec<Remote>> {
+    let text = run_allowing(
+        root,
+        &[
+            "config",
+            "-z",
+            "--get-regexp",
+            r"^remote\..*\.(url|pushurl)$",
+        ],
+        &[0, 1],
+    )?;
+    Ok(parse::remotes(&text))
 }
 
 /// Where the working tree stands: branch, upstream, every changed path, and
@@ -475,11 +497,14 @@ pub fn stamp(root: &Path) -> Result<GitStamp> {
     let mut stash = Fnv::new();
     stash.file(&dirs.common.join("refs").join("stash"));
     stash.file(&dirs.common.join("logs").join("refs").join("stash"));
+    let mut config = Fnv::new();
+    config.file(&dirs.common.join("config"));
     Ok(GitStamp {
         head: head.finish(),
         refs: refs.finish(),
         index: index.finish(),
         stash: stash.finish(),
+        config: config.finish(),
     })
 }
 
@@ -807,7 +832,13 @@ mod tests {
             return;
         };
         let stamp = stamp(dir.path()).expect("stamp");
-        for part in [stamp.head, stamp.refs, stamp.index, stamp.stash] {
+        for part in [
+            stamp.head,
+            stamp.refs,
+            stamp.index,
+            stamp.stash,
+            stamp.config,
+        ] {
             assert!(part <= MAX_SAFE_INTEGER, "{part} is past 2^53 - 1");
         }
     }
@@ -843,6 +874,55 @@ mod tests {
         git_in(root, &["stash", "push", "-q", "-m", "wip"]);
         let stashed = stamp(root).expect("stashed");
         assert!(stashed.stale_since(&committed).stashes);
+    }
+
+    /// A remote exists the moment it is added — before any fetch has put a
+    /// branch under `refs/remotes/`, which is exactly when somebody who has
+    /// just connected a repository to GitHub goes looking for it — and the
+    /// stamp says the config moved, so a remote added in a terminal is read
+    /// again without anything else being.
+    #[test]
+    fn a_remote_is_listed_before_anything_is_fetched_from_it() {
+        let Some(dir) = repository() else {
+            eprintln!("skipping: git is not available on this machine");
+            return;
+        };
+        let root = dir.path();
+        assert!(
+            remotes(root).expect("no remotes is an answer").is_empty(),
+            "git exits 1 when nothing matches, and that is not a failure",
+        );
+        let before = stamp(root).expect("stamp");
+
+        let added = git_out(
+            root,
+            &[
+                "remote",
+                "add",
+                "--",
+                "origin",
+                "https://github.com/you/firmware.git",
+            ],
+        );
+        assert_eq!(added.status.code(), Some(0), "{added:?}");
+        let listed = remotes(root).expect("remotes");
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0].name, "origin");
+        assert_eq!(listed[0].url, "https://github.com/you/firmware.git");
+        assert!(
+            refs(root)
+                .expect("refs")
+                .branches
+                .iter()
+                .all(|branch| !branch.remote),
+            "nothing is fetched yet, which is the case this read exists for",
+        );
+
+        let stale = stamp(root).expect("stamp").stale_since(&before);
+        assert!(
+            stale.remotes && !stale.history && !stale.refs && !stale.status,
+            "{stale:?}",
+        );
     }
 
     /// A merge that stops on a conflict is an operation the status names,

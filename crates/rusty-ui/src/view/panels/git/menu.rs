@@ -9,7 +9,8 @@
 //! remote branch a delete *on the remote*, asked first — its history alone,
 //! and its name. A tag: check it out detached, a branch from it, push it,
 //! delete it. A commit: its hash, a branch or a tag on it, a detached
-//! checkout, cherry-pick and revert.
+//! checkout, cherry-pick and revert. A remote: fetch it, change its URL,
+//! rename it, copy its URL, remove it — asked first.
 
 use leptos::prelude::*;
 
@@ -76,6 +77,7 @@ pub(super) fn GitContextMenu() -> impl IntoView {
                 }
                 .into_any()
             }
+            GitTarget::Remote { name } => remote_items(state, name),
             GitTarget::Commit { id } => {
                 let (copy, short, branch, tag, checkout, pick, revert) = (
                     id.clone(),
@@ -190,6 +192,39 @@ pub(super) fn GitContextMenu() -> impl IntoView {
             </ContextMenu>
         })
     }
+}
+
+/// A remote's menu. A group the config does not name — branches left under
+/// `refs/remotes/` for a remote that is gone — has nothing to fetch from or
+/// change, and offers its name alone.
+fn remote_items(state: AppState, name: String) -> AnyView {
+    let url = state.git.remotes.with_untracked(|remotes| {
+        remotes
+            .iter()
+            .find(|remote| remote.name == name)
+            .map(|remote| remote.url.clone())
+    });
+    let Some(url) = url else {
+        return view! {
+            {item(state, t!("git.copy-name"), false, move || copy_to_clipboard(&name))}
+        }
+        .into_any();
+    };
+    let (fetch, edit, rename, remove) = (name.clone(), name.clone(), name.clone(), name);
+    view! {
+        {item(state, t!("git.remote-fetch"), false, move || controller::fetch_remote(state, fetch.clone()))}
+        <MenuSeparator />
+        {item(state, t!("git.remote-edit-url"), false, move || {
+            controller::open_prompt(state, PromptKind::RemoteUrl { name: edit.clone() })
+        })}
+        {item(state, t!("git.remote-rename"), false, move || {
+            controller::open_prompt(state, PromptKind::RenameRemote { from: rename.clone() })
+        })}
+        {item(state, t!("git.remote-copy-url"), false, move || copy_to_clipboard(&url))}
+        <MenuSeparator />
+        {item(state, t!("git.remote-remove"), true, move || controller::remove_remote(state, remove.clone()))}
+    }
+    .into_any()
 }
 
 /// A branch's menu. What merge and rebase would do is named with the branch

@@ -9,6 +9,43 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.34
+
+**Fixed — compile errors show where the code is, not only in Output after a
+build.** An error like `cannot find type Vector3d in this scope`, an unused
+import or a borrow error had no squiggle in the editor, nothing in Problems and
+no mark in the file tree: rust-analyzer's own analysis does not report those,
+only the compiler does, and rusty was not asking the compiler. It asks now —
+once the project has loaded and after every save — and those errors appear
+within a few seconds, in the editor, in Problems, and on the file even when it
+is not open. They stay put, too: they used to flash up for a moment and vanish.
+
+**Added — the file tree shows what is wrong.** A file with errors is drawn in
+red with how many there are, one with only warnings in amber, and each folder
+above it takes the colour of the worst thing inside, as VS Code's explorer
+does. Fix the error and save, and the colour goes.
+
+**Added — remotes in the Git panel.** A repository started with `git init`
+could not be connected to GitHub from rusty at all. The sidebar now has a
+Remotes section with **+** to add one by name and URL, and a right-click on a
+remote to fetch it, change its URL, rename it, copy its URL or remove it.
+Pressing Push when there is no remote yet asks for one, then pushes once it is
+added — the first push of a new repository is one step. A remote shows up the
+moment it is added, even before anything has been fetched from it, and one
+added in a terminal appears on its own.
+
+**Added — copy, cut and paste the whole line.** With nothing selected, Ctrl+C
+copies the line the caret is on, Ctrl+X cuts it, and Ctrl+V puts a line copied
+that way back as a line above the caret's line — on an empty line, it lands
+right there — as in VS Code. It works in Vim mode too: in normal mode the keys
+act on the cursor's line, a cut in visual mode cuts the selection, and a paste
+in normal mode goes in at the cursor.
+
+**Fixed — Vim's normal mode could still be typed into by an input method.**
+The guard meant to stop it was never actually switched on. Chinese input and
+other text that arrives without a key press now leave normal mode's buffer
+alone, as they were always supposed to.
+
 ## v0.6.33
 
 **Fixed — an Xtensa project whose dependencies never load now says why, and

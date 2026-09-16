@@ -288,9 +288,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 <MenuItem
                                     label=t!("context.editor-cut")
                                     shortcut="Ctrl+X"
-                                    disabled=!has_selection || read_only
+                                    disabled=read_only
                                     on_select=Callback::new(move |_| {
-                                        if let Some(element) = area.get_untracked() {
+                                        // With nothing selected, the line — the
+                                        // same rule as the key.
+                                        if let Some(element) = area.get_untracked()
+                                            && !has_selection
+                                        {
+                                            clipboard_key(state, &element, true, read_only);
+                                        } else if let Some(element) = area.get_untracked() {
                                             let text = state.editor.draft.get_untracked();
                                             if let Some((from, to, picked)) =
                                                 selection_of(&element, &text)
@@ -313,9 +319,12 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 <MenuItem
                                     label=t!("context.editor-copy")
                                     shortcut="Ctrl+C"
-                                    disabled=!has_selection
                                     on_select=Callback::new(move |_| {
-                                        if let Some(element) = area.get_untracked() {
+                                        if let Some(element) = area.get_untracked()
+                                            && !has_selection
+                                        {
+                                            clipboard_key(state, &element, false, read_only);
+                                        } else if let Some(element) = area.get_untracked() {
                                             let text = state.editor.draft.get_untracked();
                                             if let Some((_, _, picked)) =
                                                 selection_of(&element, &text)
@@ -784,7 +793,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         // split once left this attribute on the context
                         // menu's Paste row, where Leptos spread it onto a
                         // button and the guard silently guarded nothing.
-                        prop:readonly=move || {
+                        //
+                        // And as the attribute, not `prop:readonly`, which is
+                        // what this was until the clipboard work measured it:
+                        // a `prop:` name is a JavaScript property name, those
+                        // are case-sensitive, and the DOM's is `readOnly`. The
+                        // lowercase one set an expando nothing reads, so the
+                        // guard above was never on — `t.readOnly` was false in
+                        // normal mode the whole time.
+                        readonly=move || {
                             state.editor.vim_on.get()
                                 && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert)
                         }
@@ -828,6 +845,25 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             }
                         }
                         on:input=on_input
+                        // A line copied with nothing selected pastes as a line,
+                        // and Vim's read-only modes take every paste here
+                        // (`edits::paste_into`). The event, not the async
+                        // clipboard API: the event carries the text with the
+                        // key press, where a read of the clipboard waits on a
+                        // permission this WebView never answers.
+                        on:paste=move |event: web_sys::ClipboardEvent| {
+                            let Some(pasted) = event
+                                .clipboard_data()
+                                .and_then(|data| data.get_data("text/plain").ok())
+                            else {
+                                return;
+                            };
+                            if let Some(element) = area.get_untracked()
+                                && paste_into(state, &element, &pasted, read_only)
+                            {
+                                event.prevent_default();
+                            }
+                        }
                         on:mousedown={
                             let path = path.clone();
                             move |event: ev::MouseEvent| {
@@ -1010,6 +1046,28 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 event.prevent_default();
                                 event.stop_propagation();
                                 return;
+                            }
+                            // Copy and cut with nothing selected take the whole
+                            // line, as VS Code's do, and so does Vim's normal
+                            // mode, whose one selected character is the cursor.
+                            // Paste is the paste event's, below — Vim's
+                            // read-only textarea only has to be let in first.
+                            if (event.ctrl_key() || event.meta_key())
+                                && !event.alt_key()
+                                && !event.shift_key()
+                            {
+                                match event.key().to_ascii_lowercase().as_str() {
+                                    key @ ("c" | "x") => {
+                                        if let Some(element) = area.get_untracked()
+                                            && clipboard_key(state, &element, key == "x", read_only)
+                                        {
+                                            event.prevent_default();
+                                            return;
+                                        }
+                                    }
+                                    "v" => open_for_paste(state, area, read_only),
+                                    _ => {}
+                                }
                             }
                             // The actions popup owns its keys while it is up.
                             if state.editor.actions.with_untracked(Option::is_some) {

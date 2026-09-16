@@ -909,6 +909,11 @@ pub struct Editor {
     pub expanded: RwSignal<Vec<String>>,
     /// The tree's Cut or Copy, waiting for its Paste.
     pub clipboard: RwSignal<Option<TreeClip>>,
+    /// The last line Ctrl+C or Ctrl+X put on the clipboard with nothing
+    /// selected. A paste of exactly this text goes in as a whole line
+    /// (`clip.rs`); shared by both groups, so a line copied on one side
+    /// pastes as a line on the other.
+    pub copied_line: RwSignal<Option<String>>,
     /// Editor font scale (Ctrl+wheel). Multiplies FONT_SIZE and every pixel
     /// the editor derives from it.
     pub zoom: RwSignal<f64>,
@@ -1001,6 +1006,7 @@ impl Editor {
             viewport: RwSignal::new(None),
             expanded: RwSignal::new(Vec::new()),
             clipboard: RwSignal::new(None),
+            copied_line: RwSignal::new(None),
             source_view: RwSignal::new(Vec::new()),
             images: RwSignal::new(HashMap::new()),
             snippets: RwSignal::new(HashMap::new()),
@@ -1031,6 +1037,7 @@ impl Editor {
             tree: self.tree,
             expanded: self.expanded,
             clipboard: self.clipboard,
+            copied_line: self.copied_line,
             zoom: self.zoom,
             page_zoom: self.page_zoom,
             vim_on: self.vim_on,
@@ -1207,6 +1214,10 @@ pub struct Git {
     pub stash_note: RwSignal<String>,
     /// Every tag, newest first — the sidebar's third section.
     pub tags: RwSignal<Vec<rusty_git::Tag>>,
+    /// Every remote the config names. Read on its own and only when the
+    /// config moves, because the branches cannot say a remote exists until
+    /// something has been fetched from it.
+    pub remotes: RwSignal<Vec<rusty_git::Remote>>,
     /// The name being typed for a new branch, a rename or a new tag, while
     /// the field is open, and what it is for.
     pub prompt: RwSignal<Option<RefPrompt>>,
@@ -1313,12 +1324,66 @@ pub struct GitMenu {
     pub target: GitTarget,
 }
 
-/// The name field for a branch or a tag: what it will make, and what has
+/// The field for a branch, a tag or a remote: what it will make, and what has
 /// been typed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefPrompt {
     pub kind: PromptKind,
+    /// The name — or, for a remote's new URL, the URL.
     pub value: String,
+    /// The URL of a new remote: the one prompt with two fields.
+    pub url: String,
+}
+
+/// Why a prompt's OK is disabled, in the terms its field says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptProblem {
+    Name(rusty_git::RefNameProblem),
+    Remote(rusty_git::RemoteProblem),
+}
+
+impl RefPrompt {
+    /// What stops the prompt being carried out, by the rules of what it
+    /// makes: a branch's or a tag's name, a remote's name and URL, or a URL
+    /// alone. Trimmed, as the submit trims.
+    pub fn problem(&self, remotes: &[rusty_git::Remote]) -> Option<PromptProblem> {
+        let value = self.value.trim();
+        match &self.kind {
+            PromptKind::Branch { .. } | PromptKind::Rename { .. } | PromptKind::Tag { .. } => {
+                rusty_git::ref_name_problem(value).map(PromptProblem::Name)
+            }
+            PromptKind::Remote { .. } => rusty_git::remote_name_problem(value, remotes, None)
+                .or_else(|| rusty_git::remote_url_problem(self.url.trim()))
+                .map(PromptProblem::Remote),
+            PromptKind::RenameRemote { from } => {
+                rusty_git::remote_name_problem(value, remotes, Some(from))
+                    .map(PromptProblem::Remote)
+            }
+            PromptKind::RemoteUrl { .. } => {
+                rusty_git::remote_url_problem(value).map(PromptProblem::Remote)
+            }
+        }
+    }
+
+    /// The problem worth saying out loud: one about a field with something
+    /// in it. An empty field only disables OK — the remote form opens with
+    /// its name filled in and its URL empty, and a form that greets somebody
+    /// with "enter a URL" in red is scolding them for not having typed yet.
+    pub fn shown_problem(&self, remotes: &[rusty_git::Remote]) -> Option<PromptProblem> {
+        let (value, url) = (self.value.trim(), self.url.trim());
+        match &self.kind {
+            PromptKind::Remote { .. } => {
+                let name = (!value.is_empty())
+                    .then(|| rusty_git::remote_name_problem(value, remotes, None))
+                    .flatten();
+                let url = (!url.is_empty())
+                    .then(|| rusty_git::remote_url_problem(url))
+                    .flatten();
+                name.or(url).map(PromptProblem::Remote)
+            }
+            _ => (!value.is_empty()).then(|| self.problem(remotes)).flatten(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1330,15 +1395,24 @@ pub enum PromptKind {
     Rename { from: String },
     /// A new tag on a commit.
     Tag { at: String },
+    /// A new remote, by name and URL. `push` when a push with nowhere to go
+    /// asked for it — once the remote exists, the push carries on, because
+    /// that is what the click was for.
+    Remote { push: bool },
+    /// A new name for a remote.
+    RenameRemote { from: String },
+    /// A new URL for a remote.
+    RemoteUrl { name: String },
 }
 
-/// The four reads the panel makes, as indices into [`ReadGate`].
+/// The reads the panel makes, as indices into [`ReadGate`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitRead {
     History,
     Refs,
     Status,
     Stashes,
+    Remotes,
 }
 
 impl GitRead {
@@ -1348,6 +1422,7 @@ impl GitRead {
             GitRead::Refs => 1,
             GitRead::Status => 2,
             GitRead::Stashes => 3,
+            GitRead::Remotes => 4,
         }
     }
 }
@@ -1357,8 +1432,8 @@ impl GitRead {
 /// once per save, and each answer arrived, was compared and was drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReadGate {
-    running: [bool; 4],
-    again: [bool; 4],
+    running: [bool; 5],
+    again: [bool; 5],
 }
 
 impl ReadGate {
@@ -1380,6 +1455,95 @@ impl ReadGate {
         let slot = read.slot();
         self.running[slot] = false;
         std::mem::take(&mut self.again[slot])
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+    use rusty_git::{RefNameProblem, Remote, RemoteProblem};
+
+    fn prompt(kind: PromptKind, value: &str, url: &str) -> RefPrompt {
+        RefPrompt {
+            kind,
+            value: value.into(),
+            url: url.into(),
+        }
+    }
+
+    fn remotes() -> Vec<Remote> {
+        vec![Remote {
+            name: "origin".into(),
+            url: "https://github.com/you/firmware.git".into(),
+            push_url: None,
+        }]
+    }
+
+    /// Each kind is judged by the rules of what it makes: a second `origin`
+    /// is refused, a fine name with no URL cannot be sent, and a URL field is
+    /// never held to a branch name's rules — a URL is full of `:` and `/`.
+    #[test]
+    fn each_prompt_is_held_to_the_rules_of_what_it_makes() {
+        let remotes = remotes();
+        let add = |name: &str, url: &str| prompt(PromptKind::Remote { push: false }, name, url);
+        assert_eq!(
+            add("origin", "https://github.com/you/other.git").problem(&remotes),
+            Some(PromptProblem::Remote(RemoteProblem::Exists))
+        );
+        assert_eq!(
+            add("fork", "").problem(&remotes),
+            Some(PromptProblem::Remote(RemoteProblem::UrlEmpty))
+        );
+        assert_eq!(
+            add(" fork ", " https://github.com/you/fork.git ").problem(&remotes),
+            None,
+            "both fields are trimmed, as the submit trims them",
+        );
+        let url = prompt(
+            PromptKind::RemoteUrl {
+                name: "origin".into(),
+            },
+            "git@github.com:you/firmware.git",
+            "",
+        );
+        assert_eq!(url.problem(&remotes), None);
+        let rename = |to: &str| {
+            prompt(
+                PromptKind::RenameRemote {
+                    from: "origin".into(),
+                },
+                to,
+                "",
+            )
+        };
+        assert_eq!(rename("origin").problem(&remotes), None);
+        assert_eq!(rename("upstream").problem(&remotes), None);
+        let branch = prompt(PromptKind::Branch { from: None }, "a:b", "");
+        assert_eq!(
+            branch.problem(&remotes),
+            Some(PromptProblem::Name(RefNameProblem::Character(':')))
+        );
+    }
+
+    /// The remote form opens with `origin` filled in and nothing in the URL.
+    /// That disables OK and says nothing; a URL typed wrong says why, and a
+    /// clashing name says so before any URL is typed.
+    #[test]
+    fn an_empty_field_disables_ok_without_a_word() {
+        let remotes = remotes();
+        let fresh = prompt(PromptKind::Remote { push: true }, "upstream", "");
+        assert!(fresh.problem(&remotes).is_some());
+        assert_eq!(fresh.shown_problem(&remotes), None);
+        let dashed = prompt(PromptKind::Remote { push: true }, "upstream", "-x");
+        assert_eq!(
+            dashed.shown_problem(&remotes),
+            Some(PromptProblem::Remote(RemoteProblem::UrlDash))
+        );
+        let clash = prompt(PromptKind::Remote { push: false }, "origin", "");
+        assert_eq!(
+            clash.shown_problem(&remotes),
+            Some(PromptProblem::Remote(RemoteProblem::Exists))
+        );
     }
 }
 
@@ -1413,6 +1577,8 @@ pub enum GitTarget {
     },
     /// A tag in the sidebar, with the commit it names.
     Tag { name: String, id: String },
+    /// A remote's heading in the sidebar.
+    Remote { name: String },
     /// A commit, by full hash — or a stash by its `stash@{n}` name.
     Commit { id: String },
     /// A path in a commit's file list, relative to the root: open it, copy
@@ -1927,6 +2093,7 @@ impl AppState {
                 message: RwSignal::new(String::new()),
                 stash_note: RwSignal::new(String::new()),
                 tags: RwSignal::new(Vec::new()),
+                remotes: RwSignal::new(Vec::new()),
                 prompt: RwSignal::new(None),
                 query: RwSignal::new(String::new()),
                 ref_filter: RwSignal::new(String::new()),

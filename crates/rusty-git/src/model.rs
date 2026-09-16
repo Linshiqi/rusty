@@ -201,6 +201,28 @@ pub struct Refs {
     pub tags: Vec<Tag>,
 }
 
+/// A remote, as the repository's config names it — whether or not anything
+/// has been fetched from it yet.
+///
+/// The sidebar used to know remotes only through their branches, read off
+/// `refs/remotes/`. A remote just added has none until the first fetch or
+/// push, so it did not exist on screen — and neither did any way to add one,
+/// so a repository started with `git init` could not be connected to GitHub
+/// from the panel at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Remote {
+    pub name: String,
+    /// Where fetches come from, as configured. Not rewritten through
+    /// `url.<base>.insteadOf`: this is also the text the edit field starts
+    /// from, and saving a rewritten URL back would bake the rewrite into the
+    /// config.
+    pub url: String,
+    /// Where pushes go, when that is configured apart from `url`.
+    #[serde(default)]
+    pub push_url: Option<String>,
+}
+
 /// One path the working tree or the index differs in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -272,6 +294,10 @@ pub struct GitStamp {
     pub index: u64,
     /// `refs/stash` and its reflog, which is the stash list.
     pub stash: u64,
+    /// The repository's `config`, which is where remotes live — so a remote
+    /// added in a terminal reaches the sidebar the way a commit does.
+    #[serde(default)]
+    pub config: u64,
 }
 
 /// What a newer stamp says has to be read again.
@@ -281,11 +307,12 @@ pub struct Stale {
     pub refs: bool,
     pub status: bool,
     pub stashes: bool,
+    pub remotes: bool,
 }
 
 impl Stale {
     pub fn any(&self) -> bool {
-        self.history || self.refs || self.status || self.stashes
+        self.history || self.refs || self.status || self.stashes || self.remotes
     }
 }
 
@@ -293,7 +320,9 @@ impl GitStamp {
     /// What moved between `before` and this one. A commit, a checkout, a
     /// fetch or a new tag moves HEAD or the refs, and the log, the branches
     /// and the status's ahead-behind all follow those; staging moves only the
-    /// index; a stash moves only the stash.
+    /// index; a stash moves only the stash; the config, only the remotes —
+    /// `git config user.name` moves it too, and costs one read of a list
+    /// nobody changed, which is cheaper than a stamp per config key.
     pub fn stale_since(&self, before: &GitStamp) -> Stale {
         let moved = self.head != before.head || self.refs != before.refs;
         Stale {
@@ -301,6 +330,7 @@ impl GitStamp {
             refs: moved,
             status: moved || self.index != before.index,
             stashes: self.stash != before.stash,
+            remotes: self.config != before.config,
         }
     }
 }
@@ -358,6 +388,56 @@ pub fn ref_name_problem(name: &str) -> Option<RefNameProblem> {
     }
     if name.split('/').any(|part| part.ends_with(".lock")) {
         return Some(RefNameProblem::Lock);
+    }
+    None
+}
+
+/// Why a remote could not be added, renamed or pointed somewhere else — said
+/// beside the field while it is typed, as a branch name's problems are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteProblem {
+    /// Not a name git would take. The rules are a branch's, because a remote
+    /// name becomes a directory of refs: `refs/remotes/<name>/`.
+    Name(RefNameProblem),
+    /// Another remote already has it.
+    Exists,
+    UrlEmpty,
+    /// A line break or another control character: a paste that brought more
+    /// than the URL with it.
+    UrlControl,
+    /// A leading `-`, which git would take as an option.
+    UrlDash,
+}
+
+/// `None` when a remote can be called `name`. `keeping` is the remote being
+/// renamed, whose own name is not a clash with itself.
+pub fn remote_name_problem(
+    name: &str,
+    remotes: &[Remote],
+    keeping: Option<&str>,
+) -> Option<RemoteProblem> {
+    if let Some(problem) = ref_name_problem(name) {
+        return Some(RemoteProblem::Name(problem));
+    }
+    let taken = remotes
+        .iter()
+        .any(|remote| remote.name == name && Some(remote.name.as_str()) != keeping);
+    taken.then_some(RemoteProblem::Exists)
+}
+
+/// `None` when a remote can point at `url`, given as it will be sent —
+/// trimmed. Deliberately not a URL parser: git takes `https://`, `ssh://`,
+/// `git@github.com:you/repo.git` and a plain directory alike, and a check
+/// that knew fewer shapes than git would refuse a remote that works.
+pub fn remote_url_problem(url: &str) -> Option<RemoteProblem> {
+    if url.is_empty() {
+        return Some(RemoteProblem::UrlEmpty);
+    }
+    if url.chars().any(char::is_control) {
+        return Some(RemoteProblem::UrlControl);
+    }
+    if url.starts_with('-') {
+        return Some(RemoteProblem::UrlDash);
     }
     None
 }
@@ -462,6 +542,7 @@ mod ref_tests {
             refs: 2,
             index: 3,
             stash: 4,
+            config: 10,
         };
         assert!(!before.stale_since(&before).any());
         let staged = GitStamp { index: 9, ..before };
@@ -486,6 +567,89 @@ mod ref_tests {
                 stashes: true,
                 ..Stale::default()
             }
+        );
+        let configured = GitStamp {
+            config: 6,
+            ..before
+        };
+        assert_eq!(
+            configured.stale_since(&before),
+            Stale {
+                remotes: true,
+                ..Stale::default()
+            },
+            "a remote added in a terminal is read again, and nothing else is",
+        );
+    }
+
+    fn remote(name: &str) -> Remote {
+        Remote {
+            name: name.into(),
+            url: format!("https://github.com/you/{name}.git"),
+            push_url: None,
+        }
+    }
+
+    /// A remote's name follows a branch's rules and must not be taken —
+    /// except by the remote being renamed, which is keeping its own.
+    #[test]
+    fn a_remote_name_is_refused_for_a_reason_and_a_clash_is_one() {
+        let remotes = [remote("origin"), remote("upstream")];
+        assert_eq!(remote_name_problem("fork", &remotes, None), None);
+        assert_eq!(
+            remote_name_problem("my.fork", &remotes, None),
+            None,
+            "a dot inside a name is fine, and git keeps it as one name",
+        );
+        assert_eq!(
+            remote_name_problem("origin", &remotes, None),
+            Some(RemoteProblem::Exists)
+        );
+        assert_eq!(
+            remote_name_problem("origin", &remotes, Some("origin")),
+            None,
+            "renaming a remote to itself clashes with nothing",
+        );
+        assert_eq!(
+            remote_name_problem("upstream", &remotes, Some("origin")),
+            Some(RemoteProblem::Exists),
+            "but renaming onto another remote does",
+        );
+        assert_eq!(
+            remote_name_problem("", &remotes, None),
+            Some(RemoteProblem::Name(RefNameProblem::Empty))
+        );
+        assert_eq!(
+            remote_name_problem("-x", &remotes, None),
+            Some(RemoteProblem::Name(RefNameProblem::Dash))
+        );
+    }
+
+    /// Every shape git takes is taken; only what git would misread is not.
+    #[test]
+    fn a_remote_url_is_refused_only_for_what_git_would_misread() {
+        for good in [
+            "https://github.com/you/repo.git",
+            "git@github.com:you/repo.git",
+            "ssh://git@gitlab.com/you/repo.git",
+            "E:/Work/My Repos/firmware.git",
+            "../bare.git",
+        ] {
+            assert_eq!(remote_url_problem(good), None, "{good}");
+        }
+        assert_eq!(remote_url_problem(""), Some(RemoteProblem::UrlEmpty));
+        let pasted = format!(
+            "https://github.com/you/repo.git{}git push",
+            char::from(10u8)
+        );
+        assert_eq!(
+            remote_url_problem(&pasted),
+            Some(RemoteProblem::UrlControl),
+            "a paste that carried a second line is not a URL",
+        );
+        assert_eq!(
+            remote_url_problem("--upload-pack=touch"),
+            Some(RemoteProblem::UrlDash)
         );
     }
 

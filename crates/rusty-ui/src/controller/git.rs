@@ -28,7 +28,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_git::{
-    ChangeKind, CommitDetail, GitIdentity, GitOperation, GitStamp, History, Refs, Stash, Status,
+    ChangeKind, CommitDetail, GitIdentity, GitOperation, GitStamp, History, Refs, Remote, Stash,
+    Status,
 };
 use rusty_i18n::t;
 
@@ -160,6 +161,23 @@ pub fn load_stashes(state: AppState) {
     });
 }
 
+/// Every remote the config names. Quiet on failure, like the refs; asked
+/// when the panel opens, after every write, and when the stamp says the
+/// config moved — a remote added in a terminal.
+pub fn load_remotes(state: AppState) {
+    if !state.has_project_now() || !begin(state, GitRead::Remotes) {
+        return;
+    }
+    spawn_local(async move {
+        if let Ok(remotes) = ipc::get::<Vec<Remote>>(cmd::git::REMOTES).await {
+            set_if_changed(state.git.remotes, remotes);
+        }
+        if finish(state, GitRead::Remotes) {
+            load_remotes(state);
+        }
+    });
+}
+
 /// Every read at once — the panel opening on a project, or the refresh
 /// button. The stamp is taken beside them as the baseline later probes are
 /// compared with; taken before the answers arrive, a change racing them is
@@ -170,6 +188,7 @@ pub fn load_git(state: AppState) {
     load_refs(state);
     load_status(state);
     load_stashes(state);
+    load_remotes(state);
     load_identity(state);
 }
 
@@ -210,6 +229,9 @@ pub fn probe_git(state: AppState) {
         if stale.stashes {
             load_stashes(state);
         }
+        if stale.remotes {
+            load_remotes(state);
+        }
     });
 }
 
@@ -247,6 +269,7 @@ pub fn open_git_panel(state: AppState, root: String) {
     state.git.tags.set(Vec::new());
     state.git.status.set(None);
     state.git.stashes.set(Vec::new());
+    state.git.remotes.set(Vec::new());
     state.git.unavailable.set(None);
     state.git.not_a_repo.set(false);
     state.git.loaded.set(false);
@@ -287,6 +310,7 @@ fn after_git(state: AppState) {
     load_refs(state);
     load_status(state);
     load_stashes(state);
+    load_remotes(state);
     refresh_tree(state);
 }
 
@@ -989,35 +1013,54 @@ fn stash_command(state: AppState, verb: &'static str, index: u32) {
 
 // ─── branches ────────────────────────────────────────────────────────────────
 
-/// The remote a push or a new upstream goes to: the current branch's own
-/// upstream's, else `origin` when there is one, else the first remote any
-/// branch is on — and `origin` when nothing says, which is git's own
-/// default name for the one it cloned from.
-fn default_remote(state: AppState) -> String {
-    let upstream_remote = state.git.status.with_untracked(|status| {
-        status
-            .as_ref()
-            .and_then(|s| s.upstream.as_deref())
-            .and_then(|upstream| upstream.split('/').next())
-            .map(str::to_string)
-    });
-    if let Some(remote) = upstream_remote {
-        return remote;
-    }
-    state.git.branches.with_untracked(|branches| {
-        let remotes: Vec<&str> = branches
+/// The remote a push or a new upstream goes to — `None` when the repository
+/// has none, which is the case a push has to stop and ask about.
+///
+/// The current branch's upstream's remote first, then `origin`, then the
+/// first there is. `known` is every remote name there is evidence of: the
+/// config's, and the ones remote-tracking branches name, so a click in the
+/// moment before the remotes have been read does not ask to add a remote
+/// that plainly exists.
+pub(crate) fn pick_remote(upstream: Option<&str>, known: &[String]) -> Option<String> {
+    if let Some(upstream) = upstream {
+        // The longest name that begins the upstream: a remote may be called
+        // `team` and another `team/fw`, and `team/fw/main` is the second's.
+        let owner = known
             .iter()
-            .filter_map(|b| b.remote_name.as_deref())
-            .collect();
-        if remotes.contains(&"origin") {
-            "origin".to_string()
-        } else {
-            remotes
-                .first()
-                .map(|remote| (*remote).to_string())
-                .unwrap_or_else(|| "origin".to_string())
+            .filter(|name| {
+                upstream
+                    .strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
+            .max_by_key(|name| name.len());
+        return owner
+            .cloned()
+            .or_else(|| upstream.split('/').next().map(str::to_string));
+    }
+    known
+        .iter()
+        .find(|name| *name == "origin")
+        .or_else(|| known.first())
+        .cloned()
+}
+
+fn default_remote(state: AppState) -> Option<String> {
+    let upstream = state
+        .git
+        .status
+        .with_untracked(|status| status.as_ref().and_then(|s| s.upstream.clone()));
+    let mut known: Vec<String> = state
+        .git
+        .remotes
+        .with_untracked(|remotes| remotes.iter().map(|r| r.name.clone()).collect());
+    state.git.branches.with_untracked(|branches| {
+        for name in branches.iter().filter_map(|b| b.remote_name.clone()) {
+            if !known.contains(&name) {
+                known.push(name);
+            }
         }
-    })
+    });
+    pick_remote(upstream.as_deref(), &known)
 }
 
 /// The arguments that check out `name`. A local branch by name; a remote
@@ -1061,25 +1104,47 @@ pub fn checkout_branch(state: AppState, name: String, remote: bool) {
     });
 }
 
-/// Open the name field.
+/// Open the name field — filled with what is being changed, or, for a new
+/// remote, with `origin` while the repository has none by that name: it is
+/// the name every guide, every host's instructions and git itself use for
+/// the one a repository was cloned from or first pushed to.
 pub fn open_prompt(state: AppState, kind: PromptKind) {
+    let remotes = state.git.remotes.get_untracked();
     let value = match &kind {
-        PromptKind::Rename { from } => from.clone(),
+        PromptKind::Rename { from } | PromptKind::RenameRemote { from } => from.clone(),
+        PromptKind::Remote { .. } if !remotes.iter().any(|r| r.name == "origin") => {
+            "origin".to_string()
+        }
+        PromptKind::RemoteUrl { name } => remotes
+            .iter()
+            .find(|r| &r.name == name)
+            .map(|r| r.url.clone())
+            .unwrap_or_default(),
         _ => String::new(),
     };
-    state.git.prompt.set(Some(RefPrompt { kind, value }));
+    state.git.prompt.set(Some(RefPrompt {
+        kind,
+        value,
+        url: String::new(),
+    }));
 }
 
-/// Carry out the name field: make the branch, rename one, or make the tag.
-/// A name git would refuse is not sent — the field says why instead.
+/// Carry out the field: make the branch, rename one, make the tag, or add,
+/// rename or re-point a remote. Anything git would refuse is not sent — the
+/// field says why instead.
+///
+/// The remote commands put `--` before what was typed. A name is already
+/// held to a branch's rules, which refuse a leading `-`; the URL is refused
+/// one too; and the `--` is what stays true if either rule is ever relaxed.
 pub fn submit_prompt(state: AppState) {
     let Some(prompt) = state.git.prompt.get_untracked() else {
         return;
     };
-    let name = prompt.value.trim().to_string();
-    if rusty_git::ref_name_problem(&name).is_some() {
+    let remotes = state.git.remotes.get_untracked();
+    if prompt.problem(&remotes).is_some() {
         return;
     }
+    let name = prompt.value.trim().to_string();
     state.git.prompt.set(None);
     match prompt.kind {
         PromptKind::Branch { from } => {
@@ -1096,6 +1161,27 @@ pub fn submit_prompt(state: AppState) {
             }
         }
         PromptKind::Tag { at } => git(state, words(&["tag", &name, &at])),
+        PromptKind::Remote { push } => {
+            let url = prompt.url.trim().to_string();
+            let args = words(&["remote", "add", "--", &name, &url]);
+            run_args_at_root_then(state, "git", args, move |code| {
+                after_git(state);
+                // The remote list is being read again, and will not have
+                // arrived by the time this line runs — so the push is told
+                // where to go rather than left to look it up.
+                if push && code == Some(0) {
+                    push_current_to(state, name);
+                }
+            });
+        }
+        PromptKind::RenameRemote { from } => {
+            if from != name {
+                git(state, words(&["remote", "rename", "--", &from, &name]));
+            }
+        }
+        PromptKind::RemoteUrl { name: remote } => {
+            git(state, words(&["remote", "set-url", "--", &remote, &name]));
+        }
     }
 }
 
@@ -1171,27 +1257,80 @@ pub fn push_branch(state: AppState, name: String) {
     });
     let args = match upstream.as_deref().and_then(|u| u.split('/').next()) {
         Some(remote) => words(&["push", remote, &name]),
-        None => words(&["push", "-u", &default_remote(state), &name]),
+        None => match default_remote(state) {
+            Some(remote) => words(&["push", "-u", &remote, &name]),
+            None => return open_prompt(state, PromptKind::Remote { push: false }),
+        },
     };
     git(state, args);
 }
 
 /// Push the current branch. With no upstream yet, set one — what the first
 /// push of a new branch wants, and what a bare `git push` refuses with a
-/// hint nobody reads.
+/// hint nobody reads. With no remote at all there is nowhere to push to, so
+/// the remote form opens instead and the push carries on once it is added:
+/// the first push of a repository made with `git init` used to be `push -u
+/// origin main` and git's "'origin' does not appear to be a git repository".
 pub fn push(state: AppState) {
+    let tracked = state
+        .git
+        .status
+        .with_untracked(|s| s.as_ref().is_some_and(|s| s.upstream.is_some()));
+    if tracked {
+        return git(state, words(&["push"]));
+    }
+    match default_remote(state) {
+        Some(remote) => push_current_to(state, remote),
+        None => open_prompt(state, PromptKind::Remote { push: true }),
+    }
+}
+
+/// Push the branch checked out to `remote` and make it the upstream — or a
+/// plain push when an upstream already exists, which the remote form's
+/// follow-up cannot know until the status is read.
+fn push_current_to(state: AppState, remote: String) {
     let (head, upstream) = state.git.status.with_untracked(|s| {
         s.as_ref()
             .map(|s| (s.head.clone(), s.upstream.clone()))
             .unwrap_or((None, None))
     });
-    let mut args = vec!["push".to_string()];
+    let mut args = words(&["push"]);
     if upstream.is_none()
         && let Some(head) = head
     {
-        args.extend(words(&["-u", &default_remote(state), &head]));
+        args.extend(words(&["-u", &remote, &head]));
     }
     git(state, args);
+}
+
+/// Fetch one remote, dropping the branches it no longer has.
+pub fn fetch_remote(state: AppState, name: String) {
+    git(state, words(&["fetch", "--prune", "--", &name]));
+}
+
+/// Remove a remote. It asks first, and says what goes: this repository's
+/// copies of the remote's branches and the upstreams that named them — and
+/// nothing on the remote itself.
+pub fn remove_remote(state: AppState, name: String) {
+    let question = t!("git.remote-remove-confirm", name = name.clone());
+    spawn_local(async move {
+        if !ipc::confirm(&question).await {
+            return;
+        }
+        let args = words(&["remote", "remove", "--", &name]);
+        run_args_at_root_then(state, "git", args, move |_| {
+            let prefix = format!("{name}/");
+            if state
+                .git
+                .rev
+                .get_untracked()
+                .is_some_and(|rev| rev.starts_with(&prefix))
+            {
+                state.git.rev.set(None);
+            }
+            after_git(state);
+        });
+    });
 }
 
 pub fn fetch(state: AppState) {
@@ -1217,7 +1356,9 @@ pub fn delete_tag(state: AppState, name: String) {
 
 /// Push one tag. By its full name, since a branch may share it.
 pub fn push_tag(state: AppState, name: String) {
-    let remote = default_remote(state);
+    let Some(remote) = default_remote(state) else {
+        return open_prompt(state, PromptKind::Remote { push: false });
+    };
     git(
         state,
         words(&["push", &remote, &format!("refs/tags/{name}")]),
@@ -1268,7 +1409,42 @@ pub fn abort_operation(state: AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{checkout_args, is_hash};
+    use super::{checkout_args, is_hash, pick_remote};
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    /// Where a push goes: the upstream's remote, then `origin`, then any —
+    /// and nowhere at all when there is none, which is when the panel asks
+    /// for one instead of running a push git can only refuse.
+    #[test]
+    fn a_push_goes_to_the_remote_there_is_evidence_for() {
+        assert_eq!(
+            pick_remote(Some("fork/main"), &names(&["origin", "fork"])).as_deref(),
+            Some("fork"),
+            "the branch's own upstream decides first",
+        );
+        assert_eq!(
+            pick_remote(Some("team/fw/main"), &names(&["team", "team/fw"])).as_deref(),
+            Some("team/fw"),
+            "the longest remote name that begins the upstream owns it",
+        );
+        assert_eq!(
+            pick_remote(None, &names(&["upstream", "origin"])).as_deref(),
+            Some("origin")
+        );
+        assert_eq!(
+            pick_remote(None, &names(&["github"])).as_deref(),
+            Some("github")
+        );
+        assert_eq!(pick_remote(None, &[]), None);
+        assert_eq!(
+            pick_remote(Some("origin/main"), &[]).as_deref(),
+            Some("origin"),
+            "an upstream is evidence of its remote before the list has arrived",
+        );
+    }
 
     #[test]
     fn a_remote_branch_is_checked_out_through_a_local_one() {

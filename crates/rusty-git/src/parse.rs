@@ -6,11 +6,11 @@
 //! message with a newline or a tab in it is ordinary and a parser that split
 //! on either would tear commits in half.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::model::{
-    Branch, ChangeKind, Commit, CommitDetail, FileChange, RefKind, RefLabel, Refs, Stash, Status,
-    StatusEntry, Tag,
+    Branch, ChangeKind, Commit, CommitDetail, FileChange, RefKind, RefLabel, Refs, Remote, Stash,
+    Status, StatusEntry, Tag,
 };
 
 /// The format string [`log`] reads. Hash, parents, author, email, author time,
@@ -322,6 +322,53 @@ pub fn files(
         .collect()
 }
 
+/// The remotes out of `git config -z --get-regexp` over the `url` and
+/// `pushurl` keys: every entry ends in NUL, and is its key, a newline, then
+/// its value — so a URL holding a space, or a path on a drive with one in
+/// its name, arrives whole.
+///
+/// A remote's name may itself hold dots (`my.fork`), so the name is what
+/// lies between `remote.` and the trailing `.url` or `.pushurl`, never a
+/// split on dots. git fetches from the first of several `url` lines, which
+/// is the one kept; a remote with a `pushurl` and no `url` is nothing a
+/// fetch can use and is left out rather than shown with a URL it lacks.
+pub fn remotes(text: &str) -> Vec<Remote> {
+    let mut found: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
+    for entry in text.split('\0') {
+        let Some((key, value)) = entry.split_once('\n') else {
+            continue;
+        };
+        let Some(rest) = key.strip_prefix("remote.") else {
+            continue;
+        };
+        let (name, push) = if let Some(name) = rest.strip_suffix(".pushurl") {
+            (name, true)
+        } else if let Some(name) = rest.strip_suffix(".url") {
+            (name, false)
+        } else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let (url, push_url) = found.entry(name.to_string()).or_default();
+        let slot = if push { push_url } else { url };
+        if slot.is_none() {
+            *slot = Some(value.to_string());
+        }
+    }
+    found
+        .into_iter()
+        .filter_map(|(name, (url, push_url))| {
+            Some(Remote {
+                name,
+                url: url?,
+                push_url,
+            })
+        })
+        .collect()
+}
+
 /// The format [`refs`] reads, one ref a line and fields on `\x1f`: the full
 /// ref name, `*` when checked out, the upstream's full name, how it tracks
 /// it (`ahead 1, behind 2`, or `gone`), the hash, the commit an annotated
@@ -559,6 +606,55 @@ fn kind_of(code: char) -> Option<ChangeKind> {
         'D' => Some(ChangeKind::Deleted),
         'R' | 'C' => Some(ChangeKind::Renamed),
         _ => Some(ChangeKind::Other),
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+
+    /// A real answer's shape: a remote whose name holds a dot, a push URL
+    /// set apart from the fetch URL, a path with a space in it, and the
+    /// trailing NUL git ends on.
+    #[test]
+    fn remotes_are_read_whole_with_dotted_names_and_push_urls() {
+        let text = concat!(
+            "remote.origin.url\nhttps://github.com/you/firmware.git\0",
+            "remote.my.fork.url\ngit@github.com:you/fork.git\0",
+            "remote.my.fork.pushurl\nE:/Work/My Repos/fork.git\0",
+        );
+        assert_eq!(
+            remotes(text),
+            vec![
+                Remote {
+                    name: "my.fork".into(),
+                    url: "git@github.com:you/fork.git".into(),
+                    push_url: Some("E:/Work/My Repos/fork.git".into()),
+                },
+                Remote {
+                    name: "origin".into(),
+                    url: "https://github.com/you/firmware.git".into(),
+                    push_url: None,
+                },
+            ],
+        );
+    }
+
+    /// No remotes is an empty answer (git exits 1 with nothing printed); a
+    /// second `url` does not replace the first, which is the one git fetches
+    /// from; and a remote that only has somewhere to push is left out.
+    #[test]
+    fn nothing_is_nothing_and_the_first_url_is_the_fetch_url() {
+        assert!(remotes("").is_empty());
+        let text = concat!(
+            "remote.origin.url\nhttps://one.example/r.git\0",
+            "remote.origin.url\nhttps://two.example/r.git\0",
+            "remote.pushonly.pushurl\nhttps://three.example/r.git\0",
+            "core.bare\nfalse\0",
+        );
+        let read = remotes(text);
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert_eq!(read[0].url, "https://one.example/r.git");
     }
 }
 

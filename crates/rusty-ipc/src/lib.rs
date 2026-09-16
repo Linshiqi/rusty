@@ -297,6 +297,8 @@ pub mod git {
     /// The working tree: branch, upstream, every changed path.
     pub const STATUS: &str = "git_status";
     pub const STASHES: &str = "git_stashes";
+    /// Every remote the config names, fetched from yet or not.
+    pub const REMOTES: &str = "git_remotes";
     /// One path's diff — index against HEAD, or tree against index.
     pub const DIFF: &str = "git_diff";
     /// Put paths in the index, or take them out. Quiet: everything that

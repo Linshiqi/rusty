@@ -679,6 +679,21 @@ fn Level(entries: Vec<Entry>, depth: usize, parent: String) -> AnyView {
                 let path = path.clone();
                 move || !is_dir && state.is_unlinked(&path)
             });
+            // What is wrong in it, as VS Code's explorer says it: a file with
+            // errors in red with how many, one with only warnings in amber,
+            // and a folder in the colour of the worst thing inside it — so a
+            // compile error in a file nobody has open is visible without
+            // building. The check's results cover every file, not only the
+            // open ones, which is what makes the folders worth colouring.
+            let mark = Signal::derive({
+                let path = path.clone();
+                move || {
+                    state
+                        .lsp
+                        .diagnostics
+                        .with(|by_file| problem_mark(by_file, &path, is_dir))
+                }
+            });
             let on_dragstart = {
                 let target = target.clone();
                 move |event: ev::DragEvent| {
@@ -764,10 +779,13 @@ fn Level(entries: Vec<Entry>, depth: usize, parent: String) -> AnyView {
                             class=move || {
                                 let base = "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left \
                                             text-callout transition-colors";
-                                let tone = if selected.get() {
-                                    "bg-selection text-rust"
-                                } else {
-                                    "text-label-2 hover:bg-sunken hover:text-label"
+                                let tone = match (selected.get(), mark.get()) {
+                                    (true, _) => "bg-selection text-rust",
+                                    (false, Some(Mark { errors, .. })) if errors > 0 => {
+                                        "text-crimson hover:bg-sunken"
+                                    }
+                                    (false, Some(_)) => "text-amber hover:bg-sunken",
+                                    (false, None) => "text-label-2 hover:bg-sunken hover:text-label",
                                 };
                                 let drop = if receiving.get() {
                                     " bg-selection/60 ring-1 ring-rust/70 ring-inset"
@@ -798,7 +816,7 @@ fn Level(entries: Vec<Entry>, depth: usize, parent: String) -> AnyView {
                                     }
                                 }}
                             </span>
-                            <span class="truncate">{name}</span>
+                            <span class="min-w-0 flex-1 truncate">{name}</span>
                             // The reason, on hover, where a shade of grey
                             // cannot say one. A dim row with no explanation
                             // is a rendering bug as far as anyone can tell.
@@ -815,6 +833,22 @@ fn Level(entries: Vec<Entry>, depth: usize, parent: String) -> AnyView {
                                             </span>
                                         }
                                     })
+                            }}
+                            {move || {
+                                mark.get().map(|Mark { errors, warnings }| {
+                                    let (count, tone) = if errors > 0 {
+                                        (errors, "text-crimson")
+                                    } else {
+                                        (warnings, "text-amber")
+                                    };
+                                    // A file says how many; a folder only that
+                                    // there is something, since a sum over a
+                                    // whole subtree is a number nobody acts on.
+                                    let text = if is_dir { "●".to_string() } else { count.to_string() };
+                                    view! {
+                                        <span class=format!("shrink-0 text-caption tnum {tone}")>{text}</span>
+                                    }
+                                })
                             }}
                         </button>
                     }
@@ -1068,5 +1102,129 @@ mod tests {
             "/home/a/blinky/src"
         );
         assert_eq!(absolute_path("E:\\work\\blinky\\", ""), "E:\\work\\blinky");
+    }
+}
+
+/// How much is wrong in one tree row: its errors and warnings, or those of
+/// everything under it for a folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Mark {
+    pub errors: usize,
+    pub warnings: usize,
+}
+
+/// The mark for `path`, or `None` when nothing there is an error or a
+/// warning. Hints and information are not problems — the Problems panel's
+/// rule — so a crate full of `#[cfg]`-inactive code is not painted amber.
+/// A folder counts what is under it by path, with the separator: `src2` is
+/// not under `src`.
+pub(super) fn problem_mark(
+    by_file: &std::collections::HashMap<String, Vec<rusty_lsp::FileDiagnostic>>,
+    path: &str,
+    is_dir: bool,
+) -> Option<Mark> {
+    use rusty_lsp::DiagSeverity;
+
+    let prefix = format!("{}/", path.trim_end_matches('/'));
+    let mut mark = Mark {
+        errors: 0,
+        warnings: 0,
+    };
+    for (file, items) in by_file {
+        let inside = if is_dir {
+            path.is_empty() || file.starts_with(&prefix)
+        } else {
+            file == path
+        };
+        if !inside {
+            continue;
+        }
+        for item in items {
+            match item.severity {
+                DiagSeverity::Error => mark.errors += 1,
+                DiagSeverity::Warning => mark.warnings += 1,
+                _ => {}
+            }
+        }
+    }
+    (mark.errors + mark.warnings > 0).then_some(mark)
+}
+
+#[cfg(test)]
+mod mark_tests {
+    use std::collections::HashMap;
+
+    use rusty_lsp::{DiagSeverity, FileDiagnostic};
+
+    use super::*;
+
+    fn items(severities: &[DiagSeverity]) -> Vec<FileDiagnostic> {
+        severities
+            .iter()
+            .map(|severity| FileDiagnostic {
+                severity: *severity,
+                message: String::new(),
+                source: Some("rustc".into()),
+                code: None,
+                start_line: 0,
+                start_col: 0,
+                end_line: 0,
+                end_col: 0,
+            })
+            .collect()
+    }
+
+    /// The report: an error in `core/src/math/quaternion.rs` marks the file
+    /// and each folder above it, and nothing beside it.
+    #[test]
+    fn an_error_marks_its_file_and_every_folder_above_it() {
+        let by_file = HashMap::from([(
+            "core/src/math/quaternion.rs".to_string(),
+            items(&[
+                DiagSeverity::Error,
+                DiagSeverity::Warning,
+                DiagSeverity::Hint,
+            ]),
+        )]);
+        let file = problem_mark(&by_file, "core/src/math/quaternion.rs", false);
+        assert_eq!(
+            file,
+            Some(Mark {
+                errors: 1,
+                warnings: 1
+            }),
+            "a hint is not a problem"
+        );
+        for folder in ["core", "core/src", "core/src/math"] {
+            assert_eq!(
+                problem_mark(&by_file, folder, true).map(|m| m.errors),
+                Some(1),
+                "{folder}"
+            );
+        }
+        assert_eq!(
+            problem_mark(&by_file, "core/src/math/vector.rs", false),
+            None
+        );
+        assert_eq!(problem_mark(&by_file, "firmware", true), None);
+    }
+
+    /// A folder whose name another begins with is not its parent, and a file
+    /// with only hints is unmarked.
+    #[test]
+    fn a_prefix_is_not_a_parent_and_hints_mark_nothing() {
+        let by_file = HashMap::from([
+            ("src2/lib.rs".to_string(), items(&[DiagSeverity::Error])),
+            (
+                "src/main.rs".to_string(),
+                items(&[DiagSeverity::Hint, DiagSeverity::Info]),
+            ),
+        ]);
+        assert_eq!(problem_mark(&by_file, "src", true), None);
+        assert_eq!(problem_mark(&by_file, "src/main.rs", false), None);
+        assert_eq!(
+            problem_mark(&by_file, "src2", true).map(|m| m.errors),
+            Some(1)
+        );
     }
 }

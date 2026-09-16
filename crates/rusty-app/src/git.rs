@@ -11,7 +11,7 @@
 
 use base64::Engine;
 use rusty_embed::{CommandPlan, LogLine, process};
-use rusty_git::{CommitDetail, GitIdentity, GitStamp, History, Refs, Stash, Status};
+use rusty_git::{CommitDetail, GitIdentity, GitStamp, History, Refs, Remote, Stash, Status};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -85,6 +85,14 @@ pub async fn git_identity(state: State<'_, AppState>) -> Answer<GitIdentity> {
 pub async fn git_stashes(state: State<'_, AppState>) -> Answer<Vec<Stash>> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     Ok(blocking("git stash list", move || rusty_git::repo::stashes(&root)).await??)
+}
+
+/// Every remote the config names — including one nothing has been fetched
+/// from yet, which the refs cannot show.
+#[tauri::command]
+pub async fn git_remotes(state: State<'_, AppState>) -> Answer<Vec<Remote>> {
+    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    Ok(blocking("git config", move || rusty_git::repo::remotes(&root)).await??)
 }
 
 /// One path's diff, for the Changes view.
