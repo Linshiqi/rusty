@@ -17,6 +17,23 @@ pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, Command
     Ok(blocking("reading the tree", move || rusty_edit::read_tree(&root)).await??)
 }
 
+/// The `.rs` files under a crate's `src/` that no `mod` declaration reaches.
+///
+/// rust-analyzer's own verdict (`unlinked-file`) is authoritative and arrives
+/// only for a file somebody has opened; the tree has to dim one before that,
+/// so this reads the declarations itself and refuses wherever it cannot be
+/// sure — see `rusty_edit::modules`.
+#[tauri::command]
+pub async fn unlinked_files(state: State<'_, AppState>) -> Result<Vec<String>, CommandError> {
+    let Some(root) = state.root().await else {
+        return Ok(Vec::new());
+    };
+    blocking("reading the module tree", move || {
+        rusty_edit::scan_unlinked(&root)
+    })
+    .await
+}
+
 /// A new empty file or directory. Refuses names that already exist.
 #[tauri::command]
 pub async fn create_entry(

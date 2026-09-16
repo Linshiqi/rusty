@@ -72,6 +72,15 @@ pub fn start_watch(state: AppState) {
 fn absorb(state: AppState, changes: FileChanges) {
     if changes.tree {
         refresh_tree(state);
+    } else if changes.changed.iter().any(|path| path.ends_with(".rs")) {
+        // Which files the module tree reaches is decided by the `mod` lines
+        // *inside* Rust files, so adding one is a content change and the
+        // tree never hears about it — the file stayed dim after being
+        // declared, which reads as a dim that means nothing. Only for `.rs`,
+        // and only when the walk is not happening anyway: the scan reads
+        // every Rust file in the project, which is not a thing to do after
+        // somebody saves a README.
+        refresh_unlinked(state);
     }
     // The history follows the disk too: a commit made in a terminal, a
     // checkout, a fetch. `.git/` itself is a dot directory and unwatched, so

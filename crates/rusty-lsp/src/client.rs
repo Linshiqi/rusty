@@ -37,8 +37,8 @@ use crate::{
     convert, discover,
     error::{Error, Result},
     model::{
-        ActionEdit, CodeActionFix, CompletionList, HealthLevel, HoverInfo, Location, LspEvent,
-        SemanticSpan, SignatureInfo,
+        ActionEdit, CodeActionFix, CodeActions, CompletionList, HealthLevel, HoverInfo, Location,
+        LspEvent, SemanticSpan, SignatureInfo,
     },
     positions::{Encoding, content_change, scalar_to_character},
     pull, rpc,
@@ -102,7 +102,9 @@ struct Doc {
     text: String,
 }
 
-/// One completion answer as the server sent it.
+/// One answer as the server sent it — a completion list's items, or a
+/// code action's WorkspaceEdits. Both are looked up the same way, by the
+/// number the answer went out under and the index within it.
 struct Reply {
     path: String,
     number: u64,
@@ -132,6 +134,14 @@ pub(crate) struct Shared {
     /// Numbers the completion answers, from 1 — far short of 2^53 in any
     /// session, so it crosses the wire as a plain JSON number.
     replies: AtomicU64,
+    /// The latest code-action answers' WorkspaceEdits, one per fix the
+    /// frontend was shown, each with the path and the number it answered
+    /// under. An accepted fix that edits other files is applied from here
+    /// the way a rename is, since the frontend only ever splices its own
+    /// buffer. Kept like the completions and for the same reason: the caret
+    /// and a hover both ask, so the newest answer is often not the one the
+    /// fix being applied came from. Newest last, at most [`KEPT_REPLIES`].
+    actions: Mutex<VecDeque<Reply>>,
     /// The server's work in progress, by token — what `$/progress` has begun
     /// and not yet ended. Summarised into `LspEvent::Progress` on change.
     progress: Mutex<BTreeMap<String, Progress>>,
@@ -186,6 +196,7 @@ impl LspClient {
             docs: Mutex::new(HashMap::new()),
             completions: Mutex::new(VecDeque::new()),
             replies: AtomicU64::new(1),
+            actions: Mutex::new(VecDeque::new()),
             progress: Mutex::new(BTreeMap::new()),
             next_id: AtomicI64::new(1),
             alive: AtomicBool::new(true),
@@ -415,15 +426,17 @@ impl LspClient {
     }
 
     /// The quick fixes and refactorings available at a position, with their
-    /// edits resolved and converted — ready to splice.
+    /// edits for `path` resolved and converted — ready to splice — and the
+    /// other files each one changes named, their edits kept here for
+    /// [`LspClient::apply_action_elsewhere`].
     ///
     /// Lazily-resolved actions get a `codeAction/resolve` round trip each, up
-    /// to a budget. Actions that edit other files, or only carry a
-    /// server-side command, are dropped: half of a multi-file fix is worse
-    /// than none. A resolve that fails is swallowed only while there is
+    /// to a budget. An action that creates, renames or deletes a file, edits
+    /// a file outside the project, or only carries a server-side command is
+    /// dropped. A resolve that fails is swallowed only while there is
     /// something else to offer — an empty menu with a reason in hand is an
     /// error the caller should hear.
-    pub fn code_actions(&self, path: &str, line: u32, col: u32) -> Result<Vec<CodeActionFix>> {
+    pub fn code_actions(&self, path: &str, line: u32, col: u32) -> Result<CodeActions> {
         let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/codeAction",
@@ -440,6 +453,7 @@ impl LspClient {
         let text = self.shared.open_text(path).unwrap_or_default();
         let encoding = self.shared.encoding();
         let mut fixes = Vec::new();
+        let mut kept = Vec::new();
         let mut resolves = 0usize;
         let mut failed: Option<Error> = None;
         for offer in result.as_array().into_iter().flatten() {
@@ -472,21 +486,86 @@ impl LspClient {
                 }
             };
 
-            if let Some(edits) = convert::single_file_edits(&action["edit"], &ours)
-                && let Some(edits) = convert::action_edits(&edits, &text, encoding)
-                && !edits.is_empty()
-            {
-                fixes.push(CodeActionFix {
-                    title: title.to_string(),
-                    kind,
-                    edits,
-                });
+            let Some((mine, theirs)) = convert::split_edits(&action["edit"], &ours) else {
+                continue;
+            };
+            let Some(edits) = convert::action_edits(&mine, &text, encoding) else {
+                continue;
+            };
+            // The other files, by the names the tree gives them. One outside
+            // the project refuses the action: nothing here writes there.
+            let mut elsewhere = Vec::with_capacity(theirs.len());
+            for (uri, _) in &theirs {
+                match uri_to_relative(uri, &self.shared.root) {
+                    Some(relative) => elsewhere.push(relative),
+                    None => {
+                        elsewhere.clear();
+                        break;
+                    }
+                }
+            }
+            if elsewhere.len() != theirs.len() || (edits.is_empty() && elsewhere.is_empty()) {
+                continue;
+            }
+            fixes.push(CodeActionFix {
+                title: title.to_string(),
+                kind,
+                edits,
+                elsewhere,
+            });
+            kept.push(action["edit"].clone());
+        }
+        let number = self.shared.replies.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut answers = self.shared.actions.lock().expect("lsp actions");
+            answers.push_back(Reply {
+                path: path.to_string(),
+                number,
+                items: kept,
+            });
+            while answers.len() > KEPT_REPLIES {
+                answers.pop_front();
             }
         }
         match (fixes.is_empty(), failed) {
             (true, Some(error)) => Err(error),
-            _ => Ok(fixes),
+            _ => Ok(CodeActions {
+                fixes,
+                reply: number,
+            }),
         }
+    }
+
+    /// The part of an accepted fix that lands in other files, written there:
+    /// the `index`th fix of answer `reply` for `path`, less its edits to
+    /// `path` itself, which the frontend has already spliced into its own
+    /// buffer. Written the way a rename is, and answering with the files
+    /// that changed.
+    ///
+    /// Empty when that answer is no longer kept or was for another file.
+    /// The number is what makes that safe: the caret and a hover both ask,
+    /// and applying by index against whichever answer happened to be last
+    /// would write one position's edits from another position's click.
+    pub fn apply_action_elsewhere(
+        &self,
+        path: &str,
+        reply: u64,
+        index: u32,
+    ) -> Result<Vec<String>> {
+        let edit = {
+            let kept = self.shared.actions.lock().expect("lsp actions");
+            kept.iter()
+                .find(|answer| answer.number == reply && answer.path == path)
+                .and_then(|answer| answer.items.get(index as usize).cloned())
+        };
+        let Some(edit) = edit else {
+            return Ok(Vec::new());
+        };
+        let ours = self.uri(path);
+        let Some((_, theirs)) = convert::split_edits(&edit, &ours) else {
+            return Ok(Vec::new());
+        };
+        self.write_edits("textDocument/codeAction", theirs)
     }
 
     /// Rename the symbol at this position, everywhere, and write the files.
@@ -515,12 +594,31 @@ impl LspClient {
             }),
         )?;
 
+        let Some(by_file) = convert::edits_by_file(&result) else {
+            return Err(Error::Server {
+                method: "textDocument/rename".into(),
+                message: "this rename also moves a file, which rusty cannot apply yet — \
+                          rename the module in the file tree instead"
+                    .into(),
+            });
+        };
+        self.write_edits("textDocument/rename", by_file)
+    }
+
+    /// Write a server's edits to the files they name — a rename, or the part
+    /// of a quick fix that lands outside the file it was asked in.
+    ///
+    /// Every file is read and converted before any is written. A file the
+    /// server names that cannot be read, or that has changed since the
+    /// server read it, refuses the whole set — not the half of it that came
+    /// after. Answers with the paths that changed.
+    fn write_edits(&self, method: &str, by_file: Vec<(String, Vec<Value>)>) -> Result<Vec<String>> {
         let encoding = self.shared.encoding();
         let mut planned: Vec<(PathBuf, String)> = Vec::new();
-        for (uri, edits) in convert::edits_by_file(&result)? {
+        for (uri, edits) in by_file {
             let Some(file) = uri_to_absolute(&uri) else {
                 return Err(Error::Server {
-                    method: "textDocument/rename".into(),
+                    method: method.into(),
                     message: format!("rust-analyzer named a file this client cannot locate: {uri}"),
                 });
             };
@@ -531,7 +629,7 @@ impl LspClient {
             })?;
             let Some(out) = convert::apply_text_edits(&text, &edits, encoding) else {
                 return Err(Error::Server {
-                    method: "textDocument/rename".into(),
+                    method: method.into(),
                     message: format!(
                         "{} has changed since rust-analyzer last read it — save and try again",
                         file.display()
@@ -1049,7 +1147,7 @@ fn dispatch(shared: &Shared, message: Value) {
             };
             let _ = shared.events.send(LspEvent::Health {
                 level,
-                message: params["message"].as_str().map(str::to_string),
+                message: params["message"].as_str().map(health_text),
             });
         }
         // A message the server asked to have shown. Only the two that name a
@@ -1063,11 +1161,20 @@ fn dispatch(shared: &Shared, message: Value) {
             };
             let _ = shared.events.send(LspEvent::Health {
                 level,
-                message: params["message"].as_str().map(str::to_string),
+                message: params["message"].as_str().map(health_text),
             });
         }
         // Logs: narration, not state.
         _ => {}
+    }
+}
+
+/// The server's own words, with a sentence in front of them where rusty
+/// recognises what the failure really is. See [`convert::explain_health`].
+fn health_text(message: &str) -> String {
+    match convert::explain_health(message) {
+        Some(named) => format!("{named}\n\n{message}"),
+        None => message.to_string(),
     }
 }
 
@@ -1286,6 +1393,73 @@ mod tests {
             let hover = hover.join().unwrap().expect("hover").expect("some hover");
             assert_eq!(hover.text, "the hover");
         });
+    }
+
+    /// A fix that edits another file is offered, names the file, and is
+    /// written there on request — the fix for a file no `mod` line declares
+    /// edits only the parent module, and used to be dropped whole.
+    #[test]
+    fn a_fix_for_another_file_is_offered_and_written_there() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        let parent = root.path().join("src/lib.rs");
+        std::fs::write(&parent, "pub mod vector;\n").unwrap();
+        let parent_uri = path_to_uri(&parent);
+        let (reader, writer, _seen) = fake_server(move |message, writer| {
+            if method(message) == "textDocument/codeAction" {
+                let at = json!({ "line": 1, "character": 0 });
+                let parent_uri = parent_uri.clone();
+                reply(
+                    writer,
+                    message,
+                    json!([{
+                        "title": "Insert `mod fresh;`",
+                        "kind": "quickfix",
+                        "edit": { "changes": { parent_uri: [{
+                            "range": { "start": at, "end": at },
+                            "newText": "pub mod fresh;\n",
+                        }] } },
+                    }]),
+                );
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client
+            .did_open("src/fresh.rs", "pub struct Fresh;\n")
+            .unwrap();
+
+        let answer = client.code_actions("src/fresh.rs", 0, 0).expect("actions");
+        assert_eq!(answer.fixes.len(), 1, "{answer:?}");
+        assert!(answer.fixes[0].edits.is_empty(), "nothing in this file");
+        assert_eq!(answer.fixes[0].elsewhere, ["src/lib.rs"]);
+
+        let changed = client
+            .apply_action_elsewhere("src/fresh.rs", answer.reply, 0)
+            .expect("apply");
+        assert_eq!(changed.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(&parent).unwrap(),
+            "pub mod vector;\npub mod fresh;\n"
+        );
+        // An index the answer never had writes nothing.
+        assert!(
+            client
+                .apply_action_elsewhere("src/fresh.rs", answer.reply, 7)
+                .unwrap()
+                .is_empty()
+        );
+        // Nor does an answer number nobody issued. That is what keeps the
+        // caret's popup and a hover over a squiggle from applying each
+        // other's fixes: both ask now, and the last asker used to win.
+        assert!(
+            client
+                .apply_action_elsewhere("src/fresh.rs", answer.reply + 99, 0)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// A server that could not load the workspace says so, and the session

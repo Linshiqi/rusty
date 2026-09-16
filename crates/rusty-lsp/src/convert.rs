@@ -10,7 +10,6 @@
 use serde_json::Value;
 
 use crate::{
-    error::{Error, Result},
     model::{
         ActionEdit, CompletionItem, CompletionList, DiagSeverity, EditRange, FileDiagnostic,
         HoverInfo, SemanticSpan, SignatureInfo,
@@ -305,22 +304,30 @@ pub(crate) fn diagnostics(
             let range = &d["range"];
             let start_line = range["start"]["line"].as_u64()? as u32;
             let end_line = range["end"]["line"].as_u64()? as u32;
+            let code = match &d["code"] {
+                Value::String(code) => Some(code.clone()),
+                Value::Number(code) => Some(code.to_string()),
+                _ => None,
+            };
+            let severity = match d["severity"].as_u64() {
+                Some(2) => DiagSeverity::Warning,
+                Some(3) => DiagSeverity::Info,
+                // rust-analyzer files `unlinked-file` as a hint, and a hint is
+                // what this editor keeps out of the Problems panel. It is the
+                // one hint that switches the server off for the whole file —
+                // no completion, no hover, no jump, while the syntax errors
+                // keep arriving — so here it is the warning it is.
+                Some(4) if code.as_deref() == Some("unlinked-file") => DiagSeverity::Warning,
+                Some(4) => DiagSeverity::Hint,
+                // Absent means the producer did not say; rustc's errors
+                // always do, so unmarked ones are treated as the worst.
+                _ => DiagSeverity::Error,
+            };
             Some(FileDiagnostic {
-                severity: match d["severity"].as_u64() {
-                    Some(2) => DiagSeverity::Warning,
-                    Some(3) => DiagSeverity::Info,
-                    Some(4) => DiagSeverity::Hint,
-                    // Absent means the producer did not say; rustc's errors
-                    // always do, so unmarked ones are treated as the worst.
-                    _ => DiagSeverity::Error,
-                },
+                severity,
                 message: d["message"].as_str().unwrap_or_default().to_string(),
                 source: d["source"].as_str().map(str::to_string),
-                code: match &d["code"] {
-                    Value::String(code) => Some(code.clone()),
-                    Value::Number(code) => Some(code.to_string()),
-                    _ => None,
-                },
+                code,
                 start_line,
                 start_col: scalar(start_line, range["start"]["character"].as_u64()? as u32),
                 end_line,
@@ -365,37 +372,28 @@ pub(crate) fn kind_name(kind: u64) -> &'static str {
     }
 }
 
-/// A WorkspaceEdit's text edits for the file at `ours` only — `None` when
-/// the edit also touches other files or moves one. Half of a multi-file fix
-/// is worse than none.
-pub(crate) fn single_file_edits(edit: &Value, ours: &str) -> Option<Vec<Value>> {
-    let mut collected = Vec::new();
-    let mut take = |uri: &str, edits: &Value| -> bool {
-        if !same_file_uri(uri, ours) {
-            return false;
-        }
-        collected.extend(edits.as_array().into_iter().flatten().cloned());
-        true
-    };
+/// A code action's WorkspaceEdit split into the edits for the file at `ours`
+/// and the edits for every other file — `(uri, the server's edits)` — or
+/// `None` when the action also creates, renames or deletes a file, which is
+/// beyond this client's apply path. Half of such a fix is worse than none.
+///
+/// Other files used to refuse the whole action. The fix for a file no `mod`
+/// line declares — the one that makes rust-analyzer answer nothing at all
+/// for the file — edits *only* another file, and was the fix nobody could
+/// reach.
+pub(crate) type SplitEdits = (Vec<Value>, Vec<(String, Vec<Value>)>);
 
-    if let Some(changes) = edit["changes"].as_object() {
-        for (uri, edits) in changes {
-            if !take(uri, edits) {
-                return None;
-            }
+pub(crate) fn split_edits(edit: &Value, ours: &str) -> Option<SplitEdits> {
+    let mut mine = Vec::new();
+    let mut theirs = Vec::new();
+    for (uri, edits) in edits_by_file(edit)? {
+        if same_file_uri(&uri, ours) {
+            mine.extend(edits);
+        } else {
+            theirs.push((uri, edits));
         }
     }
-    if let Some(documents) = edit["documentChanges"].as_array() {
-        for change in documents {
-            // A create/rename/delete file operation — beyond this client's
-            // apply path.
-            let uri = change["textDocument"]["uri"].as_str()?;
-            if !take(uri, &change["edits"]) {
-                return None;
-            }
-        }
-    }
-    Some(collected)
+    Some((mine, theirs))
 }
 
 /// Text edits as the frontend applies them: scalar ranges against `text`.
@@ -415,12 +413,11 @@ pub(crate) fn action_edits(
         .collect()
 }
 
-/// A rename's WorkspaceEdit grouped by file — `(uri, the server's edits)`.
-///
-/// Refuses a rename that also moves a file: rust-analyzer emits one when the
-/// symbol is a module, and applying only the text half would leave the
-/// project not building. The error says which part is missing.
-pub(crate) fn edits_by_file(result: &Value) -> Result<Vec<(String, Vec<Value>)>> {
+/// A WorkspaceEdit grouped by file — `(uri, the server's edits)` — or `None`
+/// when it also creates, renames or deletes a file: rust-analyzer emits one
+/// for the rename of a module, and applying only the text half would leave
+/// the project not building. The caller says which part is missing.
+pub(crate) fn edits_by_file(result: &Value) -> Option<Vec<(String, Vec<Value>)>> {
     let mut by_file: Vec<(String, Vec<Value>)> = Vec::new();
     let mut add = |uri: &str, edits: &Value| {
         let Some(list) = edits.as_array() else {
@@ -442,18 +439,11 @@ pub(crate) fn edits_by_file(result: &Value) -> Result<Vec<(String, Vec<Value>)>>
     }
     if let Some(documents) = result["documentChanges"].as_array() {
         for change in documents {
-            let Some(uri) = change["textDocument"]["uri"].as_str() else {
-                return Err(Error::Server {
-                    method: "textDocument/rename".into(),
-                    message: "this rename also moves a file, which rusty cannot apply \
-                              yet — rename the module in the file tree instead"
-                        .into(),
-                });
-            };
+            let uri = change["textDocument"]["uri"].as_str()?;
             add(uri, &change["edits"]);
         }
     }
-    Ok(by_file)
+    Some(by_file)
 }
 
 /// Apply a server's text edits to a whole document.
@@ -511,6 +501,44 @@ pub(crate) fn apply_text_edits(text: &str, edits: &[Value], encoding: Encoding) 
         out.splice(start..end, replacement.chars());
     }
     Some(out.into_iter().collect())
+}
+
+/// A sentence for a server complaint that is really about the machine, not
+/// about the code.
+///
+/// rust-analyzer hands its failures on verbatim, and cargo's failures are
+/// paragraphs of usage text. One of them matters enough here to be named:
+/// `cargo metadata` refusing `--lockfile-path`. rust-analyzer passes that
+/// flag when the project's cargo calls itself *nightly*, and Espressif's
+/// Xtensa fork does — while being built from a snapshot that predates the
+/// flag. So every esp-pinned project fails to load its metadata, which is
+/// the state where the server parses the file, answers nothing, and says
+/// "partly loaded": the exact disease three releases here have been about.
+///
+/// rusty cannot configure it away — rust-analyzer has no setting for the
+/// flag, and pointing it at another toolchain's cargo would read the wrong
+/// sysroot. So it says what happened and what to do, in place of ninety
+/// lines of `Usage: cargo.exe metadata …` that read as rusty being broken.
+/// The original follows, because a message that hides the server's own
+/// words is one nobody can search for.
+///
+/// `None` for anything not recognised: the server's text stands.
+pub fn explain_health(message: &str) -> Option<String> {
+    if !message.contains("--lockfile-path") {
+        return None;
+    }
+    let manifest = message
+        .split('`')
+        .find(|part| part.ends_with("Cargo.toml"))
+        .unwrap_or("the project");
+    Some(format!(
+        "This project's Rust toolchain is older than the rust-analyzer analysing it: \
+         `cargo metadata` for {manifest} refused `--lockfile-path`, a flag rust-analyzer \
+         passes to any cargo that calls itself nightly — Espressif's Xtensa fork does. \
+         The workspace therefore did not load, so completion, hover and navigation answer \
+         nothing there. Update the toolchain (`espup update`) or use a rust-analyzer of \
+         the same vintage as the cargo."
+    ))
 }
 
 #[cfg(test)]
@@ -730,23 +758,57 @@ mod tests {
         assert!(!bare.incomplete);
     }
 
-    /// An edit for another file makes the whole action multi-file, and a
-    /// file operation makes it unapplicable; both are `None`, never half.
+    /// An edit for another file no longer refuses the action: it is split
+    /// into this file's edits and the rest, which the client writes the way
+    /// a rename is written. A file operation still refuses it whole.
     #[test]
-    fn an_action_touching_another_file_is_refused_whole() {
+    fn an_action_touching_another_file_is_split_and_a_file_operation_refused() {
         let ours = "file:///E:/proj/src/main.rs";
         let mine = json!({ "changes": { "file:///e:/proj/src/main.rs": [edit(0, 0, 1, "x")] } });
-        assert_eq!(single_file_edits(&mine, ours).map(|e| e.len()), Some(1));
+        let (own, others) = split_edits(&mine, ours).expect("splits");
+        assert_eq!((own.len(), others.len()), (1, 0));
 
         let theirs = json!({ "changes": {
             "file:///E:/proj/src/main.rs": [edit(0, 0, 1, "x")],
             "file:///E:/proj/src/lib.rs": [edit(0, 0, 1, "x")],
         } });
-        assert_eq!(single_file_edits(&theirs, ours), None);
+        let (own, others) = split_edits(&theirs, ours).expect("splits");
+        assert_eq!(own.len(), 1);
+        assert_eq!(others.len(), 1);
+        assert_eq!(others[0].0, "file:///E:/proj/src/lib.rs");
 
         let moves =
             json!({ "documentChanges": [{ "kind": "rename", "oldUri": ours, "newUri": ours }] });
-        assert_eq!(single_file_edits(&moves, ours), None);
+        assert_eq!(split_edits(&moves, ours), None);
+    }
+
+    /// `unlinked-file` arrives as a hint and leaves as a warning: it is the
+    /// one hint that turns the server off for the whole file, and a hint is
+    /// what the Problems panel leaves out.
+    #[test]
+    fn an_unlinked_file_is_a_warning_however_the_server_files_it() {
+        let items = json!([
+            {
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                "severity": 4,
+                "code": "unlinked-file",
+                "message": "not in the module tree",
+            },
+            {
+                "range": { "start": { "line": 3, "character": 0 }, "end": { "line": 3, "character": 1 } },
+                "severity": 4,
+                "code": "inactive-code",
+                "message": "cfg is off",
+            },
+        ]);
+        let got = diagnostics(&items, None, Encoding::Utf8);
+        assert_eq!(got[0].severity, DiagSeverity::Warning);
+        assert_eq!(got[0].code.as_deref(), Some("unlinked-file"));
+        assert_eq!(
+            got[1].severity,
+            DiagSeverity::Hint,
+            "an ordinary hint stays one"
+        );
     }
 }
 
@@ -797,5 +859,30 @@ mod flyimport_tests {
         assert!(
             completion_additional_edits(&json!({ "label": "x" }), text, Encoding::Utf8).is_empty()
         );
+    }
+
+    /// The message a real esp-pinned project produced, cut to its shape:
+    /// rust-analyzer passing a flag Espressif's cargo does not have, and the
+    /// workspace not loading because of it. The sentence has to name the
+    /// manifest and the remedy — the raw text names neither, and ninety
+    /// lines of cargo usage in the dock read as rusty being broken.
+    #[test]
+    fn a_cargo_too_old_for_rust_analyzers_flag_is_named_rather_than_dumped() {
+        let raw = "Failed to read Cargo metadata with dependencies for \
+                   `E:\\CodeBase\\flyegg\\firmware\\Cargo.toml`: `cargo metadata` exited with \
+                   an error: error: unexpected argument '--lockfile-path' found\n\n  tip: a \
+                   similar argument exists: '--locked'\n";
+        let named = explain_health(raw).expect("the flag mismatch is recognised");
+        assert!(
+            named.contains("E:\\CodeBase\\flyegg\\firmware\\Cargo.toml"),
+            "the manifest that failed is named: {named}"
+        );
+        assert!(named.contains("espup update"), "and what to do: {named}");
+
+        // Everything else is the server's own words, untouched. A wrapper
+        // that rephrased every failure would hide the ones nobody has
+        // written a sentence for yet.
+        assert!(explain_health("unresolved import `foo`").is_none());
+        assert!(explain_health("").is_none());
     }
 }

@@ -42,14 +42,6 @@ type Answer<T> = Result<T, CommandError>;
 #[serde(rename_all = "camelCase")]
 pub struct OpenResult {
     pub project: EmbeddedProject,
-    /// The Cargo analysis, when `cargo metadata` succeeded.
-    ///
-    /// Optional on purpose: a misconfigured embedded project often fails
-    /// `cargo metadata`, and that is precisely when its diagnosis matters most.
-    /// Refusing to open would hide the one screen that explains the problem.
-    pub workspace: Option<WorkspaceReport>,
-    /// Why the Cargo analysis is absent, if it is.
-    pub workspace_error: Option<String>,
 }
 
 #[tauri::command]
@@ -64,20 +56,13 @@ pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<Op
         blocking("detection", move || detected_at(&root, &firmware)).await??
     };
 
-    // `cargo metadata` takes seconds on a real workspace.
-    let (workspace, report, workspace_error) = {
-        let root = root.clone();
-        blocking("the Cargo analysis", move || match Workspace::load(&root) {
-            Ok(workspace) => match workspace.report() {
-                Ok(report) => (Some(workspace), Some(report), None),
-                Err(e) => (None, None, Some(e.to_string())),
-            },
-            Err(e) => (None, None, Some(e.to_string())),
-        })
-        .await?
-    };
-
-    state.open(root.clone(), workspace).await;
+    // The Cargo analysis is *not* awaited here. It resolves the whole
+    // dependency graph, which is hundreds of milliseconds warm and seconds
+    // on a project whose lockfile does not exist yet — and the frontend is
+    // told nothing at all until this command answers, so a switch showed the
+    // old project for the whole of it. `AppState::workspace` loads it when
+    // the first panel that needs it asks.
+    state.open(root.clone()).await;
     // Recorded backend-side, at the single point every open goes through, so
     // the list exists for the CLI and the next launch without the frontend
     // having to remember to say so. Under the workbench lock like every other
@@ -89,11 +74,7 @@ pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<Op
         })
         .await?;
 
-    Ok(OpenResult {
-        project: detected,
-        workspace: report,
-        workspace_error,
-    })
+    Ok(OpenResult { project: detected })
 }
 
 /// Re-read the project's files without reopening it.
@@ -196,6 +177,25 @@ pub async fn vim_enabled() -> Answer<bool> {
 pub async fn set_vim(enabled: bool, state: State<'_, AppState>) -> Answer<()> {
     state
         .update_workbench(move |workbench| workbench.vim = enabled)
+        .await
+}
+
+/// Whether the editor writes a beat after typing stops. Read at startup by
+/// every window, like `vim_enabled`: a second window that did not auto-save
+/// would lose work on the assumption that it had.
+#[tauri::command]
+pub async fn auto_save_enabled() -> Answer<bool> {
+    blocking("reading the auto-save setting", || {
+        storage::workbench().auto_save
+    })
+    .await
+}
+
+/// Turn auto-save on or off, for good and for every window.
+#[tauri::command]
+pub async fn set_auto_save(enabled: bool, state: State<'_, AppState>) -> Answer<()> {
+    state
+        .update_workbench(move |workbench| workbench.auto_save = enabled)
         .await
 }
 

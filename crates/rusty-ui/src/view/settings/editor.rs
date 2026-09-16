@@ -29,6 +29,15 @@ pub(super) fn EditorSettings() -> impl IntoView {
                     on_toggle=Callback::new(move |on| controller::set_vim(state, on))
                 />
             </Row>
+            <Row
+                label=t!("settings.editor.auto-save")
+                detail=t!("settings.editor.auto-save-detail")
+            >
+                <Switch
+                    on=Signal::derive(move || state.editor.auto_save.get())
+                    on_toggle=Callback::new(move |on| controller::set_auto_save(state, on))
+                />
+            </Row>
             <Row label=t!("settings.editor.text-size")>
                 <ZoomStepper
                     zoom=state.editor.zoom

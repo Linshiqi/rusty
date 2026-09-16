@@ -169,7 +169,7 @@ impl AppState {
         self.tickets.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    pub async fn open(&self, root: PathBuf, workspace: Option<Workspace>) {
+    pub async fn open(&self, root: PathBuf) {
         // Reload before taking the other lock: a project's `.rusty/` files are
         // part of what "open" means, and a panel that rendered in between would
         // otherwise see the new root with the old board list. Off the async
@@ -186,7 +186,9 @@ impl AppState {
 
         let mut guard = self.inner.lock().await;
         guard.root = Some(root);
-        guard.workspace = workspace.map(Arc::new);
+        // Cleared, not filled: the next reader of `workspace` loads it for
+        // the project that is open now.
+        guard.workspace = None;
         // A different project's binary is worse than none.
         guard.firmware = None;
         drop(guard);
@@ -218,8 +220,45 @@ impl AppState {
         *self.catalog.lock().await = None;
     }
 
+    /// The Cargo analysis for the open project, loaded the first time
+    /// somebody asks for it and kept after that.
+    ///
+    /// Not at open. `cargo metadata` resolves the whole dependency graph:
+    /// measured at 113 ms on a small embedded project, 812 ms on this
+    /// workspace, and unbounded on one whose lockfile does not exist yet,
+    /// which is precisely the project somebody has just generated. `open`
+    /// awaited it before the frontend was told *anything*, so a switch sat
+    /// on the old project for the whole of it — for a number only the
+    /// Crates and Features panels read, and neither is on screen when a
+    /// project opens.
+    ///
+    /// The lock is not held across the load: every other command would
+    /// queue behind it, which is the stall moved rather than removed. A
+    /// project switched under the load parks nothing — the answer describes
+    /// a project that is no longer open.
     pub async fn workspace(&self) -> Option<Arc<Workspace>> {
-        self.inner.lock().await.workspace.clone()
+        let root = {
+            let guard = self.inner.lock().await;
+            if let Some(workspace) = guard.workspace.clone() {
+                return Some(workspace);
+            }
+            guard.root.clone()?
+        };
+
+        let loaded = {
+            let root = root.clone();
+            blocking("the Cargo analysis", move || Workspace::load(&root))
+                .await
+                .ok()?
+                .ok()?
+        };
+        let loaded = Arc::new(loaded);
+
+        let mut guard = self.inner.lock().await;
+        if guard.root.as_deref() != Some(root.as_path()) {
+            return None;
+        }
+        Some(Arc::clone(guard.workspace.get_or_insert(loaded)))
     }
 
     pub async fn root(&self) -> Option<PathBuf> {
@@ -288,8 +327,27 @@ impl AppState {
 
     /// Register the project's language server, dropping — and thereby killing —
     /// whatever it replaces.
+    /// Register the language server, burying whatever it replaces — off this
+    /// thread.
+    ///
+    /// `LspClient::drop` asks rust-analyzer to shut down and then waits for
+    /// the process, and its own comment says a project switch must not stall
+    /// on the corpse of the last server. It does not stall on a server that
+    /// has already *died* — `alive` makes both return at once — but a live
+    /// one is every ordinary switch, and that was measured at 540 ms on this
+    /// workspace: rust-analyzer answers `shutdown` in a moment and then takes
+    /// longer than `EXIT_GRACE` to go, so the poll runs out and kills it.
+    /// Half a second, inside `open`, inside the command the window awaits
+    /// before it can draw anything of the new project at all.
+    ///
+    /// So the outgoing client is dropped on the blocking pool. Nothing waits
+    /// on that: the handshake is a courtesy to rust-analyzer, which releases
+    /// the target directory, and the process is killed regardless.
     pub async fn set_lsp(&self, client: Option<Arc<rusty_lsp::LspClient>>) {
-        *self.lsp.lock().await = client;
+        let previous = std::mem::replace(&mut *self.lsp.lock().await, client);
+        if let Some(previous) = previous {
+            tauri::async_runtime::spawn_blocking(move || drop(previous));
+        }
     }
 
     pub fn files(&self) -> Arc<rusty_edit::Files> {

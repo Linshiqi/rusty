@@ -251,10 +251,11 @@ fn rust_analyzer_end_to_end() {
         client
             .code_actions("src/main.rs", table_line, table_col)
             .ok()
-            .filter(|fixes| fixes.iter().any(|f| f.title.contains("Import")))
+            .filter(|answer| answer.fixes.iter().any(|f| f.title.contains("Import")))
     })
     .expect("no import action was ever offered for HashMap");
     let import = fixes
+        .fixes
         .iter()
         .find(|f| f.title.contains("Import"))
         .expect("filtered above");

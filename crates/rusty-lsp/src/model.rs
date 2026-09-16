@@ -182,11 +182,16 @@ pub struct ActionEdit {
 }
 
 /// A quick fix or refactoring the server offers at a position, with its
-/// edits already resolved — the frontend applies text, it never negotiates.
+/// edits for this file already resolved — the frontend applies text, it
+/// never negotiates.
 ///
-/// Only single-file actions travel: an action that would touch other files
-/// is dropped by the client rather than half-applied, until a multi-file
-/// apply path exists.
+/// An action that also edits other files names them in `elsewhere`; those
+/// edits stay with the client, which writes them the way a rename is written
+/// once the fix is accepted (`apply_action_elsewhere`). They used to make
+/// the client drop the whole action, and the fix for a file no `mod` line
+/// declares — which edits *only* the parent module — was the fix nobody
+/// could reach. An action that creates, renames or deletes a file is still
+/// dropped whole.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeActionFix {
@@ -194,6 +199,25 @@ pub struct CodeActionFix {
     /// `quickfix`, `refactor.rewrite`… when the server said.
     pub kind: Option<String>,
     pub edits: Vec<ActionEdit>,
+    /// Project-relative paths of the other files the action changes.
+    #[serde(default)]
+    pub elsewhere: Vec<String>,
+}
+
+/// What the server offers to do at one position, numbered.
+///
+/// Numbered because two things ask now — Ctrl+. at the caret, and a hover
+/// over a squiggle — and an accepted fix is applied from the server's own
+/// copy of the answer by index. One slot per file was enough while the caret
+/// was the only asker; with two, a hover in flight would renumber the fixes
+/// an open popup is showing, and the click would write another position's
+/// edits into somebody's other file. The answer says which answer it is,
+/// exactly as a completion list does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeActions {
+    pub fixes: Vec<CodeActionFix>,
+    pub reply: u64,
 }
 
 /// One run of semantic colour, as rust-analyzer sees the code.

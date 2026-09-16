@@ -352,7 +352,38 @@ pub fn scaffold_workspace(root: &Path, choice: &WizardChoice) -> Result<()> {
     write_new(&root.join("README.md"), &readme(name, &core, &chip))?;
     write_new(&root.join("rustfmt.toml"), "edition = \"2024\"\n")?;
     write_new(&root.join(".gitignore"), "/target\n")?;
+    unnest_repository(&root.join("firmware"));
     add_dependency(&root.join("firmware").join("Cargo.toml"), &core)
+}
+
+/// Take the generator's own `git init` out of the firmware crate.
+///
+/// esp-generate initialises a repository in the crate it writes, which is
+/// right when that crate *is* the project and wrong here: the workspace root
+/// is the repository, and a repository inside it with no commit is an
+/// embedded repository git refuses to add — `git add` on a new project
+/// stopped with `'firmware/' does not have a commit checked out`, so the
+/// wizard produced a project whose first commit could not be made. The
+/// Changes list showing `firmware/` as one untracked entry rather than the
+/// files under it is the same fact seen from the panel.
+///
+/// Only a `.git` with no commits: one holding work is somebody's history and
+/// never this function's to delete. Best effort — a project that is
+/// otherwise written must not fail over a directory the user can remove.
+fn unnest_repository(firmware: &Path) {
+    let git = firmware.join(".git");
+    if !git.is_dir() {
+        return;
+    }
+    let has_refs = git
+        .join("refs")
+        .join("heads")
+        .read_dir()
+        .is_ok_and(|mut entries| entries.any(|entry| entry.is_ok()));
+    if has_refs || git.join("packed-refs").exists() {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&git);
 }
 
 /// A name cargo accepts for a package, since the workspace layout turns it
@@ -610,6 +641,38 @@ mod tests {
             scaffold_workspace(root, &workspace("esp32c3")),
             Err(Error::Exists { .. })
         ));
+    }
+
+    /// esp-generate runs `git init` in the crate it writes. Left there, the
+    /// workspace root's own `git add` refuses — `'firmware/' does not have a
+    /// commit checked out` — so the first commit of a brand-new project
+    /// could not be made. One with commits in it is somebody's history and
+    /// stays.
+    #[test]
+    fn the_generators_own_repository_is_taken_out_of_the_firmware_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = "[package]\nname = \"firmware\"\nedition = \"2024\"\n\n[dependencies]\n";
+        std::fs::create_dir_all(root.join("firmware/.git/refs/heads")).unwrap();
+        std::fs::write(root.join("firmware/Cargo.toml"), manifest).unwrap();
+
+        scaffold_workspace(root, &workspace("esp32c3")).unwrap();
+        assert!(
+            !root.join("firmware/.git").exists(),
+            "a repository with no commits is the generator's, not the user's"
+        );
+
+        // The same scaffold over a firmware crate whose repository has a
+        // branch in it leaves that repository alone.
+        let kept = dir.path().join("kept");
+        std::fs::create_dir_all(kept.join("firmware/.git/refs/heads")).unwrap();
+        std::fs::write(kept.join("firmware/.git/refs/heads/master"), "abc123\n").unwrap();
+        std::fs::write(kept.join("firmware/Cargo.toml"), manifest).unwrap();
+        scaffold_workspace(&kept, &workspace("esp32c3")).unwrap();
+        assert!(
+            kept.join("firmware/.git/refs/heads/master").is_file(),
+            "history is never deleted to tidy a layout"
+        );
     }
 
     #[test]

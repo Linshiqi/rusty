@@ -44,6 +44,8 @@ pub mod workbench {
     /// every window.
     pub const VIM: &str = "vim_enabled";
     pub const SET_VIM: &str = "set_vim";
+    pub const AUTO_SAVE: &str = "auto_save_enabled";
+    pub const SET_AUTO_SAVE: &str = "set_auto_save";
     /// Display language. `None` means follow the system.
     pub const LOCALE: &str = "display_locale";
     pub const SET_LOCALE: &str = "set_display_locale";
@@ -131,6 +133,9 @@ pub mod terminal {
 /// Looking at and changing the project's files.
 pub mod files {
     pub const TREE: &str = "file_tree";
+    /// The `.rs` files no `mod` declaration reaches — what the tree dims,
+    /// because rust-analyzer only says so for a file somebody has opened.
+    pub const UNLINKED: &str = "unlinked_files";
     pub const OPEN: &str = "open_file";
     /// One file's bytes, base64 — a figure in a page, an image opened from
     /// the tree. `OPEN` refuses those as binary, rightly, for the editor.
@@ -183,6 +188,8 @@ pub mod lsp {
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
     pub const ACTIONS: &str = "lsp_code_actions";
+    /// Write the part of an accepted quick fix that lands in other files.
+    pub const APPLY_ACTION: &str = "lsp_apply_action";
     /// Rename a symbol everywhere it is used. Writes the files it changes.
     pub const RENAME: &str = "lsp_rename";
 }

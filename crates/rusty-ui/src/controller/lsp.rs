@@ -18,7 +18,7 @@ use rusty_lsp::{HoverInfo, LspEvent};
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, LspStatus},
+    state::{AppState, HoverCard, LspStatus},
 };
 
 /// The buffer as the server should now see it. Sent ahead of every request
@@ -263,24 +263,64 @@ pub fn request_actions(state: AppState, path: String, line: u32, col: u32) {
     };
     spawn_local(async move {
         let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
-        let Ok(fixes) =
-            ipc::call::<_, Vec<rusty_lsp::CodeActionFix>>(cmd::lsp::ACTIONS, &ask).await
+        let Ok(answer) = ipc::call::<_, rusty_lsp::CodeActions>(cmd::lsp::ACTIONS, &ask).await
         else {
             return;
         };
         let current = state.active_path_now();
         if current.as_deref() == Some(path.as_str()) {
-            if fixes.is_empty() {
+            if answer.fixes.is_empty() {
                 state.push_log(LogLine {
                     stream: LogStream::Stdout,
                     text: t!("misc.no-quick-fixes"),
                     level: None,
                 });
             } else {
-                state.editor.actions.set(Some((path, line, fixes)));
+                state.editor.actions.set(Some((path, line, answer)));
             }
         }
     });
+}
+
+/// Write the part of an accepted quick fix that lands in other files — the
+/// `mod` line a fix for an undeclared file puts in its parent module. Those
+/// edits land on disk, so a file among them with an unsaved draft refuses
+/// the whole fix, by name: the next Ctrl+S there would overwrite them with
+/// the draft's stale bytes. Says what changed, as a rename does.
+pub fn apply_action_elsewhere(
+    state: AppState,
+    path: String,
+    reply: u64,
+    index: u32,
+    files: Vec<String>,
+) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        reply: u64,
+        index: u32,
+    }
+    if let Some(dirty) = files.iter().find(|file| state.is_dirty(file)) {
+        state.push_log(LogLine {
+            stream: LogStream::Stderr,
+            text: t!("misc.save-first", path = dirty.clone()),
+            level: Some(LogLevel::Warn),
+        });
+        return;
+    }
+    track(
+        state,
+        async move {
+            ipc::call::<_, Vec<String>>(cmd::lsp::APPLY_ACTION, &Args { path, reply, index }).await
+        },
+        move |changed| {
+            state.push_log(LogLine {
+                stream: LogStream::Stdout,
+                text: t!("misc.edited-elsewhere", count = changed.len().to_string()),
+                level: None,
+            });
+        },
+    );
 }
 
 /// Ask for the document's semantic colouring, and keep it only if the answer
@@ -556,7 +596,52 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
                 end_col: col + 1,
             },
         };
-        state.editor.hover.set(Some((path, range, text)));
+        state.editor.hover.set(Some(HoverCard {
+            path: path.clone(),
+            range,
+            text,
+            line,
+            col,
+            fixes: rusty_lsp::CodeActions::default(),
+        }));
+
+        // What the server offers to do about the problem, on the card that
+        // names it. Asked only where there *is* a problem: that is where a
+        // fix exists, and it is the whole of the reason somebody hovers a
+        // red line. An `impl Trait for T {}` with no members is the case
+        // this exists for — the fix is rust-analyzer's own "Implement
+        // missing members", reachable until now only by putting the caret
+        // there and pressing Ctrl+.
+        //
+        // It arrives *after* the card rather than with it: a `codeAction`
+        // resolves every offer it did not come with, which is a second or
+        // more on a cold index, and a tooltip that waits for it is a
+        // tooltip that does not appear. The buttons grow onto the card
+        // that is already up, and only if it is still that card — the
+        // pointer moves on while this is in flight.
+        if problem.is_none() {
+            return;
+        }
+        let ask = Ask {
+            path: path.clone(),
+            line,
+            col,
+        };
+        let Ok(answer) = ipc::call::<_, rusty_lsp::CodeActions>(cmd::lsp::ACTIONS, &ask).await
+        else {
+            return;
+        };
+        if answer.fixes.is_empty() {
+            return;
+        }
+        state.editor.hover.update(|card| {
+            if let Some(card) = card
+                && card.path == path
+                && (card.line, card.col) == (line, col)
+            {
+                card.fixes = answer;
+            }
+        });
     });
 }
 
@@ -635,11 +720,22 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
     });
 }
 
+/// How long after the last keystroke the file is written, when auto-save is
+/// on. VS Code's own default for `files.autoSave: afterDelay`, and four
+/// times the highlight pulse: a write goes to the disk and through the
+/// watcher, where a re-highlight only comes back to this window.
+const AUTOSAVE_AFTER: Duration = Duration::from_millis(1000);
+
 /// The debounced follow-up to typing: re-highlight the draft and tell the
 /// server what it says now.
 ///
 /// Scheduled rather than immediate — each is a round trip, and per keystroke
 /// that would re-highlight every letter of a word nobody finished typing.
+///
+/// Auto-save rides the same call because this is the one hook every edit
+/// path already goes through — a keystroke, a paste, an undo, a completion
+/// accepted, a quick fix applied — and a second list of edit sites would be
+/// a list that drifts from this one.
 pub fn schedule_pulse(state: AppState) {
     let generation = state.editor.pulse_gen.get_untracked() + 1;
     state.editor.pulse_gen.set(generation);
@@ -650,6 +746,36 @@ pub fn schedule_pulse(state: AppState) {
             }
         },
         std::time::Duration::from_millis(250),
+    );
+    schedule_autosave(state);
+}
+
+/// Write the file a beat after typing stops, when the setting is on.
+///
+/// Its own counter, not the pulse's: the highlight fires four times as
+/// often, and a write that rode it would go out mid-word. Keyed on the
+/// *path* as well, because the timer outlives the tab — switching files
+/// inside the second would otherwise save the new file's draft under a
+/// number the old file's typing set.
+fn schedule_autosave(state: AppState) {
+    if !state.editor.auto_save.get_untracked() {
+        return;
+    }
+    let Some(path) = state.active_path_now() else {
+        return;
+    };
+    let generation = state.editor.save_gen.get_untracked() + 1;
+    state.editor.save_gen.set(generation);
+    set_timeout(
+        move || {
+            if state.editor.save_gen.try_get_untracked() != Some(generation) {
+                return;
+            }
+            if state.active_path_now().as_deref() == Some(path.as_str()) {
+                autosave_file(state);
+            }
+        },
+        AUTOSAVE_AFTER,
     );
 }
 

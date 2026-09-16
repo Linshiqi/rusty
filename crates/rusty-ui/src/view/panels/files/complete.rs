@@ -29,44 +29,77 @@ use crate::{controller, state::AppState};
 /// How many ranked rows the keyboard can reach. Nine are drawn at a time.
 const SHOWN: usize = 50;
 
-/// Apply the chosen quick fix: splice its edits bottom-up so earlier ranges
-/// stay valid, through the undo pipeline.
+/// Apply the chosen quick fix from the Ctrl+. popup.
 pub(super) fn apply_action(state: AppState, area: &web_sys::HtmlTextAreaElement, index: usize) {
-    let Some((_, _, fixes)) = state.editor.actions.get_untracked() else {
+    let Some((path, _, answer)) = state.editor.actions.get_untracked() else {
         return;
     };
-    let Some(fix) = fixes.get(index.min(fixes.len().saturating_sub(1))) else {
+    state.editor.actions.set(None);
+    apply_fix(state, area, &path, &answer, index);
+}
+
+/// Apply the chosen quick fix: this file's edits spliced bottom-up so earlier
+/// ranges stay valid, through the undo pipeline; the edits to other files
+/// written by the client, the way a rename is.
+///
+/// Takes the answer rather than reading it off a signal, because two things
+/// hold one now — the caret's popup and the hover card over a squiggle —
+/// and a fix applied from whichever signal happened to be set is a click
+/// that rewrites the other one's position.
+pub(super) fn apply_fix(
+    state: AppState,
+    area: &web_sys::HtmlTextAreaElement,
+    path: &str,
+    answer: &rusty_lsp::CodeActions,
+    index: usize,
+) {
+    let fixes = &answer.fixes;
+    let index = index.min(fixes.len().saturating_sub(1));
+    let Some(fix) = fixes.get(index) else {
         return;
     };
 
-    let text = state.editor.draft.get_untracked();
-    let mut edits: Vec<(usize, usize, &str)> = fix
-        .edits
-        .iter()
-        .map(|edit| {
-            let from = byte_of_utf16(
-                &text,
-                utf16_offset_of(&text, edit.range.start_line, edit.range.start_col) as usize,
-            );
-            let to = byte_of_utf16(
-                &text,
-                utf16_offset_of(&text, edit.range.end_line, edit.range.end_col) as usize,
-            );
-            (from, to.max(from), edit.new_text.as_str())
-        })
-        .collect();
-    edits.sort_by_key(|(from, ..)| std::cmp::Reverse(*from));
+    // This file's part. A fix that edits only other files — the `mod` line
+    // for a file nothing declares — has none.
+    if !fix.edits.is_empty() {
+        let text = state.editor.draft.get_untracked();
+        let mut edits: Vec<(usize, usize, &str)> = fix
+            .edits
+            .iter()
+            .map(|edit| {
+                let from = byte_of_utf16(
+                    &text,
+                    utf16_offset_of(&text, edit.range.start_line, edit.range.start_col) as usize,
+                );
+                let to = byte_of_utf16(
+                    &text,
+                    utf16_offset_of(&text, edit.range.end_line, edit.range.end_col) as usize,
+                );
+                (from, to.max(from), edit.new_text.as_str())
+            })
+            .collect();
+        edits.sort_by_key(|(from, ..)| std::cmp::Reverse(*from));
 
-    record_edit(state);
-    let mut new = text.clone();
-    for (from, to, replacement) in edits {
-        new.replace_range(from..to, replacement);
+        record_edit(state);
+        let mut new = text.clone();
+        for (from, to, replacement) in edits {
+            new.replace_range(from..to, replacement);
+        }
+
+        echo_edit(state, &new);
+        set_buffer(state, area, &new);
+        controller::schedule_pulse(state);
     }
 
-    echo_edit(state, &new);
-    set_buffer(state, area, &new);
-    state.editor.actions.set(None);
-    controller::schedule_pulse(state);
+    if !fix.elsewhere.is_empty() {
+        controller::apply_action_elsewhere(
+            state,
+            path.to_string(),
+            answer.reply,
+            index as u32,
+            fix.elsewhere.clone(),
+        );
+    }
 }
 
 /// Where the identifier under the caret begins, for Ctrl+Space.

@@ -658,6 +658,32 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                 let path = path.clone();
                 move || renaming.get().as_deref() == Some(path.as_str())
             });
+            // Outside the module tree, so rust-analyzer offers nothing in it:
+            // no completion, no hover, no jump, for ever, while the squiggles
+            // keep arriving. VS Code dims a file the project does not build,
+            // and until this there was nothing on screen that said so — the
+            // diagnostic is a hint the Problems panel filters out, and the
+            // user's report was exactly "现在看不出来".
+            //
+            // Two sources, the authoritative one winning: rust-analyzer's own
+            // `unlinked-file` for a file somebody has opened, and rusty's
+            // reading of the `mod` declarations for the rest (see
+            // `rusty_edit::modules`, which refuses wherever it cannot be
+            // sure). A folder is never dimmed — a directory is not a module.
+            let unlinked = Signal::derive({
+                let path = path.clone();
+                move || {
+                    !is_dir
+                        && (state.editor.unlinked.with(|list| list.contains(&path))
+                            || state.lsp.diagnostics.with(|by_file| {
+                                by_file.get(&path).is_some_and(|items| {
+                                    items
+                                        .iter()
+                                        .any(|d| d.code.as_deref() == Some("unlinked-file"))
+                                })
+                            }))
+                }
+            });
             let on_dragstart = {
                 let target = target.clone();
                 move |event: ev::DragEvent| {
@@ -753,7 +779,16 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                                 } else {
                                     ""
                                 };
-                                let dim = if cut.get() { " opacity-50" } else { "" };
+                                let dim = if cut.get() {
+                                    " opacity-50"
+                                } else if unlinked.get() {
+                                    // Weaker than a cut row, which is a state
+                                    // the user just put it in and will undo in
+                                    // a moment; this one is how the file sits.
+                                    " opacity-60"
+                                } else {
+                                    ""
+                                };
                                 format!("{base} {tone}{drop}{dim}")
                             }
                         >
@@ -769,6 +804,23 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                                 }}
                             </span>
                             <span class="truncate">{name}</span>
+                            // The reason, on hover, where a shade of grey
+                            // cannot say one. A dim row with no explanation
+                            // is a rendering bug as far as anyone can tell.
+                            {move || {
+                                unlinked
+                                    .get()
+                                    .then(|| {
+                                        view! {
+                                            <span
+                                                class="shrink-0 leading-none text-label-3"
+                                                title=t!("tree.unlinked")
+                                            >
+                                                "◌"
+                                            </span>
+                                        }
+                                    })
+                            }}
                         </button>
                     }
                         .into_any()

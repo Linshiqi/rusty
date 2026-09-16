@@ -262,6 +262,23 @@ pub(super) fn Header(
     let path = document.path.clone();
     let read_only = document.truncated || document.read_only;
     let dirty = Signal::derive(move || state.editor.draft.with(|draft| draft != &saved));
+    // rust-analyzer's own verdict that this file is in no crate's module
+    // tree — the one state in which it parses the file and answers nothing
+    // else. Said here, where the file is, with its own fix a click away;
+    // the diagnostic alone was a hint that dimmed two characters.
+    let unlinked = {
+        let path = path.clone();
+        Signal::derive(move || {
+            state.lsp.diagnostics.with(|by_file| {
+                by_file.get(&path).is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|d| d.code.as_deref() == Some("unlinked-file"))
+                })
+            })
+        })
+    };
+    let declare_in = path.clone();
 
     view! {
         <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
@@ -274,6 +291,23 @@ pub(super) fn Header(
                             <span class="size-1.5 shrink-0 rounded-full bg-rust" title=t!("misc.unsaved") />
                         }
                     })
+            }}
+            {move || {
+                unlinked.get().then(|| {
+                    let declare_in = declare_in.clone();
+                    view! {
+                        <span class="min-w-0 truncate text-footnote text-amber" title=t!("misc.unlinked-file")>
+                            {t!("misc.unlinked-file")}
+                        </span>
+                        <button
+                            type="button"
+                            class="shrink-0 rounded-[5px] bg-amber-fill px-2 py-0.5 text-footnote font-medium text-amber hover:opacity-90"
+                            on:click=move |_| controller::request_actions(state, declare_in.clone(), 0, 0)
+                        >
+                            {t!("misc.unlinked-fix")}
+                        </button>
+                    }
+                })
             }}
             <span class="flex-1" />
             // Save, at the right of the file it saves. It was in the rail,

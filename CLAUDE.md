@@ -105,6 +105,17 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
 
+# Where the seconds go when a project is opened -- the two steps that used
+# to be awaited before the window could draw anything of the new project.
+cargo run -p rusty-core --example open_cost -- <project>
+
+# Which files rusty will draw dimmed in a project, and every file the scan
+# read to decide -- the check for a report of a file wrongly dim, or one
+# that should be and is not. `rusty_edit::modules` refuses wherever it
+# cannot be sure, so "nothing dimmed" is also what a refusal looks like and
+# the probe says so.
+cargo run -p rusty-edit --features backend --example unlinked_probe -- <project>
+
 # What EasyEDA actually answers for a part, record by record, beside what
 # the reader made of it -- how tests/fixtures/easyeda/ was captured
 cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
@@ -554,6 +565,78 @@ positioned in a coordinate system that is not the document's.
   `impl Qu` and `impl core::` every two seconds until they answer, and
   prints what the popup would keep — `["impl", "impl for"]`,
   `["Quaternion"]` — beside how long the server took to get there.
+- **A file in no crate's module tree is the *other* way rust-analyzer goes
+  silent, and it looks identical.** No `mod` or `pub mod` names the file, so
+  it is in no crate: the server parses it, reports its syntax errors, and
+  answers nothing for completion, hover or navigation. It says so —
+  `unlinked-file` — as a **Hint**, which the Problems panel filters out by
+  the rule above it, so the one sentence explaining the silence was the one
+  thing on screen nobody could see. Found by `complete_probe`, which
+  reproduced "no completion at all" in one run after three rounds of asking
+  the user for facts; the lesson under that is the user's own: *trace the
+  whole path from the server's answer to the screen* rather than
+  interrogating the person in front of it.
+  Three things say it now. `convert::diagnostics` promotes that one code to
+  a Warning. The file header carries an amber notice with a button that asks
+  for the fix. And the tree dims the file, which is the only one of the
+  three that works *before* anybody opens it.
+- **The tree cannot ask rust-analyzer, so it reads the `mod` lines itself**
+  (`rusty_edit::modules`, pure and tested). `unlinked-file` arrives only for
+  a file the client has opened — a `didOpen` per file in the project would
+  be hundreds of notifications and hundreds of diagnostic computations — and
+  a dim that only appears once you open the file explains nothing. So the
+  backend reads every `.rs` file's declarations once per tree read and names
+  the files under a crate's `src/` that nothing declares.
+  **It is arranged to fail towards "linked", and every rule in it is that
+  decision**: a `#[path]` attribute anywhere in the project takes the whole
+  answer away, a `mod` in a comment counts as a declaration, every entry
+  point cargo knows is a root, and nothing outside a crate's `src/` is
+  claimed about at all. Dimming a file the compiler builds is the confident
+  wrong answer in miniature; being silent about an exotic project costs
+  nothing. rust-analyzer's own verdict wins where the frontend has it.
+- **A fix that edits another file used to be dropped, which is why the one
+  fix for that state was unreachable.** rust-analyzer's fix for an unlinked
+  file edits *only* the parent module, and the client refused any action
+  touching a second file. `convert::split_edits` splits a WorkspaceEdit into
+  this file's edits and the others'; `CodeActionFix.elsewhere` names the
+  others so the row says what accepting it will write, the frontend splices
+  its own buffer and `apply_action_elsewhere` writes the rest the way a
+  rename does. A target file with an unsaved draft refuses the whole fix by
+  name — those edits land on disk, and the next Ctrl+S there would put the
+  draft's stale bytes back over them.
+- **Quick fixes hang off the hover card, because that is where the pointer
+  already is.** Ctrl+. at the caret was the only door, and it needs you to
+  know the fix exists before you go looking for it. The card already shows
+  the diagnostic; the actions for that position are asked for **only when
+  there is one**, arrive after the card rather than with it — a `codeAction`
+  resolves every offer it did not come with, and a tooltip that waits for
+  that is a tooltip that does not appear — and are dropped unless the card
+  they were asked for is still up. `impl core::ops::Mul for Quaternion {}`
+  offering *Implement missing members* is the case this was built for.
+- **Two askers need numbered answers.** The client kept *one* code-action
+  slot per file, and an accepted fix was applied from it by index. That was
+  safe while the caret was the only asker; with a hover asking too, a card
+  appearing beside an open popup silently renumbered the popup's fixes, and
+  the click would have written another position's edits into somebody's
+  other file. `CodeActions` carries a `reply` number and the client keeps the
+  last four answers — exactly the shape `completion`/`resolve_completion`
+  already had, arrived at the same way and for the same reason.
+- **Auto-save is not `save_file`, and it is not a format.** Off by default
+  (`auto_save` in `workbench.toml`), it writes a second after typing stops
+  — VS Code's `files.autoSave: afterDelay`. It cannot reuse Ctrl+S's path:
+  `save_file` re-reads the file afterwards and seeds `draft` from it, which
+  is right when the user has stopped and is an editor eating work when they
+  have not — the round trip takes tens of milliseconds and the keys pressed
+  during it would be replaced by the disk's copy. `format_then_save` is
+  worse: rustfmt rewrites the line being typed, and mid-expression it cannot
+  parse at all, so every second would put a failure in the dock. So
+  `autosave_file` writes and moves the *document* forward to exactly the
+  bytes written; the dirty dot is `draft != document.text`, so it clears
+  itself and lights again on the next key, and the draft is never touched.
+  It rides `schedule_pulse` because that is the one hook every edit path
+  already goes through — a second list of edit sites would be a list that
+  drifts — on a counter of its own, since the highlight pulse fires four
+  times as often.
 
 ## Two editor groups
 
@@ -1615,6 +1698,65 @@ usty`) holds `location.toml`
   silently ignored** in rust-analyzer's initializationOptions. The first
   attempt at the fix above failed while looking applied, because the sibling
   `procMacro` object *did* take effect. Nest keys in their object.
+- **Nothing goes on the critical path of a project switch that the new
+  project's first paint does not need.** Opening a project is one awaited
+  command, and until it answers the window is still showing the last
+  project — so every millisecond inside it is a millisecond of a workbench
+  that looks frozen. Two things were in there that nothing on screen reads:
+  - **The Cargo analysis.** `Workspace::load` resolves the whole dependency
+    graph: measured at 113 ms on a small embedded project, 812 ms on this
+    workspace, and unbounded on one whose lockfile does not exist yet —
+    which is exactly the project somebody has just generated, and exactly
+    the case reported. Only the Crates and Features panels read it, and
+    neither is on screen when a project opens. `AppState::workspace` loads
+    it on the first ask and keeps it, without holding the state lock across
+    the load (that would queue every other command behind it: the stall
+    moved rather than removed) and parking nothing if the project changed
+    underneath.
+  - **The outgoing language server's funeral.** `LspClient::drop` asks
+    rust-analyzer to shut down and waits for the process, and `set_lsp` ran
+    it inline. Measured at 540 ms against this workspace — the server
+    answers `shutdown` in a moment and then outlives `EXIT_GRACE`, so the
+    poll runs out and kills it. `set_lsp` hands the outgoing client to the
+    blocking pool now; nothing waits on a corpse.
+
+  `cargo run -p rusty-core --example open_cost -- <project>` is the
+  measurement, so the next person to add a step to open can see what it
+  costs rather than guess.
+- **A generator that runs `git init` leaves a repository inside the
+  workspace.** esp-generate initialises one in the crate it writes, which is
+  right when that crate *is* the project. Under `WizardLayout::Workspace` it
+  is a nested repository with no commits, and git refuses to add one: the
+  brand-new project's first `git add` stopped with `'firmware/' does not
+  have a commit checked out`, and the Changes list showed `firmware/` as a
+  single untracked entry rather than the files under it — the same fact seen
+  from the panel. `wizard::unnest_repository` removes it, and only ever one
+  with no refs and no `packed-refs`: a `.git` holding work is somebody's
+  history, never a scaffold's to delete.
+- **A remembered tab is not a file the user asked for.** `restore_tabs` puts
+  the strip back from `workbench.toml`, keyed on the project *directory* —
+  and a directory can hold a different project than it did last week, which
+  is exactly what the wizard does when somebody generates over a path they
+  used before. Reopening through `open_file` banners, so a freshly generated
+  project greeted its author with a red *could not read
+  firmware/src/bin/main.rs* about a file nobody had asked for. `reopen_file`
+  is the quiet door: gone means off the strip. The comment above
+  `restore_tabs` had claimed this behaviour for as long as the function had
+  existed; the code went through the loud path the whole time.
+- **rust-analyzer passes `--lockfile-path` to any cargo that calls itself
+  nightly, and Espressif's fork does.** The Xtensa toolchain reports `cargo
+  1.95.0-nightly` while being built from a snapshot that has no such flag,
+  so every esp-pinned project fails `cargo metadata` — "unexpected argument
+  '--lockfile-path' found" — and the workspace never loads, which is the
+  silent-server disease above arriving by a third route. rust-analyzer has
+  no setting for it (`--print-config-schema` is the way to check, and there
+  is nothing), and pointing it at another toolchain's cargo would read the
+  wrong sysroot. So `convert::explain_health` puts a sentence in front of
+  the server's own words saying what it is and that `espup update` fixes it:
+  ninety lines of `Usage: cargo.exe metadata …` in Output read as rusty
+  being broken. Measured, not reasoned: `rustup run esp cargo metadata
+  --lockfile-path …` rejects it and `rustup run stable` does too, so the
+  flag is unstable and the *channel string* is what triggers it.
 - **A workspace that excludes its firmware gets no IDE services there.**
   The standard embedded layout is host-testable crates as members and the
   bare-metal crate `exclude`d, so `cargo test` at the root does not try to

@@ -171,6 +171,15 @@ pub struct WorkbenchState {
     /// not a shrug — the next twenty keystrokes do something else entirely.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vim: bool,
+    /// Write the file a beat after typing stops, instead of waiting for
+    /// Ctrl+S — VS Code's `files.autoSave: afterDelay`.
+    ///
+    /// A file rather than the WebView's storage for `vim`'s reason: a second
+    /// window that did not auto-save would be a window whose work is lost on
+    /// the assumption that it was. Off by default, because writing somebody's
+    /// file without being asked is not a default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_save: bool,
     /// Sweep stale build artifacts after every successful cargo command run
     /// from the dock — the opt-in that keeps a build directory from growing
     /// back. Off by default: deleting anything without being asked is not a
@@ -280,6 +289,8 @@ mod file {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub vim: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub auto_save: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub disk_auto_sweep: bool,
         #[serde(default)]
         pub locale: Option<String>,
@@ -326,6 +337,7 @@ mod file {
                 proxy: file.proxy,
                 keybinds: file.keybinds,
                 vim: file.vim,
+                auto_save: file.auto_save,
                 disk_auto_sweep: file.disk_auto_sweep,
                 locale: file.locale,
                 terminal_shell: file.terminal_shell,
@@ -361,6 +373,7 @@ mod file {
                 proxy: state.proxy.clone(),
                 keybinds: state.keybinds.clone(),
                 vim: state.vim,
+                auto_save: state.auto_save,
                 disk_auto_sweep: state.disk_auto_sweep,
                 locale: state.locale.clone(),
                 terminal_shell: state.terminal_shell.clone(),
@@ -659,6 +672,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             vim: true,
+            auto_save: true,
             disk_auto_sweep: true,
             locale: Some("zh-CN".into()),
             terminal_shell: Some("system".into()),
@@ -689,6 +703,7 @@ mod tests {
         assert_eq!(back.proxy, state.proxy);
         assert_eq!(back.keybinds, state.keybinds);
         assert_eq!(back.vim, state.vim);
+        assert_eq!(back.auto_save, state.auto_save);
         assert_eq!(back.disk_auto_sweep, state.disk_auto_sweep);
         assert_eq!(back.locale, state.locale);
         assert_eq!(back.terminal_shell, state.terminal_shell);

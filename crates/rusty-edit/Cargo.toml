@@ -45,5 +45,12 @@ backend = ["dep:syntect", "dep:ignore", "dep:grep-matcher", "dep:grep-regex", "d
 [lints]
 workspace = true
 
+# The probe walks the project, so it needs the half of this crate that does
+# IO. Without this, `--all-targets` builds it with default features off and
+# stops on a missing `ignore`.
+[[example]]
+name = "unlinked_probe"
+required-features = ["backend"]
+
 [dev-dependencies]
 tempfile = "3.27.0"

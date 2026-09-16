@@ -126,14 +126,10 @@ fn project_opened(state: AppState, result: OpenResult) {
     {
         {
             state.project.detected.set(Some(result.project));
-            state.project.workspace.set(result.workspace);
-            if let Some(detail) = result.workspace_error {
-                state.push_log(LogLine {
-                    stream: LogStream::Stderr,
-                    text: format!("cargo metadata is unavailable: {detail}"),
-                    level: Some(LogLevel::Warn),
-                });
-            }
+            // The last project's analysis describes packages that are not
+            // there; dropped before the new one is asked for, so no panel
+            // shows the old numbers while the answer is in flight.
+            state.project.workspace.set(None);
             // Another project's binary is worse than none — it would be analysed
             // against this project's chip and report plausible nonsense.
             state.project.selected_firmware.set(None);
@@ -169,6 +165,7 @@ fn project_opened(state: AppState, result: OpenResult) {
             // it has to follow rather than run alongside.
             refresh_toolchain(state);
             refresh_firmware(state);
+            refresh_workspace(state);
             refresh_tree(state);
             start_lsp(state);
             start_watch(state);
@@ -364,6 +361,7 @@ pub fn restore(state: AppState) {
     // overrides and the interface scale are the same kind of thing, and used
     // to load only when a project came back through the recents list.
     load_vim(state);
+    load_auto_save(state);
     load_keybinds(state);
     apply_ui_zoom(state);
 

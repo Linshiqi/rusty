@@ -846,8 +846,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 // Inside the shown token, there is nothing to
                                 // dismiss and nothing to re-request.
                                 let inside = state.editor.hover.with_untracked(|h| {
-                                    h.as_ref().is_some_and(|(_, range, _)| {
-                                        cell.is_some_and(|(l, c)| within(range, l, c))
+                                    h.as_ref().is_some_and(|card| {
+                                        cell.is_some_and(|(l, c)| within(&card.range, l, c))
                                     })
                                 });
                                 if inside {
@@ -1432,12 +1432,13 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     {
                         let path = path.clone();
                         move || {
-                            let Some((for_path, range, text)) = state.editor.hover.get() else {
+                            let Some(card) = state.editor.hover.get() else {
                                 return ().into_any();
                             };
-                            if for_path != path {
+                            if card.path != path {
                                 return ().into_any();
                             }
+                            let (range, text) = (card.range, card.text);
                             let x = 8.0
                                 + column_px(
                                     &state.editor.draft.get_untracked(),
@@ -1475,6 +1476,72 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     }
                                 >
                                     {hover_parts(&text)}
+                                    // What the server offers to do about it,
+                                    // one click from the pointer that is
+                                    // already there. Only a squiggle has
+                                    // these — an `impl Trait for T {}` with
+                                    // no members is the case they exist for
+                                    // — and until now the only way to them
+                                    // was to click into the line and press
+                                    // Ctrl+. The card is interactive
+                                    // already, so the buttons cost no new
+                                    // behaviour: the pointer crossing onto
+                                    // it keeps it up.
+                                    {(!card.fixes.fixes.is_empty())
+                                        .then(|| {
+                                            let answer = card.fixes.clone();
+                                            let fix_path = card.path.clone();
+                                            view! {
+                                                <div class="mt-2 flex flex-wrap gap-1.5 border-t border-line pt-2">
+                                                    {answer
+                                                        .fixes
+                                                        .iter()
+                                                        .enumerate()
+                                                        .map(|(index, fix)| {
+                                                            let title = fix.title.clone();
+                                                            let hint = if fix.elsewhere.is_empty() {
+                                                                title.clone()
+                                                            } else {
+                                                                format!(
+                                                                    "{title} → {}",
+                                                                    fix.elsewhere.join(", "),
+                                                                )
+                                                            };
+                                                            let answer = answer.clone();
+                                                            let fix_path = fix_path.clone();
+                                                            view! {
+                                                                <button
+                                                                    type="button"
+                                                                    title=hint
+                                                                    on:mousedown=move |
+                                                                        event: ev::MouseEvent,
+                                                                    | {
+                                                                        event.prevent_default();
+                                                                        event.stop_propagation();
+                                                                        on_card.set(false);
+                                                                        state.editor.hover.set(None);
+                                                                        if let Some(element) =
+                                                                            area.get_untracked()
+                                                                        {
+                                                                            apply_fix(
+                                                                                state,
+                                                                                &element,
+                                                                                &fix_path,
+                                                                                &answer,
+                                                                                index,
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    class="max-w-full truncate rounded-[5px] bg-rust/15 px-2 py-0.5 text-left text-rust hover:bg-rust/25"
+                                                                >
+                                                                    {title}
+                                                                </button>
+                                                            }
+                                                        })
+                                                        .collect_view()}
+                                                </div>
+                                            }
+                                        })}
                                 </div>
                             }
                             .into_any()
@@ -1485,12 +1552,14 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     {
                         let path = path.clone();
                         move || {
-                            let Some((for_path, line, fixes)) = state.editor.actions.get() else {
+                            let Some((for_path, line, answer)) = state.editor.actions.get()
+                            else {
                                 return ().into_any();
                             };
                             if for_path != path {
                                 return ().into_any();
                             }
+                            let fixes = answer.fixes;
                             let chosen = picked_action.get().min(fixes.len().saturating_sub(1));
                             let place = card_place(state, line, zoom.get(), opens_up(line));
                             view! {
@@ -1503,7 +1572,14 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                         .enumerate()
                                         .map(|(index, fix)| {
                                             let selected = index == chosen;
-                                            let kind = fix.kind.clone().unwrap_or_default();
+                                            // What else it changes, or its kind:
+                                            // a fix that writes another file
+                                            // says which before it is taken.
+                                            let kind = if fix.elsewhere.is_empty() {
+                                                fix.kind.clone().unwrap_or_default()
+                                            } else {
+                                                format!("→ {}", fix.elsewhere.join(", "))
+                                            };
                                             view! {
                                                 <button
                                                     type="button"

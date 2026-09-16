@@ -13,6 +13,8 @@
 pub mod fold;
 pub mod lexical;
 pub mod model;
+/// Which `.rs` files no `mod` declaration reaches, so the tree can dim them.
+pub mod modules;
 /// Which tests a Rust file holds, so the gutter can offer to run them.
 pub mod tests_in;
 
@@ -48,6 +50,8 @@ pub use entries::{absolute, copy_entry, delete_entry, move_entry, rename_entry};
 pub use error::{Error, Result};
 #[cfg(feature = "backend")]
 pub use format::format_rust;
+#[cfg(feature = "backend")]
+pub use modules::scan as scan_unlinked;
 #[cfg(feature = "backend")]
 pub use search::{Query as SearchQuery, replace, search};
 #[cfg(feature = "backend")]

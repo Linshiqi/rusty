@@ -56,24 +56,35 @@ pub use workbench::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_core::WorkspaceReport;
 use rusty_embed::{EmbeddedProject, LogLevel, LogLine, LogStream};
 
 use crate::{ipc::Answer, state::AppState};
 
+/// Set a signal only when the value is not already what it holds.
+///
+/// Every Git read's answer goes through this — an unchanged history set
+/// again rebuilt every row of the log — and so does anything else whose
+/// answer is usually the same as last time. It lives here rather than in
+/// `git`, because a second copy beside the first is how two readers of one
+/// idea drift.
+pub(crate) fn set_if_changed<T: PartialEq + Send + Sync + 'static>(holder: RwSignal<T>, value: T) {
+    if holder.with_untracked(|current| *current != value) {
+        holder.set(value);
+    }
+}
+
 /// What `open_project` returns. Mirrors `rusty_app::commands::OpenResult`.
+///
+/// Detection and nothing else. The Cargo analysis used to travel with it,
+/// and the window could not draw the new project until `cargo metadata` had
+/// resolved the whole dependency graph — which nothing on screen at that
+/// moment reads. It is asked for separately now (`refresh_workspace`),
+/// beside the tree rather than ahead of it, and the reason it is absent
+/// still reaches the dock from there.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenResult {
     project: EmbeddedProject,
-    workspace: Option<WorkspaceReport>,
-    /// Why the Cargo analysis is absent, when it is.
-    ///
-    /// Surfaced rather than dropped. Opening succeeds either way — a project
-    /// whose `cargo metadata` fails is exactly the one whose diagnosis matters
-    /// — but the panels that go empty because of it cannot explain themselves,
-    /// so the reason goes to the dock where it stays answerable.
-    workspace_error: Option<String>,
 }
 
 /// Run an action, tracking it as in flight and recording any failure.

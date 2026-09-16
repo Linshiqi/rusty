@@ -65,8 +65,11 @@ pub fn remember_tabs(state: AppState) {
     });
 }
 
-/// Reopen the tabs the project had last time. Missing files fail their open
-/// quietly through the normal error path; the strip simply ends up shorter.
+/// Reopen the tabs the project had last time.
+///
+/// A file that is gone drops off the strip without a word ([`reopen_file`]):
+/// the strip is keyed on the project *directory*, and a directory can hold a
+/// different project than it did last week.
 pub fn restore_tabs(state: AppState, root: &str) {
     // A detached window edits one file; the shell's saved strip is not its
     // business to reopen.
@@ -136,7 +139,7 @@ pub fn restore_tabs(state: AppState, root: &str) {
         state.editor.tabs.set(tabs.clone());
         let active = active.filter(|path| tabs.iter().any(|t| t == path));
         if let Some(active) = active.or_else(|| tabs.first().cloned()) {
-            open_file(state, active);
+            reopen_file(state, active);
         }
         // The second group, when there was one: its strip, its file, and the
         // split itself. Focus stays with the first, as a fresh window's does.
@@ -148,7 +151,7 @@ pub fn restore_tabs(state: AppState, root: &str) {
                 .filter(|path| second.iter().any(|t| t == path))
                 .or_else(|| second.first().cloned());
             if let Some(shown) = shown {
-                open_file(group, shown);
+                reopen_file(group, shown);
             }
             state.layout.focus.set(crate::state::Group::First);
         }

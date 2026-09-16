@@ -403,7 +403,7 @@ pub fn watch_reattach(state: AppState) {
     });
 }
 
-/// Re-read the project tree.
+/// Re-read the project tree, and which of its files the module tree reaches.
 pub fn refresh_tree(state: AppState) {
     if !state.has_project_now() {
         return;
@@ -413,6 +413,21 @@ pub fn refresh_tree(state: AppState) {
         async move { ipc::call::<_, Vec<Entry>>(cmd::files::TREE, &()).await },
         move |entries| state.editor.tree.set(entries),
     );
+    refresh_unlinked(state);
+}
+
+/// Which `.rs` files no `mod` declaration reaches, for the tree to dim.
+///
+/// Not through `track`: a project whose module tree cannot be read is not a
+/// failure worth a banner — the answer is a shade of grey. An empty list is
+/// also what a refusal looks like (`rusty_edit::modules` claims nothing
+/// where it cannot be sure), so nothing here can turn a doubt into a dim.
+pub fn refresh_unlinked(state: AppState) {
+    spawn_local(async move {
+        if let Ok(paths) = ipc::call::<_, Vec<String>>(cmd::files::UNLINKED, &()).await {
+            set_if_changed(state.editor.unlinked, paths);
+        }
+    });
 }
 
 /// Open a file for reading and editing.
@@ -459,6 +474,38 @@ pub fn open_file(state: AppState, path: String) {
         async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
         move |document| show_document(state, document, true),
     );
+}
+
+/// Open a file the *workbench* asked for rather than the user: a tab being
+/// restored from `workbench.toml`.
+///
+/// A path that is no longer there drops off the strip instead of raising a
+/// banner. The strip is remembered per project directory, and a project can
+/// be deleted and recreated at the same path — the wizard does exactly that
+/// — so a remembered `firmware/src/bin/main.rs` over a directory that now
+/// holds something else greeted a freshly generated project with a red
+/// error about a file nobody had asked for. `restore_tabs` has always said
+/// it fails quietly; it went through the ordinary path, which banners.
+pub(crate) fn reopen_file(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+
+    let args = Args { path: path.clone() };
+    spawn_local(async move {
+        match ipc::call::<_, Document>(cmd::files::OPEN, &args).await {
+            Ok(document) => show_document(state, document, true),
+            // Gone. Take it off the strip in every group that lists it, so
+            // the next click cannot ask again.
+            Err(_) => {
+                for editor in state.groups.editors {
+                    editor.tabs.update(|tabs| tabs.retain(|tab| tab != &path));
+                }
+                remember_tabs(state);
+            }
+        }
+    });
 }
 
 /// Fetch a project file as a picture — a figure in a page, an image opened
@@ -981,6 +1028,64 @@ pub fn open_external(state: AppState, path: String) {
         // editable document would be a lie the read-only flag exists to
         // prevent.
         move |document| show_document(state, document, false),
+    );
+}
+
+/// Write the draft back without being asked, a beat after typing stopped.
+///
+/// Not [`save_file`]: that one re-reads the file afterwards, which is right
+/// for Ctrl+S — the user has stopped — and is an editor eating work here.
+/// The round trip takes tens of milliseconds, typing continues through it,
+/// and the re-read then puts the disk's copy into `draft` over the keys
+/// pressed since. Nor [`format_then_save`]: rustfmt under the fingers
+/// rewrites the line being typed, and mid-expression it cannot parse at all,
+/// so every second would put a failure in the dock.
+///
+/// So: write, and move the *document* forward to exactly the bytes written.
+/// The dirty dot is `draft != document.text`, so it clears by itself and
+/// stays honest — it lights again the moment the next key is pressed. The
+/// draft is never touched.
+pub fn autosave_file(state: AppState) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+
+    let Some(document) = state.editor.document.with_untracked(Clone::clone) else {
+        return;
+    };
+    // The same refusals a manual save makes. A truncated read is not the
+    // file: writing it back would cut somebody's file down to the cap.
+    if document.read_only || document.truncated {
+        return;
+    }
+    let path = document.path.clone();
+    let text = state.editor.draft.get_untracked();
+    if text == document.text {
+        return;
+    }
+    let args = Args {
+        path: path.clone(),
+        text: text.clone(),
+    };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::files::SAVE, &args).await },
+        move |()| {
+            lsp_saved_doc(path.clone());
+            clear_stale(state, &path);
+            // What is on disk is now this text, whatever has been typed
+            // since. Only the document this write was for: the tab may have
+            // changed under the round trip.
+            state.editor.document.update(|open| {
+                if let Some(open) = open
+                    && open.path == path
+                {
+                    open.text = text.clone();
+                }
+            });
+        },
     );
 }
 

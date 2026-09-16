@@ -30,5 +30,12 @@ default = ["backend"]
 # only the serde types.
 backend = ["dep:camino", "dep:fs4", "dep:guppy", "dep:semver", "dep:serde_json", "dep:thiserror", "dep:ureq"]
 
+# The probe loads a real workspace, so it needs the half of this crate that
+# runs `cargo metadata`. Without this, `--all-targets` builds it with default
+# features off and stops on a missing `guppy`.
+[[example]]
+name = "open_cost"
+required-features = ["backend"]
+
 [lints]
 workspace = true

@@ -247,6 +247,38 @@ pub fn set_vim(state: AppState, enabled: bool) {
     );
 }
 
+/// Read the auto-save switch at startup, like the modal-editing one: a
+/// second window that did not auto-save would lose work on the assumption
+/// that it had.
+pub fn load_auto_save(state: AppState) {
+    track(
+        state,
+        async move { ipc::call::<_, bool>(cmd::workbench::AUTO_SAVE, &()).await },
+        move |on| state.editor.auto_save.set(on),
+    );
+}
+
+/// Turn it on or off, and remember.
+///
+/// Turning it *on* writes what is already there, rather than waiting for the
+/// next keystroke: a switch flipped over a dirty buffer that leaves the dot
+/// lit reads as a switch that did nothing.
+pub fn set_auto_save(state: AppState, enabled: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        enabled: bool,
+    }
+    state.editor.auto_save.set(enabled);
+    if enabled {
+        super::autosave_file(state);
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::SET_AUTO_SAVE, &Args { enabled }).await },
+        move |()| {},
+    );
+}
+
 /// The stored shortcut overrides.
 ///
 /// Loaded at boot beside the Vim switch, because it is the same kind of

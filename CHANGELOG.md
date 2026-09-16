@@ -9,6 +9,60 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.29
+
+**Added — a file no `mod` declares is dimmed in the tree, and says so.** A
+Rust file that nothing in the project declares with `mod` or `pub mod` is
+not part of any crate, so rust-analyzer offers nothing in it at all: no
+completion, no hover, no go-to-definition — for ever, while the red
+squiggles keep arriving. Nothing on screen used to say that. Such files are
+now drawn dimmed, as VS Code dims a file outside the project, with the
+reason on hover. Opening one shows a notice above the editor with a button
+that writes the missing `mod` line into the parent module for you.
+
+**Added — quick fixes are one click from the pointer.** Hovering anything
+with an error or a warning under it now offers what rust-analyzer can do
+about it, as buttons on the tooltip you are already reading. `impl
+core::ops::Mul for Quaternion {}` offers *Implement missing members*, which
+fills in the associated type and the method; an unresolved name offers its
+import. They were reachable only by clicking into the line and pressing
+Ctrl+. before.
+
+**Added — auto save.** Off by default, in Settings ▸ Editor: the file is
+written a second after you stop typing, the way VS Code's *After delay*
+works. Ctrl+S is unchanged and still formats with rustfmt first; auto save
+never reformats under your fingers.
+
+**Fixed — switching projects is faster.** Opening a project waited for the
+full Cargo dependency analysis and for the previous project's rust-analyzer
+to shut down before the window could draw anything of the new one — so the
+workbench sat on the old project for the best part of a second, and longer
+for a project generated a moment ago, whose dependencies cargo has never
+resolved. Neither is needed to show the new project: the analysis is read
+when a panel that uses it asks, and the old language server is buried in the
+background.
+
+**Fixed — a new project from the wizard can be committed.** The workspace
+layout left the generator's own `git init` inside `firmware/`, so the
+project's first `git add` stopped with `'firmware/' does not have a commit
+checked out` and the Changes list showed `firmware/` as one entry instead
+of the files in it. That repository is now removed — only ever one with no
+commits in it.
+
+**Fixed — a project whose remembered tab is gone opens quietly.** The open
+tabs are remembered per directory, and a directory can hold a different
+project than it did last week — creating a project where one used to be
+greeted it with a red *could not read …* about a file nobody had asked for.
+The tab now simply drops off the strip.
+
+**Changed — a toolchain too old for rust-analyzer is named.** rust-analyzer
+passes `--lockfile-path` to any cargo that calls itself nightly, and
+Espressif's Xtensa fork does while being built from a snapshot that predates
+the flag — so `cargo metadata` fails, the workspace never loads, and Output
+fills with pages of cargo usage text that read as rusty being broken. That
+failure now carries a sentence saying what it is and that `espup update`
+fixes it, above the server's own words.
+
 ## v0.6.28
 
 **Fixed — when rust-analyzer cannot load your project, rusty now says so.**

@@ -452,6 +452,8 @@ different-hal-hint = "Every call your firmware makes to the HAL differs. The wiz
 [settings.editor]
 vim = "Vim keys"
 vim-detail = "Normal, insert and visual modes; the mode shows in the status bar."
+auto-save = "Auto save"
+auto-save-detail = "Writes the file a second after you stop typing. Ctrl+S still formats."
 text-size = "Text size"
 page-size = "Page text size"
 text-size-note = "Ctrl+wheel over the editor or a Markdown page changes its size too; Ctrl+= and Ctrl+- work in the editor."
@@ -835,6 +837,7 @@ delete-confirm-trash = "Move “{name}” to the Trash?"
 empty = "Nothing to show."
 files = "Files"
 refresh = "Re-read the project"
+unlinked = "No `mod` declares this file, so rust-analyzer offers nothing in it."
 
 [pinmap]
 pins = "{chip} pins"
@@ -1043,6 +1046,12 @@ import-note = "Type the C-number printed beside a part on lcsc.com. The symbol l
 copy-action = "copy"
 copied = "copied"
 no-quick-fixes = "no quick fixes at the cursor"
+# A file no `mod` line declares: rust-analyzer parses it and answers nothing
+# else, so the reason sits in the file's header with its own fix beside it.
+unlinked-file = "Not in any crate's module tree: rust-analyzer cannot analyse this file — no completion, hover or navigation until a `mod` line declares it."
+unlinked-fix = "Declare it…"
+edited-elsewhere = "the fix also changed {count} other file(s)"
+save-first = "save {path} first — this fix changes it on disk"
 vim-no-back = "nowhere further back"
 vim-no-forward = "nowhere further forward"
 clock-skew = "clock skew"

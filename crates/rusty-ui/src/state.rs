@@ -128,6 +128,28 @@ pub struct EditHistory {
     pub last_push: f64,
 }
 
+/// The tooltip under the pointer: what the server said, and what it offers
+/// to do about it.
+///
+/// The fixes travel *with* the prose rather than in a signal of their own,
+/// because a card describing one position while its buttons rewrite another
+/// is a click nobody meant to make. They are asked for only where the token
+/// carries a diagnostic — an `impl Trait for T {}` missing its members is the
+/// case this exists for, and asking on every hover would put a `codeAction`
+/// round trip, resolves and all, behind every idle mouse.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoverCard {
+    pub path: String,
+    /// The token's own span. What "the pointer is still on it" is measured
+    /// against, so the card does not close under a reader.
+    pub range: EditRange,
+    pub text: String,
+    /// Where the fixes were asked for — the position they splice against.
+    pub line: u32,
+    pub col: u32,
+    pub fixes: rusty_lsp::CodeActions,
+}
+
 /// A completion answer, anchored where it was asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionPopup {
@@ -825,6 +847,10 @@ pub struct Editor {
     /// replaced wholesale, and folding the text into them would lose whatever
     /// had been typed since.
     pub tree: RwSignal<Vec<Entry>>,
+    /// The `.rs` files in the tree that no `mod` declaration reaches, so the
+    /// tree can dim them as VS Code dims a file outside the project. Shared
+    /// by both groups: it is a fact about the project, not about an editor.
+    pub unlinked: RwSignal<Vec<String>>,
     pub document: RwSignal<Option<Document>>,
     pub draft: RwSignal<String>,
     /// The lines being painted, live. Seeded from the opened document, patched
@@ -838,18 +864,19 @@ pub struct Editor {
     /// Bumped on every keystroke; a re-highlight result is dropped unless the
     /// generation it was requested at is still current.
     pub pulse_gen: RwSignal<u64>,
-    /// What the server said about the position under the mouse: path, the
-    /// token's range, and the prose. The range is what keeps the card up while
-    /// the pointer moves within the same token.
-    pub hover: RwSignal<Option<(String, EditRange, String)>>,
+    /// What the server said about the position under the mouse. The range is
+    /// what keeps the card up while the pointer moves within the same token.
+    pub hover: RwSignal<Option<HoverCard>>,
     /// The completion popup, when one is up.
     pub completion: RwSignal<Option<CompletionPopup>>,
     /// What the popup is waiting on. Not reactive: nothing draws it.
     pub completion_ask: StoredValue<CompletionAsk>,
     /// The signature card: which file and line it hangs over, and what it says.
     pub signature: RwSignal<Option<(String, u32, rusty_lsp::SignatureInfo)>>,
-    /// Quick fixes offered at the caret, when the user asked (Ctrl+.).
-    pub actions: RwSignal<Option<(String, u32, Vec<rusty_lsp::CodeActionFix>)>>,
+    /// Quick fixes offered at the caret, when the user asked (Ctrl+.): the
+    /// file, the line the popup hangs under, and the answer itself — whose
+    /// number is what an accepted fix is applied against.
+    pub actions: RwSignal<Option<(String, u32, rusty_lsp::CodeActions)>>,
     /// Semantic colouring for the active document, as rust-analyzer sees it.
     /// Overlaid on the lexical highlight at render; empty while the index
     /// warms up, and the base colours simply show through.
@@ -933,6 +960,13 @@ pub struct Editor {
     /// of Escape.
     pub vim_on: RwSignal<bool>,
     pub vim: RwSignal<crate::vim::Vim>,
+    /// Write the file a beat after typing stops. Mirrors `workbench.toml`
+    /// like [`Self::vim_on`], and for the same reason.
+    pub auto_save: RwSignal<bool>,
+    /// Bumped on every edit; an auto-save fires only if its own number is
+    /// still the latest, so a burst of typing is one write rather than one
+    /// per keystroke.
+    pub save_gen: RwSignal<u64>,
 }
 
 impl Editor {
@@ -965,11 +999,14 @@ impl Editor {
             snippets: RwSignal::new(HashMap::new()),
             folds: RwSignal::new(rusty_edit::Folded::default()),
             stale: RwSignal::new(Vec::new()),
+            unlinked: RwSignal::new(Vec::new()),
             watch_session: RwSignal::new(0),
             zoom: RwSignal::new(stored_zoom()),
             page_zoom: RwSignal::new(stored_page_zoom()),
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
+            auto_save: RwSignal::new(false),
+            save_gen: RwSignal::new(0),
         }
     }
 
@@ -989,10 +1026,12 @@ impl Editor {
             zoom: self.zoom,
             page_zoom: self.page_zoom,
             vim_on: self.vim_on,
+            auto_save: self.auto_save,
             source_view: self.source_view,
             images: self.images,
             snippets: self.snippets,
             stale: self.stale,
+            unlinked: self.unlinked,
             watch_session: self.watch_session,
             ..Self::fresh()
         }

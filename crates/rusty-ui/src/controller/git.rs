@@ -46,15 +46,6 @@ use crate::{
 /// How many opened commits are kept for a second look.
 const CACHED_COMMITS: usize = 32;
 
-/// Set a signal only when the value is not already what it holds. Every
-/// read's answer goes through this: an unchanged history set again rebuilt
-/// every row of the log.
-fn set_if_changed<T: PartialEq + Send + Sync + 'static>(signal: RwSignal<T>, value: T) {
-    if signal.with_untracked(|current| *current != value) {
-        signal.set(value);
-    }
-}
-
 fn begin(state: AppState, read: GitRead) -> bool {
     let mut go = false;
     state.git.gate.update_value(|gate| go = gate.begin(read));

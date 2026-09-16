@@ -181,12 +181,31 @@ pub async fn lsp_code_actions(
     line: u32,
     col: u32,
     state: State<'_, AppState>,
-) -> Result<Vec<rusty_lsp::CodeActionFix>, CommandError> {
+) -> Result<rusty_lsp::CodeActions, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(rusty_lsp::CodeActions::default());
+    };
+    Ok(
+        tokio::task::spawn_blocking(move || client.code_actions(&path, line, col))
+            .await
+            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
+    )
+}
+
+/// The part of an accepted quick fix that lands in other files, written
+/// there. Answers with the files that changed.
+#[tauri::command]
+pub async fn lsp_apply_action(
+    path: String,
+    reply: u64,
+    index: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, CommandError> {
     let Some(client) = state.lsp().await else {
         return Ok(Vec::new());
     };
     Ok(
-        tokio::task::spawn_blocking(move || client.code_actions(&path, line, col))
+        tokio::task::spawn_blocking(move || client.apply_action_elsewhere(&path, reply, index))
             .await
             .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
     )

@@ -420,6 +420,8 @@ different-hal-hint = "固件对 HAL 的每一处调用都不一样。向导会�
 [settings.editor]
 vim = "Vim 键位"
 vim-detail = "普通、插入、可视三种模式；当前模式显示在状态栏。"
+auto-save = "自动保存"
+auto-save-detail = "停止输入一秒后写入文件。Ctrl+S 仍会先格式化。"
 text-size = "文字大小"
 page-size = "页面文字大小"
 text-size-note = "在编辑器或 Markdown 页面上按住 Ctrl 滚动滚轮也能调整；编辑器里还可以用 Ctrl+= 和 Ctrl+-。"
@@ -795,6 +797,7 @@ delete-confirm-trash = "把“{name}”移到废纸篓？"
 empty = "没有可显示的内容。"
 files = "文件"
 refresh = "重新读取项目"
+unlinked = "没有 `mod` 声明这个文件，rust-analyzer 在其中不提供任何服务。"
 
 [pinmap]
 pins = "{chip} 引脚"
@@ -992,6 +995,10 @@ import-note = "输入 lcsc.com 元件旁印着的 C 料号。符号会进入元�
 copy-action = "复制"
 copied = "已复制"
 no-quick-fixes = "光标处没有快速修复"
+unlinked-file = "此文件不在任何 crate 的模块树里：rust-analyzer 无法分析它——在父模块加上 mod 声明之前，没有补全、悬停和跳转。"
+unlinked-fix = "加入模块树…"
+edited-elsewhere = "这个修复还改动了 {count} 个其他文件"
+save-first = "请先保存 {path}——这个修复会直接改写它"
 vim-no-back = "已到最早位置"
 vim-no-forward = "已到最新位置"
 clock-skew = "时钟偏差"
