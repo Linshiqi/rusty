@@ -336,7 +336,8 @@ mod tests {
         assert_eq!(
             claim(&files, &[""]),
             None,
-            "refuse rather than guess, project-wide — and a refusal is not an              empty list, which would read as a clean bill of health"
+            "refuse rather than guess, project-wide — and a refusal is not an \
+             empty list, which would read as a clean bill of health"
         );
     }
 

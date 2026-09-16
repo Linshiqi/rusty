@@ -6,8 +6,8 @@
 //! caret's line, wherever in that line the caret is — instead of splicing it
 //! into the middle of whatever is there. The browser's own copy and cut do
 //! nothing without a selection, so in this editor the keys did nothing at
-//! all, and in Vim's normal mode they copied the one character under the
-//! block cursor, which is the selection that draws it.
+//! all. With a selection they act on the selection, in every mode, Vim's
+//! included — that half is `edits::clipboard_key`, and needs nothing here.
 //!
 //! Pure, over the document and a byte offset into it, and every answer that
 //! changes the text is a [`pairs::Edit`] — so it reaches the buffer through

@@ -691,17 +691,16 @@ impl Vim {
         }
     }
 
-    /// What the editor should select: the visual range, or the single
-    /// character the block cursor sits on.
+    /// What the editor should select: the visual range, or nothing.
     fn selection(&self, text: &str, cursor: usize) -> Option<(usize, usize)> {
         match self.mode {
             Mode::Insert => None,
             Mode::Visual | Mode::VisualLine => Some(self.visual_range(text, cursor)),
-            // Normal mode has no selection: the block is the *caret*, drawn
-            // by `caret-shape: block`. Selecting the character instead was
-            // the first design, and it could not put a cursor on an empty
-            // line — there is nothing there to select — so a blank line
-            // showed no cursor at all.
+            // Normal mode has no selection: the block is drawn by the editor
+            // where the caret is. Selecting the character instead was the
+            // first design, and it could not put a cursor on an empty line —
+            // there is nothing there to select — so a blank line showed no
+            // cursor at all. And a selection is what copy and cut act on.
             Mode::Normal => None,
         }
     }

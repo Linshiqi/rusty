@@ -44,17 +44,7 @@ pub(super) fn format_and_save(state: AppState, area: NodeRef<html::Textarea>) {
     });
 }
 
-// ─── copy, cut and paste of a whole line ─────────────────────────────────────
-
-/// Vim's normal mode, where the textarea's one selected character is the
-/// block cursor rather than anything the user selected.
-fn vim_normal(state: AppState) -> bool {
-    state.editor.vim_on.get_untracked()
-        && state
-            .editor
-            .vim
-            .with_untracked(|vim| vim.mode == crate::vim::Mode::Normal)
-}
+// ─── copy, cut and paste: the selection, or the whole line ───────────────────
 
 /// Vim's normal and visual modes, where the textarea is read-only: the
 /// browser inserts and deletes nothing there, so every change is ours.
@@ -66,33 +56,14 @@ fn vim_modal(state: AppState) -> bool {
             .with_untracked(|vim| vim.mode != crate::vim::Mode::Insert)
 }
 
-/// Vim's block cursor at `caret`, after an edit made outside Vim's own steps
-/// — normal mode's cursor is a one-character selection, and a collapsed one
-/// draws as a thin caret nobody in normal mode expects. On a line break the
-/// selection stays collapsed, as Vim's own does on an empty line.
-fn block_cursor(state: AppState, area: &web_sys::HtmlTextAreaElement, caret: usize) {
-    if !vim_normal(state) {
-        return;
-    }
-    let text = state.editor.draft.get_untracked();
-    let mut caret = caret.min(text.len());
-    while !text.is_char_boundary(caret) {
-        caret -= 1;
-    }
-    let width = text[caret..]
-        .chars()
-        .next()
-        .filter(|c| *c != '\n')
-        .map_or(0, char::len_utf8);
-    let _ = area.set_selection_start(Some(utf16_len(&text[..caret])));
-    let _ = area.set_selection_end(Some(utf16_len(&text[..caret + width])));
-}
-
-/// Ctrl+C or Ctrl+X. With nothing selected — or in Vim's normal mode, whose
-/// one selected character is the cursor — it is the whole line (`clip.rs`).
-/// A cut in Vim's visual mode is taken too, because the read-only textarea
-/// would copy the selection and delete nothing. A selection anywhere else is
-/// the browser's, as it always was. Whether the key was taken.
+/// Ctrl+C or Ctrl+X: the selection when there is one, the whole line
+/// (`clip.rs`) when there is not — VS Code's rule, in every mode. Vim's
+/// normal mode has no selection of its own (its cursor is drawn, not
+/// selected), so a selection there is one somebody made, with the mouse or
+/// a double-click, and it is what they meant to copy. A cut of a selection
+/// in Vim's modes is taken here, because the read-only textarea would copy
+/// it and delete nothing; a selection anywhere else is the browser's, as it
+/// always was. Whether the key was taken.
 pub(super) fn clipboard_key(
     state: AppState,
     area: &web_sys::HtmlTextAreaElement,
@@ -101,13 +72,12 @@ pub(super) fn clipboard_key(
 ) -> bool {
     let (from, to) = doc_selection(area, state);
     let text = state.editor.draft.get_untracked();
-    if from == to || vim_normal(state) {
+    if from == to {
         if cut && !read_only {
             let (line, edit) = clip::cut_line(&text, from);
             copy_to_clipboard(&line);
             state.editor.copied_line.set(Some(line));
             apply_edit(area, state, &edit);
-            block_cursor(state, area, edit.caret);
         } else {
             let line = clip::copy_line(&text, from);
             copy_to_clipboard(&line);
@@ -126,14 +96,21 @@ pub(super) fn clipboard_key(
             select: None,
         };
         apply_edit(area, state, &edit);
+        leave_visual(state);
+        return true;
+    }
+    false
+}
+
+/// Back to normal mode after a cut or a paste over a visual selection, as
+/// Vim goes back after `d` or `p` there. Nothing to do from normal mode.
+fn leave_visual(state: AppState) {
+    if state.editor.vim.with_untracked(|vim| vim.mode.is_visual()) {
         state
             .editor
             .vim
             .update(|vim| vim.mode = crate::vim::Mode::Normal);
-        block_cursor(state, area, from);
-        return true;
     }
-    false
 }
 
 /// Ctrl+V in Vim's normal or visual mode, before the browser acts on it. A
@@ -166,11 +143,12 @@ pub(super) fn open_for_paste(state: AppState, area: NodeRef<html::Textarea>, rea
     );
 }
 
-/// A paste, with what the clipboard holds. The line Ctrl+C or Ctrl+X copied
-/// goes in whole above the caret's line; in Vim's normal and visual modes
-/// every paste is put in here, since the browser was let in only to hand
-/// the text over. Anything else is the browser's own paste. Whether it was
-/// taken.
+/// A paste, with what the clipboard holds. With nothing selected, the line
+/// Ctrl+C or Ctrl+X copied goes in whole above the caret's line; over a
+/// selection it replaces the selection like any other text, as VS Code's
+/// does. In Vim's normal and visual modes every paste is put in here, since
+/// the browser was let in only to hand the text over. Anything else is the
+/// browser's own paste. Whether it was taken.
 pub(super) fn paste_into(
     state: AppState,
     area: &web_sys::HtmlTextAreaElement,
@@ -187,11 +165,10 @@ pub(super) fn paste_into(
     let (from, to) = doc_selection(area, state);
     let text = state.editor.draft.get_untracked();
     let remembered = state.editor.copied_line.get_untracked();
-    if (from == to || vim_normal(state)) && clip::is_copied_line(pasted, remembered.as_deref()) {
+    if from == to && clip::is_copied_line(pasted, remembered.as_deref()) {
         let line = remembered.unwrap_or_default();
         let edit = clip::paste_line(&text, from, &line);
         apply_edit(area, state, &edit);
-        block_cursor(state, area, edit.caret);
         return true;
     }
     if !modal {
@@ -201,24 +178,17 @@ pub(super) fn paste_into(
     if plain.is_empty() {
         return true;
     }
-    // Normal mode puts it in at the cursor; visual mode replaces what is
-    // selected and goes back to normal, as a paste over a selection does.
-    let normal = vim_normal(state);
-    let range = if normal { (from, from) } else { (from, to) };
+    // At the cursor, or over the selection — a visual one, or one made with
+    // the mouse in normal mode — and back to normal mode after a visual one,
+    // as a paste over a selection does.
     let edit = pairs::Edit {
-        range,
+        range: (from, to),
         text: plain.clone(),
-        caret: range.0 + plain.len(),
+        caret: from + plain.len(),
         select: None,
     };
     apply_edit(area, state, &edit);
-    if !normal {
-        state
-            .editor
-            .vim
-            .update(|vim| vim.mode = crate::vim::Mode::Normal);
-    }
-    block_cursor(state, area, edit.caret);
+    leave_visual(state);
     true
 }
 

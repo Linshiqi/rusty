@@ -120,7 +120,8 @@ pub async fn git_include_nested(path: String, state: State<'_, AppState>) -> Ans
                 Ok(())
             } else {
                 Err(CommandError::new(format!(
-                    "{folder}/ is not an empty repository — it has commits of its own, so                      rusty will not remove its .git"
+                    "{folder}/ is not an empty repository — it has commits of its own, so \
+                     rusty will not remove its .git"
                 )))
             }
         }

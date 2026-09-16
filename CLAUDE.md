@@ -414,11 +414,24 @@ completion, quick fixes and every learned shortcut keep working the moment
 you type. `Step::handled` false is that path; `stop_propagation` on the taken
 ones is what stops a `d` in normal mode also reaching the window listener.
 
-- **The block cursor *is* the selection.** Normal mode selects the character
-  under the cursor, so styling that selection is the cursor — no second
-  element, and no way for the two to disagree about where they are.
-  Translucent, because the textarea's glyphs are transparent by design and an
-  opaque block hides the character it points at.
+- **The block cursor is drawn, because a read-only field has no caret.** It
+  has been two other things. A styled one-character selection could not
+  stand on an empty line or past a line's end — nothing there to select —
+  and then `caret-shape: block` on the textarea's own caret, which worked
+  only while normal mode's read-only guard was broken (*A `prop:` name is a
+  JavaScript property name*, under Hard-won specifics): the release that
+  fixed the guard lost the cursor, since a browser paints no caret in a
+  read-only field. Now `surface.rs` draws a translucent block (`.vim-cursor`) where
+  `vim_cursor` says the next key starts — the one function `vim_key` reads,
+  so the two cannot disagree — in visual mode too, where the selection alone
+  does not say which end moves. It follows the textarea's `selectionchange`,
+  the one event every way of moving the caret fires, shows only while the
+  textarea has focus, and restarts its blink on a move by swapping between
+  two identical animations. Normal mode selects nothing, so the old
+  one-character selections are gone from every path (a cut, a paste,
+  `Ctrl+D`) — a selection is what copy and cut act on. Translucent, because
+  the textarea's glyphs are transparent by design and an opaque block hides
+  the character it points at.
 - **The textarea's selection is not the cursor, so the cursor is
   remembered.** Every key starts from the cursor, and `vim_key` read it off
   `selection_start` — right in normal mode, where the selection is the
@@ -745,9 +758,15 @@ positioned in a coordinate system that is not the document's.
   because the Windows clipboard hands `\n` back that way — goes in above the
   caret's line wherever the caret is, rather than into the middle of it.
   Without a selection the browser's copy and cut do nothing, so the keys did
-  nothing. In Vim's normal mode the one selected character is the block
-  cursor, so it counts as nothing selected; a visual-mode cut is the
-  editor's own, since the read-only textarea would copy and delete nothing.
+  nothing. **With a selection they act on the selection, in every mode** —
+  Vim's normal mode included, whose cursor is drawn rather than selected, so
+  a selection there is a double-click or a drag somebody made. It was once
+  counted as "nothing selected", back when the one selected character was
+  the cursor, and Ctrl+C on a double-clicked word copied its whole line. A
+  cut of a selection in Vim's modes is the editor's own, since the read-only
+  textarea would copy and delete nothing, and a paste over one replaces it,
+  as VS Code's does; a copied line goes in above the caret only when
+  nothing is selected.
   **Paste reads the `paste` event, never `navigator.clipboard.readText()`**:
   the read waits on a permission this WebView never answers — measured as a
   hang — while the event carries the text with the key press. A browser
@@ -2537,7 +2556,12 @@ usty`) holds `location.toml`
   refuse a paste and read the property back. It is the boolean attribute now
   (`readonly=move || …`), which a browser reflects into the property itself.
   `prop:checked` and `prop:value` are fine: their DOM names are lowercase.
-  Check any other `prop:` against the property's real spelling.
+  Check any other `prop:` against the property's real spelling. **And a
+  guard that starts working changes what the element draws**: a read-only
+  textarea gets no caret, so Vim's block cursor — the caret, styled — went
+  with the fix, and three releases passed before anybody said so. When a
+  broken guard is mended, look at the thing it guards as well as the thing
+  it keeps out.
 - **An effect that reads the state its own request produces is a loop.** The
   Registers tab re-read the selected peripheral on every `debug.session`
   change; the read's answer arrives *as* a session change. Key such an effect

@@ -18,12 +18,12 @@ use crate::{
 /// the textarea".
 ///
 /// Every key starts from the cursor, and the textarea only holds a
-/// selection. In normal mode that is the character under the cursor, so its
-/// start *is* the cursor. In visual mode it runs from the anchor through the
-/// cursor, so its start is the anchor whenever the cursor is to the right of
-/// it: every `l` began again from the anchor, and a selection could not grow
-/// past two characters. Visual line mode covers whole lines and keeps no
-/// column at all, so `Vjj` stopped at two lines the same way.
+/// selection. In normal mode that is a collapsed caret where the cursor is,
+/// so its start *is* the cursor. In visual mode it runs from the anchor
+/// through the cursor, so its start is the anchor whenever the cursor is to
+/// the right of it: every `l` began again from the anchor, and a selection
+/// could not grow past two characters. Visual line mode covers whole lines
+/// and keeps no column at all, so `Vjj` stopped at two lines the same way.
 ///
 /// So the cursor Vim last set is trusted for as long as the textarea still
 /// shows exactly the selection Vim set, in the same file. Anything else moved
@@ -39,6 +39,43 @@ pub(super) fn remembered_cursor(
     let last = last?;
     (last.path.as_deref() == path && last.start == start && last.end == end)
         .then(|| last.cursor.min(len))
+}
+
+/// The cursor Vim's next key starts from, as a scalar index into `text`: the
+/// remembered one while the textarea still shows the selection Vim set, the
+/// textarea's own start otherwise. `vim_key` starts from it and the drawn
+/// cursor stands on it, so the cursor on screen and the cursor a key moves
+/// cannot be two answers.
+pub(super) fn vim_cursor(
+    state: AppState,
+    area: &web_sys::HtmlTextAreaElement,
+    path: Option<&str>,
+    text: &str,
+) -> usize {
+    let start = area.selection_start().ok().flatten().unwrap_or(0);
+    let end = area.selection_end().ok().flatten().unwrap_or(start);
+    state
+        .editor
+        .vim_caret
+        .with_value(|last| remembered_cursor(last.as_ref(), path, start, end, text.chars().count()))
+        .unwrap_or_else(|| scalar_of_units(text, start as usize))
+}
+
+/// Where the drawn cursor goes for a scalar index: its line, its column in
+/// characters, and the character it covers — `None` on a line break or past
+/// the end of the text, where it covers one space's width of nothing, as
+/// Vim's does on an empty line.
+pub(super) fn cursor_cell(text: &str, cursor: usize) -> (u32, u32, Option<char>) {
+    let at = text
+        .char_indices()
+        .nth(cursor)
+        .map_or(text.len(), |(byte, _)| byte);
+    let before = &text[..at];
+    let line = before.matches('\n').count() as u32;
+    let line_start = before.rfind('\n').map_or(0, |found| found + 1);
+    let column = before[line_start..].chars().count() as u32;
+    let under = text[at..].chars().next().filter(|ch| *ch != '\n');
+    (line, column, under)
 }
 
 /// Feed one key to the modal state machine, and carry out what it says.
@@ -57,22 +94,8 @@ pub(super) fn vim_key(
     use crate::vim::{Ask, Key};
 
     let text = state.editor.draft.get_untracked();
-    let start = area.selection_start().ok().flatten().unwrap_or(0);
-    let end = area.selection_end().ok().flatten().unwrap_or(start);
     let path = state.active_path_now();
-    let cursor = state
-        .editor
-        .vim_caret
-        .with_value(|last| {
-            remembered_cursor(
-                last.as_ref(),
-                path.as_deref(),
-                start,
-                end,
-                text.chars().count(),
-            )
-        })
-        .unwrap_or_else(|| scalar_of_units(&text, start as usize));
+    let cursor = vim_cursor(state, area, path.as_deref(), &text);
 
     let key = Key {
         key: event.key(),
@@ -108,9 +131,10 @@ pub(super) fn vim_key(
         text
     };
 
-    // Visual mode selects a range; normal mode's cursor is the caret, drawn
-    // as a block by `caret-shape`. Both take this one path rather than two
-    // that can disagree about where the cursor is.
+    // Visual mode selects a range; normal mode selects nothing, and its
+    // cursor is drawn over the textarea (`surface.rs`) where this collapsed
+    // caret is. Both take this one path rather than two that can disagree
+    // about where the cursor is.
     let (start, end) = match step.selection {
         Some((from, to)) => (units_of_scalar(&after, from), units_of_scalar(&after, to)),
         None => {
@@ -208,11 +232,13 @@ pub(super) fn vim_key(
                 if let Some(span) =
                     crate::vim::motion::apply(motion, &after, step.cursor, lines, &None)
                 {
+                    // Collapsed, like every other cursor Vim sets: the
+                    // one-character selection this was is the block cursor
+                    // of a design long gone, and a selection is what copy
+                    // and cut act on.
                     let at = units_of_scalar(&after, span.cursor);
                     let _ = area.set_selection_start(Some(at));
-                    let _ = area.set_selection_end(Some(
-                        at + u32::from(after.chars().nth(span.cursor).is_some()),
-                    ));
+                    let _ = area.set_selection_end(Some(at));
                     keep_caret_in_view(area, state, scroller);
                 }
             }
@@ -363,5 +389,22 @@ mod tests {
             Some(2),
             "a buffer that shrank under it clamps the cursor"
         );
+    }
+
+    /// The drawn cursor has somewhere to stand everywhere a Vim cursor can
+    /// be — the places a selection-based one had nothing to select: an empty
+    /// line, the end of a line, the end of the text. Columns are characters,
+    /// so a `中` before the cursor is one column, not three bytes.
+    #[test]
+    fn the_drawn_cursor_stands_on_empty_lines_and_line_ends_too() {
+        let text = "ab\n\n中c\n";
+        assert_eq!(cursor_cell(text, 1), (0, 1, Some('b')));
+        assert_eq!(cursor_cell(text, 2), (0, 2, None), "the end of a line");
+        assert_eq!(cursor_cell(text, 3), (1, 0, None), "an empty line");
+        assert_eq!(cursor_cell(text, 4), (2, 0, Some('中')));
+        assert_eq!(cursor_cell(text, 5), (2, 1, Some('c')), "past a CJK glyph");
+        assert_eq!(cursor_cell(text, 7), (3, 0, None), "the end of the text");
+        assert_eq!(cursor_cell(text, 99), (3, 0, None), "and never past it");
+        assert_eq!(cursor_cell("", 0), (0, 0, None));
     }
 }

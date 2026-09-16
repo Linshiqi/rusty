@@ -9,6 +9,20 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.37
+
+**Fixed — Vim mode has a cursor again.** In normal and visual mode the cursor
+had disappeared entirely, so there was no telling where the next key would
+act. It is back as a block: on an empty line and at the end of a line too,
+and in visual mode on the end of the selection that moves. It blinks while
+the editor has focus and hides when it does not, as a caret does.
+
+**Changed — copy and cut act on the selection when there is one, in Vim mode
+too.** With a word selected by double-clicking or dragging, Ctrl+C copied the
+whole line instead of the word whenever Vim keys were on. Now, as in VS Code,
+Ctrl+C and Ctrl+X take the selection when something is selected and the whole
+line only when nothing is, and Ctrl+V over a selection replaces it.
+
 ## v0.6.36
 
 **Fixed — "Stage all" no longer stages nothing because of one file, and a

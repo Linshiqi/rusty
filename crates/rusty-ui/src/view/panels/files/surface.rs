@@ -52,6 +52,12 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     // scrolling it, selecting from it — must not count as leaving.
     let on_card = RwSignal::new(false);
     let editor_menu = RwSignal::new(None::<(f64, f64)>);
+    // Bumped by the textarea's `selectionchange`, which is the one event every
+    // way of moving the caret fires — a key, a click, a find, undo, a reveal —
+    // so the drawn Vim cursor follows all of them without a list of sites to
+    // keep in step. And the blink restart: which of two identical animations
+    // the cursor runs flips on every move (`input.css`).
+    let selection_moves = RwSignal::new(0u32);
 
     let zoom = state.editor.zoom;
 
@@ -669,7 +675,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     }}
                     <pre
                         class=move || {
-                            let base = "pointer-events-none m-0 overflow-visible py-2 pr-4                                         pl-2 whitespace-pre";
+                            let base = "pointer-events-none m-0 overflow-visible py-2 pr-4 \
+                                        pl-2 whitespace-pre";
                             // Drained when no `mod` declares the file, because
                             // rust-analyzer is not analysing a word of it. The
                             // name being dim in the tree, the tab and the header
@@ -809,14 +816,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             let base = "absolute inset-0 m-0 resize-none overflow-hidden \
                                         border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre \
                                         text-transparent caret-rust outline-none";
-                            // Normal mode only. Visual mode keeps the ordinary
-                            // selection tint, because there the selection is a
-                            // range the user chose rather than the cursor.
-                            let block = state.editor.vim_on.get()
+                            // Outside insert mode the cursor is drawn below,
+                            // and the textarea's own caret is hidden for the
+                            // one moment a paste makes it writable.
+                            let modal = state.editor.vim_on.get()
                                 && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert);
-                            if block { format!("{base} vim-block") } else { base.to_string() }
+                            if modal { format!("{base} vim-modal") } else { base.to_string() }
                         }
                         style=move || metrics.get()
+                        on:selectionchange=move |_| selection_moves.update(|n| *n = n.wrapping_add(1))
                         // What the textarea holds is the *screen* text, which
                         // is the draft minus every folded region. Identical to
                         // the draft while nothing is collapsed, so this is a
@@ -1047,9 +1055,10 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 event.stop_propagation();
                                 return;
                             }
-                            // Copy and cut with nothing selected take the whole
-                            // line, as VS Code's do, and so does Vim's normal
-                            // mode, whose one selected character is the cursor.
+                            // Copy and cut take the selection when there is one
+                            // and the whole line when there is not, as VS
+                            // Code's do — in Vim's modes as well, since normal
+                            // mode's cursor is drawn rather than selected.
                             // Paste is the paste event's, below — Vim's
                             // read-only textarea only has to be let in first.
                             if (event.ctrl_key() || event.meta_key())
@@ -1406,6 +1415,54 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             }
                         }}
                     />
+
+                    // Vim's cursor, outside insert mode. The textarea is
+                    // read-only there — the guard above — and a browser
+                    // paints no caret in a read-only field, so the block the
+                    // caret used to be (`caret-shape: block`) was gone from
+                    // the release that guard started working. Drawn, it
+                    // stands on the cursor Vim's next key starts from
+                    // (`vim_cursor`) — in visual mode too, where the
+                    // selection alone does not say which end moves — and on
+                    // an empty line or past a line's end as well, where there
+                    // is no character to select. Like a caret, it shows only
+                    // while the textarea has focus (`input.css`).
+                    {move || {
+                        let modal = state.editor.vim_on.get()
+                            && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert);
+                        if !modal {
+                            return ().into_any();
+                        }
+                        let Some(element) = area.get() else {
+                            return ().into_any();
+                        };
+                        let moves = selection_moves.get();
+                        let z = zoom.get();
+                        let path = state.active_path_now();
+                        let (line, x, width) = state.editor.draft.with(|text| {
+                            let cursor = vim_cursor(state, &element, path.as_deref(), text);
+                            let (line, col, under) = cursor_cell(text, cursor);
+                            // A tab's width depends on where it starts, and a
+                            // line break or the end of the text has none: all
+                            // three are a space wide.
+                            let glyph = under.filter(|ch| *ch != '\t').unwrap_or(' ');
+                            let width = column_px(&glyph.to_string(), 0, 1) * z;
+                            (line, col_left(text, line, col, z), width)
+                        });
+                        let y = row_top(state, line, z);
+                        let blink = if moves.is_multiple_of(2) { "vim-cursor-a" } else { "vim-cursor-b" };
+                        view! {
+                            <div
+                                class="vim-cursor"
+                                style=format!(
+                                    "left: {x}px; top: {y}px; width: {width}px; height: {h}px; \
+                                     animation-name: {blink}",
+                                    h = row_height(z),
+                                )
+                            />
+                        }
+                        .into_any()
+                    }}
 
                     // The tests, offered where VS Code offers them — beside
                     // the item, not at the far edge of the margin — and with

@@ -403,23 +403,51 @@ body {
   text-underline-offset: 3px;
 }
 
-/* Modal editing's block cursor.
+/* Modal editing's block cursor, drawn by the editor (`surface.rs`).
  *
- * `caret-shape: block` is the browser's own — so the block lands on an empty
- * line and past the last character, where a selection-based one cannot: there
- * is no character there to select. It blinks, which matters more than it
- * sounds: an idle cursor that still says NORMAL is the mode indicator you
- * look at without meaning to.
+ * Not the textarea's caret. It was, through `caret-shape: block`, until the
+ * read-only guard on normal and visual mode actually took effect — and a
+ * browser paints no caret at all in a read-only field, so normal mode lost
+ * its cursor entirely. An element also lands on an empty line and past the
+ * last character, where a selection-based cursor cannot: there is no
+ * character there to select.
  *
- * Translucent, because the textarea's glyphs are transparent by design and
- * the visible text is the `<pre>` underneath — an opaque block would hide the
- * character it points at.
+ * It blinks, which matters more than it sounds: an idle cursor that still
+ * says NORMAL is the mode indicator you look at without meaning to. Two
+ * identical animations, because changing the name is what restarts one: the
+ * editor swaps them on every move, so a cursor that moved shows at once, as a
+ * caret does, instead of arriving mid-blink.
  *
- * Where `caret-shape` is not supported this degrades to the ordinary caret,
- * which is a thin cursor in normal mode: wrong, but visible, and the status
- * bar still names the mode.
+ * Shown only while the textarea has focus, as a caret is. Translucent,
+ * because the textarea's glyphs are transparent by design and the visible
+ * text is the `<pre>` underneath — an opaque block would hide the character
+ * it points at.
  */
-.vim-block {
-  caret-shape: block;
-  caret-color: var(--vim-block);
+.vim-cursor {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  background: var(--vim-block);
+  animation-duration: 1.06s;
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
+}
+textarea:focus ~ .vim-cursor {
+  display: block;
+}
+@keyframes vim-cursor-a {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes vim-cursor-b {
+  50% {
+    opacity: 0;
+  }
+}
+/* The textarea's own caret, hidden outside insert mode: a paste makes the
+ * field writable for a moment, and a thin caret flashing beside the block
+ * would be a second cursor. */
+.vim-modal {
+  caret-color: transparent;
 }
