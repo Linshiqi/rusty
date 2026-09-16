@@ -640,6 +640,27 @@ positioned in a coordinate system that is not the document's.
   …;` and `Insert pub(crate) mod …;` — three precise options where the button
   had one. Removing an affordance was safe *because* the hover card had
   arrived; it would not have been the release before.
+- **VS Code does not dim an unlinked file's code, and the protocol says why.**
+  Read off the wire: `unlinked-file` arrives as severity 4 (a *hint*), over
+  the range `0:0–0:2` — the first two characters — and carries **no `tags`
+  field**, so there is no `DiagnosticTag.Unnecessary` for VS Code's
+  `editorUnnecessaryCode.opacity` to act on. Side-by-side screenshots looked
+  as though VS Code greyed the text; what differs is the theme, plus the fact
+  that neither editor can *semantically* colour a file it cannot analyse, so
+  both fall back to lexical highlighting. rusty dims the buffer anyway
+  (`opacity-60` on the echo, `surface.rs`), which is a deliberate step past
+  parity: rusty reads the `mod` lines itself and knows before the file is
+  opened, where VS Code has only a two-character hint. The card over the
+  dimmed text is a sibling, not a child, so it stays at full opacity —
+  opacity compounds through a parent, and the one thing that must stay
+  readable is the way out.
+- **rust-analyzer offers no `Insert mod …;` when the parent module file does
+  not exist.** `src/vector.rs` beside a `main.rs` gets three fixes on the
+  hover card; `src/math/matrix.rs` with no `src/math/mod.rs` gets none, because
+  the fix has nowhere to write. Nothing rusty can do about it — the removed
+  banner's button asked for the same actions at the same position and would
+  have been just as empty — but it is the case a user hits, and the dim is
+  then the whole of what tells them.
 - **Two sources for one fact need a rule about which wins, not an `or`.**
   `is_unlinked` was the scan `||` rust-analyzer's `unlinked-file`, so either
   could assert and neither could retract: adding the `mod` line left the file

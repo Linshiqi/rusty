@@ -36,6 +36,12 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     let read_only = document.truncated || document.read_only;
     // Hover only means something where a language server is listening.
     let is_rust = path.ends_with(".rs");
+    // In no crate's module tree — one rule, shared with the tree and the tab
+    // strip, so the three cannot dim different files.
+    let unlinked = {
+        let path = path.clone();
+        Signal::derive(move || state.is_unlinked(&path))
+    };
 
     // The cell the mouse was last over, and a generation so only the newest
     // 400ms-old position asks the server. Hover is ambient: it must cost
@@ -653,7 +659,35 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             .into_any()
                     }}
                     <pre
-                        class="pointer-events-none m-0 overflow-visible py-2 pr-4 pl-2 whitespace-pre"
+                        class=move || {
+                            let base = "pointer-events-none m-0 overflow-visible py-2 pr-4                                         pl-2 whitespace-pre";
+                            // Drained when no `mod` declares the file, because
+                            // rust-analyzer is not analysing a word of it. The
+                            // name being dim in the tree, the tab and the header
+                            // is missable — on a selected row it is a shade
+                            // against a highlight — and the code is where the
+                            // eye actually is.
+                            //
+                            // This goes past VS Code deliberately, and the
+                            // protocol is why: `unlinked-file` arrives as a
+                            // Hint over *two characters* with no `Unnecessary`
+                            // tag, so there is nothing for VS Code's
+                            // `editorUnnecessaryCode.opacity` to act on and it
+                            // dims nothing. rusty knows more than the
+                            // diagnostic does — it reads the `mod` lines
+                            // itself, before the file is ever opened.
+                            //
+                            // The squiggle dims with the text rather than being
+                            // exempted: opacity compounds through a parent, and
+                            // a two-character mark at 60% is still plainly a
+                            // mark. Hovering it is unaffected — that is the
+                            // textarea's job, and the textarea is not dimmed.
+                            if unlinked.get() {
+                                format!("{base} opacity-60")
+                            } else {
+                                base.to_string()
+                            }
+                        }
                         style=move || metrics.get()
                         aria-hidden="true"
                     >

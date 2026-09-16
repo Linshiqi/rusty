@@ -9,6 +9,22 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.31
+
+**Changed — a file outside the module tree now reads as inert.** Its name was
+dimmed in v0.6.30; the code itself was not, so an open file still looked like
+code being analysed when nothing in it is. The whole buffer is drawn drained
+now. The squiggle dims with it and stays plainly a squiggle; the hover card
+over it does not dim, so the diagnostic and whatever rust-analyzer can do
+about it are read at full strength.
+
+This goes deliberately past VS Code, and the protocol is the reason. Measured
+off the wire, rust-analyzer's `unlinked-file` arrives as a *hint* spanning the
+first **two characters** of the file, with no `Unnecessary` tag — so there is
+nothing for VS Code's own dimming to act on, and it dims nothing. rusty does
+not need the diagnostic: it reads the `mod` declarations itself, which is also
+why it can dim the file in the tree before anybody opens it.
+
 ## v0.6.30
 
 **Fixed — a new file or folder is named where it will be.** The box appeared
