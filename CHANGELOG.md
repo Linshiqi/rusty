@@ -9,6 +9,16 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.35
+
+**Fixed — Vim's visual mode can select to the right.** Pressing `v` and then
+`l` repeatedly stopped growing after two characters, and `V` with `j` stopped
+after two lines: the editor worked out where the cursor was from the start of
+the selection, which in visual mode is where the selection began, not where
+the cursor is. Selections now grow and shrink one step per key in every
+direction, as they do in Vim; clicking elsewhere still moves the cursor to
+where you clicked.
+
 ## v0.6.34
 
 **Fixed — compile errors show where the code is, not only in Output after a

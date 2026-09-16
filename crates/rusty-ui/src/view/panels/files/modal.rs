@@ -9,7 +9,37 @@ use leptos::{ev, html, prelude::*};
 use rusty_i18n::t;
 
 use super::*;
-use crate::{controller, state::AppState};
+use crate::{
+    controller,
+    state::{AppState, VimCaret},
+};
+
+/// Where Vim's cursor is, when the textarea cannot say — `None` means "read
+/// the textarea".
+///
+/// Every key starts from the cursor, and the textarea only holds a
+/// selection. In normal mode that is the character under the cursor, so its
+/// start *is* the cursor. In visual mode it runs from the anchor through the
+/// cursor, so its start is the anchor whenever the cursor is to the right of
+/// it: every `l` began again from the anchor, and a selection could not grow
+/// past two characters. Visual line mode covers whole lines and keeps no
+/// column at all, so `Vjj` stopped at two lines the same way.
+///
+/// So the cursor Vim last set is trusted for as long as the textarea still
+/// shows exactly the selection Vim set, in the same file. Anything else moved
+/// it — a click, a find, a paste, undo — and then the textarea's start is
+/// where the cursor now is, which is what it always was outside visual mode.
+pub(super) fn remembered_cursor(
+    last: Option<&VimCaret>,
+    path: Option<&str>,
+    start: u32,
+    end: u32,
+    len: usize,
+) -> Option<usize> {
+    let last = last?;
+    (last.path.as_deref() == path && last.start == start && last.end == end)
+        .then(|| last.cursor.min(len))
+}
 
 /// Feed one key to the modal state machine, and carry out what it says.
 ///
@@ -27,8 +57,22 @@ pub(super) fn vim_key(
     use crate::vim::{Ask, Key};
 
     let text = state.editor.draft.get_untracked();
-    let units = area.selection_start().ok().flatten().unwrap_or(0) as usize;
-    let cursor = scalar_of_units(&text, units);
+    let start = area.selection_start().ok().flatten().unwrap_or(0);
+    let end = area.selection_end().ok().flatten().unwrap_or(start);
+    let path = state.active_path_now();
+    let cursor = state
+        .editor
+        .vim_caret
+        .with_value(|last| {
+            remembered_cursor(
+                last.as_ref(),
+                path.as_deref(),
+                start,
+                end,
+                text.chars().count(),
+            )
+        })
+        .unwrap_or_else(|| scalar_of_units(&text, start as usize));
 
     let key = Key {
         key: event.key(),
@@ -67,17 +111,23 @@ pub(super) fn vim_key(
     // Visual mode selects a range; normal mode's cursor is the caret, drawn
     // as a block by `caret-shape`. Both take this one path rather than two
     // that can disagree about where the cursor is.
-    match step.selection {
-        Some((from, to)) => {
-            let _ = area.set_selection_start(Some(units_of_scalar(&after, from)));
-            let _ = area.set_selection_end(Some(units_of_scalar(&after, to)));
-        }
+    let (start, end) = match step.selection {
+        Some((from, to)) => (units_of_scalar(&after, from), units_of_scalar(&after, to)),
         None => {
             let at = units_of_scalar(&after, step.cursor);
-            let _ = area.set_selection_start(Some(at));
-            let _ = area.set_selection_end(Some(at));
+            (at, at)
         }
-    }
+    };
+    let _ = area.set_selection_start(Some(start));
+    let _ = area.set_selection_end(Some(end));
+    // What was set, and the cursor it was set for — the next key's starting
+    // point while nothing else moves the selection.
+    state.editor.vim_caret.set_value(Some(VimCaret {
+        path,
+        start,
+        end,
+        cursor: step.cursor,
+    }));
 
     // Follow the caret, always. The typing path has done this from the start;
     // this one only did it for `Ctrl+D`, so every *other* way of leaving the
@@ -197,4 +247,121 @@ pub(super) fn vim_key(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vim::{Key, Mode, Vim};
+
+    /// The textarea, as far as a key sees it: the selection the last step
+    /// set, in scalars — these texts are ASCII, so scalars are the units.
+    struct Textarea {
+        start: u32,
+        end: u32,
+        last: Option<VimCaret>,
+    }
+
+    impl Textarea {
+        fn press(&mut self, vim: &mut Vim, key: &str, text: &str) {
+            let from_dom = self.start as usize;
+            let cursor = remembered_cursor(
+                self.last.as_ref(),
+                Some("src/lib.rs"),
+                self.start,
+                self.end,
+                text.chars().count(),
+            )
+            .unwrap_or(from_dom);
+            let step = vim.feed(&Key::new(key), text, cursor);
+            let (start, end) = step.selection.unwrap_or((step.cursor, step.cursor));
+            self.start = start as u32;
+            self.end = end as u32;
+            self.last = Some(VimCaret {
+                path: Some("src/lib.rs".into()),
+                start: self.start,
+                end: self.end,
+                cursor: step.cursor,
+            });
+        }
+    }
+
+    /// The report: `v` then `l` over and over grows the selection one
+    /// character a press, through the one under the cursor, as Vim's does —
+    /// where reading the textarea's start stopped it at two.
+    #[test]
+    fn a_visual_selection_grows_rightwards_one_press_at_a_time() {
+        let text = "abcdef";
+        let mut vim = Vim::default();
+        let mut area = Textarea {
+            start: 0,
+            end: 1,
+            last: None,
+        };
+        area.press(&mut vim, "v", text);
+        assert_eq!(vim.mode, Mode::Visual);
+        for (presses, end) in [(1, 2), (2, 3), (3, 4)] {
+            area.press(&mut vim, "l", text);
+            assert_eq!(
+                (area.start, area.end),
+                (0, end),
+                "after {presses} l the selection runs from the anchor through the cursor",
+            );
+        }
+        area.press(&mut vim, "h", text);
+        assert_eq!((area.start, area.end), (0, 3), "and shrinks back");
+    }
+
+    /// `V` then `j` twice is three lines, not two.
+    #[test]
+    fn a_visual_line_selection_grows_downwards() {
+        let text = "one\ntwo\nthree\nfour\n";
+        let mut vim = Vim::default();
+        let mut area = Textarea {
+            start: 0,
+            end: 1,
+            last: None,
+        };
+        area.press(&mut vim, "V", text);
+        area.press(&mut vim, "j", text);
+        area.press(&mut vim, "j", text);
+        assert_eq!(vim.mode, Mode::VisualLine);
+        assert_eq!(
+            &text[area.start as usize..area.end as usize],
+            "one\ntwo\nthree\n"
+        );
+    }
+
+    /// Anything that moves the selection other than Vim — a click, a find, a
+    /// paste — is where the cursor now is; and another file's cursor is never
+    /// borrowed, whatever its selection looks like.
+    #[test]
+    fn a_selection_vim_did_not_set_is_read_from_the_textarea() {
+        let last = VimCaret {
+            path: Some("src/lib.rs".into()),
+            start: 0,
+            end: 4,
+            cursor: 3,
+        };
+        assert_eq!(
+            remembered_cursor(Some(&last), Some("src/lib.rs"), 0, 4, 10),
+            Some(3)
+        );
+        assert_eq!(
+            remembered_cursor(Some(&last), Some("src/lib.rs"), 7, 8, 10),
+            None,
+            "a click moved it"
+        );
+        assert_eq!(
+            remembered_cursor(Some(&last), Some("src/main.rs"), 0, 4, 10),
+            None,
+            "same selection, another file"
+        );
+        assert_eq!(remembered_cursor(None, Some("src/lib.rs"), 0, 4, 10), None);
+        assert_eq!(
+            remembered_cursor(Some(&last), Some("src/lib.rs"), 0, 4, 2),
+            Some(2),
+            "a buffer that shrank under it clamps the cursor"
+        );
+    }
 }

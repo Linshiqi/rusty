@@ -834,6 +834,17 @@ pub struct Assistant {
     pub open: RwSignal<bool>,
 }
 
+/// What `modal::vim_key` last set on the textarea: the file, the selection
+/// in the UTF-16 units the DOM reports, and the cursor (a scalar index) that
+/// selection was drawn for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VimCaret {
+    pub path: Option<String>,
+    pub start: u32,
+    pub end: u32,
+    pub cursor: usize,
+}
+
 /// The document in front of you and everything that follows the caret.
 ///
 /// `draft` is the truth while typing; `document` is what the backend last
@@ -968,6 +979,10 @@ pub struct Editor {
     /// of Escape.
     pub vim_on: RwSignal<bool>,
     pub vim: RwSignal<crate::vim::Vim>,
+    /// The selection Vim last put on the textarea and the cursor it stands
+    /// for — per group, like `vim`. See `modal::remembered_cursor` for why
+    /// the textarea alone cannot say where the cursor is.
+    pub vim_caret: StoredValue<Option<VimCaret>>,
     /// Write the file a beat after typing stops. Mirrors `workbench.toml`
     /// like [`Self::vim_on`], and for the same reason.
     pub auto_save: RwSignal<bool>,
@@ -1018,6 +1033,7 @@ impl Editor {
             page_zoom: RwSignal::new(stored_page_zoom()),
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
+            vim_caret: StoredValue::new(None),
             auto_save: RwSignal::new(false),
             rust_analyzer: RwSignal::new(String::new()),
             save_gen: RwSignal::new(0),

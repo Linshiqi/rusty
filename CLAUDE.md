@@ -419,6 +419,20 @@ ones is what stops a `d` in normal mode also reaching the window listener.
   element, and no way for the two to disagree about where they are.
   Translucent, because the textarea's glyphs are transparent by design and an
   opaque block hides the character it points at.
+- **The textarea's selection is not the cursor, so the cursor is
+  remembered.** Every key starts from the cursor, and `vim_key` read it off
+  `selection_start` — right in normal mode, where the selection is the
+  character under the cursor, and wrong in visual mode, where it runs from
+  the anchor through the cursor: with the cursor right of the anchor the
+  start *is* the anchor, so every `l` began again there and a selection
+  could not grow past two characters, and `Vjj` stopped at two lines. The
+  pure machine was right all along — its tests feed `step.cursor` back — and
+  the bug lived in the round trip no test made. `Editor.vim_caret` keeps the
+  selection Vim set and the cursor it stands for; `remembered_cursor` trusts
+  it while the textarea shows exactly that selection in the same file, and
+  anything else (a click, a find, a paste, undo) is read off the textarea as
+  before. `modal::tests` drives keys through a simulated textarea, which is
+  the test that was missing.
 - **Indices are Unicode scalars**, converted to UTF-16 at the DOM boundary
   exactly as the LSP client converts at its own. A `中` in the buffer must not
   shift every motion after it.
