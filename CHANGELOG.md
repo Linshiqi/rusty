@@ -9,6 +9,34 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.33
+
+**Fixed — an Xtensa project whose dependencies never load now says why, and
+the way out is an upgrade.** On an ESP32, S2 or S3 project, completion, hover
+and go-to-definition worked in your own code while `esp_hal::` and every
+other crate answered nothing, with *dependencies unresolved* in the status
+bar. The last two releases blamed rust-analyzer and offered nothing to do.
+The actual cause is narrower: rust-analyzer decides how to talk to cargo from
+the toolchain's version number, and Xtensa Rust 1.95.0.0 reports the one
+version it gets wrong. The cargo itself is fine — asked the other way, it
+reads the whole dependency graph.
+
+So the fix is to move forward, not back. When rusty finds that toolchain, the
+Problems tab says so and carries the command:
+
+```
+espup install --toolchain-version 1.97.0.0
+```
+
+rust-analyzer stays whatever is current. Nothing is pinned or downgraded, and
+your project builds exactly as before either way — only the editor's view of
+your dependencies was affected.
+
+**Added — Settings ▸ Editor ▸ rust-analyzer binary.** For pointing rusty at a
+copy it would not find by itself, such as the one an editor bundles. Leave it
+empty and rusty finds its own, as before. It takes effect the next time a
+project opens.
+
 ## v0.6.32
 
 **Fixed — two tabs are never the same word.** A workspace has three

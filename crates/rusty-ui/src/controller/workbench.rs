@@ -279,6 +279,36 @@ pub fn set_auto_save(state: AppState, enabled: bool) {
     );
 }
 
+/// Read the named rust-analyzer at startup, beside the other editor
+/// settings a second window has to agree about.
+pub fn load_rust_analyzer(state: AppState) {
+    spawn_local(async move {
+        if let Ok(path) = ipc::call::<_, Option<String>>(cmd::workbench::RUST_ANALYZER, &()).await {
+            state.editor.rust_analyzer.set(path.unwrap_or_default());
+        }
+    });
+}
+
+/// Name one, or clear the choice with an empty field.
+///
+/// It takes effect on the next language-server start rather than now:
+/// swapping the server under a window mid-edit would drop every diagnostic
+/// on screen, and the setting's own footer says so.
+pub fn set_rust_analyzer(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: Option<String>,
+    }
+    let trimmed = path.trim().to_string();
+    state.editor.rust_analyzer.set(trimmed.clone());
+    let path = (!trimmed.is_empty()).then_some(trimmed);
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::SET_RUST_ANALYZER, &Args { path }).await },
+        move |()| {},
+    );
+}
+
 /// The stored shortcut overrides.
 ///
 /// Loaded at boot beside the Vim switch, because it is the same kind of

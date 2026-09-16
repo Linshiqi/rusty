@@ -966,6 +966,10 @@ pub struct Editor {
     /// Write the file a beat after typing stops. Mirrors `workbench.toml`
     /// like [`Self::vim_on`], and for the same reason.
     pub auto_save: RwSignal<bool>,
+    /// A rust-analyzer the user named, in place of the one rusty finds.
+    /// Empty is "whichever rusty finds"; it exists for the upstream bug in
+    /// `rusty_lsp::convert::explain_health`, and mirrors `workbench.toml`.
+    pub rust_analyzer: RwSignal<String>,
     /// Bumped on every edit; an auto-save fires only if its own number is
     /// still the latest, so a burst of typing is one write rather than one
     /// per keystroke.
@@ -1009,6 +1013,7 @@ impl Editor {
             vim_on: RwSignal::new(false),
             vim: RwSignal::new(crate::vim::Vim::default()),
             auto_save: RwSignal::new(false),
+            rust_analyzer: RwSignal::new(String::new()),
             save_gen: RwSignal::new(0),
         }
     }
@@ -1030,6 +1035,7 @@ impl Editor {
             page_zoom: self.page_zoom,
             vim_on: self.vim_on,
             auto_save: self.auto_save,
+            rust_analyzer: self.rust_analyzer,
             source_view: self.source_view,
             images: self.images,
             snippets: self.snippets,

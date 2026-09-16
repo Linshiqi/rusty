@@ -180,6 +180,29 @@ pub async fn set_vim(enabled: bool, state: State<'_, AppState>) -> Answer<()> {
         .await
 }
 
+/// The rust-analyzer the user named, if any — empty means "whichever rusty
+/// finds". Read at startup by every window, like the editor mode.
+#[tauri::command]
+pub async fn rust_analyzer_path() -> Answer<Option<String>> {
+    blocking("reading the rust-analyzer setting", || {
+        storage::workbench().rust_analyzer
+    })
+    .await
+}
+
+/// Name a rust-analyzer, or clear the choice. Takes effect on the next
+/// language-server start, which is the next project open or window.
+#[tauri::command]
+pub async fn set_rust_analyzer_path(
+    path: Option<String>,
+    state: State<'_, AppState>,
+) -> Answer<()> {
+    let chosen = typed(path);
+    state
+        .update_workbench(move |workbench| workbench.rust_analyzer = chosen)
+        .await
+}
+
 /// Whether the editor writes a beat after typing stops. Read at startup by
 /// every window, like `vim_enabled`: a second window that did not auto-save
 /// would lose work on the assumption that it had.

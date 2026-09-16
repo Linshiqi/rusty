@@ -48,9 +48,22 @@ pub async fn lsp_start(
     .await
     .unwrap_or(None);
 
-    let spawned = tokio::task::spawn_blocking(move || LspClient::spawn(&root, hint.as_deref()))
+    // A rust-analyzer the user named in Settings (`workbench.toml`'s
+    // `rust_analyzer`), when there is one: a copy rusty would not find by
+    // itself. Read here rather than once at boot, so a change applies to the
+    // next project opened without restarting the window.
+    let named = tokio::task::spawn_blocking(|| rusty_embed::config::workbench().rust_analyzer)
         .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))?;
+        .unwrap_or_default();
+    let spawned = tokio::task::spawn_blocking(move || {
+        LspClient::spawn(
+            &root,
+            hint.as_deref(),
+            named.as_deref().map(std::path::Path::new),
+        )
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))?;
 
     let (client, events) = match spawned {
         Ok(pair) => pair,

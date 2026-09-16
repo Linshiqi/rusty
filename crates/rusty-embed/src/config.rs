@@ -199,6 +199,20 @@ pub struct WorkbenchState {
     /// always the OS shell; anything else = a program to run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_shell: Option<String>,
+    /// A rust-analyzer to use instead of the one rusty would find.
+    ///
+    /// For a copy rusty's own ladder would not reach — the one an editor
+    /// bundles, a build somebody is trying out. It was added as a way round
+    /// the `--lockfile-path` failure and measured afterwards as not being
+    /// one: every rust-analyzer since 1.83 sends that flag, and the fix is a
+    /// newer Xtensa toolchain (`model::cargo_loses_dependencies`). What is
+    /// left is an ordinary setting, and its footer says only that.
+    ///
+    /// A file rather than an environment variable because the app is
+    /// launched from a Start menu, not a shell, and a second window has to
+    /// agree with the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_analyzer: Option<String>,
     /// The assistant profile last chosen — never the key, which lives in the
     /// OS credential store and never enters the window at all.
     ///
@@ -297,6 +311,8 @@ mod file {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub terminal_shell: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub rust_analyzer: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub assistant: Option<Assistant>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub open_tabs: Vec<Tabs>,
@@ -341,6 +357,7 @@ mod file {
                 disk_auto_sweep: file.disk_auto_sweep,
                 locale: file.locale,
                 terminal_shell: file.terminal_shell,
+                rust_analyzer: file.rust_analyzer,
                 assistant: file.assistant.map(|a| AssistantChoice {
                     profile: a.profile,
                     kind: a.kind,
@@ -377,6 +394,7 @@ mod file {
                 disk_auto_sweep: state.disk_auto_sweep,
                 locale: state.locale.clone(),
                 terminal_shell: state.terminal_shell.clone(),
+                rust_analyzer: state.rust_analyzer.clone(),
                 assistant: state.assistant.as_ref().map(|a| Assistant {
                     profile: a.profile.clone(),
                     kind: a.kind.clone(),
@@ -676,6 +694,7 @@ mod tests {
             disk_auto_sweep: true,
             locale: Some("zh-CN".into()),
             terminal_shell: Some("system".into()),
+            rust_analyzer: Some("C:/ra/rust-analyzer.exe".into()),
             assistant: Some(AssistantChoice {
                 profile: "work".into(),
                 kind: "anthropic".into(),
@@ -707,6 +726,7 @@ mod tests {
         assert_eq!(back.disk_auto_sweep, state.disk_auto_sweep);
         assert_eq!(back.locale, state.locale);
         assert_eq!(back.terminal_shell, state.terminal_shell);
+        assert_eq!(back.rust_analyzer, state.rust_analyzer);
         assert_eq!(back.assistant, state.assistant);
         assert_eq!(back.open_tabs, state.open_tabs);
         assert_eq!(back.skipped_update, state.skipped_update);

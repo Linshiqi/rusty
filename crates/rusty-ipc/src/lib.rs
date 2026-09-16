@@ -46,6 +46,9 @@ pub mod workbench {
     pub const SET_VIM: &str = "set_vim";
     pub const AUTO_SAVE: &str = "auto_save_enabled";
     pub const SET_AUTO_SAVE: &str = "set_auto_save";
+    /// A rust-analyzer the user named, in place of the one rusty finds.
+    pub const RUST_ANALYZER: &str = "rust_analyzer_path";
+    pub const SET_RUST_ANALYZER: &str = "set_rust_analyzer_path";
     /// Display language. `None` means follow the system.
     pub const LOCALE: &str = "display_locale";
     pub const SET_LOCALE: &str = "set_display_locale";

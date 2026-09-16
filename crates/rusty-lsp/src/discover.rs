@@ -25,7 +25,27 @@ use std::{
 /// toolchain — and `rust-toolchain.toml` pinning `esp` (every Xtensa project)
 /// makes the proxy fail with "unknown binary in toolchain 'esp'". So: stable's
 /// real binary first, the active toolchain's second, PATH last.
-pub fn find_rust_analyzer() -> Option<PathBuf> {
+pub fn find_rust_analyzer(named: Option<&Path>) -> Option<PathBuf> {
+    // A binary the user named wins over every rung below, because the rungs
+    // answer "which one is installed" and this answers "which one I want
+    // here" — the copy a VS Code install already carries, or a build being
+    // tried out. It is not an escape from the `--lockfile-path` failure and
+    // must not be offered as one: every rust-analyzer since 1.83 carries
+    // that flag, so the first one that does not is from October 2024. The
+    // answer is a newer Xtensa toolchain (`toolchain::report` raises
+    // `xtensa-analyzer-blind` with the command), which keeps the analyzer
+    // current as well.
+    let asked = named
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("RUSTY_RUST_ANALYZER").map(PathBuf::from));
+    if let Some(path) = asked {
+        // Checked like any other candidate: a path that is not a
+        // rust-analyzer is a typo, and falling through to the ladder is
+        // kinder than spawning something that answers nothing.
+        if path.is_file() && answers_as_rust_analyzer(&path) {
+            return Some(path);
+        }
+    }
     for toolchain in [Some("stable"), None] {
         let mut command = Command::new("rustup");
         command.arg("which");
@@ -104,6 +124,13 @@ pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {
     // so an esp-pinned project would be read with stable — the same leak
     // that made a spawned cargo fail with "can't find crate for `core`".
     command.env_remove("RUSTUP_TOOLCHAIN");
+    // `CARGO` is the same leak in another spelling: a rusty started by
+    // `cargo run` carries one naming the toolchain that *built rusty*, so a
+    // development build would hand the server stable's cargo for an
+    // esp-pinned project. It only decides anything where rust-analyzer finds
+    // no sysroot — with one it prefers rustup's proxy, measured — but an
+    // inherited value that is right by accident is not a reason to keep it.
+    command.env_remove("CARGO");
     no_console_window(&mut command);
     command
 }

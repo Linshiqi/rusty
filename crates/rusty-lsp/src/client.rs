@@ -163,9 +163,16 @@ impl LspClient {
     ///
     /// `target` is the triple the firmware builds for, when the caller knows
     /// it — detection does — so cfg resolution matches the chip rather than
-    /// the host.
-    pub fn spawn(root: &Path, target: Option<&str>) -> Result<(LspClient, Events)> {
-        let binary = discover::find_rust_analyzer().ok_or(Error::NotFound)?;
+    /// the host. `analyzer` names a rust-analyzer to use instead of the one
+    /// discovery would pick: every caller passes `None` except the app, which
+    /// passes what the user set — see `workbench.toml`'s `rust_analyzer` and
+    /// the version skew it exists for.
+    pub fn spawn(
+        root: &Path,
+        target: Option<&str>,
+        analyzer: Option<&Path>,
+    ) -> Result<(LspClient, Events)> {
+        let binary = discover::find_rust_analyzer(analyzer).ok_or(Error::NotFound)?;
         let mut child = discover::command_for(&binary, root)
             .spawn()
             .map_err(Error::Spawn)?;

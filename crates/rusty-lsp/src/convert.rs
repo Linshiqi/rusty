@@ -506,26 +506,37 @@ pub(crate) fn apply_text_edits(text: &str, edits: &[Value], encoding: Encoding) 
 /// A sentence for a server complaint that is really about the machine, not
 /// about the code.
 ///
-/// rust-analyzer hands its failures on verbatim, and cargo's failures are
-/// paragraphs of usage text. One of them matters enough here to be named:
-/// `cargo metadata` refusing `--lockfile-path`. rust-analyzer passes that
-/// flag to any cargo that calls itself *nightly*, and Espressif's Xtensa
-/// fork does while being built from a snapshot that has no such flag.
+/// One failure matters enough here to be named: `cargo metadata` refusing
+/// `--lockfile-path`. It took three wrong explanations to get to this one,
+/// and the third was wrong in a way worth keeping written down — the fix it
+/// offered was "pin an older rust-analyzer", which does not even work.
 ///
-/// **What it costs is measured, not assumed.** rust-analyzer retries with
-/// `--no-deps` and carries on, so the project's own code still resolves —
-/// completion, hover and go-to-definition all work inside it. What is lost
-/// is the *dependencies*: `esp_hal::` and every other crate answers nothing,
-/// which on an embedded project is most of what anybody types. An earlier
-/// version of this sentence said the workspace "did not load, so completion,
-/// hover and navigation answer nothing there", which reads as a broken tool
-/// and is wrong in the direction that matters.
+/// rust-analyzer hands `cargo metadata` a copy of the lockfile rather than
+/// let it rewrite the project's own, and picks how to say so from the
+/// toolchain's version: `--lockfile-path` below 1.95, `-Zlockfile-path` plus
+/// `CARGO_RESOLVER_LOCKFILE_PATH` up to 1.97, the variable alone after that.
+/// cargo removed the flag *in* 1.95 — and a nightly is a **pre-release**,
+/// which semver sorts below the release it is becoming. So a cargo calling
+/// itself `1.95.0-nightly` is asked for the one spelling it has just lost.
 ///
-/// rusty cannot configure it away, and that was measured too: rust-analyzer
-/// has no setting for the flag (`--print-config-schema` lists none), the esp
-/// cargo rejects it even with `-Zunstable-options`, and pointing `CARGO` at
-/// a stable cargo changes nothing because rust-analyzer resolves cargo
-/// through rustup regardless. So it says what it is and what does fix it.
+/// Espressif's Xtensa fork calls itself exactly that, which is why this is
+/// the ordinary state of an Xtensa project and not a bad week on nightly.
+/// Measured on the user's own toolchain: the same `cargo metadata` that
+/// fails with the flag answers with the whole dependency graph when it is
+/// given `-Zlockfile-path` and the variable instead. The cargo is fine; only
+/// the number rust-analyzer reads sends it down the wrong branch.
+///
+/// So the remedy is an **upgrade**, and rusty's own pin already names it:
+/// Xtensa Rust 1.97.0.0, whose cargo says `1.97.0-nightly` and is asked the
+/// way it understands. `toolchain::report` raises the same finding with that
+/// exact command against the version it found installed.
+///
+/// What does *not* work, each measured rather than assumed: a newer
+/// rust-analyzer (every one since 1.83 carries the flag, and the standalone
+/// 0.3.3049 does too), an older one (1.90's has it; 1.82's does not, and is
+/// from October 2024), a `CARGO` pointing elsewhere or a `cargo` shim on
+/// `PATH` — with a sysroot in hand rust-analyzer runs rustup's proxy and
+/// reads neither — and any rust-analyzer setting, since there is none.
 ///
 /// `None` for anything not recognised: the server's text stands.
 pub fn explain_health(message: &str) -> Option<String> {
@@ -537,7 +548,16 @@ pub fn explain_health(message: &str) -> Option<String> {
         .find(|part| part.ends_with("Cargo.toml"))
         .unwrap_or("this project");
     Some(format!(
-        "Dependencies will not resolve here. This project's Rust toolchain is older than the          rust-analyzer analysing it: `cargo metadata` for {manifest} refused `--lockfile-path`,          a flag rust-analyzer passes to any cargo that calls itself nightly — Espressif's          Xtensa fork does. rust-analyzer carries on without the dependency graph, so your own          code still gets completion, hover and go-to-definition, but `esp_hal::` and every          other crate answers nothing. A newer Xtensa toolchain (`espup update`), or a          rust-analyzer of the same vintage as the cargo, is what fixes it."
+        "Dependencies will not resolve here, and the toolchain is one version behind \
+         the fix rather than {manifest} being wrong. rust-analyzer asks a cargo that \
+         calls itself `1.95.0-nightly` for `--lockfile-path`, which cargo removed in \
+         1.95 — a nightly sorts below the release it is becoming, so it is asked for \
+         the spelling it has just lost. It carries on without the dependency graph: \
+         your own code still has completion, hover and go-to-definition, while \
+         `esp_hal::` and every other crate answer nothing. Updating the Xtensa \
+         toolchain moves the version past that boundary, and rust-analyzer then asks \
+         the way this cargo already understands — the Problems tab has the \
+         command. The build is unaffected either way."
     ))
 }
 
@@ -867,7 +887,7 @@ mod flyimport_tests {
     /// manifest and the remedy — the raw text names neither, and ninety
     /// lines of cargo usage in the dock read as rusty being broken.
     #[test]
-    fn a_cargo_too_old_for_rust_analyzers_flag_is_named_rather_than_dumped() {
+    fn a_toolchain_in_the_broken_window_is_named_with_the_way_out() {
         let raw = "Failed to read Cargo metadata with dependencies for \
                    `E:\\CodeBase\\flyegg\\firmware\\Cargo.toml`: `cargo metadata` exited with \
                    an error: error: unexpected argument '--lockfile-path' found\n\n  tip: a \
@@ -877,7 +897,18 @@ mod flyimport_tests {
             named.contains("E:\\CodeBase\\flyegg\\firmware\\Cargo.toml"),
             "the manifest that failed is named: {named}"
         );
-        assert!(named.contains("espup update"), "and what to do: {named}");
+        // And the remedy, which is an upgrade. Two earlier versions of this
+        // sentence sent people somewhere that does not work — one to `espup
+        // update` for the wrong reason, one to an older rust-analyzer, which
+        // was measured afterwards as not fixing it at all.
+        assert!(
+            named.contains("Updating the Xtensa toolchain"),
+            "the way out is named, and it is forwards: {named}"
+        );
+        assert!(
+            !named.contains("rust-analyzer from before") && !named.contains("1.90"),
+            "and it is never an older analyzer: {named}"
+        );
         // And what it actually costs, which is not "nothing works":
         // rust-analyzer retries with `--no-deps` and carries on.
         assert!(

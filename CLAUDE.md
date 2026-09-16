@@ -707,7 +707,9 @@ positioned in a coordinate system that is not the document's.
   cargo rejects it even with `-Zunstable-options`, rust-analyzer's
   `--print-config-schema` has no setting for it, and pointing `CARGO` at a
   stable cargo changes nothing because rust-analyzer resolves cargo through
-  rustup regardless.
+  rustup regardless. The way out turned out to be forwards — a newer Xtensa
+  toolchain; see "rust-analyzer picks its lockfile flag from a semver
+  comparison" below for why, and for how long it took to find.
 - **`RUSTY_LSP_LOG=1` is the difference between a theory and the answer.**
   The app reproduced "partly loaded" on an esp project while `complete_probe`
   on the same project looked perfect, and two rounds of reasoning about
@@ -1854,20 +1856,34 @@ usty`) holds `location.toml`
   layout that no longer exists. `project_tabs` drops every tab whose file is
   gone as it reads the strip — one `exists` per tab against a root the
   backend already has, where the frontend would need a round trip each.
-- **rust-analyzer passes `--lockfile-path` to any cargo that calls itself
-  nightly, and Espressif's fork does.** The Xtensa toolchain reports `cargo
-  1.95.0-nightly` while being built from a snapshot that has no such flag,
-  so every esp-pinned project fails `cargo metadata` — "unexpected argument
-  '--lockfile-path' found" — and the workspace never loads, which is the
-  silent-server disease above arriving by a third route. rust-analyzer has
-  no setting for it (`--print-config-schema` is the way to check, and there
-  is nothing), and pointing it at another toolchain's cargo would read the
-  wrong sysroot. So `convert::explain_health` puts a sentence in front of
-  the server's own words saying what it is and that `espup update` fixes it:
-  ninety lines of `Usage: cargo.exe metadata …` in Output read as rusty
-  being broken. Measured, not reasoned: `rustup run esp cargo metadata
-  --lockfile-path …` rejects it and `rustup run stable` does too, so the
-  flag is unstable and the *channel string* is what triggers it.
+- **rust-analyzer picks its lockfile flag from a semver comparison, and
+  `1.95.0-nightly` loses it.** rust-analyzer hands `cargo metadata` a copy
+  of the lockfile and chooses the spelling from the toolchain's version
+  (`project-model/src/cargo_config_file.rs`): `--lockfile-path` for
+  `[1.82, 1.95)`, `-Zlockfile-path` plus `CARGO_RESOLVER_LOCKFILE_PATH` for
+  `[1.95, 1.97)`, the variable alone after. cargo dropped the flag *in*
+  1.95 — and a nightly is a pre-release, which semver sorts **below** the
+  release it is becoming. So a cargo calling itself `1.95.0-nightly` is
+  asked for the one spelling it has just lost; `cargo metadata` fails,
+  rust-analyzer retries with `--no-deps`, and every dependency answers
+  nothing. Espressif's Xtensa fork sits on exactly that version, so it is the
+  normal state of an esp project, not a bad week on nightly. The same
+  `cargo metadata` given `-Zlockfile-path` and the variable instead answers
+  with the whole graph on the user's own esp toolchain — the cargo is fine,
+  the number is the bug. **The remedy is an upgrade**: Xtensa Rust 1.97.0.0
+  (rusty's own `XTENSA_RUST_VERSION`) calls itself `1.97.0-nightly` and is
+  asked the way it understands. `model::cargo_loses_dependencies` is the rule,
+  `toolchain::report` raises `xtensa-analyzer-blind` with that command, and
+  `convert::explain_health` says the same beside the server's own words.
+  **This passage was wrong three times, and each wrong version was
+  "measured"** — `espup update` "cannot help", then "pin rust-analyzer 1.90,
+  it gives zero warnings". The zero was warnings on rust-analyzer's stderr,
+  which 1.90 simply does not log; `esp_hal::` completion under 1.90 was
+  still empty, and 1.90's binary carries the flag. **Measure the symptom the
+  user reported, not a proxy for it**, and read the source of the decision
+  before building around it: a `CARGO` shim was written, tested and deleted
+  in one sitting, because with a sysroot in hand rust-analyzer runs rustup's
+  proxy (`Sysroot::tool` → `prefer_proxy`) and never reads `CARGO` at all.
 - **A workspace that excludes its firmware gets no IDE services there.**
   The standard embedded layout is host-testable crates as members and the
   bare-metal crate `exclude`d, so `cargo test` at the root does not try to

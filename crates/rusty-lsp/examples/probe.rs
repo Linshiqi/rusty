@@ -26,7 +26,7 @@ fn main() {
 
     eprintln!("spawning rust-analyzer for {}", root.display());
     let started = Instant::now();
-    let (client, events) = LspClient::spawn(&root, None).expect("spawn");
+    let (client, events) = LspClient::spawn(&root, None, None).expect("spawn");
     eprintln!("handshake in {:.1?}", started.elapsed());
 
     client.did_open(&file, &injected).expect("didOpen");

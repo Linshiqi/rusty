@@ -37,7 +37,7 @@ fn main() {
         root.display()
     );
     let started = Instant::now();
-    let (client, events) = LspClient::spawn(&root, target.as_deref()).expect("spawn");
+    let (client, events) = LspClient::spawn(&root, target.as_deref(), None).expect("spawn");
     client
         .did_open(&file, &format!("{HEAD}imp"))
         .expect("didOpen");

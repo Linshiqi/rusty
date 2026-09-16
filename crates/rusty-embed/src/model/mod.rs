@@ -54,7 +54,9 @@ pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
 pub(crate) use sim::is_upright;
 pub use sim::{Drive, Emulator, SimDebug, SimPlan, SimTool};
 pub use symbol::{Fill, Graphic, MM_PX, Pin, PinKind, Symbol};
-pub use toolchain::{ToolStatus, Toolchain, ToolchainReport, ToolchainStatus};
+pub use toolchain::{
+    ToolStatus, Toolchain, ToolchainReport, ToolchainStatus, cargo_loses_dependencies,
+};
 pub use wizard::{
     CrateNameProblem, Explanation, WizardChoice, WizardLayout, WizardOption, crate_name_problem,
 };

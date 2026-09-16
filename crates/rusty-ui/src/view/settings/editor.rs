@@ -55,6 +55,27 @@ pub(super) fn EditorSettings() -> impl IntoView {
                 />
             </Row>
         </Group>
+
+        // Its own group, because it is not about how the editor behaves: it
+        // chooses the program behind completion and navigation, and the
+        // footer says what it is for so the field does not read as a knob
+        // everybody should turn.
+        <Group footer=t!("settings.editor.analyzer-note")>
+            <Row
+                label=t!("settings.editor.analyzer")
+                detail=t!("settings.editor.analyzer-detail")
+                stacked=true
+            >
+                <TextField
+                    value=Signal::derive(move || state.editor.rust_analyzer.get())
+                    on_input=Callback::new(move |path| {
+                        controller::set_rust_analyzer(state, path)
+                    })
+                    placeholder=t!("settings.editor.analyzer-auto")
+                    width="w-full"
+                />
+            </Row>
+        </Group>
     }
 }
 

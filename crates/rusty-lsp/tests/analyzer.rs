@@ -65,7 +65,7 @@ fn eventually<T>(within: Duration, mut attempt: impl FnMut() -> Option<T>) -> Op
 
 #[test]
 fn rust_analyzer_end_to_end() {
-    if find_rust_analyzer().is_none() {
+    if find_rust_analyzer(None).is_none() {
         eprintln!("skipping: rust-analyzer is not installed on this machine");
         return;
     }
@@ -90,7 +90,7 @@ fn rust_analyzer_end_to_end() {
     let text = source();
     std::fs::write(root.join("src/main.rs"), &text).unwrap();
 
-    let (client, events) = LspClient::spawn(&root, None).expect("spawn rust-analyzer");
+    let (client, events) = LspClient::spawn(&root, None, None).expect("spawn rust-analyzer");
     client.did_open("src/main.rs", &text).expect("didOpen");
 
     // ── diagnostics are pushed, and land on the right line ───────────────────

@@ -473,6 +473,48 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         );
     }
 
+    // Installed, and old enough to be the reason nothing outside the
+    // project's own code answers. rust-analyzer picks how to redirect the
+    // lockfile from the toolchain's version, and `1.95.0-nightly` — which is
+    // what Espressif's fork calls itself — lands on the one spelling cargo
+    // dropped in that very release. The build is unaffected; every hover,
+    // completion and jump into a dependency is not, which is a silence that
+    // reads as rusty being broken. `cargo_loses_dependencies` says why in
+    // full.
+    if needs_esp_toolchain
+        && status.has_esp_toolchain
+        && let Some(version) = esp_cargo_version()
+        && crate::model::cargo_loses_dependencies(&version)
+    {
+        let reported = version
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("1.95.0-nightly")
+            .to_string();
+        problems.push(
+            Problem::new(
+                Severity::Warning,
+                "xtensa-analyzer-blind",
+                "Xtensa toolchain older than rust-analyzer expects",
+                format!(
+                    "The esp toolchain's cargo calls itself {reported}, and rust-analyzer \
+                     asks a cargo of that version for `--lockfile-path` — a flag cargo \
+                     removed in 1.95. Every `cargo metadata` fails, so the dependency \
+                     graph never loads: your own code still gets completion and \
+                     navigation, while `esp_hal::` and every other crate answer nothing. \
+                     The build is unaffected. Updating the toolchain moves the version \
+                     past the boundary, and rust-analyzer then asks the way this cargo \
+                     already understands."
+                ),
+            )
+            .arg("version", &reported)
+            .fix(format!(
+                "espup install --toolchain-version {}",
+                crate::install::XTENSA_RUST_VERSION
+            )),
+        );
+    }
+
     if let Some(target) = &required_target
         && !required_target_installed
         && !target.starts_with("xtensa-")
@@ -538,6 +580,21 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         needs_esp_toolchain,
         problems,
     }
+}
+
+/// What the Xtensa toolchain's own cargo calls itself.
+///
+/// Through `rustup run esp` rather than a path: which directory holds the
+/// toolchain is rustup's business, and asking rustup is what an esp project's
+/// own build does. Only ever called for a project that needs the toolchain
+/// and has it, so a machine with neither pays no spawn for the question.
+fn esp_cargo_version() -> Option<String> {
+    let mut command = crate::process::command("rustup");
+    command.args(["run", "esp", "cargo", "--version"]);
+    let out = command.output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 // ─── the pure parts ──────────────────────────────────────────────────────────
