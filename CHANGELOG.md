@@ -9,6 +9,46 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.30
+
+**Fixed — a new file or folder is named where it will be.** The box appeared
+above the whole tree with the target folder's path beside it, which is a form,
+not a file being made. It is now a row inside the folder, indented with its
+future siblings, exactly as VS Code does it; starting one in a collapsed
+folder opens that folder first.
+
+**Fixed — typing a project name with an input method no longer raises
+errors.** A Chinese IME shows its own pinyin segmentation in the field while
+composing, so typing `flyegg` passed through `f'l` and `f'l'y` — and every one
+of those was sent off to be checked as a crate name and came back as a red
+error about a name nobody had typed. Half-composed text is no longer taken as
+a name. And a name cargo really would refuse now says so *under the field*,
+naming the character that is wrong, with Create disabled until it is fixed —
+instead of a banner, or a failure after you have already chosen a folder.
+
+**Changed — a file outside the module tree is dimmed, and says nothing else.**
+It used to be a full-width notice with a sentence of explanation and a button,
+which is a paragraph where a shade of grey is the message. The file's name is
+now simply dimmed — in the tree, in its tab, and in the header — with the
+reason on hover, as VS Code dims a file the project does not build. The fix is
+where every other fix is: hover the underlined code and rust-analyzer offers
+`Insert mod …;`, `Insert pub mod …;` or `Insert pub(crate) mod …;`.
+
+**Fixed — the dim clears the moment the file is declared.** Adding the `mod`
+line left the file dimmed anyway: rust-analyzer's own verdict stays until it
+re-analyses that file, and it was being allowed to outvote a reading of the
+declarations taken a second ago. And "nothing is dimmed" and "this reading
+cannot tell" are now different answers, where both used to look like a clean
+bill of health.
+
+**Changed — what a toolchain too old for rust-analyzer actually costs.** The
+note added in v0.6.29 said the workspace did not load "so completion, hover
+and navigation answer nothing there". Measured, that is wrong in the direction
+that matters: rust-analyzer retries without the dependency graph and carries
+on, so your own code still gets completion, hover and go-to-definition — what
+is lost is `esp_hal::` and every other crate. The note says that now, because
+a tool that overstates its own breakage is one you stop believing.
+
 ## v0.6.29
 
 **Added — a file no `mod` declares is dimmed in the tree, and says so.** A

@@ -38,18 +38,24 @@ pub struct SourceFile<'a> {
 }
 
 /// The project-relative paths of `.rs` files under a crate's `src/` that no
-/// `mod` declaration names, sorted.
+/// `mod` declaration names, sorted — or `None` when this reading refuses to
+/// claim anything about the project at all.
+///
+/// The two are different answers and must not be one. An empty list means
+/// "every file is declared"; a refusal means "ask somebody else", and the
+/// caller then falls back to rust-analyzer's own verdict. Returning an empty
+/// list for both would make a refusal read as a clean bill of health.
 ///
 /// `manifests` are the project-relative directories that hold a `Cargo.toml`
 /// — every crate root the project has, since a `mod` in one crate does not
 /// declare a file in another. Pure over its inputs, so the rules above are
 /// tests rather than something discovered on somebody's checkout.
-pub fn unlinked(files: &[SourceFile<'_>], manifests: &[String]) -> Vec<String> {
+pub fn unlinked(files: &[SourceFile<'_>], manifests: &[String]) -> Option<Vec<String>> {
     // `#[path]` anywhere in the project takes the whole answer away. It is
     // rare, and being silent about a project that uses it costs nothing;
     // dimming a file it pulls in would be a lie.
     if files.iter().any(|file| file.text.contains("#[path")) {
-        return Vec::new();
+        return None;
     }
 
     let mut declared: HashSet<&str> = HashSet::new();
@@ -67,7 +73,7 @@ pub fn unlinked(files: &[SourceFile<'_>], manifests: &[String]) -> Vec<String> {
         .map(|file| file.path.to_string())
         .collect();
     out.sort();
-    out
+    Some(out)
 }
 
 /// The module names a file declares: `mod x;`, `pub mod x;`,
@@ -191,7 +197,7 @@ fn in_a_crates_src(path: &str, manifests: &[String]) -> bool {
 /// `mod` declarations — a declaration can sit anywhere, and a `src/lib.rs`
 /// that was not read is a crate whose whole module tree reads as unlinked.
 #[cfg(feature = "backend")]
-pub fn scan(root: &std::path::Path) -> Vec<String> {
+pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
     use ignore::WalkBuilder;
 
     let mut manifests: Vec<String> = Vec::new();
@@ -243,7 +249,13 @@ pub fn scan(root: &std::path::Path) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// What the scan claims, where it claims anything. A refusal is its own
+    /// test below.
     fn scan<'a>(files: &'a [(&'a str, &'a str)], manifests: &[&str]) -> Vec<String> {
+        claim(files, manifests).expect("the scan claims something")
+    }
+
+    fn claim<'a>(files: &'a [(&'a str, &'a str)], manifests: &[&str]) -> Option<Vec<String>> {
         let files: Vec<SourceFile<'_>> = files
             .iter()
             .map(|(path, text)| SourceFile { path, text })
@@ -321,9 +333,10 @@ mod tests {
             ("src/lib.rs", "#[path = \"weird/name.rs\"]\nmod thing;\n"),
             ("src/orphan.rs", ""),
         ];
-        assert!(
-            scan(&files, &[""]).is_empty(),
-            "refuse rather than guess, project-wide"
+        assert_eq!(
+            claim(&files, &[""]),
+            None,
+            "refuse rather than guess, project-wide — and a refusal is not an              empty list, which would read as a clean bill of health"
         );
     }
 

@@ -391,12 +391,9 @@ fn unnest_repository(firmware: &Path) {
 /// or digit. The generator checks its own argument; this is the one it never
 /// sees.
 fn valid_name(name: &str) -> Result<&str> {
-    let ok = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && name.starts_with(|c: char| c.is_ascii_alphanumeric());
-    if ok {
+    // One rule, in the model, so the field can say this while it is being
+    // typed instead of the backend saying it afterwards in a banner.
+    if crate::model::crate_name_problem(name).is_none() {
         Ok(name)
     } else {
         Err(Error::Refused {

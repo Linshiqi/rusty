@@ -581,10 +581,13 @@ positioned in a coordinate system that is not the document's.
   the user for facts; the lesson under that is the user's own: *trace the
   whole path from the server's answer to the screen* rather than
   interrogating the person in front of it.
-  Three things say it now. `convert::diagnostics` promotes that one code to
-  a Warning. The file header carries an amber notice with a button that asks
-  for the fix. And the tree dims the file, which is the only one of the
-  three that works *before* anybody opens it.
+  Two things say it now, and neither is prose. `convert::diagnostics`
+  promotes that one code to a Warning, so the squiggle and its hover card
+  carry rust-analyzer's own `Insert mod …;` fixes. And the name is dimmed —
+  in the tree, in its tab and in the header — which is the only one of the
+  two that works *before* anybody opens the file. A notice with a sentence
+  and a button sat between them for one release; see the dimming rule
+  below.
 - **The tree cannot ask rust-analyzer, so it reads the `mod` lines itself**
   (`rusty_edit::modules`, pure and tested). `unlinked-file` arrives only for
   a file the client has opened — a `didOpen` per file in the project would
@@ -626,6 +629,71 @@ positioned in a coordinate system that is not the document's.
   other file. `CodeActions` carries a `reply` number and the client keeps the
   last four answers — exactly the shape `completion`/`resolve_completion`
   already had, arrived at the same way and for the same reason.
+- **A shade of grey is the message; a paragraph beside it is noise.** The
+  unlinked file got three surfaces in one release — a promoted diagnostic, a
+  full-width amber notice with a sentence and a button, and a dim in the tree
+  — and the user's verdict on the middle one was exact: "a pile of warning
+  text", where VS Code says the same thing by greying the name. The notice is
+  gone. The name is dimmed in the tree, in its tab and in the header, the
+  sentence is the tooltip, and the fix is where every other fix now is: on
+  the hover card, where rust-analyzer offers `Insert mod …;`, `Insert pub mod
+  …;` and `Insert pub(crate) mod …;` — three precise options where the button
+  had one. Removing an affordance was safe *because* the hover card had
+  arrived; it would not have been the release before.
+- **Two sources for one fact need a rule about which wins, not an `or`.**
+  `is_unlinked` was the scan `||` rust-analyzer's `unlinked-file`, so either
+  could assert and neither could retract: adding the `mod` line left the file
+  dimmed, because the server's diagnostic stays until it re-analyses *that*
+  file and nothing was going to make it. The scan wins wherever it has an
+  opinion — it has just read the files — and the server answers only where
+  the scan refused. **Which means the refusal has to be sayable**, so
+  `modules::unlinked` returns `Option<Vec<String>>`: an empty list is "every
+  file is declared" and `None` is "ask somebody else". They were the same
+  value, and a refusal read as a clean bill of health.
+- **Half-composed text from an input method is not input.** A Chinese IME
+  puts its own pinyin segmentation in the field while composing — typing
+  `flyegg` passes through `f'l` and `f'l'y` — and fires an `input` event for
+  each. The wizard sent every one to the backend to be checked as a crate
+  name, and every refusal came back as a red banner about a name nobody had
+  typed. Anything that *judges* what was typed waits for `compositionend`
+  and ignores an `input` whose `isComposing` is set; anything that merely
+  echoes it need not. Every other field that judges text as it arrives — a
+  branch name, a search — has the same exposure.
+- **A name is refused beside the field, by a rule both sides share.**
+  `crate_name_problem` is in `rusty_embed::model`, so the wizard can say
+  which character is wrong while it is being typed and disable Create, and
+  the generator's own `valid_name` calls it rather than keeping a second
+  copy — the Git panel's `ref_name_problem`, applied to the one name the
+  generator never sees. It was a backend check on every keystroke whose only
+  voice was a banner.
+- **A new entry is named where it will be.** The box sat above the whole
+  tree with the target folder's path beside it in grey, which is a form
+  rather than a file being made, and it said `core/src/` while the tree was
+  already showing that folder open. It is a row of the folder's own level
+  now, indented with its future siblings and built like `RenameBox` beside
+  it; `begin_naming` expands a collapsed folder first, because a box drawn
+  inside something nobody has opened is a caret in a void.
+- **Say what a failure costs, measured, or do not say it.** v0.6.29's note
+  about Espressif's cargo refusing `--lockfile-path` said the workspace "did
+  not load, so completion, hover and navigation answer nothing there". Run
+  with `RUSTY_LSP_LOG=1`, rust-analyzer says what it actually does: `cargo
+  metadata failed and returning succeeded result with --no-deps`. It retries
+  without the dependency graph and carries on — the project's own code
+  resolves perfectly and only the *dependencies* answer nothing, which on an
+  embedded project is `esp_hal::` and most of what anybody types. Overstating
+  rusty's own breakage is how a tool stops being believed. And rusty cannot
+  configure the flag away, which was measured rather than assumed: the esp
+  cargo rejects it even with `-Zunstable-options`, rust-analyzer's
+  `--print-config-schema` has no setting for it, and pointing `CARGO` at a
+  stable cargo changes nothing because rust-analyzer resolves cargo through
+  rustup regardless.
+- **`RUSTY_LSP_LOG=1` is the difference between a theory and the answer.**
+  The app reproduced "partly loaded" on an esp project while `complete_probe`
+  on the same project looked perfect, and two rounds of reasoning about
+  environments got nowhere. The variable was the target hint — `lsp_start`
+  detects at the *opened root*, which for the standard embedded layout has
+  no chip, so it passes none — and one run with the server's own stderr let
+  out named both the cause and the fallback in a single line.
 - **Auto-save is not `save_file`, and it is not a format.** Off by default
   (`auto_save` in `workbench.toml`), it writes a second after typing stops
   — VS Code's `files.autoSave: afterDelay`. It cannot reuse Ctrl+S's path:

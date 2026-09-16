@@ -83,6 +83,14 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 }
                             }
                         };
+                        // Dimmed when no `mod` declares it, the way the
+                        // tree dims it and the way VS Code dims a file the
+                        // project does not build. The tab is where the eye
+                        // is once the file is open.
+                        let unlinked = {
+                            let path = path.clone();
+                            Signal::derive(move || state.is_unlinked(&path))
+                        };
                         let tab_class = if is_active {
                             "group flex cursor-pointer items-center gap-1.5 border-r border-line \
                              bg-canvas px-2.5 py-1.5 font-mono text-footnote text-label"
@@ -109,7 +117,13 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 on:click=activate
                                 on:auxclick=middle_close
                                 on:contextmenu=open_menu
-                                class=tab_class
+                                class=move || {
+                                    if unlinked.get() {
+                                        format!("{tab_class} opacity-60")
+                                    } else {
+                                        tab_class.to_string()
+                                    }
+                                }
                             >
                                 <span class="max-w-[18ch] truncate">{name}</span>
                                 {move || {
@@ -262,27 +276,35 @@ pub(super) fn Header(
     let path = document.path.clone();
     let read_only = document.truncated || document.read_only;
     let dirty = Signal::derive(move || state.editor.draft.with(|draft| draft != &saved));
-    // rust-analyzer's own verdict that this file is in no crate's module
-    // tree — the one state in which it parses the file and answers nothing
-    // else. Said here, where the file is, with its own fix a click away;
-    // the diagnostic alone was a hint that dimmed two characters.
+    // In no crate's module tree, so rust-analyzer answers nothing here. Said
+    // by *dimming* the name, as VS Code says a file the project does not
+    // build, with the reason in the tooltip — and by nothing else. It was a
+    // full-width amber banner with a sentence of explanation and a button,
+    // which is a paragraph where a shade of grey is the whole message: the
+    // user's verdict was "a pile of warning text". The fix stays one click
+    // away where every other fix is, on the hover card over the squiggle.
     let unlinked = {
         let path = path.clone();
-        Signal::derive(move || {
-            state.lsp.diagnostics.with(|by_file| {
-                by_file.get(&path).is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|d| d.code.as_deref() == Some("unlinked-file"))
-                })
-            })
-        })
+        Signal::derive(move || state.is_unlinked(&path))
     };
-    let declare_in = path.clone();
 
     view! {
         <div class="flex flex-none items-center gap-2 border-b border-line px-3 py-1.5">
-            <span class="truncate font-mono text-footnote">{document.path}</span>
+            <span
+                class=move || {
+                    let base = "truncate font-mono text-footnote";
+                    if unlinked.get() {
+                        format!("{base} opacity-60")
+                    } else {
+                        base.to_string()
+                    }
+                }
+                title=move || {
+                    if unlinked.get() { t!("misc.unlinked-file") } else { String::new() }
+                }
+            >
+                {document.path}
+            </span>
             {move || {
                 dirty
                     .get()
@@ -291,23 +313,6 @@ pub(super) fn Header(
                             <span class="size-1.5 shrink-0 rounded-full bg-rust" title=t!("misc.unsaved") />
                         }
                     })
-            }}
-            {move || {
-                unlinked.get().then(|| {
-                    let declare_in = declare_in.clone();
-                    view! {
-                        <span class="min-w-0 truncate text-footnote text-amber" title=t!("misc.unlinked-file")>
-                            {t!("misc.unlinked-file")}
-                        </span>
-                        <button
-                            type="button"
-                            class="shrink-0 rounded-[5px] bg-amber-fill px-2 py-0.5 text-footnote font-medium text-amber hover:opacity-90"
-                            on:click=move |_| controller::request_actions(state, declare_in.clone(), 0, 0)
-                        >
-                            {t!("misc.unlinked-fix")}
-                        </button>
-                    }
-                })
             }}
             <span class="flex-1" />
             // Save, at the right of the file it saves. It was in the rail,

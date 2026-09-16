@@ -509,18 +509,23 @@ pub(crate) fn apply_text_edits(text: &str, edits: &[Value], encoding: Encoding) 
 /// rust-analyzer hands its failures on verbatim, and cargo's failures are
 /// paragraphs of usage text. One of them matters enough here to be named:
 /// `cargo metadata` refusing `--lockfile-path`. rust-analyzer passes that
-/// flag when the project's cargo calls itself *nightly*, and Espressif's
-/// Xtensa fork does — while being built from a snapshot that predates the
-/// flag. So every esp-pinned project fails to load its metadata, which is
-/// the state where the server parses the file, answers nothing, and says
-/// "partly loaded": the exact disease three releases here have been about.
+/// flag to any cargo that calls itself *nightly*, and Espressif's Xtensa
+/// fork does while being built from a snapshot that has no such flag.
 ///
-/// rusty cannot configure it away — rust-analyzer has no setting for the
-/// flag, and pointing it at another toolchain's cargo would read the wrong
-/// sysroot. So it says what happened and what to do, in place of ninety
-/// lines of `Usage: cargo.exe metadata …` that read as rusty being broken.
-/// The original follows, because a message that hides the server's own
-/// words is one nobody can search for.
+/// **What it costs is measured, not assumed.** rust-analyzer retries with
+/// `--no-deps` and carries on, so the project's own code still resolves —
+/// completion, hover and go-to-definition all work inside it. What is lost
+/// is the *dependencies*: `esp_hal::` and every other crate answers nothing,
+/// which on an embedded project is most of what anybody types. An earlier
+/// version of this sentence said the workspace "did not load, so completion,
+/// hover and navigation answer nothing there", which reads as a broken tool
+/// and is wrong in the direction that matters.
+///
+/// rusty cannot configure it away, and that was measured too: rust-analyzer
+/// has no setting for the flag (`--print-config-schema` lists none), the esp
+/// cargo rejects it even with `-Zunstable-options`, and pointing `CARGO` at
+/// a stable cargo changes nothing because rust-analyzer resolves cargo
+/// through rustup regardless. So it says what it is and what does fix it.
 ///
 /// `None` for anything not recognised: the server's text stands.
 pub fn explain_health(message: &str) -> Option<String> {
@@ -530,14 +535,9 @@ pub fn explain_health(message: &str) -> Option<String> {
     let manifest = message
         .split('`')
         .find(|part| part.ends_with("Cargo.toml"))
-        .unwrap_or("the project");
+        .unwrap_or("this project");
     Some(format!(
-        "This project's Rust toolchain is older than the rust-analyzer analysing it: \
-         `cargo metadata` for {manifest} refused `--lockfile-path`, a flag rust-analyzer \
-         passes to any cargo that calls itself nightly — Espressif's Xtensa fork does. \
-         The workspace therefore did not load, so completion, hover and navigation answer \
-         nothing there. Update the toolchain (`espup update`) or use a rust-analyzer of \
-         the same vintage as the cargo."
+        "Dependencies will not resolve here. This project's Rust toolchain is older than the          rust-analyzer analysing it: `cargo metadata` for {manifest} refused `--lockfile-path`,          a flag rust-analyzer passes to any cargo that calls itself nightly — Espressif's          Xtensa fork does. rust-analyzer carries on without the dependency graph, so your own          code still gets completion, hover and go-to-definition, but `esp_hal::` and every          other crate answers nothing. A newer Xtensa toolchain (`espup update`), or a          rust-analyzer of the same vintage as the cargo, is what fixes it."
     ))
 }
 
@@ -878,6 +878,12 @@ mod flyimport_tests {
             "the manifest that failed is named: {named}"
         );
         assert!(named.contains("espup update"), "and what to do: {named}");
+        // And what it actually costs, which is not "nothing works":
+        // rust-analyzer retries with `--no-deps` and carries on.
+        assert!(
+            named.contains("Dependencies will not resolve"),
+            "the consequence is stated, and stated correctly: {named}"
+        );
 
         // Everything else is the server's own words, untouched. A wrapper
         // that rephrased every failure would hide the ones nobody has

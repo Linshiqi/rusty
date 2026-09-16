@@ -850,7 +850,10 @@ pub struct Editor {
     /// The `.rs` files in the tree that no `mod` declaration reaches, so the
     /// tree can dim them as VS Code dims a file outside the project. Shared
     /// by both groups: it is a fact about the project, not about an editor.
-    pub unlinked: RwSignal<Vec<String>>,
+    /// `None` where the reading refused to claim anything at all, which is
+    /// not the same answer as claiming nothing is unlinked — see
+    /// [`AppState::is_unlinked`] and `rusty_edit::modules`.
+    pub unlinked: RwSignal<Option<Vec<String>>>,
     pub document: RwSignal<Option<Document>>,
     pub draft: RwSignal<String>,
     /// The lines being painted, live. Seeded from the opened document, patched
@@ -999,7 +1002,7 @@ impl Editor {
             snippets: RwSignal::new(HashMap::new()),
             folds: RwSignal::new(rusty_edit::Folded::default()),
             stale: RwSignal::new(Vec::new()),
-            unlinked: RwSignal::new(Vec::new()),
+            unlinked: RwSignal::new(None),
             watch_session: RwSignal::new(0),
             zoom: RwSignal::new(stored_zoom()),
             page_zoom: RwSignal::new(stored_page_zoom()),
@@ -2142,6 +2145,36 @@ impl AppState {
     /// one keeps its own inside `parked`. A read-only document can never be
     /// dirty — its draft is the disk's text by construction, and treating it
     /// as unsaved would put a dot on every dependency you glanced at.
+    /// Is this file in no crate's module tree — the state where
+    /// rust-analyzer parses it and answers nothing else?
+    ///
+    /// Two sources and one answer, so the tree and the tab strip cannot dim
+    /// different files: rust-analyzer's own `unlinked-file`, which exists
+    /// only for a file the client has opened, and rusty's reading of the
+    /// `mod` declarations (`rusty_edit::modules`), which is what a file
+    /// nobody has opened yet is judged by.
+    pub fn is_unlinked(&self, path: &str) -> bool {
+        // The scan wins wherever it has an opinion, because it has just read
+        // the files. rust-analyzer's diagnostic is right when it arrives and
+        // then *stays* until the server re-analyses that file — so a `mod`
+        // line added to the parent module left the child dimmed with nothing
+        // on either side able to clear it. Its verdict answers only where the
+        // scan refused to claim anything at all.
+        let claimed = self
+            .editor
+            .unlinked
+            .with(|claim| claim.as_ref().map(|list| list.iter().any(|p| p == path)));
+        claimed.unwrap_or_else(|| {
+            self.lsp.diagnostics.with(|by_file| {
+                by_file.get(path).is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|d| d.code.as_deref() == Some("unlinked-file"))
+                })
+            })
+        })
+    }
+
     pub fn is_dirty(&self, path: &str) -> bool {
         // Both groups, whichever this value addresses: a file is open in one
         // of them at most, and a draft anywhere is what protects the disk.

@@ -24,9 +24,11 @@ pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, Command
 /// so this reads the declarations itself and refuses wherever it cannot be
 /// sure — see `rusty_edit::modules`.
 #[tauri::command]
-pub async fn unlinked_files(state: State<'_, AppState>) -> Result<Vec<String>, CommandError> {
+pub async fn unlinked_files(
+    state: State<'_, AppState>,
+) -> Result<Option<Vec<String>>, CommandError> {
     let Some(root) = state.root().await else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     blocking("reading the module tree", move || {
         rusty_edit::scan_unlinked(&root)

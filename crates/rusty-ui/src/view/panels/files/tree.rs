@@ -93,15 +93,11 @@ fn Tree() -> impl IntoView {
     provide_context(DropTarget(drop_target));
     // A pending "New file" / "New folder": (directory it lands in, is_dir).
     // The name is typed into a strip under the header; Enter creates.
+    // Where a new entry is being named, and whether it is a folder. Context
+    // like [`Renaming`], because the box is drawn by the level it belongs to
+    // — see [`NewBox`].
     let naming = RwSignal::new(None::<(String, bool)>);
-    let name_box: NodeRef<html::Input> = NodeRef::new();
-    Effect::new(move |_| {
-        if naming.get().is_some()
-            && let Some(input) = name_box.get()
-        {
-            let _ = input.focus();
-        }
-    });
+    provide_context(Naming(naming));
 
     view! {
         <div
@@ -140,50 +136,6 @@ fn Tree() -> impl IntoView {
                     <IconView icon=Icon::Refresh size=13 />
                 </button>
             </div>
-            {move || {
-                let (parent, dir) = naming.get()?;
-                let hint = if dir { t!("tree.folder-name") } else { t!("tree.file-name") };
-                let shown_parent = if parent.is_empty() {
-                    "./".to_string()
-                } else {
-                    format!("{parent}/")
-                };
-                let commit_parent = parent.clone();
-                Some(
-                    view! {
-                        <div class="flex items-center gap-1.5 border-b border-line px-3 pb-2">
-                            <span class="max-w-[9ch] truncate font-mono text-caption text-label-3">
-                                {shown_parent}
-                            </span>
-                            <input
-                                node_ref=name_box
-                                placeholder=hint
-                                class="min-w-0 flex-1 rounded-[5px] bg-sunken px-1.5 py-0.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
-                                on:keydown=move |event: ev::KeyboardEvent| {
-                                    match event.key().as_str() {
-                                        "Enter" => {
-                                            let name = event_target_value(&event);
-                                            let name = name.trim().trim_matches('/');
-                                            if name.is_empty() {
-                                                return;
-                                            }
-                                            let path = if commit_parent.is_empty() {
-                                                name.to_string()
-                                            } else {
-                                                format!("{commit_parent}/{name}")
-                                            };
-                                            controller::create_entry(state, path, dir);
-                                            naming.set(None);
-                                        }
-                                        "Escape" => naming.set(None),
-                                        _ => {}
-                                    }
-                                }
-                            />
-                        </div>
-                    },
-                )
-            }}
             // Right-clicking the empty space targets the project root: rows
             // stop propagation, so only the sheet itself reaches this.
             <div
@@ -248,7 +200,7 @@ fn Tree() -> impl IntoView {
                         }
                             .into_any();
                     }
-                    view! { <Level entries=tree depth=0 /> }.into_any()
+                    view! { <Level entries=tree depth=0 parent=String::new() /> }.into_any()
                 }}
             </div>
 
@@ -384,14 +336,14 @@ fn Tree() -> impl IntoView {
                                     <MenuItem
                                         label=t!("context.tree-new-file")
                                         on_select=Callback::new(move |_| {
-                                            naming.set(Some((file_into.clone(), false)));
+                                            begin_naming(state, naming, &file_into, false);
                                             tree_menu.set(None);
                                         })
                                     />
                                     <MenuItem
                                         label=t!("context.tree-new-folder")
                                         on_select=Callback::new(move |_| {
-                                            naming.set(Some((folder_into.clone(), true)));
+                                            begin_naming(state, naming, &folder_into, true);
                                             tree_menu.set(None);
                                         })
                                     />
@@ -542,6 +494,34 @@ struct TreeTarget {
 #[derive(Clone, Copy)]
 struct Renaming(RwSignal<Option<String>>);
 
+/// Where a new entry is being named — the folder's project-relative path,
+/// and whether it is a folder. `""` is the project root.
+#[derive(Clone, Copy)]
+struct Naming(RwSignal<Option<(String, bool)>>);
+
+/// Start naming a new entry inside `parent`, and open that folder.
+///
+/// The box is a row of the folder's own level, so a folder nobody has
+/// expanded would put the caret somewhere nothing is drawn — a new file
+/// named into a void, which is how the top-of-panel form got written in the
+/// first place.
+fn begin_naming(
+    state: AppState,
+    naming: RwSignal<Option<(String, bool)>>,
+    parent: &str,
+    dir: bool,
+) {
+    if !parent.is_empty() {
+        let parent = parent.to_string();
+        state.editor.expanded.update(|open| {
+            if !open.iter().any(|p| p == &parent) {
+                open.push(parent);
+            }
+        });
+    }
+    naming.set(Some((parent.to_string(), dir)));
+}
+
 /// The entry being dragged, and the folder a drop would land it in.
 #[derive(Clone, Copy)]
 struct Dragging(RwSignal<Option<TreeTarget>>);
@@ -564,10 +544,35 @@ fn search_within(state: AppState, path: &str, is_dir: bool) {
 /// opaque return type has no fixed point, and the compiler says so with
 /// "recursive opaque type" pointing at the signature.
 #[component]
-fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
+fn Level(entries: Vec<Entry>, depth: usize, parent: String) -> AnyView {
     let state = AppState::expect();
+    let Naming(naming) = expect_context::<Naming>();
 
-    entries
+    // A new entry is named where it will be, as VS Code does it: a row inside
+    // the folder it is being created in, indented with its future siblings.
+    // The box used to sit above the whole tree with the folder's path beside
+    // it — which is a form, not a file being made, and it said `core/src/`
+    // in eleven characters of grey where the tree was already showing that
+    // folder open.
+    let box_here = {
+        let parent = parent.clone();
+        Signal::derive(move || {
+            naming
+                .get()
+                .filter(|(at, _)| at == &parent)
+                .map(|(_, dir)| dir)
+        })
+    };
+    let new_row = {
+        let parent = parent.clone();
+        move || {
+            box_here.get().map(|dir| {
+                view! { <NewBox parent=parent.clone() dir=dir depth=depth /> }
+            })
+        }
+    };
+
+    let rows = entries
         .into_iter()
         .map(|entry| {
             let path = entry.path.clone();
@@ -672,17 +677,7 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
             // sure). A folder is never dimmed — a directory is not a module.
             let unlinked = Signal::derive({
                 let path = path.clone();
-                move || {
-                    !is_dir
-                        && (state.editor.unlinked.with(|list| list.contains(&path))
-                            || state.lsp.diagnostics.with(|by_file| {
-                                by_file.get(&path).is_some_and(|items| {
-                                    items
-                                        .iter()
-                                        .any(|d| d.code.as_deref() == Some("unlinked-file"))
-                                })
-                            }))
-                }
+                move || !is_dir && state.is_unlinked(&path)
             });
             let on_dragstart = {
                 let target = target.clone();
@@ -827,12 +822,90 @@ fn Level(entries: Vec<Entry>, depth: usize) -> AnyView {
                 }}
 
                 <Show when=move || is_dir && open.get()>
-                    <Level entries=children.clone() depth=depth + 1 />
+                    <Level entries=children.clone() depth=depth + 1 parent=path.clone() />
                 </Show>
             }
         })
-        .collect_view()
-        .into_any()
+        .collect_view();
+
+    // First, where VS Code puts it, and where an alphabetical tree would put
+    // a name nobody has typed yet.
+    view! { {new_row} {rows} }.into_any()
+}
+
+/// A new entry being named, as a row of the folder it is being created in.
+///
+/// The sibling of [`RenameBox`], and the same shape on purpose: the same
+/// indent, the same keys, the same commit-on-blur. VS Code makes a file by
+/// growing a row where the file will be, and the difference from a form at
+/// the top of the panel is that you can see what you are naming it *beside*.
+#[component]
+fn NewBox(parent: String, dir: bool, depth: usize) -> impl IntoView {
+    let state = AppState::expect();
+    let Naming(naming) = expect_context::<Naming>();
+    let input: NodeRef<html::Input> = NodeRef::new();
+    Effect::new(move |_| {
+        if let Some(input) = input.get() {
+            let _ = input.focus();
+        }
+    });
+
+    let commit = {
+        let parent = parent.clone();
+        move |value: String| {
+            naming.set(None);
+            // A name is a name: a separator in it would be a path into a
+            // folder the tree is not showing, which is the rename rule.
+            let name = value.trim().trim_matches('/');
+            if name.is_empty() {
+                return;
+            }
+            let path = if parent.is_empty() {
+                name.to_string()
+            } else {
+                format!("{parent}/{name}")
+            };
+            controller::create_entry(state, path, dir);
+        }
+    };
+    let on_key = {
+        let commit = commit.clone();
+        move |event: ev::KeyboardEvent| match event.key().as_str() {
+            "Enter" => commit(event_target_value(&event)),
+            "Escape" => naming.set(None),
+            _ => {}
+        }
+    };
+    // Clicking away is giving up, not creating `` — the empty name is what
+    // "I changed my mind" looks like, and `commit` refuses it.
+    let on_blur = move |event: ev::FocusEvent| {
+        if naming.get_untracked().is_some() {
+            commit(event_target_value(&event));
+        }
+    };
+    let hint = if dir {
+        t!("tree.folder-name")
+    } else {
+        t!("tree.file-name")
+    };
+
+    view! {
+        <div
+            class="flex w-full items-center gap-1.5 py-[2px] pr-2"
+            style=format!("padding-left: {}px", 10 + depth * 12)
+        >
+            <span class="w-3 shrink-0 text-center text-footnote text-label-3">
+                {if dir { "\u{25b8}" } else { "" }}
+            </span>
+            <input
+                node_ref=input
+                placeholder=hint
+                on:keydown=on_key
+                on:blur=on_blur
+                class="min-w-0 flex-1 rounded-[4px] bg-sunken px-1 py-0 font-mono text-callout outline-none ring-1 ring-rust"
+            />
+        </div>
+    }
 }
 
 /// A row's name as an input: Enter renames, Escape gives up, and leaving

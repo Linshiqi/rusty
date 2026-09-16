@@ -419,13 +419,15 @@ pub fn refresh_tree(state: AppState) {
 /// Which `.rs` files no `mod` declaration reaches, for the tree to dim.
 ///
 /// Not through `track`: a project whose module tree cannot be read is not a
-/// failure worth a banner — the answer is a shade of grey. An empty list is
-/// also what a refusal looks like (`rusty_edit::modules` claims nothing
-/// where it cannot be sure), so nothing here can turn a doubt into a dim.
+/// failure worth a banner — the answer is a shade of grey. `None` is the
+/// refusal (`rusty_edit::modules` claims nothing where it cannot be sure)
+/// and travels as itself, so nothing here can turn a doubt into a dim, and
+/// a call that fails outright leaves the last claim alone rather than
+/// silently un-dimming every file in the project.
 pub fn refresh_unlinked(state: AppState) {
     spawn_local(async move {
-        if let Ok(paths) = ipc::call::<_, Vec<String>>(cmd::files::UNLINKED, &()).await {
-            set_if_changed(state.editor.unlinked, paths);
+        if let Ok(claim) = ipc::call::<_, Option<Vec<String>>>(cmd::files::UNLINKED, &()).await {
+            set_if_changed(state.editor.unlinked, claim);
         }
     });
 }

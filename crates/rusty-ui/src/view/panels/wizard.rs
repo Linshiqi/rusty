@@ -10,9 +10,11 @@
 //! consequences of the nine parts you did not choose are worth nothing, and
 //! showing all ten at once buries the one that matters.
 
-use leptos::prelude::*;
+use leptos::{ev, prelude::*};
 
-use rusty_embed::{Chip, Runtime, WizardChoice, WizardLayout};
+use rusty_embed::{
+    Chip, CrateNameProblem, Runtime, WizardChoice, WizardLayout, crate_name_problem,
+};
 
 use rusty_i18n::t;
 
@@ -196,6 +198,19 @@ fn Footer(step: RwSignal<Step>) -> impl IntoView {
             }}
         </div>
     }
+}
+
+/// Is this `input` event a keystroke an input method has not finished with?
+///
+/// While a Chinese IME composes, the field holds *its* working text — the
+/// pinyin segmentation, `f'l'y` for three letters of `flyegg` — and an
+/// `input` event fires for each one. Anything that judges what was typed has
+/// to wait for `compositionend`; anything that merely echoes it need not.
+fn composing(event: &ev::Event) -> bool {
+    use wasm_bindgen::JsCast;
+    event
+        .dyn_ref::<web_sys::InputEvent>()
+        .is_some_and(web_sys::InputEvent::is_composing)
 }
 
 /// Change one field of the choice in flight and ask what it now means.
@@ -673,11 +688,44 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                 <input
                     class="h-[30px] w-[280px] rounded-[6px] bg-sunken px-2.5 font-mono text-footnote outline-none ring-1 ring-line focus:ring-rust"
                     prop:value=name
-                    on:input=move |event| {
+                    // Half-typed text from an input method is not a name.
+                    // A Chinese IME shows its pinyin segmentation in the
+                    // field while composing — typing `flyegg` passes through
+                    // `f'l` and `f'l'y` — and every one of those reached the
+                    // backend, was refused as a crate name and put a red
+                    // banner over the workbench about a name nobody typed.
+                    // `compositionend` is what says the letters are settled.
+                    on:input=move |event: ev::Event| {
+                        if composing(&event) {
+                            return;
+                        }
+                        let value = event_target_value(&event);
+                        amend(state, |next| next.name = value);
+                    }
+                    on:compositionend=move |event: ev::CompositionEvent| {
                         let value = event_target_value(&event);
                         amend(state, |next| next.name = value);
                     }
                 />
+                // What cargo would refuse, under the field it is about, as
+                // the Git panel says what git would refuse about a branch.
+                {move || {
+                    let problem = state
+                        .wizard
+                        .choice
+                        .with(|c| c.as_ref().map(|c| crate_name_problem(&c.name)))
+                        .flatten()?;
+                    let said = match problem {
+                        CrateNameProblem::Empty => t!("wizard.name-empty"),
+                        CrateNameProblem::Character(c) => {
+                            t!("wizard.name-character", char = c.to_string())
+                        }
+                        CrateNameProblem::Start(c) => {
+                            t!("wizard.name-start", char = c.to_string())
+                        }
+                    };
+                    Some(view! { <p class="mt-1 text-footnote text-crimson">{said}</p> })
+                }}
             </label>
 
             <div class="mb-4 flex flex-wrap items-center gap-1.5">
@@ -734,9 +782,13 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                         .into_any();
                 };
                 let busy = state.app.session_running.get();
+                // A name cargo would refuse is refused here, not by cargo
+                // minutes later and not by the backend after the folder
+                // picker — the field already says which character is wrong.
                 let named = state
-                    .wizard.choice
-                    .with(|c| c.as_ref().is_some_and(|c| !c.name.trim().is_empty()));
+                    .wizard
+                    .choice
+                    .with(|c| c.as_ref().is_some_and(|c| crate_name_problem(&c.name).is_none()));
 
                 // Check the generator is there *before* offering the button.
                 // The toolchain report already probed every tool rusty drives,

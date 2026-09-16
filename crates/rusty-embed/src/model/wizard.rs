@@ -70,3 +70,81 @@ pub struct Explanation {
     /// A concrete follow-on — a command to run, a target that gets used.
     pub consequence: Option<String>,
 }
+
+/// Why cargo would refuse `name` as a crate name, if it would.
+///
+/// Here in the model rather than beside the generator, so the *field* can say
+/// it while it is being typed — the Git panel's `ref_name_problem` rule,
+/// applied to the one name the generator never sees. It used to be checked
+/// only on the backend, on every keystroke, and each refusal arrived as a red
+/// banner over the workbench: typing `flyegg` through a Chinese IME put two
+/// of them there, about `f'l` and `f'l'y`, which are the input method's own
+/// pinyin segmentation and not anything the user had typed.
+///
+/// The workspace layout is what makes this matter: the project's name becomes
+/// `<name>-core`, a package cargo has to accept, and the generator is asked
+/// for a crate called `firmware` whatever the project is called — so nothing
+/// downstream would refuse the name until cargo did, minutes later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrateNameProblem {
+    Empty,
+    /// Anything that is not a letter, a digit, `-` or `_`.
+    Character(char),
+    /// A first character that is not a letter or a digit.
+    Start(char),
+}
+
+/// `None` when cargo would take `name` as a package name.
+pub fn crate_name_problem(name: &str) -> Option<CrateNameProblem> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return Some(CrateNameProblem::Empty);
+    };
+    if let Some(bad) = name
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || *c == '-' || *c == '_'))
+    {
+        return Some(CrateNameProblem::Character(bad));
+    }
+    if !first.is_ascii_alphanumeric() {
+        return Some(CrateNameProblem::Start(first));
+    }
+    None
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn a_name_cargo_takes_has_no_problem() {
+        for good in ["blinky", "cf-drone_rs2", "a", "2fast"] {
+            assert_eq!(crate_name_problem(good), None, "{good}");
+        }
+    }
+
+    /// The character is named, because "not a name cargo accepts" over a
+    /// field with twelve characters in it does not say which one.
+    #[test]
+    fn a_name_cargo_refuses_names_the_character() {
+        assert_eq!(crate_name_problem(""), Some(CrateNameProblem::Empty));
+        assert_eq!(
+            crate_name_problem("my project"),
+            Some(CrateNameProblem::Character(' '))
+        );
+        assert_eq!(
+            crate_name_problem("\u{9a71}\u{52a8}"),
+            Some(CrateNameProblem::Character('\u{9a71}'))
+        );
+        assert_eq!(
+            crate_name_problem("-lead"),
+            Some(CrateNameProblem::Start('-'))
+        );
+        // An input method's own pinyin segmentation, which is what reached
+        // the backend on every keystroke and bannered.
+        assert_eq!(
+            crate_name_problem("f'l'y"),
+            Some(CrateNameProblem::Character('\''))
+        );
+    }
+}

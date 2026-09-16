@@ -28,15 +28,23 @@ fn main() {
         }
     }
 
-    let unlinked = rusty_edit::scan_unlinked(root);
-    println!("\n{seen} files read, {} dimmed", unlinked.len());
-    for path in &unlinked {
-        println!("  {path}");
-    }
-    // Nothing dimmed is the ordinary answer, and it is also what a refusal
-    // looks like — a `#[path]` anywhere takes the whole claim away. Say so,
-    // rather than letting silence read as "every file is fine".
-    if unlinked.is_empty() {
-        println!("  (nothing — every file is declared, or the scan refused)");
+    // A refusal and a clean project are different answers, and the whole
+    // point of the `Option` is that they are not both "nothing dimmed": an
+    // empty list would read as a clean bill of health the scan never gave.
+    match rusty_edit::scan_unlinked(root) {
+        None => println!(
+            "\n{seen} files read — REFUSED: a `#[path]` attribute somewhere means \
+             this reading cannot say which files are reachable, so nothing is dimmed \
+             and rust-analyzer's own verdict is the only one rusty shows."
+        ),
+        Some(unlinked) if unlinked.is_empty() => {
+            println!("\n{seen} files read, nothing dimmed: every file is declared.");
+        }
+        Some(unlinked) => {
+            println!("\n{seen} files read, {} dimmed", unlinked.len());
+            for path in &unlinked {
+                println!("  {path}");
+            }
+        }
     }
 }
