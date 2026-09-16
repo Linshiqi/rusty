@@ -1827,6 +1827,18 @@ usty`) holds `location.toml`
   from the panel. `wizard::unnest_repository` removes it, and only ever one
   with no refs and no `packed-refs`: a `.git` holding work is somebody's
   history, never a scaffold's to delete.
+- **Two tabs that read as the same word are two tabs nobody can tell apart.**
+  The strip showed a bare file name, and the standard workspace has three
+  `Cargo.toml`s, two `lib.rs`es and two `main.rs`es — eleven tabs with six
+  labels between them, reported as "I cannot find the file the tab is
+  showing". `tab_hints` (pure, tested, beside the strip) is VS Code's rule:
+  the name alone while it is unique, otherwise the shortest suffix of the
+  directories above it that separates the whole group, grown one segment at
+  a time. `core/src/lib.rs` against `firmware/src/lib.rs` needs two; a `bin`
+  against a `src` needs one. A file at the project root keeps a bare name
+  even when it shares one — having nothing above it *is* the distinguishing
+  mark, and inventing a word for it would be a label the path does not
+  contain.
 - **A remembered tab is not a file the user asked for.** `restore_tabs` puts
   the strip back from `workbench.toml`, keyed on the project *directory* —
   and a directory can hold a different project than it did last week, which
@@ -1837,6 +1849,11 @@ usty`) holds `location.toml`
   is the quiet door: gone means off the strip. The comment above
   `restore_tabs` had claimed this behaviour for as long as the function had
   existed; the code went through the loud path the whole time.
+  **That fixed the active file and left the other ten.** They sat on the
+  strip as names, and the first click on one banner’d about a file from a
+  layout that no longer exists. `project_tabs` drops every tab whose file is
+  gone as it reads the strip — one `exists` per tab against a root the
+  backend already has, where the frontend would need a round trip each.
 - **rust-analyzer passes `--lockfile-path` to any cargo that calls itself
   nightly, and Espressif's fork does.** The Xtensa toolchain reports `cargo
   1.95.0-nightly` while being built from a snapshot that has no such flag,

@@ -31,11 +31,15 @@ pub(super) fn TabStrip() -> impl IntoView {
             {move || {
                 let active = state.active_path()
                     .unwrap_or_default();
-                state
-                    .editor.tabs
-                    .get()
+                let open = state.editor.tabs.get();
+                // As much of the path as it takes to tell two tabs apart,
+                // and no more — a workspace's three `Cargo.toml`s were three
+                // identical labels. See [`tab_hints`].
+                let hints = tab_hints(&open);
+                open
                     .into_iter()
-                    .map(|path| {
+                    .zip(hints)
+                    .map(|(path, hint)| {
                         let name = path
                             .rsplit(['/', '\\'])
                             .next()
@@ -126,6 +130,16 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 }
                             >
                                 <span class="max-w-[18ch] truncate">{name}</span>
+                                // Quieter than the name: it is there to
+                                // separate, not to be read.
+                                {(!hint.is_empty())
+                                    .then(|| {
+                                        view! {
+                                            <span class="max-w-[14ch] shrink truncate text-label-3">
+                                                {hint}
+                                            </span>
+                                        }
+                                    })}
                                 {move || {
                                     dirty
                                         .get()
@@ -260,6 +274,77 @@ pub(super) fn TabStrip() -> impl IntoView {
         </div>
     }
     .into_any()
+}
+
+/// What to write beside each tab's name so two tabs are never the same word.
+///
+/// A workspace has three `Cargo.toml`s, two `main.rs`es and two `lib.rs`es,
+/// and the strip showed each of them as its bare file name — eleven tabs with
+/// six distinct labels between them, reported as "I cannot find the file the
+/// tab is showing". VS Code's rule: the name alone while it is unique, and
+/// otherwise as much of the path above it as it takes to tell them apart, no
+/// more.
+///
+/// Parallel to `paths`, empty where the name stands on its own. The suffix
+/// grows one directory at a time and stops at the first depth that separates
+/// the whole group, so `core/Cargo.toml` against `firmware/Cargo.toml` is
+/// `core` and `firmware` rather than either full path — and two `lib.rs`es
+/// both under a `src` go to `core/src` and `firmware/src`, because one
+/// segment does not part them.
+///
+/// A file at the project root keeps a bare name even when it shares one. It
+/// is the only member of its group with nothing above it, so "no suffix" is
+/// itself the distinguishing mark, and inventing a word for it (`./`, the
+/// project's name) would be a label the path does not contain.
+pub(super) fn tab_hints(paths: &[String]) -> Vec<String> {
+    let name_of =
+        |path: &str| -> String { path.rsplit(['/', '\\']).next().unwrap_or(path).to_string() };
+    // The directories above the file, nearest first: `core/src/math/q.rs`
+    // gives `["math", "src", "core"]`.
+    let parents = |path: &str| -> Vec<String> {
+        let mut parts: Vec<String> = path.split(['/', '\\']).map(str::to_string).collect();
+        parts.pop();
+        parts.reverse();
+        parts
+    };
+
+    let mut hints = vec![String::new(); paths.len()];
+    for (index, path) in paths.iter().enumerate() {
+        let name = name_of(path);
+        // Everyone else wearing this name. One tab per path, so a path equal
+        // to this one is this one.
+        let rivals: Vec<usize> = paths
+            .iter()
+            .enumerate()
+            .filter(|(other, p)| *other != index && name_of(p) == name)
+            .map(|(other, _)| other)
+            .collect();
+        if rivals.is_empty() {
+            continue;
+        }
+        let mine = parents(path);
+        let deepest = rivals
+            .iter()
+            .map(|&other| parents(&paths[other]).len())
+            .chain(std::iter::once(mine.len()))
+            .max()
+            .unwrap_or(0);
+        for depth in 1..=deepest {
+            let suffix = |parts: &[String]| parts.iter().take(depth).cloned().collect::<Vec<_>>();
+            let ours = suffix(&mine);
+            if rivals
+                .iter()
+                .all(|&other| suffix(&parents(&paths[other])) != ours)
+            {
+                // Written the way the path reads, outermost first.
+                let mut shown = ours;
+                shown.reverse();
+                hints[index] = shown.join("/");
+                break;
+            }
+        }
+    }
+    hints
 }
 
 #[component]
@@ -408,5 +493,75 @@ pub(super) fn Header(
                     }
                 })}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hints(paths: &[&str]) -> Vec<String> {
+        tab_hints(&paths.iter().map(|p| (*p).to_string()).collect::<Vec<_>>())
+    }
+
+    /// A name nobody else wears is written alone.
+    #[test]
+    fn a_unique_name_carries_no_suffix() {
+        assert_eq!(hints(&["core/src/lib.rs", "firmware/build.rs"]), ["", ""]);
+    }
+
+    /// The workspace that produced the report: three `Cargo.toml`s. One
+    /// directory apiece parts them, and the one at the root stays bare —
+    /// having nothing above it is what tells it apart.
+    #[test]
+    fn three_manifests_are_told_apart_by_one_directory_each() {
+        assert_eq!(
+            hints(&["Cargo.toml", "core/Cargo.toml", "firmware/Cargo.toml"]),
+            ["", "core", "firmware"]
+        );
+    }
+
+    /// One segment does not always do it: two `lib.rs`es both under a `src`
+    /// need the crate above it, and only that.
+    #[test]
+    fn the_suffix_grows_until_it_separates_them() {
+        assert_eq!(
+            hints(&["core/src/lib.rs", "firmware/src/lib.rs"]),
+            ["core/src", "firmware/src"]
+        );
+    }
+
+    /// And it stops as soon as it has: `bin` against `src` is enough, so
+    /// neither grows to the crate.
+    #[test]
+    fn the_suffix_stops_at_the_first_depth_that_works() {
+        assert_eq!(
+            hints(&["firmware/src/main.rs", "firmware/src/bin/main.rs"]),
+            ["src", "bin"]
+        );
+    }
+
+    /// Three at once, two of which need more than the others.
+    #[test]
+    fn each_tab_grows_only_as_far_as_its_own_group_needs() {
+        assert_eq!(
+            hints(&[
+                "Cargo.toml",
+                "core/Cargo.toml",
+                "core/src/lib.rs",
+                "firmware/src/lib.rs",
+            ]),
+            ["", "core", "core/src", "firmware/src"]
+        );
+    }
+
+    /// Windows separators arrive from the same places project-relative paths
+    /// do, and must not read as one long file name.
+    #[test]
+    fn a_backslash_is_a_separator_too() {
+        assert_eq!(
+            hints(&["core\\Cargo.toml", "firmware\\Cargo.toml"]),
+            ["core", "firmware"]
+        );
     }
 }

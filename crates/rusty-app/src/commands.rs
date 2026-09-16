@@ -359,7 +359,28 @@ pub async fn record_tabs(
 /// What a project had open last time.
 #[tauri::command]
 pub async fn project_tabs(root: String) -> Answer<Option<rusty_embed::ProjectTabs>> {
-    blocking("reading the tab strip", move || storage::tabs_for(&root)).await
+    blocking("reading the tab strip", move || {
+        let mut strip = storage::tabs_for(&root)?;
+        // Only the files that are still there. The strip is remembered per
+        // project *directory*, and a directory can hold a different project
+        // than it did last week — generating over a path somebody used
+        // before is exactly what the wizard does. v0.6.30 made the restored
+        // *active* file fail quietly; the rest sat on the strip as names,
+        // and clicking one raised "could not read build.rs" about a file
+        // from a layout that no longer exists.
+        //
+        // Answered here rather than in the frontend because it is one
+        // `exists` per tab against a root the backend already has, where the
+        // frontend would need a round trip each.
+        let base = std::path::Path::new(&root);
+        let here = |path: &String| base.join(path).exists();
+        strip.tabs.retain(&here);
+        strip.second.retain(&here);
+        strip.active = strip.active.filter(|p| strip.tabs.contains(p));
+        strip.second_active = strip.second_active.filter(|p| strip.second.contains(p));
+        Some(strip)
+    })
+    .await
 }
 
 /// The assistant profile last chosen, and setting it.

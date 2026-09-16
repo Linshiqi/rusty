@@ -9,6 +9,31 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.32
+
+**Fixed — two tabs are never the same word.** A workspace has three
+`Cargo.toml`s, two `lib.rs`es and two `main.rs`es, and the strip showed each
+of them as its bare file name — eleven tabs with six labels between them, and
+no way to tell which one you were looking at. A tab now carries as much of the
+path above it as it takes to tell it from the others, and no more:
+`Cargo.toml core`, `Cargo.toml firmware`, `lib.rs core/src`, `main.rs bin`.
+A name nobody else is using is still written alone.
+
+**Fixed — a remembered tab whose file is gone is dropped, not kept.** v0.6.30
+made the restored *active* file fail quietly; the rest stayed on the strip as
+names, so clicking one raised *could not read build.rs* about a file from a
+layout that no longer exists. The strip is remembered per project directory,
+and a directory can hold a different project than it did last week — which is
+exactly what generating over a path you have used before produces. Every tab
+is now checked when the strip is read.
+
+**Changed — the status bar says what is actually wrong.** An Xtensa project
+whose toolchain is older than the rust-analyzer analysing it sat on
+*rust-analyzer: partly loaded* for the whole session, which is true and tells
+you nothing you can act on. Where rusty recognises that failure it now says
+*rust-analyzer: dependencies unresolved* — which is what it costs — with the
+full explanation still in the tooltip.
+
 ## v0.6.31
 
 **Changed — a file outside the module tree now reads as inert.** Its name was

@@ -830,7 +830,24 @@ fn StatusBar() -> impl IntoView {
                                 (t!("status.lsp-broken"), Tone::Crimson)
                             }
                             _ if matches!(health, Some((rusty_lsp::HealthLevel::Warning, _))) => {
-                                (t!("status.lsp-degraded"), Tone::Amber)
+                                // "Partly loaded" is true and says nothing
+                                // anybody can act on, and for the one warning
+                                // rusty recognises it sits there for the
+                                // whole session. Where the reason is the
+                                // toolchain that cannot resolve dependencies,
+                                // the status says *that* — three words the
+                                // reader can do something about, with the
+                                // whole explanation still in the tooltip.
+                                let deps_lost = health.as_ref().is_some_and(|(_, why)| {
+                                    why.as_deref()
+                                        .is_some_and(|why| why.contains("--lockfile-path"))
+                                });
+                                let said = if deps_lost {
+                                    t!("status.lsp-no-deps")
+                                } else {
+                                    t!("status.lsp-degraded")
+                                };
+                                (said, Tone::Amber)
                             }
                             // Busy comes before errors: while the index is
                             // being built, both the diagnostics and the
