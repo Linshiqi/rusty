@@ -38,6 +38,8 @@ mod pull;
 mod rpc;
 #[cfg(feature = "backend")]
 mod uri;
+#[cfg(feature = "backend")]
+pub mod watched;
 
 #[cfg(feature = "backend")]
 pub use client::{Events, LspClient};

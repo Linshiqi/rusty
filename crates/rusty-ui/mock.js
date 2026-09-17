@@ -303,6 +303,7 @@
     },
     lsp_open: () => null,
     lsp_saved: () => null,
+    lsp_close: () => null,
     lsp_change: (a) => { window.__mock.changes.push(a); return null; },
     // Edits carry the range as of *this* request, which is what the real
     // server does and what the stale-range bug depended on: ask while two

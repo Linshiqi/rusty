@@ -58,7 +58,75 @@ pub(super) fn vim_cursor(
         .editor
         .vim_caret
         .with_value(|last| remembered_cursor(last.as_ref(), path, start, end, text.chars().count()))
-        .unwrap_or_else(|| scalar_of_units(text, start as usize))
+        .unwrap_or_else(|| {
+            // The textarea counts in the screen text; below a fold that is a
+            // different place in the document (`screen_selection`).
+            state.editor.folds.with_untracked(|folds| {
+                if folds.is_empty() {
+                    return scalar_of_units(text, start as usize);
+                }
+                let screen = folds.view_text(text);
+                text[..doc_byte_at(&screen, text, folds, start as usize)]
+                    .chars()
+                    .count()
+            })
+        })
+}
+
+/// Vim's selection, in document scalars, as the textarea takes it: UTF-16
+/// offsets into the screen text, which is the document less what is folded.
+///
+/// The machine knows nothing of folds, and its scalars went to the textarea
+/// as they were — right with nothing collapsed, and below a fold a line or
+/// more off, so every key landed somewhere the cursor was not. A cursor Vim
+/// moves into a collapsed region opens it first, as VSCodeVim's does: the
+/// other choice is a cursor on a line nobody can see.
+fn screen_selection(
+    state: AppState,
+    area: &web_sys::HtmlTextAreaElement,
+    text: &str,
+    from: usize,
+    to: usize,
+) -> (u32, u32) {
+    if state.editor.folds.with_untracked(|folds| folds.is_empty()) {
+        return (units_of_scalar(text, from), units_of_scalar(text, to));
+    }
+    let byte = |scalar: usize| {
+        text.char_indices()
+            .nth(scalar)
+            .map_or(text.len(), |(at, _)| at)
+    };
+    let (from, to) = (byte(from), byte(to));
+    let lines = [from, to].map(|at| text[..at].matches('\n').count() as u32);
+    let hiding: Vec<u32> = state.editor.folds.with_untracked(|folds| {
+        folds
+            .regions()
+            .iter()
+            .filter(|region| {
+                lines
+                    .iter()
+                    .any(|line| *line > region.header && *line <= region.last)
+            })
+            .map(|region| region.header)
+            .collect()
+    });
+    if !hiding.is_empty() {
+        state.editor.folds.update(|folds| {
+            for header in &hiding {
+                folds.unfold(*header);
+            }
+        });
+        // Now, not when the value effect runs: the selection set below counts
+        // in this text.
+        area.set_value(&screen(state));
+    }
+    let screen = screen(state);
+    state.editor.folds.with_untracked(|folds| {
+        let at = |byte: usize| {
+            screen_units_at(&screen, text, folds, byte).unwrap_or_else(|| utf16_len(&screen))
+        };
+        (at(from), at(to))
+    })
 }
 
 /// Where the drawn cursor goes for a scalar index: its line, its column in
@@ -136,9 +204,9 @@ pub(super) fn vim_key(
     // caret is. Both take this one path rather than two that can disagree
     // about where the cursor is.
     let (start, end) = match step.selection {
-        Some((from, to)) => (units_of_scalar(&after, from), units_of_scalar(&after, to)),
+        Some((from, to)) => screen_selection(state, area, &after, from, to),
         None => {
-            let at = units_of_scalar(&after, step.cursor);
+            let (at, _) = screen_selection(state, area, &after, step.cursor, step.cursor);
             (at, at)
         }
     };
@@ -236,7 +304,7 @@ pub(super) fn vim_key(
                     // one-character selection this was is the block cursor
                     // of a design long gone, and a selection is what copy
                     // and cut act on.
-                    let at = units_of_scalar(&after, span.cursor);
+                    let (at, _) = screen_selection(state, area, &after, span.cursor, span.cursor);
                     let _ = area.set_selection_start(Some(at));
                     let _ = area.set_selection_end(Some(at));
                     keep_caret_in_view(area, state, scroller);

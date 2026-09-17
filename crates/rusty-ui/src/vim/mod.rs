@@ -195,6 +195,16 @@ pub struct Vim {
     replaying: bool,
     /// The last `f`/`t` search, replayed by `;` and `,`.
     last_find: Option<(char, char)>,
+    /// The column `j` and `k` are aiming for, in characters from the line's
+    /// start — Vim's `curswant`. Kept across a line too short to reach it,
+    /// so `j` over a blank line comes back to the column it left, and
+    /// forgotten by anything else that moves the cursor.
+    want_col: Option<usize>,
+    /// Where this machine last put the cursor. A cursor that arrives
+    /// anywhere else was moved by something else — a click, typing in
+    /// insert mode, a find — and the column memory belongs to a place it has
+    /// left.
+    placed: Option<usize>,
 }
 
 impl Vim {
@@ -205,7 +215,15 @@ impl Vim {
     /// while Vim is on.
     pub fn feed(&mut self, key: &Key, text: &str, cursor: usize) -> Step {
         let cursor = cursor.min(text.chars().count());
+        if self.placed != Some(cursor) {
+            self.want_col = None;
+        }
+        let step = self.feed_key(key, text, cursor);
+        self.placed = Some(step.cursor);
+        step
+    }
 
+    fn feed_key(&mut self, key: &Key, text: &str, cursor: usize) -> Step {
         // Insert mode claims almost nothing on purpose. Anyone who turned
         // Vim on still has completion, quick fixes, save and the palette
         // exactly where they were.
@@ -269,6 +287,28 @@ impl Vim {
             // the editor rather than eaten.
             return self.pass(cursor);
         };
+
+        // `iw`, `a(`, `i"` in visual mode select the object, as Vim's do.
+        // The grammar reads a bare `i` and `a` as insert and append, so
+        // `viw` left visual mode and typed a `w` into the file. A count in
+        // front is dropped rather than read as one: `v2i` is not something
+        // this selects twice.
+        if self.mode.is_visual() {
+            if matches!(character, 'i' | 'a') && self.pending.chars().all(|c| c.is_ascii_digit()) {
+                self.pending = character.to_string();
+                self.rejected = None;
+                return self.consumed(text, cursor);
+            }
+            let inside = match self.pending.as_str() {
+                "i" => Some(true),
+                "a" => Some(false),
+                _ => None,
+            };
+            if let Some(inside) = inside {
+                self.pending.clear();
+                return self.select_object(inside, character, text, cursor);
+            }
+        }
 
         // In visual mode an operator acts on the selection at once. Routing
         // it through the operator grammar would leave `vlld` waiting for a
@@ -353,8 +393,14 @@ impl Vim {
     fn run(&mut self, command: Command, text: &str, cursor: usize) -> Step {
         match command {
             Command::Move(motion, count) => self.run_motion(motion, count, text, cursor),
-            Command::Operate { op, target, count } => self.operate(op, target, count, text, cursor),
-            Command::Simple(simple, count) => self.simple(simple, count, text, cursor),
+            Command::Operate { op, target, count } => {
+                self.want_col = None;
+                self.operate(op, target, count, text, cursor)
+            }
+            Command::Simple(simple, count) => {
+                self.want_col = None;
+                self.simple(simple, count, text, cursor)
+            }
         }
     }
 
@@ -365,10 +411,44 @@ impl Vim {
         if let Motion::Find { key, target } = motion {
             self.last_find = Some((key, target));
         }
-        // `span.cursor`, never `span.end`: for an inclusive motion like `e`
-        // the operator range runs one past the character the cursor lands on,
-        // and using the range here puts the cursor off the end of every word.
-        self.consumed(text, span.cursor)
+        if !matches!(motion, Motion::Up | Motion::Down) {
+            self.want_col = None;
+            // `span.cursor`, never `span.end`: for an inclusive motion like
+            // `e` the operator range runs one past the character the cursor
+            // lands on, and using the range here puts the cursor off the end
+            // of every word.
+            return self.consumed(text, span.cursor);
+        }
+        // The column wanted, not the one a short line clamped it to.
+        let column = *self
+            .want_col
+            .get_or_insert_with(|| cursor - motion::line_start(text, cursor));
+        let start = motion::line_start(text, span.cursor);
+        let end = motion::line_end(text, span.cursor);
+        self.consumed(text, (start + column).min(end))
+    }
+
+    /// `iw`, `a(` and the rest, in visual mode: the selection becomes the
+    /// object, through the same `object::apply` `diw` uses, so the two
+    /// cannot disagree about what a word is. An object the cursor is not in
+    /// — `i(` with no parentheses around it — leaves the selection as it
+    /// was, as Vim does; a key that is no object is named.
+    fn select_object(&mut self, inside: bool, key: char, text: &str, cursor: usize) -> Step {
+        let Some(object) = object::of(inside, key) else {
+            self.rejected = Some(format!("{}{key}", if inside { 'i' } else { 'a' }));
+            return self.consumed(text, cursor);
+        };
+        let Some(span) = object::apply(object, text, cursor).filter(|span| span.end > span.start)
+        else {
+            return self.consumed(text, cursor);
+        };
+        self.mode = if span.linewise {
+            Mode::VisualLine
+        } else {
+            Mode::Visual
+        };
+        self.anchor = span.start;
+        self.consumed(text, span.end - 1)
     }
 
     fn operate(&mut self, op: Op, target: Target, count: usize, text: &str, cursor: usize) -> Step {

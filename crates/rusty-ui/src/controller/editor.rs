@@ -85,25 +85,29 @@ fn follow_move(state: AppState, from: &str, to: &str, is_dir: bool) {
         group.editor.parked.update(|parked| {
             for entry in parked.iter_mut() {
                 if let Some(new) = moved(&entry.document.path) {
-                    entry.document.path = new.clone();
-                    reopened.push((new, entry.draft.clone()));
+                    let old = std::mem::replace(&mut entry.document.path, new.clone());
+                    reopened.push((old, new, entry.draft.clone()));
                 }
             }
         });
-        let active = group
-            .editor
-            .document
-            .with_untracked(|d| d.as_ref().and_then(|d| moved(&d.path)));
-        if let Some(new) = active {
+        let active = group.editor.document.with_untracked(|d| {
+            d.as_ref()
+                .and_then(|d| moved(&d.path).map(|new| (d.path.clone(), new)))
+        });
+        if let Some((old, new)) = active {
             group.editor.document.update(|d| {
                 if let Some(d) = d {
                     d.path = new.clone();
                 }
             });
-            reopened.push((new, group.editor.draft.get_untracked()));
+            reopened.push((old, new, group.editor.draft.get_untracked()));
         }
-        for (path, text) in reopened {
-            lsp_open_doc(path, text);
+        // The old name closed and the new one opened: left open, the server
+        // kept a document at a path that no longer exists — a second copy
+        // of the module, under its old name, for as long as the session ran.
+        for (old, new, text) in reopened {
+            lsp_closed_doc(old);
+            lsp_open_doc(new, text);
         }
     }
     let rename_all = |list: &mut Vec<String>| {
@@ -828,6 +832,9 @@ fn remove_tab(state: AppState, path: String) {
         .editor
         .parked
         .update(|parked| parked.retain(|e| e.document.path != path));
+    // One group per file, so a closed tab is a file no editor holds: the
+    // server goes back to the disk for it.
+    lsp_closed_doc(path.clone());
 
     if is_active {
         clear_editor_transients(state);
@@ -920,8 +927,15 @@ fn transplant(from: AppState, to: AppState, path: &str) {
     from.editor.tabs.update(|tabs| tabs.retain(|t| t != path));
     if was_active {
         clear_editor_transients(from);
-        if !next.is_some_and(|n| front_parked(from, &n)) {
+        if !next.as_deref().is_some_and(|n| front_parked(from, n)) {
             clear_screen(from);
+            // A neighbour listed with no body — restored from last session
+            // and never clicked — is read, as `remove_tab` reads one. Moving
+            // the one loaded file of a restored strip to the side left the
+            // group it came from blank under four tab names.
+            if let Some(next) = next {
+                open_file(from, next);
+            }
         }
     }
     to.layout.focus.set(to.group);

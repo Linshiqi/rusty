@@ -77,6 +77,64 @@ pub(super) fn card_place(state: AppState, line: u32, zoom: f64, above: bool) -> 
     }
 }
 
+/// A document byte offset for a UTF-16 offset into the screen text — where a
+/// textarea selection is in the draft.
+///
+/// Rows map through the fold table and columns are the same on both sides,
+/// so the conversion is exact; with nothing folded it is the identity.
+/// Pure over the three texts it relates, so both directions are tested
+/// against real folds rather than read off signals.
+pub(super) fn doc_byte_at(screen: &str, draft: &str, folds: &Folded, units: usize) -> usize {
+    let byte = super::byte_of_utf16(screen, units);
+    let before = &screen[..byte.min(screen.len())];
+    let row = before.matches('\n').count() as u32;
+    let line_start = before.rfind('\n').map_or(0, |at| at + 1);
+    let col = before[line_start..].chars().count();
+    let line = folds.doc_of_view(row) as usize;
+    let mut offset = 0;
+    for (index, text) in draft.split('\n').enumerate() {
+        if index == line {
+            return offset + text.chars().take(col).map(char::len_utf8).sum::<usize>();
+        }
+        offset += text.len() + 1;
+    }
+    draft.len()
+}
+
+/// The other way: where a document byte offset is in the screen text, as
+/// the UTF-16 offset a textarea selection takes — or `None` when a collapsed
+/// region hides its line, since nothing on screen stands for it.
+pub(super) fn screen_units_at(
+    screen: &str,
+    draft: &str,
+    folds: &Folded,
+    byte: usize,
+) -> Option<u32> {
+    let mut byte = byte.min(draft.len());
+    while !draft.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    let before = &draft[..byte];
+    let line = before.matches('\n').count() as u32;
+    let col = before[before.rfind('\n').map_or(0, |at| at + 1)..]
+        .chars()
+        .count();
+    let row = folds.view_of_doc(line)?;
+    let mut start = 0;
+    for _ in 0..row {
+        start += screen[start..].find('\n')? + 1;
+    }
+    let end = screen[start..]
+        .find('\n')
+        .map_or(screen.len(), |at| start + at);
+    let within: usize = screen[start..end]
+        .chars()
+        .take(col)
+        .map(char::len_utf8)
+        .sum();
+    Some(super::utf16_len(&screen[..start + within]))
+}
+
 /// The document line a screen row shows. The inverse of [`row_for`], for
 /// anything that starts from a pixel — a click, a hover.
 pub(super) fn line_of_row(state: AppState, row: u32) -> u32 {
@@ -140,4 +198,63 @@ pub(super) fn set_buffer(state: AppState, area: &web_sys::HtmlTextAreaElement, t
     unfold_all(state);
     state.editor.draft.set(text.to_string());
     area.set_value(text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A function body collapsed: lines 1 and 2 hidden, the brace and what
+    /// follows moved up two rows, and a `中` on the line after so a column
+    /// counted in bytes or in UTF-16 cannot pass for one counted right.
+    fn folded() -> (String, Folded, String) {
+        let draft = "fn a() {\n    one\n    two\n}\n中 next\n".to_string();
+        let mut folds = Folded::default();
+        folds.fold(Region { header: 0, last: 2 });
+        let screen = folds.view_text(&draft);
+        assert_eq!(screen, "fn a() {\n}\n中 next\n");
+        (draft, folds, screen)
+    }
+
+    #[test]
+    fn with_nothing_folded_both_directions_are_the_identity() {
+        let draft = "// 中文\nfn main() {}\n";
+        let folds = Folded::default();
+        for byte in [0, 3, 10, draft.len()] {
+            let units = screen_units_at(draft, draft, &folds, byte).unwrap();
+            assert_eq!(units, super::super::utf16_len(&draft[..byte]));
+            assert_eq!(doc_byte_at(draft, draft, &folds, units as usize), byte);
+        }
+    }
+
+    /// Below a fold, a screen position is further down the document, and
+    /// back again — the round trip Vim's cursor makes on every key.
+    #[test]
+    fn below_a_fold_positions_map_across_the_hidden_lines_both_ways() {
+        let (draft, folds, screen) = folded();
+        let next_in_draft = draft.find("next").unwrap();
+        let next_on_screen = super::super::utf16_len(&screen[..screen.find("next").unwrap()]);
+        assert_eq!(
+            doc_byte_at(&screen, &draft, &folds, next_on_screen as usize),
+            next_in_draft
+        );
+        assert_eq!(
+            screen_units_at(&screen, &draft, &folds, next_in_draft),
+            Some(next_on_screen)
+        );
+        let brace = draft.find('}').unwrap();
+        assert_eq!(screen_units_at(&screen, &draft, &folds, brace), Some(9));
+    }
+
+    #[test]
+    fn a_hidden_line_has_no_place_on_screen() {
+        let (draft, folds, screen) = folded();
+        let hidden = draft.find("two").unwrap();
+        assert_eq!(screen_units_at(&screen, &draft, &folds, hidden), None);
+        assert_eq!(
+            screen_units_at(&screen, &draft, &folds, 0),
+            Some(0),
+            "the header shows"
+        );
+    }
 }

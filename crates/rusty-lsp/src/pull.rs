@@ -59,9 +59,18 @@ pub(crate) fn pull_loop(poke: Receiver<String>, shared: Weak<Shared>) {
                 }
             }
             for path in wanted {
+                // Closed since the poke: its analysis is no longer this
+                // client's to keep (`LspClient::did_close`).
+                if !shared.is_open(&path) {
+                    continue;
+                }
                 for attempt in 1..=ATTEMPTS {
                     match pull(&shared, &path) {
                         Ok(items) => {
+                            // And closed while the answer was on its way.
+                            if !shared.is_open(&path) {
+                                break;
+                            }
                             shared
                                 .pulled
                                 .lock()

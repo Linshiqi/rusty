@@ -681,10 +681,10 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                 controller::open_recent(state, path, true);
             }
         }
-        Action::Undo => editor_key("z", false),
-        Action::Redo => editor_key("y", false),
-        Action::Cut => editor_exec("cut", None),
-        Action::Copy => editor_exec("copy", None),
+        Action::Undo => editor_key(state, "z", false),
+        Action::Redo => editor_key(state, "y", false),
+        Action::Cut => editor_exec(state, "cut", None),
+        Action::Copy => editor_exec(state, "copy", None),
         Action::Paste => {
             // Through the async clipboard, then execCommand('insertText') so
             // the insertion fires a real input event — history, echo and the
@@ -699,7 +699,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                     && let Some(text) = value.as_string()
                     && !text.is_empty()
                 {
-                    editor_exec("insertText", Some(&text));
+                    editor_exec(state, "insertText", Some(&text));
                 }
             });
         }
@@ -720,8 +720,8 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::OpenSettings => chrome.settings_open.set(true),
         Action::CloseWindow => controller::window_action(crate::ipc::cmd::window::CLOSE),
         Action::OpenUrl(url) => controller::open_url(state, url.to_string()),
-        Action::ToggleComment => editor_key("/", false),
-        Action::Rename => editor_chord("F2", false, false),
+        Action::ToggleComment => editor_key(state, "/", false),
+        Action::Rename => editor_chord(state, "F2", false, false),
         // The group the user is in: a jump list belongs to an editor, and
         // there are two.
         Action::NavBack => controller::nav_back(state.focused()),
@@ -761,19 +761,17 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
 /// The undo stack, its coalescing and its caret rules live in the editor's
 /// own keydown path; synthesising the event means the menu cannot drift from
 /// the shortcut.
-fn editor_key(key: &str, shift: bool) {
-    editor_chord(key, true, shift);
+fn editor_key(state: AppState, key: &str, shift: bool) {
+    editor_chord(state, key, true, shift);
 }
 
 /// The same, for keys that are not Ctrl chords — F2 is a bare key, and
 /// sending it as Ctrl+F2 would reach a handler that is not listening.
-fn editor_chord(key: &str, ctrl: bool, shift: bool) {
-    use wasm_bindgen::JsCast;
-    let Some(element) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("editor-area"))
-        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-    else {
+///
+/// To the focused group's textarea (`controller::editor_area`): a menu item
+/// acts on the file being worked in, not on whichever group is leftmost.
+fn editor_chord(state: AppState, key: &str, ctrl: bool, shift: bool) {
+    let Some(element) = controller::editor_area(state.focused().group) else {
         return;
     };
     let _ = element.focus();
@@ -791,15 +789,12 @@ fn editor_chord(key: &str, ctrl: bool, shift: bool) {
 }
 
 /// Run a document editing command against the focused editor.
-fn editor_exec(command: &str, argument: Option<&str>) {
+fn editor_exec(state: AppState, command: &str, argument: Option<&str>) {
     use wasm_bindgen::JsCast;
     let Some(document) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
-    if let Some(element) = document
-        .get_element_by_id("editor-area")
-        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-    {
+    if let Some(element) = controller::editor_area(state.focused().group) {
         let _ = element.focus();
     }
     let Ok(html) = document.dyn_into::<web_sys::HtmlDocument>() else {

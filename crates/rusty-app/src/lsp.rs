@@ -134,6 +134,17 @@ pub async fn lsp_saved(path: String, state: State<'_, AppState>) -> Result<(), C
 }
 
 #[tauri::command]
+pub async fn lsp_close(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(());
+    };
+    tokio::task::spawn_blocking(move || client.did_close(&path))
+        .await
+        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn lsp_complete(
     path: String,
     line: u32,

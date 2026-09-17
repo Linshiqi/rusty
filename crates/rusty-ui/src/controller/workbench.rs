@@ -237,7 +237,7 @@ pub fn set_vim(state: AppState, enabled: bool) {
     // menu and the palette — take focus to get themselves clicked, and Vim's
     // keys are handled on the textarea, so without this the very next `j`
     // goes nowhere and the feature reads as not working at all.
-    if enabled && let Some(element) = editor_element() {
+    if enabled && let Some(element) = editor_area(state.focused().group) {
         let _ = element.focus();
     }
     track(

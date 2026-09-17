@@ -514,6 +514,21 @@ pub(super) fn lsp_saved_doc(path: String) {
     lsp_sync(cmd::lsp::SAVED, Args { path });
 }
 
+/// Tell the server the editor no longer holds this file — a tab closed, or
+/// a file moved out from under its old name — so it reads the disk for it
+/// again (`LspClient::did_close`). The client ignores a file it was never
+/// told about, so this needs no bookkeeping of what was announced.
+pub(super) fn lsp_closed_doc(path: String) {
+    if !path.ends_with(".rs") {
+        return;
+    }
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+    }
+    lsp_sync(cmd::lsp::CLOSE, Args { path });
+}
+
 /// Ask what the thing at this position is, for the tooltip.
 ///
 /// Silent on failure and on `None`: hover is ambient, and a banner about a

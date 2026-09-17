@@ -182,6 +182,8 @@ pub mod lsp {
     pub const OPEN: &str = "lsp_open";
     pub const CHANGE: &str = "lsp_change";
     pub const SAVED: &str = "lsp_saved";
+    /// The editor let a document go: the server reads it from disk again.
+    pub const CLOSE: &str = "lsp_close";
     pub const COMPLETE: &str = "lsp_complete";
     /// The `use` line an accepted completion brings with it, when the item
     /// was not yet in scope.

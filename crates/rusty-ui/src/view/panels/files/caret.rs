@@ -163,26 +163,13 @@ pub(super) fn doc_selection(
 ) -> (usize, usize) {
     let screen = screen(state);
     let draft = state.editor.draft.get_untracked();
-    let map = |units: usize| -> usize {
-        let byte = byte_of_utf16(&screen, units);
-        let before = &screen[..byte.min(screen.len())];
-        let row = before.matches('\n').count() as u32;
-        let line_start = before.rfind('\n').map(|at| at + 1).unwrap_or(0);
-        let col = before[line_start..].chars().count();
-        let line = line_of_row(state, row) as usize;
-        let mut offset = 0;
-        for (index, text) in draft.split('\n').enumerate() {
-            if index == line {
-                let within: usize = text.chars().take(col).map(char::len_utf8).sum();
-                return offset + within;
-            }
-            offset += text.len() + 1;
-        }
-        draft.len()
-    };
-    let start = map(area.selection_start().ok().flatten().unwrap_or(0) as usize);
-    let end = map(area.selection_end().ok().flatten().unwrap_or(0) as usize);
-    (start.min(end), start.max(end))
+    state.editor.folds.with_untracked(|folds| {
+        let map =
+            |units: Option<u32>| doc_byte_at(&screen, &draft, folds, units.unwrap_or(0) as usize);
+        let start = map(area.selection_start().ok().flatten());
+        let end = map(area.selection_end().ok().flatten());
+        (start.min(end), start.max(end))
+    })
 }
 
 /// selectionStart counts UTF-16 units — it is a JS string index. Treating it
@@ -215,17 +202,17 @@ pub(super) fn cell_under(
     let line = line as u32;
     let content = text.split('\n').nth(line as usize)?;
 
-    let x = offset_x - 8.0;
+    let x = (offset_x - 8.0) / zoom;
     if x < 0.0 {
         return Some((line, 0));
     }
     let mut reached = 0.0;
     for (index, ch) in content.chars().enumerate() {
-        let advance = advance_of(ch) * zoom;
-        if reached + advance > x {
+        let next = pen_after(reached, ch, advance_of);
+        if next > x {
             return Some((line, index as u32));
         }
-        reached += advance;
+        reached = next;
     }
     // Past the end of the line: the last column, where "what is this?" still
     // usually means the token the line ends with.
@@ -236,8 +223,54 @@ pub(super) fn cell_under(
 pub(super) fn column_px(text: &str, line: u32, col: u32) -> f64 {
     text.split('\n')
         .nth(line as usize)
-        .map(|content| content.chars().take(col as usize).map(advance_of).sum())
+        .map(|content| {
+            content
+                .chars()
+                .take(col as usize)
+                .fold(0.0, |x, ch| pen_after(x, ch, advance_of))
+        })
         .unwrap_or(0.0)
+}
+
+/// How many UTF-16 units to take off the end of what a double-click
+/// selected: the spaces and tabs after the word.
+///
+/// Chromium on Windows selects a word *with* the whitespace after it — the
+/// platform's convention, and not VS Code's — so a double-clicked
+/// `Quaternion` was copied as `Quaternion ` and pasted with a space nobody
+/// typed. A selection that is nothing but whitespace is left alone: the
+/// run of spaces is what was double-clicked.
+pub(super) fn word_selection_overhang(picked: &str) -> u32 {
+    let kept = picked.trim_end_matches([' ', '\t']);
+    if kept.is_empty() {
+        return 0;
+    }
+    utf16_len(&picked[kept.len()..])
+}
+
+/// Where the pen is after drawing `ch` from `x`, at zoom 1.
+///
+/// A character's own advance — except a tab, which goes to the next stop,
+/// every [`TAB_SIZE`] spaces from the line start, as both layers' `tab-size`
+/// draw it. And past that stop to the one after when it is nearer than half
+/// a space, which is Blink's rule (`Font::TabWidth`): a tab is never drawn
+/// narrower than that. Measuring a tab as one character put every overlay on
+/// a tab-indented line — a find match, a completion popup, the Vim cursor, a
+/// hover — up to three columns left of the text it belongs to.
+pub(super) fn pen_after(x: f64, ch: char, advance: impl Fn(char) -> f64) -> f64 {
+    if ch != '\t' {
+        return x + advance(ch);
+    }
+    let space = advance(' ');
+    let stop = space * TAB_SIZE;
+    if stop <= 0.0 {
+        return x;
+    }
+    let mut to = stop - x % stop;
+    if to < space / 2.0 {
+        to += stop;
+    }
+    x + to
 }
 
 /// One glyph's advance in the editor's font, measured once per character via
@@ -322,7 +355,57 @@ pub(super) fn centre_view(
 
 #[cfg(test)]
 mod tests {
-    use super::utf16_offset_of;
+    use super::{pen_after, utf16_offset_of, word_selection_overhang};
+
+    #[test]
+    fn a_double_clicked_word_loses_the_space_after_it_and_nothing_else() {
+        assert_eq!(word_selection_overhang("Quaternion "), 1);
+        assert_eq!(word_selection_overhang("pub\t "), 2);
+        assert_eq!(word_selection_overhang("中文"), 0, "nothing to trim");
+        assert_eq!(
+            word_selection_overhang("   "),
+            0,
+            "a run of spaces double-clicked stays selected"
+        );
+        assert_eq!(word_selection_overhang(""), 0);
+    }
+
+    /// Where a column lands, in cells, with every character one cell wide
+    /// and `中` two — what the editor's monospace font does.
+    fn cells(line: &str) -> Vec<f64> {
+        let advance = |ch: char| if ch == '中' { 2.0 } else { 1.0 };
+        let mut x = 0.0;
+        let mut at = vec![x];
+        for ch in line.chars() {
+            x = pen_after(x, ch, advance);
+            at.push(x);
+        }
+        at
+    }
+
+    /// A tab goes to the next stop of four, from wherever the pen is — the
+    /// same place the textarea and the highlighted text draw what follows it.
+    #[test]
+    fn a_tab_reaches_the_next_stop_of_four() {
+        assert_eq!(cells("\tx"), vec![0.0, 4.0, 5.0]);
+        assert_eq!(cells("ab\tx"), vec![0.0, 1.0, 2.0, 4.0, 5.0]);
+        assert_eq!(cells("abcd\tx")[5], 8.0, "on a stop, a whole stop further");
+        assert_eq!(cells("\t\t")[2], 8.0);
+    }
+
+    /// Blink never draws a tab narrower than half a space: a stop that
+    /// close is skipped for the one after.
+    #[test]
+    fn a_stop_closer_than_half_a_space_is_skipped() {
+        let advance = |_: char| 1.0;
+        assert_eq!(pen_after(3.6, '\t', advance), 8.0);
+        assert_eq!(pen_after(3.4, '\t', advance), 4.0);
+        assert_eq!(
+            cells("中a\tx")[3],
+            4.0,
+            "a wide glyph before still counts in cells"
+        );
+    }
 
     #[test]
     fn caret_offsets_survive_cjk() {

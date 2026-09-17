@@ -101,12 +101,12 @@ pub async fn git_remotes(state: State<'_, AppState>) -> Answer<Vec<Remote>> {
 /// is a decision for a terminal, not a menu item. Checked here again rather
 /// than trusted from the status the frontend drew, which may be stale.
 ///
-/// **rust-analyzer is stopped first**, and the frontend starts it again
-/// whatever happens. It watches the directories it loads, and on Windows a
-/// directory somebody holds open cannot be moved: the recycle bin answered
-/// "Some operations were aborted" for a `.git` the server had open, `mv`
-/// said "Permission denied", and both succeeded the moment the server was
-/// stopped — measured, on a project whose firmware crate held such a `.git`.
+/// rust-analyzer used to be stopped around the move and started again: while
+/// it watched the disk for itself it held the workspace's directories open,
+/// and the recycle bin answered "Some operations were aborted". It watches
+/// nothing now — the client does (`rusty_lsp::watched`) — and the same move
+/// succeeds with the server running, measured on an excluded, linked
+/// `firmware/` holding an empty `.git`.
 #[tauri::command]
 pub async fn git_include_nested(path: String, state: State<'_, AppState>) -> Answer<()> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
@@ -128,24 +128,8 @@ pub async fn git_include_nested(path: String, state: State<'_, AppState>) -> Ans
     })
     .await??;
 
-    let server = state.take_lsp().await;
     blocking("include repository", move || -> Answer<()> {
-        // The last handle, unless a request is still out: dropping it asks
-        // the server to exit and waits for the process.
-        drop(server);
-        // A request in flight holds the server a moment longer; the move is
-        // tried again for a few seconds before its refusal is believed.
-        let mut attempt = 0;
-        loop {
-            match rusty_edit::delete_entry(&root, &git) {
-                Ok(()) => return Ok(()),
-                Err(_) if attempt < 10 => {
-                    attempt += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        Ok(rusty_edit::delete_entry(&root, &git)?)
     })
     .await?
 }

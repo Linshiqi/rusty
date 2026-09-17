@@ -150,12 +150,37 @@ fn hjkl_moves_and_stops_at_the_edges() {
     assert_eq!(go("jk", text).1, 0);
 }
 
+/// Vim's `curswant`: a short line clamps the column, and the next line long
+/// enough gets it back. This half was missing, and `j` over a blank line
+/// sent the cursor to the start of every line after it.
 #[test]
 fn a_shorter_line_below_clamps_the_column_without_losing_it() {
-    // Vim remembers the column across a short line. This does not yet, and
-    // the test says which half is guaranteed: the clamp.
-    let (_, at) = go("lllj", "abcdef\nxy");
-    assert_eq!(at, 9, "clamped to the end of the short line");
+    let text = "abcdef\nxy\nabcdef";
+    assert_eq!(
+        go("lllj", text).1,
+        9,
+        "clamped to the end of the short line"
+    );
+    assert_eq!(go("llljj", text).1, 13, "column 3 again on the long line");
+    let (_, up) = run_at(&mut Vim::default(), "kk", text, 13);
+    assert_eq!(up, 3, "and the same going up");
+}
+
+/// Anything but `j` and `k` moves the cursor to a column of its own, and a
+/// cursor moved from outside — a click, typing — is a new place to start.
+#[test]
+fn the_remembered_column_is_forgotten_when_the_cursor_moves_otherwise() {
+    let text = "abcdef\nxy\nabcdef";
+    let (_, at) = go("lljh", text);
+    assert_eq!(at, 8, "h from the clamped end");
+    let (_, at) = go("llljhj", text);
+    assert_eq!(at, 11, "column 1, where h left it");
+
+    let mut vim = Vim::default();
+    let (_, at) = run(&mut vim, "lllj", text);
+    assert_eq!(at, 9);
+    let (_, moved) = run_at(&mut vim, "j", text, 7);
+    assert_eq!(moved, 10, "a click at column 0 set a new column");
 }
 
 #[test]
@@ -419,6 +444,72 @@ fn escape_leaves_visual_mode_without_touching_the_buffer() {
     let (text, _) = run(&mut vim, "vll<Esc>", "hello");
     assert_eq!(text, "hello");
     assert_eq!(vim.mode, Mode::Normal);
+}
+
+/// Keys from `cursor`, and the selection the last one left.
+fn selected(vim: &mut Vim, keys: &str, text: &str, cursor: usize) -> Option<(usize, usize)> {
+    let mut at = cursor;
+    let mut last = None;
+    for key in keys.chars() {
+        let step = vim.feed(&Key::new(&key.to_string()), text, at);
+        assert_eq!(step.text, None, "`{keys}` must not change the buffer");
+        at = step.cursor;
+        last = step.selection;
+    }
+    last
+}
+
+/// The report: `viw` left visual mode at the `i` and typed the `w` into the
+/// file. It selects the word, and stays in visual mode to be acted on.
+#[test]
+fn a_text_object_in_visual_mode_selects_it_and_types_nothing() {
+    let mut vim = Vim::default();
+    assert_eq!(
+        selected(&mut vim, "viw", "pub struct Quaternion", 13),
+        Some((11, 21))
+    );
+    assert_eq!(vim.mode, Mode::Visual);
+
+    let mut vim = Vim::default();
+    assert_eq!(
+        selected(&mut vim, "vi(", "call(a, b)", 6),
+        Some((5, 9)),
+        "inside the parentheses"
+    );
+}
+
+/// What a visual object selects is what the operator's object takes:
+/// `viwd` and `diw` leave the same buffer, because both go through one
+/// `object::apply`.
+#[test]
+fn a_visual_object_then_an_operator_is_the_operator_with_the_object() {
+    for (keys, operator) in [("viwd", "diw"), ("vi(d", "di("), ("va\"d", "da\"")] {
+        let text = "call(a, \"b c\") rest";
+        let at = if keys.contains('"') { 10 } else { 6 };
+        let (visual, _) = run_at(&mut Vim::default(), keys, text, at);
+        let (direct, _) = run_at(&mut Vim::default(), operator, text, at);
+        assert_eq!(visual, direct, "{keys} against {operator}");
+    }
+}
+
+/// A paragraph is whole lines, so it selects in visual line mode; an object
+/// that is not there leaves the selection alone; a key that is no object is
+/// named rather than swallowed.
+#[test]
+fn objects_in_visual_mode_keep_their_shape_and_refuse_by_name() {
+    let text = "one\ntwo\n\nthree";
+    let mut vim = Vim::default();
+    let _ = selected(&mut vim, "vip", text, 1);
+    assert_eq!(vim.mode, Mode::VisualLine);
+
+    let mut vim = Vim::default();
+    let before = selected(&mut vim, "v", "no parens", 3);
+    assert_eq!(selected(&mut vim, "i(", "no parens", 3), before);
+
+    let mut vim = Vim::default();
+    let _ = selected(&mut vim, "viq", "word", 1);
+    assert_eq!(vim.rejected.as_deref(), Some("iq"));
+    assert_eq!(vim.mode, Mode::Visual);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

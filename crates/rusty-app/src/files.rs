@@ -399,18 +399,40 @@ pub async fn replace_in_project(
 #[tauri::command]
 pub async fn watch_project(
     on_change: tauri::ipc::Channel<rusty_edit::FileChanges>,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
+    use tauri::Manager;
+
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
 
-    let started = blocking("the file watcher", move || rusty_edit::watch(&root)).await?;
+    let watched = root.clone();
+    let started = blocking("the file watcher", move || rusty_edit::watch(&watched)).await?;
     let Ok((watch, changes)) = started else {
         return Ok(());
     };
 
     let ticket = state.start_watch(watch).await;
     blocking("the file watcher", move || {
+        // rust-analyzer watches nothing itself — it asked this client to
+        // (`rusty_lsp::watched`) — so every batch is told to it as well:
+        // what a structural change added and removed, as the difference
+        // between two listings, and which files' contents moved.
+        let mut known = relevant_files(&root);
         while let Ok(batch) = changes.recv() {
+            let events = if batch.tree {
+                let after = relevant_files(&root);
+                let events = rusty_lsp::watched::file_events(&known, &after, &batch.changed);
+                known = after;
+                events
+            } else {
+                rusty_lsp::watched::file_events(&known, &known, &batch.changed)
+            };
+            if !events.is_empty()
+                && let Some(client) = tauri::async_runtime::block_on(app.state::<AppState>().lsp())
+            {
+                let _ = client.did_change_watched_files(&events);
+            }
             if on_change.send(batch).is_err() {
                 // The WebView is gone — the one thing a failed send means.
                 break;
@@ -422,4 +444,24 @@ pub async fn watch_project(
     // a successor replaced it, and the successor's entry is not ours to clear.
     state.release_watch(ticket).await;
     Ok(())
+}
+
+/// Every file under the project rust-analyzer reads, as the tree lists it —
+/// the same walk and the same ignore rules, so what the server is told about
+/// and what the Files panel shows cannot disagree about what exists.
+fn relevant_files(root: &std::path::Path) -> std::collections::BTreeSet<String> {
+    fn gather(entries: &[Entry], out: &mut std::collections::BTreeSet<String>) {
+        for entry in entries {
+            if entry.is_dir {
+                gather(&entry.children, out);
+            } else if rusty_lsp::watched::relevant(&entry.path) {
+                out.insert(entry.path.clone());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    if let Ok(tree) = rusty_edit::read_tree(root) {
+        gather(&tree, &mut out);
+    }
+    out
 }

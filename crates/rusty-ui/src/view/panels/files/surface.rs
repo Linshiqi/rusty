@@ -225,7 +225,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
         format!(
             "font-size: {}px; line-height: {}px; \
              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; \
-             tab-size: 4",
+             tab-size: {TAB_SIZE}",
             FONT_SIZE * z,
             row_height(z),
         )
@@ -778,7 +778,10 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
 
                     <textarea
                         node_ref=area
-                        id="editor-area"
+                        // Which group this is, for `controller::editor_area`.
+                        // Not an id: there are two of these once the editor
+                        // splits, and a lookup by id always finds the left.
+                        data-editor=state.group.index().to_string()
                         spellcheck="false"
                         autocapitalize="off"
                         autocomplete="off"
@@ -870,6 +873,29 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 && paste_into(state, &element, &pasted, read_only)
                             {
                                 event.prevent_default();
+                            }
+                        }
+                        // The word, not the word and the space after it —
+                        // VS Code's double-click, not Windows' (see
+                        // `word_selection_overhang`).
+                        on:dblclick=move |_| {
+                            let Some(element) = area.get_untracked() else {
+                                return;
+                            };
+                            let (Ok(Some(start)), Ok(Some(end))) =
+                                (element.selection_start(), element.selection_end())
+                            else {
+                                return;
+                            };
+                            if end <= start {
+                                return;
+                            }
+                            let value = element.value();
+                            let picked = &value[byte_of_utf16(&value, start as usize)
+                                ..byte_of_utf16(&value, end as usize)];
+                            let overhang = word_selection_overhang(picked);
+                            if overhang > 0 {
+                                let _ = element.set_selection_end(Some(end - overhang));
                             }
                         }
                         on:mousedown={
@@ -1449,11 +1475,13 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         let (line, x, width) = state.editor.draft.with(|text| {
                             let cursor = vim_cursor(state, &element, path.as_deref(), text);
                             let (line, col, under) = cursor_cell(text, cursor);
-                            // A tab's width depends on where it starts, and a
-                            // line break or the end of the text has none: all
-                            // three are a space wide.
-                            let glyph = under.filter(|ch| *ch != '\t').unwrap_or(' ');
-                            let width = column_px(&glyph.to_string(), 0, 1) * z;
+                            // As wide as what it covers — a tab up to its
+                            // stop — and a space wide on a line break or at
+                            // the end of the text, where there is nothing.
+                            let width = match under {
+                                Some(_) => column_px(text, line, col + 1) - column_px(text, line, col),
+                                None => column_px(" ", 0, 1),
+                            } * z;
                             (line, col_left(text, line, col, z), width)
                         });
                         let y = row_top(state, line, z);

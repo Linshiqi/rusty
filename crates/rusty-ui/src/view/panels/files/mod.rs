@@ -56,6 +56,10 @@ use tabs::*;
 /// character it is over, a column at a time, all the way across the line.
 const FONT_SIZE: f64 = 12.5;
 const LINE_HEIGHT: f64 = 19.0;
+/// How many spaces a tab stop is, for both layers' `tab-size` and for every
+/// overlay that measures a column — one number, or the overlays measure a
+/// tab as one character while the text draws it as up to four.
+const TAB_SIZE: f64 = 4.0;
 
 /// The height of one row at this zoom, in whole pixels.
 ///

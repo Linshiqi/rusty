@@ -323,13 +323,21 @@ pub fn rename_symbol(state: AppState, path: String, line: u32, col: u32, new_nam
     );
 }
 
-/// The editor's textarea, when there is one.
-pub(super) fn editor_element() -> Option<web_sys::HtmlElement> {
+/// A group's textarea, when it is showing one.
+///
+/// Found by the group it belongs to (`data-editor`), never by an id. Both
+/// groups' textareas were `id="editor-area"`, and a lookup by id answers with
+/// the first in the document — the left one — whichever group asked: the
+/// right group parked its tabs with the left group's caret, recorded the
+/// left group's position in the history, and the Edit menu's undo, cut and
+/// rename acted on the left file while the right one had focus.
+pub fn editor_area(group: crate::state::Group) -> Option<web_sys::HtmlTextAreaElement> {
     use wasm_bindgen::JsCast;
     web_sys::window()?
         .document()?
-        .get_element_by_id("editor-area")?
-        .dyn_into::<web_sys::HtmlElement>()
+        .query_selector(&format!("textarea[data-editor='{}']", group.index()))
+        .ok()??
+        .dyn_into::<web_sys::HtmlTextAreaElement>()
         .ok()
 }
 
@@ -370,11 +378,8 @@ fn here(state: AppState) -> Option<crate::state::NavPoint> {
 /// counted the newline in a different order.
 pub(super) fn caret_position(state: AppState) -> Option<(u32, u32)> {
     use rusty_lsp::positions::{self, Encoding::Utf16};
-    use wasm_bindgen::JsCast;
 
-    let element = editor_element()?
-        .dyn_into::<web_sys::HtmlTextAreaElement>()
-        .ok()?;
+    let element = editor_area(state.group)?;
     let units = element.selection_start().ok().flatten()? as usize;
     let text = state.editor.draft.get_untracked();
     let byte = positions::byte_of_character(&text, units, Utf16);

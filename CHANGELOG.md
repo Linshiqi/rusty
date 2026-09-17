@@ -9,6 +9,43 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.40
+
+**Fixed — Windows: folders can be renamed, moved and deleted while
+rust-analyzer is running.** rust-analyzer kept the project's folders locked,
+so renaming a folder such as `src` from the file tree failed with "access
+denied". rusty now watches the files and tells rust-analyzer what changed, so
+nothing is locked. *Include in this repository…* no longer restarts
+rust-analyzer either.
+
+**Fixed — closing a file hands it back to the disk.** A file closed in the
+editor stayed, as far as rust-analyzer knew, the way it was when it was open,
+even after a `git checkout` or another editor changed it.
+
+**Fixed — Vim mode and folded code.** With a region folded, Vim's keys acted a
+line or more away from the cursor anywhere below the fold. Positions now map
+across folds, and moving the cursor into a folded region opens it.
+
+**Fixed — text objects in Vim's visual mode.** `viw`, `vi(`, `va"` and the rest
+select the word, the inside of the brackets or the quoted string, as in Vim.
+Before, `i` switched to insert mode and the next key was typed into the file.
+
+**Fixed — `j` and `k` keep their column across short lines**, as in Vim: going
+down over a short or empty line, the cursor comes back to the column it started
+in on the next line that is long enough.
+
+**Fixed — the split editor.** The right side remembers its own cursor when you
+switch between its files (it was taking the left side's), the Edit menu's
+Undo, Cut, Copy, Paste and Rename act on the side you are working in, and
+moving a file to the side no longer leaves the other side blank.
+
+**Fixed — lines indented with tabs.** Find highlights, the completion popup,
+the Vim cursor and hover now line up with the text on such lines; they sat up
+to three columns to the left.
+
+**Fixed — double-clicking a word selects just the word**, not the space after
+it, so copying it no longer brings a space along.
+
 ## v0.6.39
 
 **Fixed — a long rust-analyzer message no longer breaks the status bar.** While

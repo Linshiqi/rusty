@@ -43,6 +43,7 @@ use crate::{
     positions::{Encoding, content_change, scalar_to_character},
     pull, rpc,
     uri::{path_to_uri, uri_to_absolute, uri_to_relative},
+    watched::FileChange,
 };
 
 /// How long a request may take before the caller is told rather than kept
@@ -168,6 +169,10 @@ pub(crate) struct Shared {
     /// check's results and does not run it again, and opening a project runs
     /// it not at all until something is saved.
     quiescent: AtomicBool,
+    /// rust-analyzer registered `workspace/didChangeWatchedFiles`: it is not
+    /// watching the disk itself, and hears about changes only from
+    /// [`LspClient::did_change_watched_files`] (`watched.rs` says why).
+    watching: AtomicBool,
     pub(crate) root: PathBuf,
     pub(crate) events: Sender<LspEvent>,
 }
@@ -226,6 +231,7 @@ impl LspClient {
             pulled: Mutex::new(HashMap::new()),
             pushed: Mutex::new(HashMap::new()),
             quiescent: AtomicBool::new(false),
+            watching: AtomicBool::new(false),
             root: root.to_path_buf(),
             events: events_tx,
         });
@@ -342,6 +348,56 @@ impl LspClient {
             "textDocument/didSave",
             json!({ "textDocument": { "uri": self.uri(path) } }),
         )
+    }
+
+    /// Files changed on disk, as rusty's own watcher saw them
+    /// (`watched::file_events`). Sent only once the server has asked to be
+    /// told — before that it is reading the workspace fresh, and a server
+    /// that never asks is watching for itself.
+    pub fn did_change_watched_files(&self, events: &[(String, FileChange)]) -> Result<()> {
+        if events.is_empty() || !self.shared.watching.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let changes: Vec<Value> = events
+            .iter()
+            .map(|(path, change)| json!({ "uri": self.uri(path), "type": *change as u8 }))
+            .collect();
+        self.shared.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({ "changes": changes }),
+        )
+    }
+
+    /// The editor stopped holding this file.
+    ///
+    /// An open document is the client's to keep: rust-analyzer answers from
+    /// the text it was sent and ignores the disk for it. This was never
+    /// sent, so a file closed in the editor stayed, to the server, the text
+    /// it had when it was open — whatever a `git checkout` or another editor
+    /// did to it afterwards — and every file ever opened stayed in its
+    /// memory. Closing hands it back to the disk.
+    ///
+    /// The server's own analysis of the file goes with it: it is asked for
+    /// per open document, and nothing would keep it current. What the check
+    /// found stands, as it does for any file nobody opened.
+    pub fn did_close(&self, path: &str) -> Result<()> {
+        let was_open = self
+            .shared
+            .docs
+            .lock()
+            .expect("lsp docs")
+            .remove(path)
+            .is_some();
+        if !was_open {
+            return Ok(());
+        }
+        self.shared.pulled.lock().expect("lsp pulled").remove(path);
+        self.shared.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": self.uri(path) } }),
+        )?;
+        self.shared.emit_diagnostics(path);
+        Ok(())
     }
 
     /// What could complete at this position. Columns are scalars, as
@@ -1006,6 +1062,9 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     // project watched for four minutes with the check on produced no storm
     // and no wipe.
     options.insert("checkOnSave".into(), json!(true));
+    // Its default already, and said anyway: this is what makes the capability
+    // above mean "ask the client" rather than "watch for yourself".
+    options.insert("files".into(), json!({ "watcher": "client" }));
     // A function completes with its parentheses and the caret between them.
     // rust-analyzer's default fills the arguments in as placeholders to tab
     // through, which works only in an editor that walks tabstops; this one
@@ -1097,6 +1156,11 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "workspaceFolders": false,
                 "configuration": false,
                 "diagnostics": { "refreshSupport": true },
+                // The client watches the disk, so the server does not — and
+                // on Windows a server watching for itself holds the
+                // workspace's directories open, which no rename or move of
+                // one survives. See `watched.rs`.
+                "didChangeWatchedFiles": { "dynamicRegistration": true },
             },
         },
         "initializationOptions": Value::Object(options),
@@ -1163,6 +1227,17 @@ fn dispatch(shared: &Shared, message: Value) {
                 let _ = shared.respond(id, Value::Null);
                 shared.poke_all_open();
                 return;
+            }
+            if method == "client/registerCapability" {
+                let watches = message["params"]["registrations"]
+                    .as_array()
+                    .is_some_and(|all| {
+                        all.iter()
+                            .any(|r| r["method"] == "workspace/didChangeWatchedFiles")
+                    });
+                if watches {
+                    shared.watching.store(true, Ordering::Release);
+                }
             }
             let result = if method == "workspace/configuration" {
                 let asked = message["params"]["items"].as_array().map_or(0, Vec::len);
@@ -1727,6 +1802,144 @@ mod tests {
             matches!((shutdown, exit), (Some(s), Some(e)) if s < e),
             "shutdown then exit, before any kill: {order:?}",
         );
+    }
+
+    /// The client offers to watch the disk; rust-analyzer takes it up by
+    /// registering `didChangeWatchedFiles`; and only from then on does the
+    /// client send what changed. A server that never registers is watching
+    /// for itself and is told nothing twice.
+    #[test]
+    fn watched_files_are_sent_once_the_server_asks_and_not_before() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server(|message, writer| {
+            if method(message) == "textDocument/didOpen" {
+                rpc::write_message(
+                    writer,
+                    &json!({ "jsonrpc": "2.0", "id": 90, "method": "client/registerCapability",
+                             "params": { "registrations": [{
+                                 "id": "watch", "method": "workspace/didChangeWatchedFiles",
+                                 "registerOptions": { "watchers": [{ "globPattern": "**/*.rs" }] } }] } }),
+                )
+                .unwrap();
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        let initialize = seen.lock().unwrap()[0].clone();
+        assert_eq!(
+            initialize["params"]["capabilities"]["workspace"]["didChangeWatchedFiles"]["dynamicRegistration"],
+            json!(true)
+        );
+
+        let events = vec![("src/new.rs".to_string(), FileChange::Created)];
+        client.did_change_watched_files(&events).unwrap();
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.get("id") == Some(&json!(90)) && m.get("method").is_none())
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the registration went unanswered"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        client.did_change_watched_files(&events).unwrap();
+        assert!(saw(&seen, "workspace/didChangeWatchedFiles"));
+
+        let sent: Vec<Value> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| method(m) == "workspace/didChangeWatchedFiles")
+            .cloned()
+            .collect();
+        assert_eq!(sent.len(), 1, "nothing was sent before the registration");
+        let change = &sent[0]["params"]["changes"][0];
+        assert_eq!(change["type"], json!(1));
+        assert!(
+            change["uri"].as_str().unwrap().ends_with("src/new.rs"),
+            "{change}"
+        );
+    }
+
+    /// A closed tab is a closed document: the server hears `didClose` once,
+    /// and the file's diagnostics drop the client's own analysis — pulled
+    /// for open documents only, so nothing would keep it current — while
+    /// what the check published stays.
+    #[test]
+    fn closing_a_document_tells_the_server_once_and_keeps_only_the_checks_findings() {
+        let root = tempfile::tempdir().unwrap();
+        let uri = path_to_uri(&root.path().join("a.rs"));
+        let item = |message: &str| {
+            json!({
+                "range": { "start": { "line": 0, "character": 0 },
+                           "end": { "line": 0, "character": 2 } },
+                "severity": 1,
+                "message": message,
+            })
+        };
+        let (reader, writer, seen) = fake_server(move |message, writer| {
+            match method(message) {
+                "textDocument/didOpen" => {
+                    rpc::write_message(
+                        writer,
+                        &json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                                 "params": { "uri": uri, "diagnostics": [item("from the check")] } }),
+                    )
+                    .unwrap();
+                }
+                "textDocument/diagnostic" => reply(
+                    writer,
+                    message,
+                    json!({ "kind": "full", "items": [item("from the analysis")] }),
+                ),
+                _ => {}
+            }
+            true
+        });
+        let (client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        let messages = |items: &[FileDiagnostic]| -> Vec<String> {
+            items.iter().map(|item| item.message.clone()).collect()
+        };
+        let next_for_a = |wanted: usize| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Some(LspEvent::Diagnostics { path, items })
+                        if path == "a.rs" && items.len() == wanted =>
+                    {
+                        break items;
+                    }
+                    Some(_) => continue,
+                    None => panic!("no diagnostics of {wanted} for a.rs: {:?}", methods(&seen)),
+                }
+            }
+        };
+
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+        let both = next_for_a(2);
+        assert_eq!(messages(&both).len(), 2, "{both:?}");
+
+        client.did_close("a.rs").unwrap();
+        let after = next_for_a(1);
+        assert_eq!(messages(&after), vec!["from the check".to_string()]);
+        assert!(saw(&seen, "textDocument/didClose"));
+
+        client.did_close("a.rs").unwrap();
+        client.did_save("a.rs").unwrap();
+        assert!(saw(&seen, "textDocument/didSave"));
+        let closes = methods(&seen)
+            .iter()
+            .filter(|m| *m == "textDocument/didClose")
+            .count();
+        assert_eq!(closes, 1, "a second close of a closed file says nothing");
     }
 
     /// The server's indexing arrives as `$/progress` and leaves as an event

@@ -825,13 +825,7 @@ pub fn include_nested(state: AppState, path: String) {
         let args = Args { path };
         track(
             state,
-            async move {
-                let answer = ipc::call::<_, ()>(cmd::git::INCLUDE_NESTED, &args).await;
-                // The backend stopped rust-analyzer to move the directory;
-                // it comes back whichever way that went.
-                start_lsp(state);
-                answer
-            },
+            async move { ipc::call::<_, ()>(cmd::git::INCLUDE_NESTED, &args).await },
             move |()| {
                 load_status(state);
                 refresh_tree(state);

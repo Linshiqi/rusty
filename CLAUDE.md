@@ -400,7 +400,7 @@ declarative — extensions never ship markup or styles.
 ## Modal editing
 
 Vim keys in the editor, off by default, switched on from View. `vim/` is a
-pure state machine — `(keys, text, cursor) -> Step`, no DOM — under 45 tests
+pure state machine — `(keys, text, cursor) -> Step`, no DOM — under sixty tests
 that name the property a Vim user would notice missing. The editor reads
 `Step` and does only the three things a browser forces on it: set `value`,
 set the selection, `preventDefault`.
@@ -464,6 +464,25 @@ ones is what stops a `d` in normal mode also reaching the window listener.
 - Undo granularity is Vim's, not the editor's. `Step::seal` closes the unit
   at a command boundary, so `ciwfoo<Esc>` undoes in one press instead of one
   keystroke at a time.
+- **The machine knows nothing about folds, so `vim_key` maps across them.**
+  Its scalars index the document; the textarea's selection indexes the
+  screen, which is the document less what is collapsed. They went across
+  unmapped — exact with nothing folded, and below a fold every key landed a
+  line or more from the cursor. `vim_cursor` reads the textarea through
+  `folding::doc_byte_at`, `screen_selection` writes back through
+  `screen_units_at`, and a cursor Vim moves into a collapsed region opens
+  it first, as VSCodeVim's does, rather than standing on a line nobody can
+  see. Both conversions are pure and tested against a real fold.
+- **`i` and `a` in visual mode begin a text object** (`select_object`), as
+  in Vim. The grammar read them as insert and append, so `viw` left visual
+  mode at the `i` and typed the `w` into the file. The object comes from the
+  same `object::apply` as `diw`, and a test holds `viwd` and `diw` to the
+  same buffer.
+- **`j` and `k` remember the column** — Vim's `curswant`, `Vim::want_col`.
+  A short line clamps the cursor and the next long enough one gets the
+  column back; any other motion or command forgets it, and so does a cursor
+  that arrives somewhere this machine did not put it (`Vim::placed`), since
+  a click or insert-mode typing moved it from outside.
 
 ## Code folding
 
@@ -766,7 +785,10 @@ positioned in a coordinate system that is not the document's.
   cut of a selection in Vim's modes is the editor's own, since the read-only
   textarea would copy and delete nothing, and a paste over one replaces it,
   as VS Code's does; a copied line goes in above the caret only when
-  nothing is selected.
+  nothing is selected. **A double-click selects the word and not the space
+  after it** (`word_selection_overhang`): Chromium on Windows takes the
+  trailing whitespace too, the platform's convention and not VS Code's, so
+  a double-clicked word pasted with a space nobody typed.
   **Paste reads the `paste` event, never `navigator.clipboard.readText()`**:
   the read waits on a permission this WebView never answers — measured as a
   hang — while the event carries the text with the key press. A browser
@@ -829,7 +851,18 @@ written for one group — every component, controller and effect reads
   group that lost its last file, and a first group that lost its last file
   takes the second's files — so the layout is never "nothing on the left,
   the work on the right". The split button wants a second tab to leave
-  behind for the same reason.
+  behind for the same reason. And a file moved to the side is followed by
+  its neighbour even when that neighbour was never loaded — a tab restored
+  from last session and not clicked since: `transplant` reads it as
+  `remove_tab` does, where it used to leave the group blank under the
+  strip's names.
+- **A group's textarea is found by its group, never by an id.** Both were
+  `id="editor-area"`, and a lookup by id answers with the first in the
+  document whichever group asked: the right group parked its tabs with the
+  left group's caret and recorded the left's position in the history, and
+  the Edit menu's undo, cut, copy, paste and rename acted on the left file
+  while the right one had focus. `controller::editor_area(group)` queries
+  `textarea[data-editor=<group>]`; nothing may look the editor up by id.
 - **Both strips persist** in `workbench.toml` (`ProjectTabs.second`), and the
   split comes back with them; the divider between the groups is
   `Divider::EditorSplit`, in permille like the diff's.
@@ -1062,12 +1095,11 @@ The view is a directory, one module per region, where it was one file of
   rule the wizard also uses): its row says *empty repository*, "Stage all"
   leaves it out, and its menu offers *Include in this repository…*, which
   moves its `.git` to the recycle bin after checking again that it has no
-  commits. **rust-analyzer is stopped around that move and started again**:
-  on Windows it holds the directories it watches open, and the move failed
-  with "Some operations were aborted" (and `mv` with "Permission denied")
-  until the server was stopped, measured. The same hold is why a crate's
-  `src` cannot be renamed from outside while the server runs; the tree's
-  own verbs meet it too, and nothing here addresses that yet.
+  commits. The move used to stop rust-analyzer and start it again, because
+  the server held the directories it watched open and the recycle bin said
+  "Some operations were aborted"; the client watches the disk now (*The
+  client watches, so the server does not*, under Hard-won specifics), and
+  the same move succeeds with the server running.
 - **A commit asks who you are before git refuses.** `git_identity` reads
   `user.name` and `user.email` as `git config --get` resolves them (exit 1
   is "unset", an answer); when either is missing the commit box shows a
@@ -1919,6 +1951,34 @@ usty`) holds `location.toml`
   client re-requests. `rusty-lsp` declares the pull capability, re-pulls on
   refresh/didOpen/didChange with busy-retry, and treats a pushed empty set
   for an open file as a poke to re-pull, not as truth.
+- **The client watches, so the server does not.** Left to watch the disk for
+  itself, rust-analyzer holds handles on the workspace's directories, and on
+  Windows a directory with an open handle anywhere below it cannot be
+  renamed or moved. Measured with `diag_probe` and a rename loop: `src`
+  refused, access denied, on every attempt while the server ran, and
+  `src/math` — nothing below it — renamed freely; the tree's rename and move
+  met exactly that, and so did moving an empty `.git` to the recycle bin. A
+  client declaring `workspace.didChangeWatchedFiles.dynamicRegistration` is
+  asked to watch instead (`files.watcher: "client"`, rust-analyzer's
+  default, said explicitly), and rusty already has a watcher: `watch_project`
+  tells the server what each batch amounts to (`rusty_lsp::watched`) — the
+  difference between two listings of the files it reads on a structural
+  change, so a renamed directory arrives as every file in it deleted and
+  created, which one event for the directory would not be. Measured again
+  after: `src` renames every time, and an excluded, linked `firmware/`'s
+  empty `.git` goes to the recycle bin with the server running — which is
+  why *Include in this repository…* no longer stops and restarts it.
+  `LspClient::did_change_watched_files` sends nothing until the server has
+  registered, since a server that never registers is watching for itself.
+- **An open document is the client's to keep, so a closed one must be
+  given back.** rust-analyzer answers from the text it was sent for any
+  document the client opened and ignores the disk for it; `didClose` was
+  never sent, so a file closed in the editor stayed, to the server, the
+  text it had when it was open — whatever a `git checkout` did to it
+  afterwards — and every file ever opened stayed in its memory. A closed tab
+  and a moved file's old name close now (`lsp_closed_doc`), the client drops
+  the file's pulled analysis with it, and the puller skips a file closed
+  while its pull was on the way.
 - **`procMacro.enable: false` is not a lighter mode — it is poison.** It
   takes the built-in derives down with it, sysroot trait resolution collapses,
   and any open file containing an `impl` with `&self` gets *no diagnostics at
@@ -2551,6 +2611,16 @@ usty`) holds `location.toml`
   overlay's column to the content (`w-max` row), mirror any internal scroll
   out to the shared scroller and pin it back to zero, and follow the caret
   explicitly after every edit.
+- **A tab is not a character wide, and every overlay measures one the way
+  the text draws it.** Both layers set `tab-size` (`TAB_SIZE`), and a tab
+  goes to the next stop of four spaces — and past it to the one after when
+  it is nearer than half a space, which is Blink's `Font::TabWidth`.
+  `column_px` and `cell_under` summed each character's own advance and
+  measured `\t` as one, so on a tab-indented line a find match, the
+  completion popup, the Vim cursor and hover's hit-testing all sat up to
+  three columns left of the text. `caret::pen_after` is the one rule, pure
+  and tested; measured in the app, the Vim cursor on `\t\tfoo` sits within a
+  tenth of a pixel of the glyph it covers.
 - **Programmatic `.value` writes destroy the textarea's native undo stack.**
   The editor writes value on every echo, completion accept and format, so
   Ctrl+Z was silently dead. The editor keeps its own snapshot history
