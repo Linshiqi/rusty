@@ -1662,6 +1662,18 @@ success no longer clears it, because every controller call shares one
 success path and a background re-probe was dismissing banners before they
 were read. The dock keeps a copy regardless.
 
+**The status bar is one line, and text a server wrote is clipped.** Every
+item is `shrink-0` and `whitespace-nowrap` (`Status`, `BuiltFor`,
+`PinStatus`), except the language server's, which is `Status`'s `clip`:
+rust-analyzer's progress is its own words, a crate name per piece of work
+and for `Roots Scanned` a whole path — measured at startup as `Roots Scanned
+92% 13/14: C:\Users\…\lib/rustlib/src/rust/library\std` — which pushed the
+bar's other items off the edge. It is cut with an ellipsis at 22rem, is the
+first thing to give way when the bar is short of room (the interface zoom
+makes a 960 px window narrower than that), and carries the whole line in its
+tooltip. The chip item was wrapping onto two lines at the same width before
+it was given the same rule.
+
 **Lists of things the shell has are generated from the thing.** The View
 menu and the palette iterate `DockTab::ALL` and the panel registry; five of
 the nine dock tabs were once spelled out by hand and the other four were

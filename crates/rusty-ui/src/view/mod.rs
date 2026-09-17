@@ -510,6 +510,12 @@ fn Status(
     #[prop(optional)] tone: Option<Tone>,
     #[prop(optional, into)] title: Option<String>,
     #[prop(optional)] on_click: Option<Callback<()>>,
+    /// Text whose length nobody here controls — what a server says it is
+    /// doing. Cut with an ellipsis at a bounded width, and the first item to
+    /// give way when the bar runs out of room; the caller puts the whole of
+    /// it in `title`.
+    #[prop(optional)]
+    clip: bool,
 ) -> impl IntoView {
     let colour = match tone {
         Some(Tone::Crimson) => "text-crimson",
@@ -523,6 +529,14 @@ fn Status(
     } else {
         ""
     };
+    // One line, always: the bar is 26 px tall, and a status that wraps
+    // spills out of it. Everything else keeps its width, so what gives way
+    // when the window is narrow is the clipped item and nothing beside it.
+    let width = if clip {
+        "min-w-0 max-w-[22rem]"
+    } else {
+        "shrink-0"
+    };
     view! {
         <button
             type="button"
@@ -534,12 +548,12 @@ fn Status(
                 }
             }
             class=format!(
-                "flex h-full items-center gap-1.5 border-r border-line px-3 transition-colors \
-                 disabled:pointer-events-none {colour} {interactive}",
+                "flex h-full items-center gap-1.5 whitespace-nowrap border-r border-line px-3 \
+                 transition-colors disabled:pointer-events-none {width} {colour} {interactive}",
             )
         >
-            {label.map(|label| view! { <span class="text-label-3">{label}</span> })}
-            {text}
+            {label.map(|label| view! { <span class="shrink-0 text-label-3">{label}</span> })}
+            <span class="min-w-0 truncate">{text}</span>
         </button>
     }
 }
@@ -570,12 +584,13 @@ fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
     };
 
     view! {
-        <div class="relative h-full">
+        // Full width, one line, like every item in the bar (`Status`).
+        <div class="relative h-full shrink-0">
             <button
                 type="button"
                 title=t!("status.built-for-hint")
                 on:click=move |_| open.update(|it| *it = !*it)
-                class="flex h-full items-center gap-1.5 border-r border-line px-3 transition-colors hover:bg-sunken hover:text-label"
+                class="flex h-full items-center gap-1.5 whitespace-nowrap border-r border-line px-3 transition-colors hover:bg-sunken hover:text-label"
             >
                 <span class="text-label-3">{t!("status.chip")}</span>
                 {chip}
@@ -796,7 +811,7 @@ fn StatusBar() -> impl IntoView {
             {move || {
                 let busy = state.is_busy();
                 view! {
-                    <span class="flex h-full items-center gap-1.5 border-r border-line px-3">
+                    <span class="flex h-full shrink-0 items-center gap-1.5 whitespace-nowrap border-r border-line px-3">
                         <Dot tone=if busy { Tone::Amber } else { Tone::Patina } />
                         {if busy { t!("status.working") } else { t!("status.ready") }}
                     </span>
@@ -857,6 +872,10 @@ fn StatusBar() -> impl IntoView {
                             // completions are provisional, and "12 errors"
                             // over a half-loaded workspace is the wrong
                             // headline.
+                            // The server's own words, which can run to a crate
+                            // name per piece of work or a whole registry path —
+                            // clipped in the bar (`Status::clip`), and read in
+                            // full in the tooltip.
                             crate::state::LspStatus::Ready if state.lsp.progress.get().is_some() => {
                                 let what = state.lsp.progress.get().unwrap_or_default();
                                 (format!("rust-analyzer · {what}"), Tone::Amber)
@@ -869,11 +888,24 @@ fn StatusBar() -> impl IntoView {
                             }
                             _ => (t!("status.lsp-missing"), Tone::Crimson),
                         };
+                        // A clipped line is only readable whole on hover. The
+                        // health reason stays the tooltip whenever there is
+                        // one, since then the line says only what is wrong.
+                        let title = if health.is_none() && lsp == crate::state::LspStatus::Ready {
+                            state
+                                .lsp
+                                .progress
+                                .get()
+                                .map_or(title, |_| text.clone())
+                        } else {
+                            title
+                        };
                         view! {
                             <Status
                                 text=text
                                 tone=tone
                                 title=title
+                                clip=true
                                 on_click=Callback::new(move |_| {
                                     state.show_dock(crate::state::DockTab::Problems)
                                 })

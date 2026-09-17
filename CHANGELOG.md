@@ -9,6 +9,16 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.39
+
+**Fixed — a long rust-analyzer message no longer breaks the status bar.** While
+rust-analyzer starts up, the status bar shows what it is doing in its own
+words, and some of those are very long — scanning the standard library
+includes the whole folder path. The message now stops at a fixed width with
+an ellipsis, and hovering over it shows all of it; the items beside it stay
+where they are. When the window is narrow, this message is what gets shorter,
+and no item in the status bar wraps onto a second line any more.
+
 ## v0.6.38
 
 **Added — Ctrl+Tab switches between open files.** As in VS Code: a quick

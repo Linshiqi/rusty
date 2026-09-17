@@ -54,15 +54,16 @@ pub fn PinStatus() -> impl IntoView {
         let chip = report.chip.to_uppercase();
         let label = t!("pinmap.pins", chip = chip);
         Some(view! {
-            <div class="relative h-full">
+            // Full width, one line, like every item in the status bar.
+            <div class="relative h-full shrink-0">
                 <button
                     type="button"
                     title=move || if open.get() { t!("pinmap.hide") } else { t!("pinmap.show") }
                     on:click=move |_| open.update(|it| *it = !*it)
                     class=move || {
                         format!(
-                            "flex h-full items-center gap-1.5 border-l border-line px-3 transition-colors \
-                             hover:bg-sunken hover:text-label {}",
+                            "flex h-full items-center gap-1.5 whitespace-nowrap border-l border-line px-3 \
+                             transition-colors hover:bg-sunken hover:text-label {}",
                             if open.get() { "bg-sunken text-label" } else { "" },
                         )
                     }
