@@ -8,7 +8,6 @@ use std::time::Duration;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_edit::Line as EditLine;
 use rusty_embed::{LogLevel, LogLine, LogStream};
 use rusty_i18n::t;
 use rusty_lsp::{HoverInfo, LspEvent};
@@ -18,7 +17,7 @@ use rusty_lsp::{HoverInfo, LspEvent};
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, HoverCard, LspStatus},
+    state::{AppState, HoverCard, LspStatus, PaintAsk, PaintState},
 };
 
 /// The buffer as the server should now see it. Sent ahead of every request
@@ -329,25 +328,97 @@ pub fn request_semantic(state: AppState, path: String) {
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
+        lines: Option<(u32, u32)>,
     }
 
     if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let args = Args { path: path.clone() };
+    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
+    let lines = (count > SEMANTIC_WHOLE_LINES).then(|| {
+        let (from, to) = state.editor.drawn_lines.get_value();
+        (
+            from.saturating_sub(SEMANTIC_MARGIN),
+            to.saturating_add(SEMANTIC_MARGIN).min(count),
+        )
+    });
+    let args = Args {
+        path: path.clone(),
+        lines,
+    };
     spawn_local(async move {
         // Errors and empties are the warm-up talking; the lexical base colour
         // stays up either way, so there is nothing to report.
-        let Ok(spans) =
+        let Ok(mut spans) =
             ipc::call::<_, Vec<rusty_lsp::SemanticSpan>>(cmd::lsp::SEMANTIC, &args).await
         else {
             return;
         };
+        // In order, which the echo finds a line's spans by halving.
+        spans.sort_by_key(|span| (span.line, span.start_col));
         let current = state.active_path_now();
         if current.as_deref() == Some(path.as_str()) && !spans.is_empty() {
             state.editor.semantic.set(Some((path, spans)));
+            state.editor.semantic_lines.set_value(lines);
         }
     });
+}
+
+/// Where the name at this position occurs in its file, for the editor to
+/// mark. Only the latest ask is answered: the caret has moved on from the
+/// others.
+pub fn request_highlights(state: AppState, path: String, line: u32, col: u32) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    let asked = ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let args = Args {
+        path: path.clone(),
+        line,
+        col,
+    };
+    spawn_local(async move {
+        let answer = ipc::call::<_, Vec<rusty_lsp::EditRange>>(cmd::lsp::HIGHLIGHTS, &args).await;
+        if ASKED.load(std::sync::atomic::Ordering::Relaxed) != asked
+            || state.active_path_now().as_deref() != Some(path.as_str())
+        {
+            return;
+        }
+        let ranges = answer.unwrap_or_default();
+        let _ = state
+            .editor
+            .occurrences
+            .try_set((!ranges.is_empty()).then_some((path, ranges)));
+    });
+}
+
+/// Files longer than this are asked for their semantic colours around the
+/// lines on screen rather than whole.
+const SEMANTIC_WHOLE_LINES: u32 = 3_000;
+
+/// How many lines either side of the drawn ones such a request covers, so a
+/// scroll of a screen or two stays inside the answer.
+const SEMANTIC_MARGIN: u32 = 400;
+
+/// Whether the semantic colours on hand cover document lines `from..to` —
+/// always, for a file short enough to be asked about whole.
+pub fn semantic_covers(state: AppState, from: u32, to: u32) -> bool {
+    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
+    count <= SEMANTIC_WHOLE_LINES
+        || state
+            .editor
+            .semantic_lines
+            .get_value()
+            .is_some_and(|(first, end)| first <= from && to <= end)
 }
 
 // ─── the language server ─────────────────────────────────────────────────────
@@ -706,6 +777,158 @@ fn worst_at(
 ///
 /// The target lands in `state.editor.reveal`; if it is in another file, that file is
 /// opened first and the editor applies the reveal once the document arrives.
+/// Which places a command asks the server for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaceQuery {
+    References,
+    Implementations,
+    TypeDefinition,
+}
+
+/// Where the thing at the caret of this group's editor is used, implemented
+/// or typed.
+///
+/// One implementation or type definition is a jump, as a definition is; more
+/// than one, or any references at all, is a list in the finder, titled with
+/// the name asked about — even an empty one, which says there were none
+/// rather than letting a key seem to do nothing.
+pub fn find_places(state: AppState, query: PlaceQuery) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    let Some(path) = state.active_path_now() else {
+        return;
+    };
+    if !path.ends_with(".rs") {
+        return;
+    }
+    let Some((line, col)) = caret_position(state) else {
+        return;
+    };
+    let name = state
+        .editor
+        .draft
+        .with_untracked(|text| word_around(text, line, col));
+    let command = match query {
+        PlaceQuery::References => cmd::lsp::REFERENCES,
+        PlaceQuery::Implementations => cmd::lsp::IMPLEMENTATIONS,
+        PlaceQuery::TypeDefinition => cmd::lsp::TYPE_DEFINITION,
+    };
+    let args = Args { path, line, col };
+    spawn_local(async move {
+        // Errors are the server warming up, as they are for a definition.
+        let Ok(mut places) = ipc::call::<_, Vec<rusty_lsp::Place>>(command, &args).await else {
+            return;
+        };
+        // By file, then down each file: the order a list is read in. The
+        // server's own puts the declaration wherever its index found it.
+        places.sort_by(|a, b| {
+            let (a, b) = (&a.location, &b.location);
+            (a.external, &a.path, a.line, a.col).cmp(&(b.external, &b.path, b.line, b.col))
+        });
+        if places.len() == 1 && query != PlaceQuery::References {
+            go_to(state, places[0].location.clone());
+            return;
+        }
+        let title = match query {
+            PlaceQuery::References => t!("places.references", name = name.clone()),
+            PlaceQuery::Implementations => t!("places.implementations", name = name.clone()),
+            PlaceQuery::TypeDefinition => t!("places.type-definition", name = name.clone()),
+        };
+        state
+            .layout
+            .quick_places
+            .set(Some(crate::state::PlaceList { title, places }));
+        state.layout.quick_seed.set(String::new());
+        state.layout.quick_open.set(true);
+    });
+}
+
+/// The identifier a position is on or just after — what a list of its uses
+/// is titled with.
+fn word_around(text: &str, line: u32, col: u32) -> String {
+    let chars: Vec<char> = text
+        .split('\n')
+        .nth(line as usize)
+        .unwrap_or_default()
+        .chars()
+        .collect();
+    let is_word = |c: &&char| c.is_alphanumeric() || **c == '_';
+    let at = (col as usize).min(chars.len());
+    let before = chars[..at].iter().rev().take_while(is_word).count();
+    let after = chars[at..].iter().take_while(is_word).count();
+    chars[at - before..at + after].iter().collect()
+}
+
+/// Ask for the symbols the finder lists: the outline of this group's file
+/// for `@`, the workspace's matching `words` for `#`. The answer is kept with
+/// its ask, so a slow reply to `#gp` is not shown under `#gpio`.
+pub fn ask_symbols(state: AppState, workspace: bool, words: String) {
+    #[derive(serde::Serialize)]
+    struct File {
+        path: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Workspace {
+        query: String,
+    }
+
+    if state.lsp.status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    spawn_local(async move {
+        let (ask, answer) = if workspace {
+            let ask = format!("#{words}");
+            let answer = ipc::call::<_, Vec<rusty_lsp::Symbol>>(
+                cmd::lsp::WORKSPACE_SYMBOLS,
+                &Workspace { query: words },
+            )
+            .await;
+            (ask, answer)
+        } else {
+            let Some(path) = state.active_path_now().filter(|path| path.ends_with(".rs")) else {
+                return;
+            };
+            let ask = format!("@{path}");
+            let answer =
+                ipc::call::<_, Vec<rusty_lsp::Symbol>>(cmd::lsp::DOCUMENT_SYMBOLS, &File { path })
+                    .await;
+            (ask, answer)
+        };
+        if let Ok(symbols) = answer {
+            state
+                .layout
+                .quick_symbols
+                .set(Some(crate::state::SymbolAnswer { ask, symbols }));
+        }
+    });
+}
+
+/// Open where a location is, with the caret on it, remembering where the
+/// caret was for Back. Outside the project, the file opens read-only.
+pub fn go_to(state: AppState, location: rusty_lsp::Location) {
+    // Files and Search keep an editor on screen; from anywhere else, the
+    // jump lands in Files — a finder row picked over the Git panel.
+    let panel = state.layout.panel.get_untracked();
+    if panel != "files" && panel != "search" {
+        state.layout.panel.set("files".to_string());
+    }
+    let current = state.active_path_now();
+    if current.as_deref() != Some(location.path.as_str()) {
+        if location.external {
+            open_external(state, location.path.clone());
+        } else {
+            open_file(state, location.path.clone());
+        }
+    }
+    remember_jump(state, &location);
+    state.editor.reveal.set(Some(location));
+}
+
 pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
     #[derive(serde::Serialize)]
     struct Args {
@@ -721,16 +944,7 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
         if let Ok(Some(location)) =
             ipc::call::<_, Option<rusty_lsp::Location>>(cmd::lsp::DEFINITION, &args).await
         {
-            let current = state.active_path_now();
-            if current.as_deref() != Some(location.path.as_str()) {
-                if location.external {
-                    open_external(state, location.path.clone());
-                } else {
-                    open_file(state, location.path.clone());
-                }
-            }
-            remember_jump(state, &location);
-            state.editor.reveal.set(Some(location));
+            go_to(state, location);
         }
     });
 }
@@ -752,12 +966,17 @@ const AUTOSAVE_AFTER: Duration = Duration::from_millis(1000);
 /// accepted, a quick fix applied — and a second list of edit sites would be
 /// a list that drifts from this one.
 pub fn schedule_pulse(state: AppState) {
+    // Marks of where a name occurs are about the text before the edit, and
+    // wash whatever moved under them; they come back when the caret rests.
+    if state.editor.occurrences.with_untracked(Option::is_some) {
+        state.editor.occurrences.set(None);
+    }
     let generation = state.editor.pulse_gen.get_untracked() + 1;
     state.editor.pulse_gen.set(generation);
     set_timeout(
         move || {
             if state.editor.pulse_gen.get_untracked() == generation {
-                edit_pulse(state, generation);
+                edit_pulse(state);
             }
         },
         std::time::Duration::from_millis(250),
@@ -794,7 +1013,7 @@ fn schedule_autosave(state: AppState) {
     );
 }
 
-fn edit_pulse(state: AppState, generation: u64) {
+fn edit_pulse(state: AppState) {
     let Some(path) = state.active_path_now() else {
         return;
     };
@@ -817,15 +1036,105 @@ fn edit_pulse(state: AppState, generation: u64) {
         );
     }
 
-    let args = Args { path, text };
+    repaint(state, path);
+}
+
+/// Ask for the lines the edits since the last repaint changed, painted, and
+/// put them on screen where those lines now are.
+///
+/// One ask at a time per group, because each answer is the painting the next
+/// is measured against; edits while one is out ask again when it lands. An
+/// answer is placed even when typing went on — `paint::place` moves each line
+/// to where it is now and leaves the ones edited since plain — because
+/// dropping it would leave the backend a painting ahead of the screen, and
+/// the next repaint would be the whole file.
+pub fn repaint(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+        base: Option<u32>,
+        stale: Option<(u32, u32)>,
+    }
+
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let mut busy = false;
+    state.editor.painting.update_value(|ask| {
+        if let Some(ask) = ask {
+            ask.again = true;
+            busy = true;
+        }
+    });
+    if busy {
+        return;
+    }
+    let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let text = state.editor.echo_text.get_untracked();
+    let paint = state.editor.paint.get_value();
+    state.editor.painting.set_value(Some(PaintAsk {
+        serial,
+        path: path.clone(),
+        sent: text.clone(),
+        since: None,
+        again: false,
+    }));
+    let args = Args {
+        path,
+        text,
+        base: paint.version,
+        stale: paint.stale.map(|(from, to)| (from as u32, to as u32)),
+    };
     spawn_local(async move {
-        if let Ok(lines) = ipc::call::<_, Vec<EditLine>>(cmd::files::HIGHLIGHT, &args).await {
-            // Typing continued while this was in flight: the reply describes a
-            // text that no longer exists, and painting it would visibly revert
-            // the newest keystrokes until the next pulse.
-            if state.editor.pulse_gen.get_untracked() == generation {
-                state.editor.highlighted.set(lines);
+        let answer = ipc::call::<_, rusty_edit::Repaint>(cmd::files::REPAINT, &args).await;
+        let mut landed = None;
+        state.editor.painting.update_value(|slot| {
+            if slot.as_ref().is_some_and(|ask| ask.serial == serial) {
+                landed = slot.take();
             }
+        });
+        // A whole painting went on screen while this was out, and dropped it.
+        let Some(ask) = landed else {
+            return;
+        };
+        let active = state.active_path_now();
+        let again = ask.again;
+        if let Ok(answer) = answer
+            && active.as_deref() == Some(ask.path.as_str())
+        {
+            let now = state.editor.echo_text.get_untracked();
+            let mut placed = false;
+            state.editor.highlighted.update(|lines| {
+                placed =
+                    crate::paint::place(lines, &ask.sent, &now, answer.from as usize, answer.lines);
+            });
+            if placed {
+                state.editor.paint.set_value(PaintState {
+                    version: Some(answer.version),
+                    stale: ask.since,
+                });
+            } else {
+                // The lines are not the text line for line, which no edit
+                // should allow: start again from plain text, all of it stale,
+                // so the next answer is the whole file and fits.
+                let plain = crate::paint::all_plain(&now);
+                let count = plain.len();
+                state.editor.highlighted.set(plain);
+                state.editor.paint.set_value(PaintState {
+                    version: None,
+                    stale: Some((0, count)),
+                });
+                if let Some(path) = active {
+                    repaint(state, path);
+                }
+                return;
+            }
+        }
+        // Failed, or its file was parked or closed while it was out: the
+        // number on screen is left as it was, and if this moved the backend
+        // past it the next ask is answered whole.
+        if again && let Some(path) = state.active_path_now() {
+            repaint(state, path);
         }
     });
 }

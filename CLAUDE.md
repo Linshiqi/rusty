@@ -120,6 +120,11 @@ cargo run -p rusty-core --example open_cost -- <project>
 # server never sent it, or sent it and something took it away.
 cargo run -p rusty-lsp --example diag_probe -- <project> <file> [seconds]
 
+# What painting a file costs: whole, after a one-line edit halfway down, and
+# after a block comment opened at the top — the check that a keystroke in a
+# long file repaints its own line and not the file (see "Large files").
+cargo run -p rusty-edit --features backend --release --example highlight_cost -- <file>
+
 # Which files rusty will draw dimmed in a project, and every file the scan
 # read to decide -- the check for a report of a file wrongly dim, or one
 # that should be and is not. `rusty_edit::modules` refuses wherever it
@@ -143,7 +148,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
 | `rusty-git` | The repository's history, Fork-shaped: `graph.rs` lays the log out into lanes and edges (pure, tested — the frontend only turns a lane into an x), `parse.rs` reads `git`'s machine formats, `repo.rs` runs the user's own `git` in the opened project. No libgit2: one binary on PATH is one implementation of the repository format to agree with |
-| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens. `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
+| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens, and navigation — references, implementations, type definitions, outlines, workspace symbols and the occurrences of a name (`client/navigate.rs`, every answer a place with its line). `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
@@ -517,7 +522,87 @@ positioned in a coordinate system that is not the document's.
   persisted**: restoring yesterday's folds onto a file somebody else has since
   edited collapses the wrong lines.
 
+## Large files
+
+A file used to stop being coloured, and start being read-only, at 5,000
+lines — and a file of 4,000 was already slow, because everything the editor
+did per keystroke was the size of the file. Measured on a 24,000-line file
+before the change: the whole file re-highlighted after every pause in typing
+(a second of syntect and 4.5 MB back over IPC), every line and every gutter
+row rebuilt on every keystroke, and the semantic colours asked for whole
+(3.5 MB and 600 ms, then parsed on the one thread the window has). Now the
+limit is the 2 MB refusal (`document::MAX_BYTES`), and what a keystroke costs
+is what it changed.
+
+- **A file is painted once and repainted by the edit**
+  (`rusty_edit::highlight::Painting`). A grammar's state at a line is what
+  every line above left, so the parser is kept as it stood between every two
+  lines — shared through an `Arc`, since most lines leave it unchanged.
+  `repaint` starts at the first line the edit touched and stops at the first
+  line below it where the parser stands exactly as it stood before: the text
+  and the state are both what they were, so the painting is too. One line
+  typed on is one line; a block comment opened repaints what it now covers.
+  The test that holds it paints edits incrementally and whole and compares.
+  `highlight_cost` measures it: 957 ms whole, 0.56 ms for a line.
+- **The backend keeps the painting; the editor names which one it holds.**
+  `Files` keeps a dozen, each under a number that only counts up
+  (`Document.paint`, `Repaint.version`); a request naming another — evicted,
+  or moved on by another window — is answered whole, which is correct
+  whatever the editor held. The editor sends the lines it shows plain
+  (`crate::paint`: a keystroke echoes the lines it wrote as plain text, and a
+  letter typed and deleted leaves the text unchanged and the line plain, so
+  the backend is told), and an answer that lands after more typing is placed
+  line by line where those lines are now rather than dropped — dropped, the
+  backend would be a painting ahead of the screen. One ask at a time per
+  group; `painted_whole` is the one door for everything that puts a whole
+  painting on screen, and drops an ask on its way.
+- **Lines are split at `\n` everywhere**, backend and frontend: a text ending
+  in a newline has an empty last line, painted and numbered, because the
+  textarea has it too. `str::lines` on one side and `split` on the other is
+  an off-by-one between the painting and the draft that a patch cannot
+  survive.
+- **The echo and the gutter draw a window of rows** (`window.rs`): the rows in
+  view and forty either side, in steps of 32, between spacers as tall as the
+  rows they stand for, so the scrollbar and every overlay's `row_top` are
+  unchanged. Rows are `<For>`-keyed on their line and a hash of everything
+  drawn on them (`EchoRow`, `GutterRow`), so typing rebuilds the row it
+  changed. The textarea still holds the whole text — the caret, the selection
+  and the browser's keys need it — so the pre is given the widest line's
+  width (`line_px`), or a long line outside the window would scroll the
+  textarea inside itself. Find washes, lenses and the new marks draw only in
+  the window, and find places its matches in one walk (`match_lines`).
+- **A long file's semantic colours are asked for around the lines on screen**
+  (`semanticTokens/range`, 400 lines either side, above 3,000 lines), and
+  again when a scroll settles outside what the answer covered. The overlay
+  finds a line's spans by halving the sorted list; it used to filter every
+  token in the file for every line it drew.
+- **Everything that still reads the whole file per keystroke is linear and
+  cheap, and was not always.** `fold::regions` scanned forward from every line
+  (quadratic in a long block); it is one pass with a stack, held to the old
+  scan by a test over real files. `tests_in::runnables` returns at once for a
+  text without the word `test`. Undo keeps two hundred snapshots *and* 48 MB of
+  them (`EditHistory::trim`), since every step is the whole text.
+- **The floor is the textarea itself**: a bare textarea holding 388 KB takes
+  about 25 ms from `insertText` to the next frame in WebView2, and typing in
+  the editor at that size measures 30–45 ms. Going below it means a textarea
+  that holds a window of lines, with the selection, IME and native undo
+  rebuilt around it — not attempted.
+- **Profile a release frontend.** `trunk serve` builds wasm at opt-level 0,
+  where dropping a `String` walks its bytes, and the first profile of this
+  work blamed code that costs nothing in release. `cargo tauri dev --config
+  '{"build":{"beforeDevCommand":{"script":"trunk serve --release","cwd":"../rusty-ui"}}}'`
+  serves an optimised one.
+
 ## Bracket pairs, and what a keystroke asks the server
+
+- **Where the caret rests is marked, twice** (`surface.rs`, `brackets.rs`):
+  the bracket beside it and its pair are outlined, found on the *painted*
+  lines, whose tokens already say what a string and a comment are, so a `{`
+  in `"{}"` pairs with nothing; and the other places the name under it occurs
+  are washed, asked of rust-analyzer 400 ms after the caret stops — later
+  than the edit pulse, so the server has the text the position is in. An
+  edit clears the washes (`schedule_pulse`), since they are about the text
+  before it.
 
 - **Four rules, pure and tested, in `view/panels/files/pairs.rs`.** An opener
   brings its closer with the caret between; a closer typed against its twin
@@ -876,6 +961,20 @@ written for one group — every component, controller and effect reads
   Ranking is pure and under tests. Ctrl+P, Ctrl+B (fold the tree) and
   Ctrl+\ (split) are VS Code's chords, so hands that know them need not
   learn ours.
+- **The finder is also where navigation lands.** VS Code's prefixes: `:` a
+  line (`42`, `42:7`; Ctrl+G), `@` the outline of the file in front
+  (Ctrl+Shift+O) and `#` the workspace's symbols (Ctrl+T), asked of
+  rust-analyzer — `workspace.symbol.search.kind` is `all_symbols`, since its
+  default finds structs and not functions. A symbol answer is kept with its
+  ask (`SymbolAnswer`), so a slow reply to `#gp` is never shown under
+  `#gpio`. References (Shift+F12), implementations (Ctrl+F12) and type
+  definitions list in the same overlay under a heading naming what they are
+  (`PlaceList`), sorted by file and line; one implementation or type
+  definition is a jump, as a definition is, and no references is an empty
+  list saying so rather than a key that seems to do nothing. Every place
+  arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
+  is a riddle. `controller::go_to` is the one jump — the panel, the file,
+  Back, the reveal — and Ctrl+click's definition goes through it too.
 - **Ctrl+Tab is the focused group's files by recent use** (`view/switcher.rs`,
   VS Code's editor history in a group). Held, Tab walks down the list and
   Shift+Tab back up, and letting go opens the pick; a tap opens the file
@@ -2649,6 +2748,19 @@ usty`) holds `location.toml`
   on a button and guarded nothing. Twelve lines of comment explained a guard
   that was not there. When an attribute exists to enforce something, grep for
   it on the element it belongs to.
+- **A key the editor takes and a window binding also names is handled twice,
+  unless the editor stops it.** Ctrl+/ toggled the comment in the textarea,
+  bubbled to the window, matched `editor.comment`, and that binding sends
+  Ctrl+/ to the textarea — which toggled it back. On the caret's line the key
+  did nothing; over a selection only the first line lost its marker, since
+  the second toggle ran with the caret moved to the selection's start. A
+  handler for a chord that is also a binding calls `stop_propagation`; F2
+  does too.
+- **The backend names a grammar as syntect does — `Rust`, `TOML`, `C++`.**
+  The comment marker matched `"rust"`, which is what `mock.js` calls the
+  language and nothing the app sends, so Ctrl+/ found no marker in the app
+  while working in the browser — the second fault under the one above. Compare
+  language names without regard to case, and put the real names in the test.
 - **A `prop:` name is a JavaScript property name, and those are
   case-sensitive.** The same guard, moved back onto the textarea, was still
   `prop:readonly` — which sets an expando called `readonly` that nothing

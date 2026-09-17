@@ -256,15 +256,18 @@ pub async fn open_external(
     )
 }
 
-/// Re-highlight an unsaved buffer.
+/// Repaint an unsaved buffer against the painting the editor holds — `base`
+/// the number it came with, `stale` the lines it is showing plain.
 #[tauri::command]
-pub async fn highlight_text(
+pub async fn repaint_text(
     path: String,
     text: String,
+    base: Option<u32>,
+    stale: Option<(u32, u32)>,
     state: State<'_, AppState>,
-) -> Result<Vec<rusty_edit::Line>, CommandError> {
+) -> Result<rusty_edit::Repaint, CommandError> {
     let files = state.files();
-    tokio::task::spawn_blocking(move || files.highlight_source(&path, &text))
+    tokio::task::spawn_blocking(move || files.repaint(&path, &text, base, stale))
         .await
         .map_err(|e| CommandError::new(format!("highlighting panicked: {e}")))
 }

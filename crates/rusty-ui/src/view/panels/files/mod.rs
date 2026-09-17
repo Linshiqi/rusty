@@ -16,6 +16,7 @@
 //! was the order they happened to be written in. The names below are what a
 //! reader is actually looking for when they open this directory.
 
+mod brackets;
 mod caret;
 mod clip;
 mod complete;
@@ -31,6 +32,7 @@ mod rename;
 mod surface;
 mod tabs;
 mod tree;
+mod window;
 
 pub(crate) use editor::Editor;
 use editor::{EditorGroup, SplitGrip};
@@ -40,6 +42,7 @@ pub use tree::FilesPanel;
 // `use super::*` picks it up.
 use crate::view::components::copy_to_clipboard;
 
+use brackets::*;
 use caret::*;
 use complete::*;
 use edits::*;
@@ -51,6 +54,7 @@ use modal::*;
 use rename::*;
 use surface::*;
 use tabs::*;
+use window::*;
 
 /// Shared by both layers. They must agree exactly or the caret drifts from the
 /// character it is over, a column at a time, all the way across the line.

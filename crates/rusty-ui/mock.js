@@ -141,7 +141,7 @@
     text,
     language: "rust",
     binary: false,
-    truncated: false,
+    paint: 1,
     readOnly: false,
   });
 
@@ -265,7 +265,8 @@
       if (a.path.endsWith(".md")) fallback = MD;
       return docOf(a.path, window.__mock.saved[a.path] || fallback);
     },
-    highlight_text: (a) => docOf(a.path || MAIN, a.text).lines,
+    // Every repaint answered whole, which is always a correct answer.
+    repaint_text: (a) => ({ version: 1, from: 0, lines: docOf(a.path || MAIN, a.text).lines }),
     // A picture for any path, base64 as the real command answers it: one
     // small SVG carrying the path it stands for, so a page's figures and
     // the image view can be driven without a project on disk.
@@ -325,6 +326,14 @@
       kind: "quickfix",
       edits: [{ range: { startLine: 0, startCol: 0, endLine: 0, endCol: 0 }, newText: ["use std::collections::HashMap;", "", ""].join("\n") }],
     }],
+    // Navigation answers nothing in the browser: an empty list is what a
+    // server still loading says, and the finder shows it as such.
+    lsp_references: () => [],
+    lsp_implementations: () => [],
+    lsp_type_definition: () => [],
+    lsp_highlights: () => [],
+    lsp_document_symbols: () => [],
+    lsp_workspace_symbols: () => [],
     lsp_semantic: () => [
       { line: 47, startCol: 8, length: 5, kind: "variable" },
       { line: 51, startCol: 7, length: 5, kind: "struct" },

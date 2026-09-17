@@ -33,6 +33,8 @@ use std::{
 
 use serde_json::{Value, json};
 
+mod navigate;
+
 use crate::{
     convert, discover,
     error::{Error, Result},
@@ -733,13 +735,33 @@ impl LspClient {
         Ok(changed)
     }
 
-    /// The whole document's semantic colouring, as the server sees it — for
-    /// an open document; there is nothing to convert against otherwise.
-    pub fn semantic_tokens(&self, path: &str) -> Result<Vec<SemanticSpan>> {
-        let result = self.shared.request(
-            "textDocument/semanticTokens/full",
-            json!({ "textDocument": { "uri": self.uri(path) } }),
-        )?;
+    /// A document's semantic colouring, as the server sees it — for an open
+    /// document; there is nothing to convert against otherwise. The whole of
+    /// it, or the lines `from..to`: all of a 24,000-line file was three and a
+    /// half megabytes and 600 ms after every pause in typing, nearly all of it
+    /// for lines nobody was looking at.
+    pub fn semantic_tokens(
+        &self,
+        path: &str,
+        lines: Option<(u32, u32)>,
+    ) -> Result<Vec<SemanticSpan>> {
+        let document = json!({ "uri": self.uri(path) });
+        let result = match lines {
+            Some((from, to)) => self.shared.request(
+                "textDocument/semanticTokens/range",
+                json!({
+                    "textDocument": document,
+                    "range": {
+                        "start": { "line": from, "character": 0 },
+                        "end": { "line": to, "character": 0 },
+                    },
+                }),
+            )?,
+            None => self.shared.request(
+                "textDocument/semanticTokens/full",
+                json!({ "textDocument": document }),
+            )?,
+        };
         let data: Vec<u32> = result["data"]
             .as_array()
             .map(|values| {
@@ -768,51 +790,20 @@ impl LspClient {
     /// lives in esp-hal or `core`, and answering `None` for all of it made the
     /// gesture look broken.
     pub fn definition(&self, path: &str, line: u32, col: u32) -> Result<Option<Location>> {
-        let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/definition",
             json!({
                 "textDocument": { "uri": self.uri(path) },
-                "position": position,
+                "position": self.protocol_position(path, line, col),
             }),
         )?;
-
-        let first = result
-            .as_array()
-            .and_then(|a| a.first().cloned())
-            .unwrap_or(result);
-        let Some(uri) = first["uri"].as_str() else {
-            return Ok(None);
-        };
-        let line = first["range"]["start"]["line"].as_u64().unwrap_or(0) as u32;
-        let character = first["range"]["start"]["character"].as_u64().unwrap_or(0) as u32;
-
-        if let Some(rel) = uri_to_relative(uri, &self.shared.root) {
-            let col = self.scalarize(&rel, line, character);
-            return Ok(Some(Location {
-                path: rel,
-                line,
-                col,
-                external: false,
-            }));
-        }
-
-        // Outside the project. The absolute path travels; the viewer decides
-        // whether it is somewhere it is willing to read.
-        let Some(absolute) = uri_to_absolute(uri) else {
-            return Ok(None);
-        };
-        let col = std::fs::read_to_string(&absolute)
-            .ok()
-            .map_or(character, |text| {
-                convert::scalar_at(&text, line, character, self.shared.encoding())
-            });
-        Ok(Some(Location {
-            path: absolute.replace('\\', "/"),
-            line,
-            col,
-            external: true,
-        }))
+        // The first of the places, read the way references and
+        // implementations are: one reading of a location, not two.
+        Ok(self
+            .places(&result)
+            .into_iter()
+            .next()
+            .map(|place| place.location))
     }
 
     fn uri(&self, path: &str) -> String {
@@ -829,14 +820,6 @@ impl LspClient {
             .map(|line_text| scalar_to_character(line_text, col, encoding))
             .unwrap_or(col);
         json!({ "line": line, "character": character })
-    }
-
-    /// A protocol column as a scalar one, for a file that may not be open.
-    fn scalarize(&self, path: &str, line: u32, character: u32) -> u32 {
-        let encoding = self.shared.encoding();
-        self.shared.text_of(path).map_or(character, |text| {
-            convert::scalar_at(&text, line, character, encoding)
-        })
     }
 }
 
@@ -1073,6 +1056,13 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
         "completion".into(),
         json!({ "callable": { "snippets": "add_parentheses" } }),
     );
+    // Every kind of symbol in the workspace search, not only types: its
+    // default finds `struct Gpio` and not `fn set_high`, and a search for a
+    // function that comes back empty reads as a search that does not work.
+    options.insert(
+        "workspace".into(),
+        json!({ "symbol": { "search": { "kind": "all_symbols" } } }),
+    );
 
     let params = json!({
         "processId": std::process::id(),
@@ -1119,6 +1109,13 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 },
                 "hover": { "contentFormat": ["plaintext", "markdown"] },
                 "definition": {},
+                "references": {},
+                "implementation": {},
+                "typeDefinition": {},
+                "documentHighlight": {},
+                // Nested, so an outline has its impl blocks' methods under
+                // them rather than beside them with a container name.
+                "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
                 // Actions come back as literals with lazily-resolved edits;
                 // both halves are declared or rust-analyzer sends commands
                 // this client cannot execute.
@@ -1135,7 +1132,7 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 // types listed are the standard set, and the server's own
                 // legend (captured below) is what decodes the reply.
                 "semanticTokens": {
-                    "requests": { "full": true },
+                    "requests": { "full": true, "range": true },
                     "tokenTypes": [
                         "namespace", "type", "class", "enum", "interface", "struct",
                         "typeParameter", "parameter", "variable", "property",
@@ -1403,14 +1400,14 @@ mod tests {
     use super::*;
 
     /// Every message the fake server received, in order.
-    type Seen = Arc<Mutex<Vec<Value>>>;
+    pub(super) type Seen = Arc<Mutex<Vec<Value>>>;
 
-    fn method(message: &Value) -> &str {
+    pub(super) fn method(message: &Value) -> &str {
         message["method"].as_str().unwrap_or("")
     }
 
     /// Answer a request with `result`.
-    fn reply(writer: &mut dyn Write, request: &Value, result: Value) {
+    pub(super) fn reply(writer: &mut dyn Write, request: &Value, result: Value) {
         let _ = rpc::write_message(
             writer,
             &json!({ "jsonrpc": "2.0", "id": request["id"], "result": result }),
@@ -1441,7 +1438,7 @@ mod tests {
     /// lifecycle — `initialize`, `shutdown` and `exit` are answered here —
     /// and returns `false` to hang up, which is what a crashed server looks
     /// like from the client's side: end of stream, no answer.
-    fn fake_server(
+    pub(super) fn fake_server(
         mut handle: impl FnMut(&Value, &mut PipeWriter) -> bool + Send + 'static,
     ) -> (Box<dyn Read + Send>, Box<dyn Write + Send>, Seen) {
         let (client_reads, server_writes) = std::io::pipe().expect("a pipe");
@@ -1492,6 +1489,42 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    /// A long file is asked about a range of lines, and the range travels as
+    /// whole lines; with none, the whole document is asked for.
+    #[test]
+    fn semantic_tokens_are_asked_for_the_lines_named_or_the_whole_document() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server(|message, writer| {
+            if method(message).starts_with("textDocument/semanticTokens/") {
+                reply(writer, message, json!({ "data": [] }));
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.semantic_tokens("a.rs", Some((120, 900))).unwrap();
+        client.semantic_tokens("a.rs", None).unwrap();
+        let asked: Vec<(String, Value)> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| method(m).starts_with("textDocument/semanticTokens/"))
+            .map(|m| (method(m).to_string(), m["params"]["range"].clone()))
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                (
+                    "textDocument/semanticTokens/range".to_string(),
+                    json!({ "start": { "line": 120, "character": 0 },
+                            "end": { "line": 900, "character": 0 } })
+                ),
+                ("textDocument/semanticTokens/full".to_string(), Value::Null),
+            ]
+        );
     }
 
     /// Two requests in flight, answered in the other order. The reply's id

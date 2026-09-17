@@ -48,6 +48,13 @@ pub enum RunnableKind {
 /// Order is by line, so the caller can bisect and so the gutter's decorations
 /// come out in the order they are drawn.
 pub fn runnables(text: &str) -> Vec<Runnable> {
+    // Every test attribute's path ends in `test`, so a text without the word
+    // has nothing to offer. The editor asks on every keystroke, and the scan
+    // below reads every line several times over: a generated register map of
+    // twenty thousand lines is exactly the file with no tests in it.
+    if !text.contains("test") {
+        return Vec::new();
+    }
     let mut found = Vec::new();
     // The `mod` names currently open, and the brace depth each was opened at.
     let mut modules: Vec<(String, i32)> = Vec::new();

@@ -643,6 +643,7 @@ fn show_document(state: AppState, document: Document, announce: bool) {
     state.editor.draft.set(document.text.clone());
     state.editor.echo_text.set(document.text.clone());
     state.editor.highlighted.set(document.lines.clone());
+    painted_whole(state, document.paint, None);
     if announce && !document.read_only && state.lsp.status.get_untracked() == LspStatus::Ready {
         lsp_open_doc(document.path.clone(), document.text.clone());
         request_semantic(state, document.path.clone());
@@ -668,6 +669,17 @@ fn show_document(state: AppState, document: Document, announce: bool) {
     state.editor.document.set(Some(document));
 }
 
+/// A whole painting went on screen: say which it is and which of its lines
+/// are plain, and drop the repaint on its way, whose answer is about
+/// another painting.
+pub(crate) fn painted_whole(state: AppState, version: Option<u32>, stale: crate::paint::Lines) {
+    state
+        .editor
+        .paint
+        .set_value(crate::state::PaintState { version, stale });
+    state.editor.painting.set_value(None);
+}
+
 /// Stash the on-screen editor into the parked set, caret and all.
 fn park_active(state: AppState) {
     let Some(document) = state.editor.document.get_untracked() else {
@@ -676,6 +688,7 @@ fn park_active(state: AppState) {
     let entry = ParkedEditor {
         draft: state.editor.draft.get_untracked(),
         highlighted: state.editor.highlighted.get_untracked(),
+        paint: state.editor.paint.get_value(),
         caret: active_caret(state),
         history: state.editor.history.get_untracked(),
         folds: state.editor.folds.get_untracked(),
@@ -706,6 +719,10 @@ fn clear_editor_transients(state: AppState) {
     state.editor.signature.set(None);
     state.editor.hover.set(None);
     state.editor.semantic.set(None);
+    state.editor.semantic_lines.set_value(None);
+    state.editor.occurrences.set(None);
+    // A new document opens at its top; the view says otherwise once it draws.
+    state.editor.drawn_lines.set_value((0, 0));
     state.editor.actions.set(None);
     // A viewport still waiting for a view that never mounted belongs to a
     // document that is no longer coming.
@@ -758,6 +775,7 @@ fn front_parked(state: AppState, path: &str) -> bool {
     state.editor.draft.set(entry.draft.clone());
     state.editor.echo_text.set(entry.draft);
     state.editor.highlighted.set(entry.highlighted);
+    painted_whole(state, entry.paint.version, entry.paint.stale);
     state
         .editor
         .recent
@@ -859,6 +877,7 @@ fn clear_screen(state: AppState) {
     state.editor.draft.set(String::new());
     state.editor.echo_text.set(String::new());
     state.editor.highlighted.set(Vec::new());
+    painted_whole(state, None, None);
     state.editor.history.set(EditHistory::default());
 }
 
@@ -1081,9 +1100,8 @@ pub fn autosave_file(state: AppState) {
     let Some(document) = state.editor.document.with_untracked(Clone::clone) else {
         return;
     };
-    // The same refusals a manual save makes. A truncated read is not the
-    // file: writing it back would cut somebody's file down to the cap.
-    if document.read_only || document.truncated {
+    // The refusal a manual save makes: a library's source is not ours.
+    if document.read_only {
         return;
     }
     let path = document.path.clone();
@@ -1179,7 +1197,12 @@ pub fn format_then_save(
     if document.read_only {
         return;
     }
-    let is_rust = document.language.as_deref() == Some("rust") || document.path.ends_with(".rs");
+    // The backend names the grammar as syntect does, `Rust`.
+    let is_rust = document
+        .language
+        .as_deref()
+        .is_some_and(|language| language.eq_ignore_ascii_case("rust"))
+        || document.path.ends_with(".rs");
     if !is_rust {
         save_file(state);
         return;

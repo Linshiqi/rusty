@@ -204,7 +204,7 @@ fn rust_analyzer_end_to_end() {
         .unwrap() as u32;
     let spans = eventually(Duration::from_secs(30), || {
         client
-            .semantic_tokens("src/main.rs")
+            .semantic_tokens("src/main.rs", None)
             .ok()
             .filter(|spans| !spans.is_empty())
     })

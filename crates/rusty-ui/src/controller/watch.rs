@@ -205,6 +205,10 @@ fn reload_open(state: AppState, path: String) {
                 }
                 entry.draft = document.text.clone();
                 entry.highlighted = document.lines.clone();
+                entry.paint = crate::state::PaintState {
+                    version: document.paint,
+                    stale: None,
+                };
                 entry.document = document;
                 // The caret is kept. A file that grew by a line above the
                 // caret puts it somewhere slightly wrong, which is a great
@@ -221,6 +225,7 @@ fn adopt_active(state: AppState, document: Document) {
     state.editor.draft.set(document.text.clone());
     state.editor.echo_text.set(document.text.clone());
     state.editor.highlighted.set(document.lines.clone());
+    super::editor::painted_whole(state, document.paint, None);
     let path = document.path.clone();
     let text = document.text.clone();
     state.editor.document.set(Some(document));

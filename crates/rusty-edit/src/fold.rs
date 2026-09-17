@@ -53,41 +53,46 @@ impl Region {
 /// the header's level or less. Trailing blank lines belong to whatever comes
 /// next, not to the region — folding a function should not swallow the space
 /// before the one after it.
+///
+/// One pass, holding the lines still waiting for their body to end: each is
+/// deeper than the one below it on the stack, so a line at some indentation
+/// ends every waiting line at that indentation or deeper, and each of those
+/// ends at the last line with content before it. It used to scan forward
+/// from every line, which is a pass per line — and it runs on every
+/// keystroke, over files of tens of thousands of lines.
 pub fn regions(text: &str) -> Vec<Region> {
-    let indents: Vec<Option<usize>> = text
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            (!trimmed.is_empty()).then(|| line.len() - trimmed.len())
-        })
-        .collect();
-
     let mut found = Vec::new();
-    for (index, indent) in indents.iter().enumerate() {
-        let Some(indent) = *indent else { continue };
-        // Where does the body end? Scan forward past blanks for the first
-        // line at or below this indentation.
-        let mut last = index;
-        let mut deeper = false;
-        for (offset, other) in indents.iter().enumerate().skip(index + 1) {
-            match other {
-                // Blank lines do not end a region — a function with a blank
-                // line in the middle is one region, not two.
-                None => continue,
-                Some(other) if *other > indent => {
-                    deeper = true;
-                    last = offset;
-                }
-                Some(_) => break,
+    // (indentation, line) of every line whose body has not ended yet.
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    // The last line with any content — blank lines do not end a region, and
+    // a region's trailing blanks belong to whatever comes next.
+    let mut last_content = None;
+    let mut close = |open: &mut Vec<(usize, usize)>, down_to: usize, last: Option<usize>| {
+        while let Some(&(indent, header)) = open.last() {
+            if indent < down_to {
+                break;
+            }
+            open.pop();
+            if let Some(last) = last.filter(|&last| last > header) {
+                found.push(Region {
+                    header: header as u32,
+                    last: last as u32,
+                });
             }
         }
-        if deeper && last > index {
-            found.push(Region {
-                header: index as u32,
-                last: last as u32,
-            });
+    };
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
         }
+        let indent = line.len() - trimmed.len();
+        close(&mut open, indent, last_content);
+        open.push((indent, index));
+        last_content = Some(index);
     }
+    close(&mut open, 0, last_content);
+    found.sort_unstable();
     found
 }
 
@@ -154,6 +159,17 @@ impl Folded {
         } else {
             self.fold(region);
         }
+    }
+
+    /// How many rows a document of `total` lines takes on screen.
+    pub fn rows(&self, total: u32) -> u32 {
+        let hidden: u32 = self
+            .regions
+            .iter()
+            .filter(|r| r.header < total)
+            .map(|r| r.last.min(total.saturating_sub(1)) - r.header)
+            .sum();
+        total - hidden
     }
 
     /// Document lines that are on screen, in order. Index into this is the
@@ -657,6 +673,92 @@ fn other() {
             if let Some(view) = folds.view_of_doc(doc) {
                 assert_eq!(folds.row_for(doc), view, "doc line {doc}");
             }
+        }
+    }
+
+    #[test]
+    fn the_rows_on_screen_are_the_lines_folds_do_not_hide() {
+        let mut folds = Folded::default();
+        assert_eq!(folds.rows(12), 12);
+        folds.fold(Region { header: 0, last: 4 });
+        folds.fold(Region { header: 7, last: 8 });
+        for total in [0, 1, 3, 5, 8, 9, 12] {
+            assert_eq!(
+                folds.rows(total),
+                folds.visible(total).len() as u32,
+                "{total} lines"
+            );
+        }
+    }
+
+    /// The scan as it was: forward from every line, for as long as the lines
+    /// are deeper. Kept as the reference the one-pass scan must agree with.
+    fn regions_line_by_line(text: &str) -> Vec<Region> {
+        let indents: Vec<Option<usize>> = text
+            .lines()
+            .map(|line| {
+                let trimmed = line.trim_start();
+                (!trimmed.is_empty()).then(|| line.len() - trimmed.len())
+            })
+            .collect();
+        let mut found = Vec::new();
+        for (index, indent) in indents.iter().enumerate() {
+            let Some(indent) = *indent else { continue };
+            let mut last = index;
+            for (offset, other) in indents.iter().enumerate().skip(index + 1) {
+                match other {
+                    None => continue,
+                    Some(other) if *other > indent => last = offset,
+                    Some(_) => break,
+                }
+            }
+            if last > index {
+                found.push(Region {
+                    header: index as u32,
+                    last: last as u32,
+                });
+            }
+        }
+        found
+    }
+
+    /// The one-pass scan finds exactly what scanning forward from every line
+    /// found: nested bodies, blank lines inside one and after it, a line
+    /// deeper than the blank before it, a body running to the end — and every
+    /// region of a real source file, this one.
+    #[test]
+    fn regions_are_found_in_one_pass_as_they_were_line_by_line() {
+        let text = [
+            "mod a {",
+            "    fn b() {",
+            "        one();",
+            "",
+            "        two();",
+            "    }",
+            "",
+            "",
+            "    fn c() {}",
+            "}",
+            "",
+            "    stray",
+            "top",
+            "    runs",
+            "        to",
+            "    the end",
+        ]
+        .join(
+            "
+",
+        );
+        assert_eq!(regions(&text), regions_line_by_line(&text));
+        assert!(regions(&text).contains(&Region { header: 1, last: 4 }));
+        for source in [
+            include_str!("fold.rs"),
+            include_str!("highlight.rs"),
+            RUST,
+            "",
+        ] {
+            assert_eq!(regions(source), regions_line_by_line(source));
         }
     }
 

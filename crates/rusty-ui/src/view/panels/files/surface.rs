@@ -6,9 +6,10 @@
 //! caret drifts from its glyph a column at a time across the line.
 
 use leptos::{ev, html, prelude::*};
+use wasm_bindgen::{JsCast, closure::Closure};
 
-use rusty_edit::Document;
-use rusty_lsp::CompletionItem;
+use rusty_edit::{Document, Line};
+use rusty_lsp::{CompletionItem, FileDiagnostic};
 
 use rusty_i18n::t;
 
@@ -19,6 +20,30 @@ use crate::{
     view::components::{ContextMenu, MenuItem, MenuSeparator},
     view::icon::{Icon, IconView},
 };
+
+/// One row of the margin, and everything its markup depends on — which is
+/// also its key, so a row is rebuilt only when something it draws changed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct GutterRow {
+    line: u32,
+    chevron: bool,
+    collapsed: bool,
+    folds_column: bool,
+    icon_px: u32,
+}
+
+/// One row of the echo, ready to draw. Keyed by its line and a hash of
+/// everything drawn on it — its runs, the squiggles over it, its fold — so
+/// the window's `<For>` rebuilds a row only when what it shows changed:
+/// typing on a line redraws that line, not the screen.
+#[derive(Clone)]
+struct EchoRow {
+    key: (u32, u64),
+    index: u32,
+    line: Line,
+    diags: Vec<FileDiagnostic>,
+    folded: Option<u32>,
+}
 
 /// The two stacked layers: highlighted text underneath, a transparent text
 /// area on top taking every keystroke.
@@ -33,7 +58,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     let state = AppState::expect();
     let scroller: NodeRef<html::Div> = NodeRef::new();
     let path = document.path.clone();
-    let read_only = document.truncated || document.read_only;
+    let read_only = document.read_only;
     // Hover only means something where a language server is listening.
     let is_rust = path.ends_with(".rs");
     // In no crate's module tree — one rule, shared with the tree and the tab
@@ -61,6 +86,142 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
 
     let zoom = state.editor.zoom;
 
+    // The scroller's viewport: how far down it is scrolled and how tall it
+    // is. The two layers draw the rows in it and a margin (`window.rs`),
+    // never the file. The height follows the dividers and the window; the
+    // observer's callback is forgotten rather than kept, because one firing
+    // after the view has gone would call a dropped closure, and this one reads
+    // only through `try_` and finds nothing.
+    let view_top = RwSignal::new(0.0_f64);
+    let view_height = RwSignal::new(0.0_f64);
+    let observer = StoredValue::new_local(None::<web_sys::ResizeObserver>);
+    Effect::new(move |_| {
+        let Some(element) = scroller.get() else {
+            return;
+        };
+        view_height.set(f64::from(element.client_height()));
+        let measure = Closure::<dyn FnMut()>::new(move || {
+            if let Some(Some(element)) = scroller.try_get_untracked() {
+                let _ = view_height.try_set(f64::from(element.client_height()));
+                let _ = view_top.try_set(f64::from(element.scroll_top()));
+            }
+        });
+        if let Ok(watch) = web_sys::ResizeObserver::new(measure.as_ref().unchecked_ref()) {
+            watch.observe(&element);
+            observer.update_value(|slot| {
+                if let Some(old) = slot.replace(watch) {
+                    old.disconnect();
+                }
+            });
+        }
+        measure.forget();
+    });
+    on_cleanup(move || {
+        observer.try_update_value(|slot| {
+            if let Some(watch) = slot.take() {
+                watch.disconnect();
+            }
+        });
+    });
+    // How many lines the document has, how many rows they take with the folds
+    // collapsed, and which of those rows are drawn.
+    let line_count = Memo::new(move |_| state.editor.highlighted.with(Vec::len).max(1) as u32);
+    let rows_total = Memo::new(move |_| {
+        let lines = line_count.get();
+        state.editor.folds.with(|folds| folds.rows(lines))
+    });
+    let window = Memo::new(move |_| {
+        rows_to_draw(
+            view_top.get(),
+            view_height.get(),
+            row_height(zoom.get()),
+            rows_total.get(),
+        )
+    });
+    // The height of `rows` rows, as a spacer's style.
+    let spacer = move |rows: u32| format!("height: {}px", f64::from(rows) * row_height(zoom.get()));
+    // The widest line, which the text column is at least as wide as.
+    let widest = Memo::new(move |_| {
+        state
+            .editor
+            .draft
+            .with(|text| text.split('\n').map(line_px).fold(0.0, f64::max))
+    });
+    // Where the caret is in the document while nothing is selected: what the
+    // bracket beside it and the name under it are marked from. It follows
+    // every way the caret moves (`selection_moves`) and every edit.
+    let caret_at = Memo::new(move |_| {
+        selection_moves.track();
+        state.editor.draft.track();
+        let element = area.get()?;
+        let (from, to) = doc_selection(&element, state);
+        (from == to).then(|| {
+            state
+                .editor
+                .draft
+                .with_untracked(|text| line_col_of_byte(text, from))
+        })
+    });
+    let brackets = Memo::new(move |_| {
+        let at = caret_at.get()?;
+        state
+            .editor
+            .highlighted
+            .with(|lines| bracket_pair(lines, at))
+    });
+    // The other places the name under the caret occurs, asked for once the
+    // caret has rested — later than the edit pulse, so the server has the
+    // text the position is in.
+    let occurrence_wait = StoredValue::new(0u64);
+    {
+        let path = path.clone();
+        Effect::new(move |_| {
+            let at = caret_at.get();
+            let turn = occurrence_wait.get_value() + 1;
+            occurrence_wait.set_value(turn);
+            let Some((line, col)) = at.filter(|_| is_rust) else {
+                return;
+            };
+            let path = path.clone();
+            set_timeout(
+                move || {
+                    if occurrence_wait.try_get_value() == Some(turn) {
+                        controller::request_highlights(state, path, line, col);
+                    }
+                },
+                std::time::Duration::from_millis(400),
+            );
+        });
+    }
+    // The document lines drawn, which a long file's semantic colours are
+    // asked for around (`controller::request_semantic`) — and asked for again
+    // once a scroll settles outside what the last answer covered.
+    let semantic_wait = StoredValue::new(0u64);
+    {
+        let path = path.clone();
+        Effect::new(move |_| {
+            let range = window.get();
+            let drawn = state.editor.folds.with_untracked(|folds| {
+                (folds.doc_of_view(range.start), folds.doc_of_view(range.end))
+            });
+            state.editor.drawn_lines.set_value(drawn);
+            if !is_rust || controller::semantic_covers(state, drawn.0, drawn.1) {
+                return;
+            }
+            let turn = semantic_wait.get_value() + 1;
+            semantic_wait.set_value(turn);
+            let path = path.clone();
+            set_timeout(
+                move || {
+                    if semantic_wait.try_get_value() == Some(turn) {
+                        controller::request_semantic(state, path);
+                    }
+                },
+                std::time::Duration::from_millis(150),
+            );
+        });
+    }
+
     // Which lines can be run, keyed by line. Derived from the *draft* rather
     // than from the document, so an arrow appears beside a test the moment it
     // is typed rather than on the next save, and goes with it when it is
@@ -78,6 +239,88 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     // per gutter row made drawing a thousand-line file quadratic in the
     // number of rows on screen.
     let foldables = Memo::new(move |_| rusty_edit::fold::regions(&state.editor.draft.get()));
+
+    // The margin's rows in the window. The icons scale with the row: a fixed
+    // 13px chevron is taller than the row itself once the editor is zoomed
+    // out far enough, and a row that out-grows its line height pushes every
+    // number below it down — the gutter walks away from the code a row at a
+    // time.
+    let gutter_rows = move || {
+        let range = window.get();
+        let icon_px = (row_height(zoom.get()) * 0.68).round().max(7.0) as u32;
+        state.editor.folds.with(|folds| {
+            foldables.with(|found| {
+                range
+                    .map(|row| {
+                        let line = folds.doc_of_view(row);
+                        GutterRow {
+                            line,
+                            chevron: found
+                                .binary_search_by_key(&line, |region| region.header)
+                                .is_ok(),
+                            collapsed: folds.is_folded(line),
+                            folds_column: !found.is_empty(),
+                            icon_px,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+    };
+
+    // The echo's rows in the window, each with what is drawn on it. Hidden
+    // lines are not among them: the echo must drop exactly the lines the
+    // textarea dropped, or every caret below sits on the wrong glyph.
+    let echo_rows = {
+        let path = path.clone();
+        move || {
+            let range = window.get();
+            let diagnostics = state
+                .lsp
+                .diagnostics
+                .with(|by_file| by_file.get(&path).cloned())
+                .unwrap_or_default();
+            state.editor.folds.with(|folds| {
+                // The compiler's colours, when they have arrived for this
+                // document.
+                state.editor.semantic.with(|semantic| {
+                    let semantic = semantic
+                        .as_ref()
+                        .filter(|(for_path, _)| for_path == &path)
+                        .map_or(&[][..], |(_, spans)| spans.as_slice());
+                    state.editor.highlighted.with(|lines| {
+                        range
+                            .filter_map(|row| {
+                                let index = folds.doc_of_view(row);
+                                let line = overlay_semantic(
+                                    lines.get(index as usize)?.clone(),
+                                    index,
+                                    semantic_on(semantic, index),
+                                );
+                                let diags: Vec<FileDiagnostic> = diagnostics
+                                    .iter()
+                                    .filter(|d| d.start_line <= index && index <= d.end_line)
+                                    .cloned()
+                                    .collect();
+                                let folded = folds
+                                    .regions()
+                                    .iter()
+                                    .find(|region| region.header == index)
+                                    .map(rusty_edit::Region::hidden);
+                                Some(EchoRow {
+                                    key: (index, row_hash(&line, &diags, folded)),
+                                    index,
+                                    line,
+                                    diags,
+                                    folded,
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+            })
+        }
+    };
 
     // Where `line` sits in the scroller's visible box: (pixels from the top
     // of the view, view height). The overlays decide their direction with
@@ -371,6 +614,38 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     })
                                 />
                                 <MenuItem
+                                    label=t!("menu.view.references")
+                                    shortcut="Shift+F12"
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        editor_menu.set(None);
+                                        controller::find_places(state, controller::PlaceQuery::References);
+                                    })
+                                />
+                                <MenuItem
+                                    label=t!("menu.view.implementations")
+                                    shortcut="Ctrl+F12"
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        editor_menu.set(None);
+                                        controller::find_places(
+                                            state,
+                                            controller::PlaceQuery::Implementations,
+                                        );
+                                    })
+                                />
+                                <MenuItem
+                                    label=t!("menu.view.type-definition")
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        editor_menu.set(None);
+                                        controller::find_places(
+                                            state,
+                                            controller::PlaceQuery::TypeDefinition,
+                                        );
+                                    })
+                                />
+                                <MenuItem
                                     label=t!("context.editor-quick-fix")
                                     shortcut="Ctrl+."
                                     disabled=!is_rust
@@ -436,6 +711,11 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             // Ctrl+wheel scales the editor font, as every editor since
             // forever. The browser's own page zoom is exactly what this
             // prevent_default suppresses.
+            on:scroll=move |_| {
+                if let Some(element) = scroller.get_untracked() {
+                    view_top.set(f64::from(element.scroll_top()));
+                }
+            }
             on:wheel=move |event: ev::WheelEvent| {
                 if !event.ctrl_key() {
                     return;
@@ -454,17 +734,18 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             // drifting away from the echoed text.
             <div class="flex min-h-full w-max min-w-full">
                 // Line numbers scroll with the text rather than floating, so a
-                // long file's numbers stay beside their lines.
-                {
-                    let path_for_gutter = path.clone();
-                    move || {
-                        let count = state.editor.highlighted.with(Vec::len).max(1);
+                // long file's numbers stay beside their lines. Only the rows in
+                // the window are drawn, between spacers as tall as the rows
+                // above and below it — the echo beside it draws the same rows.
+                <div
+                    class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
+                    style=move || {
                         // Tailwind's border-box made a bare `width: 5ch` mean
                         // "5ch including 20px of padding", which left 4-digit
                         // numbers 14px of room — they clipped against the code
                         // column. The width now names the digits and adds the
                         // padding explicitly.
-                        let digits = count.to_string().len().max(3);
+                        let digits = line_count.get().to_string().len().max(3);
                         // Padding, the breakpoint dot and its gap, plus a
                         // column for the fold chevron when the file has
                         // anything to fold. Reserving it unconditionally would
@@ -474,203 +755,275 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         // so anything that does not fit overflows off the left
                         // edge rather than wrapping or scrolling. (The arrows
                         // have since moved beside the item, as a lens.)
-                        let columns = usize::from(!foldables.get().is_empty());
+                        let columns = usize::from(foldables.with(|found| !found.is_empty()));
                         let extra = 32 + columns * 17;
-                        // The icons scale with the row. A fixed 13px chevron
-                        // is taller than the row itself once the editor is
-                        // zoomed out far enough, and a row that out-grows its
-                        // line height pushes every number below it down — the
-                        // gutter walks away from the code a row at a time.
-                        let icon_px = (row_height(zoom.get()) * 0.68).round().max(7.0) as u32;
-                        // Each decoration gets a slot of its own on *every*
-                        // row, occupied or not. The row is `justify-end`, so a
-                        // line with no chevron lets its number slide right
-                        // into the chevron's place — and one number out of
-                        // step with its neighbours reads as the gutter having
-                        // lost track of the file.
-                        let slot = format!("width: {icon_px}px");
-                        let folds_column = !foldables.get().is_empty();
-                        view! {
-                            <div
-                                class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
-                                style=format!(
-                                    // The dot's column, then the digits, then the
-                                    // padding — a width that only counted digits
-                                    // clipped the number the moment a dot appeared.
-                                    "{}; width: calc({digits}ch + {extra}px)",
-                                    metrics.get(),
-                                )
-                            >
-                                // Each number is a breakpoint target, as in
-                                // every debugger since the first one with a
-                                // mouse: click the margin, get a breakpoint.
-                                // Only the lines on screen, each keeping its
-                                // real number: a folded file whose numbers
-                                // renumbered themselves would make every
-                                // compiler error point at the wrong place.
-                                {state
-                                    .editor.folds
-                                    .with(|f| f.visible(count as u32))
-                                    .into_iter()
-                                    .map(|line| {
-                                        let n = line + 1;
-                                        let file = path_for_gutter.clone();
-                                        let toggle = file.clone();
-                                        let marked = Signal::derive(move || {
-                                            state.debug.breakpoints.with(|list| {
-                                                list.iter().any(|(f, l)| f == &file && *l == line)
-                                            })
-                                        });
-                                        // Fold control. Shown only where
-                                        // something can collapse, and only on
-                                        // hover unless it is already folded —
-                                        // a chevron on every second line is a
-                                        // margin nobody can read past.
-                                        let collapsed = state
-                                            .editor.folds
-                                            .with(|f| f.is_folded(line));
-                                        let chevron = foldables
-                                            .get()
-                                            .iter()
-                                            .any(|r| r.header == line)
-                                            .then(|| {
-                                                // VSCode's shape: a stroked
-                                                // chevron, down when the
-                                                // region is open and turned a
-                                                // quarter right when it is
-                                                // collapsed. A filled triangle
-                                                // reads as a disclosure widget
-                                                // from a different decade and,
-                                                // worse, as the run arrow's
-                                                // sibling rather than as a
-                                                // different kind of control.
-                                                let class = if collapsed {
-                                                    "flex shrink-0 -rotate-90 items-center text-label-2"
-                                                } else {
-                                                    "flex shrink-0 items-center text-transparent \
-                                                     group-hover:text-label-3"
-                                                };
-                                                let title = if collapsed {
-                                                    t!("files.unfold")
-                                                } else {
-                                                    t!("files.fold")
-                                                };
-                                                view! {
-                                                    <button
-                                                        type="button"
-                                                        title=title
-                                                        on:click=move |event: ev::MouseEvent| {
-                                                            event.stop_propagation();
-                                                            toggle_fold(state, line);
-                                                        }
-                                                        class=class
-                                                    >
-                                                        <IconView icon=Icon::Chevron size=icon_px />
-                                                    </button>
-                                                }
-                                            });
-                                        view! {
-                                            // The dot sits *left of* the number, as every
-                                            // editor with a breakpoint margin puts it:
-                                            // replacing the number meant setting a
-                                            // breakpoint cost you the line you were on.
-                                            <div
-                                                on:click=move |_| {
-                                                    controller::debug_breakpoint(
-                                                        state,
-                                                        toggle.clone(),
-                                                        line,
-                                                    )
-                                                }
-                                                title=t!("files.breakpoint")
-                                                class="group flex cursor-pointer items-center justify-end gap-1.5"
-                                            >
-                                                <span class=move || {
-                                                    if marked.get() {
-                                                        "text-crimson"
-                                                    } else {
-                                                        // Faint under the pointer, invisible
-                                                        // otherwise: a margin that looks
-                                                        // inert is a margin nobody clicks.
-                                                        "text-transparent group-hover:text-crimson/50"
-                                                    }
-                                                }>
-                                                    "●"
-                                                </span>
-                                                <span>{n.to_string()}</span>
-                                                // Right of the number, hard
-                                                // against the code, which is
-                                                // where VSCode puts it — the
-                                                // chevron belongs to the line
-                                                // it opens, and on the far
-                                                // side of the margin it reads
-                                                // as another breakpoint
-                                                // control.
-                                                {folds_column
-                                                    .then(|| {
-                                                        view! {
-                                                            <span
-                                                                class="flex shrink-0 items-center justify-center"
-                                                                style=slot.clone()
-                                                            >
-                                                                {chevron}
-                                                            </span>
-                                                        }
-                                                    })}
-                                            </div>
-                                        }
-                                    })
-                                    .collect_view()}
-                            </div>
-                        }
+                        // The dot's column, then the digits, then the padding —
+                        // a width that only counted digits clipped the number
+                        // the moment a dot appeared.
+                        format!("{}; width: calc({digits}ch + {extra}px)", metrics.get())
                     }
-                }
+                >
+                    <div style=move || spacer(window.get().start)></div>
+                    <For
+                        each=gutter_rows
+                        key=|row| *row
+                        children={
+                            let path = path.clone();
+                            move |row: GutterRow| {
+                                let GutterRow { line, chevron, collapsed, folds_column, icon_px } = row;
+                                let n = line + 1;
+                                let file = path.clone();
+                                let toggle = file.clone();
+                                let marked = Signal::derive(move || {
+                                    state.debug.breakpoints.with(|list| {
+                                        list.iter().any(|(f, l)| f == &file && *l == line)
+                                    })
+                                });
+                                // Fold control. Shown only where something can
+                                // collapse, and only on hover unless it is
+                                // already folded — a chevron on every second
+                                // line is a margin nobody can read past.
+                                let chevron = chevron.then(|| {
+                                    // VSCode's shape: a stroked chevron, down
+                                    // when the region is open and turned a
+                                    // quarter right when it is collapsed. A
+                                    // filled triangle reads as a disclosure
+                                    // widget from a different decade and,
+                                    // worse, as the run arrow's sibling rather
+                                    // than as a different kind of control.
+                                    let class = if collapsed {
+                                        "flex shrink-0 -rotate-90 items-center text-label-2"
+                                    } else {
+                                        "flex shrink-0 items-center text-transparent \
+                                         group-hover:text-label-3"
+                                    };
+                                    let title = if collapsed {
+                                        t!("files.unfold")
+                                    } else {
+                                        t!("files.fold")
+                                    };
+                                    view! {
+                                        <button
+                                            type="button"
+                                            title=title
+                                            on:click=move |event: ev::MouseEvent| {
+                                                event.stop_propagation();
+                                                toggle_fold(state, line);
+                                            }
+                                            class=class
+                                        >
+                                            <IconView icon=Icon::Chevron size=icon_px />
+                                        </button>
+                                    }
+                                });
+                                // Each decoration gets a slot of its own on
+                                // *every* row, occupied or not. The row is
+                                // `justify-end`, so a line with no chevron lets
+                                // its number slide right into the chevron's
+                                // place — and one number out of step with its
+                                // neighbours reads as the gutter having lost
+                                // track of the file.
+                                let slot = format!("width: {icon_px}px");
+                                view! {
+                                    // The dot sits *left of* the number, as every
+                                    // editor with a breakpoint margin puts it:
+                                    // replacing the number meant setting a
+                                    // breakpoint cost you the line you were on.
+                                    // Each number is a breakpoint target, as in
+                                    // every debugger since the first one with a
+                                    // mouse, and keeps its real number: a folded
+                                    // file whose numbers renumbered themselves
+                                    // would make every compiler error point at
+                                    // the wrong place.
+                                    <div
+                                        on:click=move |_| {
+                                            controller::debug_breakpoint(state, toggle.clone(), line)
+                                        }
+                                        title=t!("files.breakpoint")
+                                        class="group flex cursor-pointer items-center justify-end gap-1.5"
+                                    >
+                                        <span class=move || {
+                                            if marked.get() {
+                                                "text-crimson"
+                                            } else {
+                                                // Faint under the pointer, invisible
+                                                // otherwise: a margin that looks
+                                                // inert is a margin nobody clicks.
+                                                "text-transparent group-hover:text-crimson/50"
+                                            }
+                                        }>
+                                            "●"
+                                        </span>
+                                        <span>{n.to_string()}</span>
+                                        // Right of the number, hard against the
+                                        // code, which is where VSCode puts it —
+                                        // the chevron belongs to the line it
+                                        // opens, and on the far side of the
+                                        // margin it reads as another breakpoint
+                                        // control.
+                                        {folds_column
+                                            .then(|| {
+                                                view! {
+                                                    <span
+                                                        class="flex shrink-0 items-center justify-center"
+                                                        style=slot
+                                                    >
+                                                        {chevron}
+                                                    </span>
+                                                }
+                                            })}
+                                    </div>
+                                }
+                            }
+                        }
+                    />
+                    <div style=move || spacer(rows_total.get().saturating_sub(window.get().end))></div>
+                </div>
 
                 <div class="relative min-w-0 flex-1">
                     // Find matches, washed under the text. Rectangles rather
                     // than woven spans: the wash must not disturb the span
-                    // structure the caret math and diagnostics rely on.
+                    // structure the caret math and diagnostics rely on. Only
+                    // the matches in the window, their lines found in one walk
+                    // down the text.
                     {move || {
                         if !state.find.open.get() {
                             return ().into_any();
                         }
-                        let text = state.editor.draft.get();
                         let query = state.find.query.get();
                         let case = state.find.case.get();
-                        let matches = find_matches(&text, &query, case);
-                        if matches.is_empty() {
-                            return ().into_any();
-                        }
-                        let current = state.find.index.get().min(matches.len() - 1);
+                        let chosen = state.find.index.get();
+                        let range = window.get();
                         let z = zoom.get();
-                        matches
-                            .iter()
-                            .take(500)
-                            .enumerate()
-                            .map(|(index, (from, to))| {
-                                let (line, col) = line_col_of_byte(&text, *from);
-                                let (_, end_col) = line_col_of_byte(&text, *to);
-                                let x = col_left(&text, line, col, z);
-                                let width = ((column_px(&text, line, end_col)
-                                    - column_px(&text, line, col)) * z)
-                                    .max(2.0);
-                                let y = row_top(state, line, z);
-                                let wash = if index == current {
-                                    "pointer-events-none absolute rounded-[3px] bg-amber-fill"
-                                } else {
-                                    "pointer-events-none absolute rounded-[3px] bg-selection"
-                                };
-                                view! {
-                                    <div
-                                        class=wash
-                                        style=format!(
-                                            "left: {x}px; top: {y}px; width: {width}px; height: {h}px",
-                                            h = row_height(z),
-                                        )
-                                    />
-                                }
+                        state
+                            .editor
+                            .draft
+                            .with(|text| {
+                                let matches = find_matches(text, &query, case);
+                                let current = chosen.min(matches.len().saturating_sub(1));
+                                match_lines(text, &matches)
+                                    .into_iter()
+                                    .enumerate()
+                                    .filter(|(_, found)| {
+                                        !state.editor.folds.with(|folds| folds.hides(found.line))
+                                            && range.contains(&row_for(state, found.line))
+                                    })
+                                    .map(|(index, found)| {
+                                        let x = col_left(found.text, 0, found.col, z);
+                                        let width = ((column_px(found.text, 0, found.end_col)
+                                            - column_px(found.text, 0, found.col))
+                                            * z)
+                                            .max(2.0);
+                                        let y = row_top(state, found.line, z);
+                                        let wash = if index == current {
+                                            "pointer-events-none absolute rounded-[3px] bg-amber-fill"
+                                        } else {
+                                            "pointer-events-none absolute rounded-[3px] bg-selection"
+                                        };
+                                        view! {
+                                            <div
+                                                class=wash
+                                                style=format!(
+                                                    "left: {x}px; top: {y}px; width: {width}px; height: {h}px",
+                                                    h = row_height(z),
+                                                )
+                                            />
+                                        }
+                                    })
+                                    .collect_view()
                             })
-                            .collect_view()
+                            .into_any()
+                    }}
+                    // The other places the name at the caret occurs, washed
+                    // under the text as a find match is, in a colour of their
+                    // own.
+                    {
+                        let path = path.clone();
+                        move || {
+                            let range = window.get();
+                            let z = zoom.get();
+                            state
+                                .editor
+                                .occurrences
+                                .with(|found| {
+                                    let Some((_, ranges)) = found
+                                        .as_ref()
+                                        .filter(|(for_path, _)| for_path == &path)
+                                    else {
+                                        return ().into_any();
+                                    };
+                                    state
+                                        .editor
+                                        .draft
+                                        .with(|text| {
+                                            ranges
+                                                .iter()
+                                                .filter(|r| {
+                                                    r.start_line == r.end_line
+                                                        && !state.editor.folds.with(|f| f.hides(r.start_line))
+                                                        && range.contains(&row_for(state, r.start_line))
+                                                })
+                                                .filter_map(|r| {
+                                                    let content = text.split('\n').nth(r.start_line as usize)?;
+                                                    let x = col_left(content, 0, r.start_col, z);
+                                                    let width = ((column_px(content, 0, r.end_col)
+                                                        - column_px(content, 0, r.start_col))
+                                                        * z)
+                                                        .max(2.0);
+                                                    let y = row_top(state, r.start_line, z);
+                                                    Some(view! {
+                                                        <div
+                                                            class="pointer-events-none absolute rounded-[3px] bg-slate-fill"
+                                                            style=format!(
+                                                                "left: {x}px; top: {y}px; width: {width}px; height: {h}px",
+                                                                h = row_height(z),
+                                                            )
+                                                        />
+                                                    })
+                                                })
+                                                .collect_view()
+                                        })
+                                        .into_any()
+                                })
+                        }
+                    }
+                    // The bracket beside the caret and the one it pairs with,
+                    // outlined — so where a block ends is a glance, not a count.
+                    {move || {
+                        let Some((open, close)) = brackets.get() else {
+                            return ().into_any();
+                        };
+                        let range = window.get();
+                        let z = zoom.get();
+                        state
+                            .editor
+                            .draft
+                            .with(|text| {
+                                [open, close]
+                                    .into_iter()
+                                    .filter(|(line, _)| {
+                                        !state.editor.folds.with(|f| f.hides(*line))
+                                            && range.contains(&row_for(state, *line))
+                                    })
+                                    .filter_map(|(line, col)| {
+                                        let content = text.split('\n').nth(line as usize)?;
+                                        let x = col_left(content, 0, col, z);
+                                        let width = (column_px(content, 0, col + 1)
+                                            - column_px(content, 0, col))
+                                            * z;
+                                        let y = row_top(state, line, z);
+                                        Some(view! {
+                                            <div
+                                                class="pointer-events-none absolute rounded-[2px] ring-1 ring-label-3"
+                                                style=format!(
+                                                    "left: {x}px; top: {y}px; width: {width}px; height: {h}px",
+                                                    h = row_height(z),
+                                                )
+                                            />
+                                        })
+                                    })
+                                    .collect_view()
+                            })
                             .into_any()
                     }}
                     <pre
@@ -704,76 +1057,54 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 base.to_string()
                             }
                         }
-                        style=move || metrics.get()
+                        // At least as wide as the widest line, drawn or not:
+                        // the textarea over this column holds every line, and
+                        // one wider than the column scrolls inside itself —
+                        // the caret drifting off its glyph.
+                        style=move || {
+                            format!(
+                                "{}; min-width: {}px",
+                                metrics.get(),
+                                widest.get() * zoom.get() + PAD_PX + 16.0,
+                            )
+                        }
                         aria-hidden="true"
                     >
-                        {
-                            let path = path.clone();
-                            move || {
-                                let diags = state
-                                    .lsp.diagnostics
-                                    .with(|by_file| by_file.get(&path).cloned())
-                                    .unwrap_or_default();
-                                // The compiler's colours, when they have
-                                // arrived for this document.
-                                let semantic = state
-                                    .editor.semantic
-                                    .with(|s| {
-                                        s.as_ref()
-                                            .filter(|(for_path, _)| for_path == &path)
-                                            .map(|(_, spans)| spans.clone())
-                                    })
-                                    .unwrap_or_default();
-                                let folds = state.editor.folds.get();
-                                state
-                                    .editor.highlighted
-                                    .get()
-                                    .into_iter()
-                                    .enumerate()
-                                    // Hidden lines are not drawn, and the
-                                    // echo must drop exactly the lines the
-                                    // textarea dropped: one row of
-                                    // disagreement and every caret below it
-                                    // sits on the wrong glyph.
-                                    .filter(|(index, _)| !folds.hides(*index as u32))
-                                    .map(|(index, line)| {
-                                        let line = overlay_semantic(
-                                            line,
-                                            index as u32,
-                                            &semantic,
-                                        );
-                                        // A collapsed header says how much is
-                                        // underneath it. A bare `…` gives no
-                                        // sense of whether unfolding costs
-                                        // three lines or three hundred.
-                                        let summary = folds
-                                            .regions()
-                                            .iter()
-                                            .find(|r| r.header == index as u32)
-                                            .map(|r| {
-                                                let n = r.hidden();
-                                                let unit = if n == 1 { "line" } else { "lines" };
-                                                view! {
-                                                    <span class="rounded-[3px] bg-selection px-1 text-label-3">
-                                                        {format!(" ⋯ {n} {unit} ")}
-                                                    </span>
-                                                }
-                                            });
+                        <div style=move || spacer(window.get().start)></div>
+                        // Keyed by the line and everything drawn on it, so a
+                        // keystroke rebuilds the row it changed and a scroll
+                        // the rows it brought in (`EchoRow`).
+                        <For
+                            each=echo_rows
+                            key=|row| row.key
+                            children=move |row: EchoRow| {
+                                // A collapsed header says how much is
+                                // underneath it. A bare `…` gives no sense of
+                                // whether unfolding costs three lines or three
+                                // hundred.
+                                let summary = row
+                                    .folded
+                                    .map(|n| {
+                                        let unit = if n == 1 { "line" } else { "lines" };
                                         view! {
-                                            <div>
-                                                {decorate(line, index as u32, &diags)}
-                                                {summary}
-                                                // An empty line still occupies
-                                                // one, or the caret above sits a
-                                                // row too high for the rest of
-                                                // the file.
-                                                {"\u{200b}"}
-                                            </div>
+                                            <span class="rounded-[3px] bg-selection px-1 text-label-3">
+                                                {format!(" ⋯ {n} {unit} ")}
+                                            </span>
                                         }
-                                    })
-                                    .collect_view()
+                                    });
+                                view! {
+                                    <div>
+                                        {decorate(row.line, row.index, &row.diags)}
+                                        {summary}
+                                        // An empty line still occupies one, or
+                                        // the caret above sits a row too high
+                                        // for the rest of the file.
+                                        {"\u{200b}"}
+                                    </div>
+                                }
                             }
-                        }
+                        />
+                        <div style=move || spacer(rows_total.get().saturating_sub(window.get().end))></div>
                     </pre>
 
                     <textarea
@@ -1142,6 +1473,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             // always been able to do this; rusty never asked.
                             if event.key() == "F2" && !event.ctrl_key() && is_rust {
                                 event.prevent_default();
+                                // Taken here, so the window's binding for the
+                                // same key does not send it back a second time.
+                                event.stop_propagation();
                                 if let Some(element) = area.get_untracked() {
                                     // The word under the caret is read off the
                                     // screen text, because that is what the
@@ -1173,6 +1507,13 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             // board up.
                             if (event.ctrl_key() || event.meta_key()) && event.key() == "/" {
                                 event.prevent_default();
+                                // And kept from the window, whose `editor.comment`
+                                // binding answers Ctrl+/ by sending it to this
+                                // textarea again: the comment went on and came
+                                // straight back off, so the key did nothing on the
+                                // caret's line — and a selection lost the marker
+                                // from its first line only.
+                                event.stop_propagation();
                                 if let Some(element) = area.get_untracked() {
                                     comment_selection(state, &element);
                                 }
@@ -1518,6 +1859,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         let z = zoom.get();
                         let height = row_height(z);
                         let icon_px = (height * 0.6).round().max(7.0) as u32;
+                        let range = window.get();
                         found
                             .into_iter()
                             .filter_map(|r| {
@@ -1525,7 +1867,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 // Inside a collapsed region the header stands
                                 // for the line, and a stack of lenses on one
                                 // header would say nothing readable.
-                                if line_of_row(state, row_for(state, line)) != line {
+                                let row = row_for(state, line);
+                                if line_of_row(state, row) != line || !range.contains(&row) {
                                     return None;
                                 }
                                 let x = col_left(&draft, line, col, z);

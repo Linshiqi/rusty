@@ -206,6 +206,35 @@ fn semantic_token(kind: &str) -> Option<Token> {
 
 /// Re-cut a line's spans so the compiler's colours win where they exist and
 /// the lexical base shows everywhere else.
+/// The semantic spans on one line, out of a list sorted by line: found by
+/// halving the list rather than by filtering it, which the overlay did once
+/// for every line it drew — a scan of every token in the file, per line.
+pub(super) fn semantic_on(spans: &[SemanticSpan], line: u32) -> &[SemanticSpan] {
+    let start = spans.partition_point(|span| span.line < line);
+    let end = start + spans[start..].partition_point(|span| span.line <= line);
+    &spans[start..end]
+}
+
+/// Everything a row of the echo draws, as one number: its runs, the
+/// squiggles over it and its fold. A row whose number did not change draws
+/// what it drew, so the window keeps its markup.
+pub(super) fn row_hash(line: &Line, diags: &[FileDiagnostic], folded: Option<u32>) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    for span in &line.spans {
+        span.text.hash(&mut hasher);
+        (span.token as u8).hash(&mut hasher);
+    }
+    for d in diags {
+        let place = (d.start_line, d.start_col, d.end_line, d.end_col);
+        (place, d.severity as u8).hash(&mut hasher);
+        d.message.hash(&mut hasher);
+    }
+    folded.hash(&mut hasher);
+    hasher.finish()
+}
+
 pub(super) fn overlay_semantic(line: Line, index: u32, semantic: &[SemanticSpan]) -> Line {
     let marks: Vec<(u32, u32, Token)> = semantic
         .iter()
@@ -275,6 +304,58 @@ pub(crate) fn class_of(token: Token) -> &'static str {
 #[cfg(test)]
 mod semantic_tests {
     use super::*;
+
+    fn span_at(line: u32, start_col: u32) -> SemanticSpan {
+        SemanticSpan {
+            line,
+            start_col,
+            length: 1,
+            kind: "variable".to_string(),
+        }
+    }
+
+    /// A line's spans out of a sorted list are exactly the ones a filter
+    /// finds — on a line with several, a line with none, and past the end.
+    #[test]
+    fn a_lines_semantic_spans_are_found_by_halving_the_sorted_list() {
+        let spans = [
+            span_at(0, 1),
+            span_at(2, 0),
+            span_at(2, 4),
+            span_at(2, 9),
+            span_at(5, 3),
+        ];
+        for line in 0..8 {
+            let halved: Vec<_> = semantic_on(&spans, line).to_vec();
+            let filtered: Vec<_> = spans.iter().filter(|s| s.line == line).cloned().collect();
+            assert_eq!(halved, filtered, "line {line}");
+        }
+    }
+
+    /// A row's number moves with anything it draws — a token, a squiggle, a
+    /// fold — and stays put otherwise, which is what keeps a row's markup.
+    #[test]
+    fn a_rows_hash_changes_with_what_it_draws_and_only_then() {
+        let line = line_of("let x = 1;");
+        let base = row_hash(&line, &[], None);
+        assert_eq!(row_hash(&line_of("let x = 1;"), &[], None), base);
+        assert_ne!(row_hash(&line_of("let x = 2;"), &[], None), base);
+        let mut keyword = line.clone();
+        keyword.spans[0].token = Token::Keyword;
+        assert_ne!(row_hash(&keyword, &[], None), base);
+        let squiggle = FileDiagnostic {
+            severity: DiagSeverity::Error,
+            message: "no".to_string(),
+            source: None,
+            code: None,
+            start_line: 3,
+            start_col: 4,
+            end_line: 3,
+            end_col: 5,
+        };
+        assert_ne!(row_hash(&line, std::slice::from_ref(&squiggle), None), base);
+        assert_ne!(row_hash(&line, &[], Some(12)), base);
+    }
 
     fn line_of(text: &str) -> Line {
         Line {

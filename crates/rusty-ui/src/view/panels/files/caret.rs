@@ -273,6 +273,19 @@ pub(super) fn pen_after(x: f64, ch: char, advance: impl Fn(char) -> f64) -> f64 
     x + to
 }
 
+/// How wide a line is drawn, in pixels at zoom 1: what the text column must
+/// be at least, or the textarea over it scrolls inside itself. A line of ASCII
+/// with no tab is its length in advances — most lines, and one lookup where
+/// the general case is one per character, on every keystroke of a long file.
+pub(super) fn line_px(content: &str) -> f64 {
+    if content.bytes().all(|byte| byte.is_ascii() && byte != b'\t') {
+        return content.len() as f64 * advance_of('0');
+    }
+    content
+        .chars()
+        .fold(0.0, |x, ch| pen_after(x, ch, advance_of))
+}
+
 /// One glyph's advance in the editor's font, measured once per character via
 /// canvas and cached — measuring is what makes CJK correct, caching is what
 /// makes it affordable on every mouse move.

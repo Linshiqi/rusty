@@ -91,14 +91,35 @@ pub struct Document {
     /// reader looking for a corrupt file.
     #[serde(default)]
     pub too_large: bool,
-    /// Set when the file was too large to highlight in full.
-    pub truncated: bool,
+    /// The painting `lines` came from, by the number the backend keeps it
+    /// under: what the editor names when it asks for a repaint, so that an
+    /// edit costs the lines it changed rather than the file. `None` for a
+    /// document nothing is kept for — refused, or a library's source opened
+    /// to read.
+    #[serde(default)]
+    pub paint: Option<u32>,
     /// Not this project's file — a dependency's source, opened to read.
     /// The editor refuses to write it: the registry cache is shared by every
     /// project on the machine, and "I fixed it in the library" there is a
     /// change the next `cargo build` may silently revert or spread.
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// An edited buffer repainted, as the editor applies it.
+///
+/// `lines` are the painted lines of the text that was sent, from line `from`
+/// on. Every other line paints as it did in the painting the request named —
+/// below these, moved by however many lines the edit added or removed. A
+/// request naming a painting the backend no longer keeps is answered whole:
+/// `from` is 0 and `lines` is every line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repaint {
+    /// The number to name this painting by in the next request.
+    pub version: u32,
+    pub from: u32,
+    pub lines: Vec<Line>,
 }
 
 /// What rustfmt made of the text.

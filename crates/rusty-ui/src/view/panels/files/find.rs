@@ -45,6 +45,42 @@ pub(super) fn line_col_of_byte(text: &str, at: usize) -> (u32, u32) {
     (line, before[start..].chars().count() as u32)
 }
 
+/// Where a match is: its line, that line's text and the match's columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MatchLine<'a> {
+    pub line: u32,
+    pub text: &'a str,
+    pub col: u32,
+    pub end_col: u32,
+}
+
+/// Every match's line, found in one walk down the text. `line_col_of_byte`
+/// per match walks from the top each time — two thousand walks of a long
+/// file on every render of the washes. `matches` are in order, as
+/// [`find_matches`] returns them.
+pub(super) fn match_lines<'a>(text: &'a str, matches: &[(usize, usize)]) -> Vec<MatchLine<'a>> {
+    let mut out = Vec::with_capacity(matches.len());
+    let (mut line, mut start, mut walked) = (0u32, 0usize, 0usize);
+    for &(from, to) in matches {
+        for (offset, byte) in text.as_bytes()[walked..from].iter().enumerate() {
+            if *byte == b'\n' {
+                line += 1;
+                start = walked + offset + 1;
+            }
+        }
+        walked = from;
+        let end = text[start..].find('\n').map_or(text.len(), |at| start + at);
+        let col = text[start..from].chars().count() as u32;
+        out.push(MatchLine {
+            line,
+            text: &text[start..end],
+            col,
+            end_col: col + text[from..to].chars().count() as u32,
+        });
+    }
+    out
+}
+
 /// Step the current find match by `direction`, wrapping, and show it.
 pub(super) fn find_jump(state: AppState, scroller: NodeRef<html::Div>, direction: i32) {
     let text = state.editor.draft.get_untracked();
@@ -277,6 +313,26 @@ pub(super) fn FindBar(
 #[cfg(test)]
 mod find_tests {
     use super::*;
+
+    /// One walk finds what a walk from the top per match found, on lines
+    /// with a `中` before the match so a byte count cannot pass for columns.
+    #[test]
+    fn every_match_is_placed_where_a_walk_from_the_top_places_it() {
+        let text = "gain\n中 gain gain\n\n  x gain";
+        let matches = find_matches(text, "gain", true);
+        let placed = match_lines(text, &matches);
+        assert_eq!(placed.len(), 4);
+        for (found, &(from, to)) in placed.iter().zip(&matches) {
+            let (line, col) = line_col_of_byte(text, from);
+            let (_, end_col) = line_col_of_byte(text, to);
+            assert_eq!((found.line, found.col, found.end_col), (line, col, end_col));
+            assert_eq!(
+                Some(found.text),
+                text.split('\n').nth(line as usize),
+                "the line itself"
+            );
+        }
+    }
 
     #[test]
     fn matches_fold_ascii_case_and_respect_the_toggle() {

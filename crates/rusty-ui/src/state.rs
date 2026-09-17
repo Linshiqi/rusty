@@ -88,12 +88,60 @@ pub struct ParkedEditor {
     /// at, and a file that unfolds itself every time you glance at another
     /// one is a fold feature nobody uses twice.
     pub folds: rusty_edit::Folded,
+    /// Which backend painting its lines are, and which it shows plain.
+    pub paint: PaintState,
     /// Where the working area was scrolled to, as (top, left) pixels of
     /// whichever scroller was showing the tab — the code surface's, the
     /// Markdown page's or the picture's. The caret says where the user was
     /// typing; this says what they were looking at, which after a long read
     /// of a chapter is somewhere else entirely.
     pub viewport: (i32, i32),
+}
+
+/// Places a command asked the language server for — a symbol's references,
+/// its implementations — which the finder lists under `title` in place of
+/// files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceList {
+    pub title: String,
+    pub places: Vec<rusty_lsp::Place>,
+}
+
+/// Symbols the finder asked for, and the ask they answer: `@` and the file's
+/// path, or `#` and the words typed. An answer to an older ask is never
+/// shown under a newer one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolAnswer {
+    pub ask: String,
+    pub symbols: Vec<rusty_lsp::Symbol>,
+}
+
+/// How an editor's painted lines stand against the backend's painting of
+/// the file (`crate::paint` has the why).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PaintState {
+    /// The number of the backend painting the lines are, outside `stale`.
+    /// `None` when they are no painting the backend keeps, and the next
+    /// repaint is the whole file.
+    pub version: Option<u32>,
+    /// The lines on screen as plain text since then.
+    pub stale: crate::paint::Lines,
+}
+
+/// A repaint on its way. One at a time per group: each answer is the base
+/// the next ask is measured against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaintAsk {
+    /// Which ask this is. Anything that puts a whole painting on screen drops
+    /// the ask, and an answer finding another ask, or none, is dropped too.
+    pub serial: u64,
+    pub path: String,
+    /// The text that was sent, which the answer's line numbers are about.
+    pub sent: String,
+    /// Lines edited while it was out: what is still plain once it lands.
+    pub since: crate::paint::Lines,
+    /// Edits arrived while it was out, so ask again when it lands.
+    pub again: bool,
 }
 
 /// A viewport to put back once a tab's view is on screen.
@@ -126,6 +174,30 @@ pub struct EditHistory {
     pub redo: Vec<String>,
     /// When the last snapshot was pushed (ms), for burst coalescing.
     pub last_push: f64,
+}
+
+impl EditHistory {
+    /// Undo steps kept, at most.
+    pub const STEPS: usize = 200;
+    /// And bytes of them. Every step is the whole text, so two hundred steps
+    /// of a two-megabyte file would be four hundred megabytes of the window's
+    /// memory — held again by every tab parked with them.
+    pub const BYTES: usize = 48 * 1024 * 1024;
+
+    /// Drop the oldest undo steps past either limit, keeping the newest one
+    /// however large it is: a file that is its own whole budget still undoes
+    /// the last thing done to it.
+    pub fn trim(&mut self) {
+        let mut bytes: usize = self.undo.iter().map(String::len).sum();
+        let mut drop = 0;
+        while self.undo.len() - drop > 1
+            && (self.undo.len() - drop > Self::STEPS || bytes > Self::BYTES)
+        {
+            bytes -= self.undo[drop].len();
+            drop += 1;
+        }
+        self.undo.drain(..drop);
+    }
 }
 
 /// The tooltip under the pointer: what the server said, and what it offers
@@ -965,8 +1037,12 @@ pub struct Editor {
     /// keystroke patch. Not the same as `draft` for the milliseconds between
     /// an input event and the patch.
     pub echo_text: RwSignal<String>,
-    /// Bumped on every keystroke; a re-highlight result is dropped unless the
-    /// generation it was requested at is still current.
+    /// Which backend painting `highlighted` is, and which lines it shows
+    /// plain. Not reactive: nothing draws it.
+    pub paint: StoredValue<PaintState>,
+    /// The repaint on its way, if one is.
+    pub painting: StoredValue<Option<PaintAsk>>,
+    /// Bumped on every keystroke, so the pulse fires once typing pauses.
     pub pulse_gen: RwSignal<u64>,
     /// What the server said about the position under the mouse. The range is
     /// what keeps the card up while the pointer moves within the same token.
@@ -985,6 +1061,15 @@ pub struct Editor {
     /// Overlaid on the lexical highlight at render; empty while the index
     /// warms up, and the base colours simply show through.
     pub semantic: RwSignal<Option<(String, Vec<rusty_lsp::SemanticSpan>)>>,
+    /// The other places the name at the caret occurs in this file, as the
+    /// server found them once the caret rested: what the editor washes.
+    pub occurrences: RwSignal<Option<(String, Vec<rusty_lsp::EditRange>)>>,
+    /// The lines `semantic` covers, when it is not the whole file: a long
+    /// file is asked about the lines around the ones on screen.
+    pub semantic_lines: StoredValue<Option<(u32, u32)>>,
+    /// The document lines the view is drawing, first and one past the last —
+    /// what a long file's semantic colours are asked for around.
+    pub drawn_lines: StoredValue<(u32, u32)>,
     /// Every open editor, in strip order. The active one is [`Self::document`];
     /// the rest are parked in [`Self::parked`].
     pub tabs: RwSignal<Vec<String>>,
@@ -1099,6 +1184,8 @@ impl Editor {
             draft: RwSignal::new(String::new()),
             highlighted: RwSignal::new(Vec::new()),
             echo_text: RwSignal::new(String::new()),
+            paint: StoredValue::new(PaintState::default()),
+            painting: StoredValue::new(None),
             pulse_gen: RwSignal::new(0),
             hover: RwSignal::new(None),
             completion: RwSignal::new(None),
@@ -1106,6 +1193,9 @@ impl Editor {
             signature: RwSignal::new(None),
             actions: RwSignal::new(None),
             semantic: RwSignal::new(None),
+            semantic_lines: StoredValue::new(None),
+            occurrences: RwSignal::new(None),
+            drawn_lines: StoredValue::new((0, 0)),
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),
@@ -1991,6 +2081,15 @@ pub struct Layout {
     pub tree_hidden: RwSignal<bool>,
     /// The file finder (Ctrl+P) is up.
     pub quick_open: RwSignal<bool>,
+    /// What the finder opens with already typed: `@` lists the file's
+    /// symbols and `#` the workspace's, VS Code's prefixes — so Ctrl+Shift+O
+    /// and Ctrl+T are the finder with one character in it.
+    pub quick_seed: RwSignal<String>,
+    /// Places the finder lists instead of files, when a command asked for
+    /// some: a symbol's references, its implementations.
+    pub quick_places: RwSignal<Option<PlaceList>>,
+    /// The symbols the finder last asked the server for, and which ask.
+    pub quick_symbols: RwSignal<Option<SymbolAnswer>>,
     /// Ctrl+Tab's list, while Ctrl is held.
     pub switcher: RwSignal<Option<Switcher>>,
 }
@@ -2337,6 +2436,9 @@ impl AppState {
                 )),
                 tree_hidden: RwSignal::new(stored_tree_hidden()),
                 quick_open: RwSignal::new(false),
+                quick_seed: RwSignal::new(String::new()),
+                quick_places: RwSignal::new(None),
+                quick_symbols: RwSignal::new(None),
                 switcher: RwSignal::new(None),
             },
             dock: Dock {
@@ -2909,5 +3011,39 @@ mod switcher_tests {
             100,
             "a forgotten tab still lists, in strip order"
         );
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn with(sizes: &[usize]) -> EditHistory {
+        EditHistory {
+            undo: sizes.iter().map(|&size| "x".repeat(size)).collect(),
+            ..EditHistory::default()
+        }
+    }
+
+    #[test]
+    fn the_oldest_steps_go_past_the_step_limit() {
+        let mut history = with(&vec![1; EditHistory::STEPS + 3]);
+        history.trim();
+        assert_eq!(history.undo.len(), EditHistory::STEPS);
+    }
+
+    /// A long file keeps as many steps as fit the budget, newest first, and
+    /// always the newest one, however large it is.
+    #[test]
+    fn the_oldest_steps_go_past_the_byte_budget_but_never_the_last() {
+        let third = EditHistory::BYTES / 3;
+        let mut history = with(&[third, third, third, third + 1]);
+        history.trim();
+        assert_eq!(history.undo.len(), 2);
+        assert_eq!(history.undo[1].len(), third + 1, "the newest stays");
+
+        let mut history = with(&[EditHistory::BYTES * 2]);
+        history.trim();
+        assert_eq!(history.undo.len(), 1);
     }
 }

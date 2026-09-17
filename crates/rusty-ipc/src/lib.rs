@@ -158,7 +158,9 @@ pub mod files {
     pub const DETACH: &str = "open_editor_window";
     /// Bring a detached editor's file back into the main window.
     pub const REATTACH: &str = "reattach_editor_window";
-    pub const HIGHLIGHT: &str = "highlight_text";
+    /// An edited buffer repainted against the painting the editor holds:
+    /// the lines the edit changed, not the file.
+    pub const REPAINT: &str = "repaint_text";
     /// A fenced code block, highlighted by the language its fence names —
     /// what the Markdown page asks for, where there is no path to read a
     /// grammar off.
@@ -190,6 +192,16 @@ pub mod lsp {
     pub const RESOLVE_COMPLETION: &str = "lsp_resolve_completion";
     pub const HOVER: &str = "lsp_hover";
     pub const DEFINITION: &str = "lsp_definition";
+    /// Every use of the symbol at a position, each with its line.
+    pub const REFERENCES: &str = "lsp_references";
+    pub const IMPLEMENTATIONS: &str = "lsp_implementations";
+    pub const TYPE_DEFINITION: &str = "lsp_type_definition";
+    /// The other places in a file the name at a position occurs.
+    pub const HIGHLIGHTS: &str = "lsp_highlights";
+    /// A file's outline, flattened.
+    pub const DOCUMENT_SYMBOLS: &str = "lsp_document_symbols";
+    /// Symbols across the workspace matching a query.
+    pub const WORKSPACE_SYMBOLS: &str = "lsp_workspace_symbols";
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
     pub const ACTIONS: &str = "lsp_code_actions";

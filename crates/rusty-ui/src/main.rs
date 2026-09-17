@@ -17,6 +17,7 @@ mod format;
 mod gitlog;
 mod i18n;
 mod ipc;
+mod paint;
 mod state;
 mod theme;
 mod view;

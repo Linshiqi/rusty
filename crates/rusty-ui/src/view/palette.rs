@@ -125,6 +125,36 @@ pub fn defaults() -> Vec<Binding> {
             action: Action::QuickOpen,
         },
         Binding {
+            id: "quick.line".into(),
+            label: t!("bind.go-to-line"),
+            default: "Ctrl+G".into(),
+            action: Action::GoToLine,
+        },
+        Binding {
+            id: "quick.symbol".into(),
+            label: t!("bind.symbol-in-file"),
+            default: "Ctrl+Shift+O".into(),
+            action: Action::GoToSymbolInFile,
+        },
+        Binding {
+            id: "quick.workspace-symbol".into(),
+            label: t!("bind.symbol-in-workspace"),
+            default: "Ctrl+T".into(),
+            action: Action::GoToSymbolInWorkspace,
+        },
+        Binding {
+            id: "editor.references".into(),
+            label: t!("bind.references"),
+            default: "Shift+F12".into(),
+            action: Action::FindReferences,
+        },
+        Binding {
+            id: "editor.implementations".into(),
+            label: t!("bind.implementations"),
+            default: "Ctrl+F12".into(),
+            action: Action::GoToImplementations,
+        },
+        Binding {
             id: "tree.toggle".into(),
             label: t!("bind.toggle-tree"),
             default: "Ctrl+B".into(),

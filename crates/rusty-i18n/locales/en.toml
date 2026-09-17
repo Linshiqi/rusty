@@ -55,6 +55,12 @@ switch-editor-back = "Switch to recent file, oldest first"
 vim = "Vim keys in the editor"
 panel-below = "Panel below"
 quick-open = "Go to file…"
+go-to-line = "Go to line…"
+symbol-in-file = "Go to symbol in file…"
+symbol-in-workspace = "Go to symbol in workspace…"
+references = "Go to references"
+implementations = "Go to implementations"
+type-definition = "Go to type definition"
 toggle-tree = "Show or hide the file list"
 split = "Split editor right"
 
@@ -826,6 +832,11 @@ settings = "Settings"
 type-command = "Type a command…"
 no-match = "No match"
 quick-open = "Go to file"
+go-to-line = "Go to line"
+symbol-in-file = "Go to symbol in file"
+symbol-in-workspace = "Go to symbol in workspace"
+references = "Go to references"
+implementations = "Go to implementations"
 toggle-tree = "Show or hide the file list"
 split = "Split editor right"
 
@@ -1112,7 +1123,6 @@ no-channel = "no channel"
 up-to-date = "up to date"
 default-features = "everything the package turns on when nothing is specified"
 rename-scope = "every use in the project, written to disk"
-tab-cap = "shown to 5,000 lines"
 own-parts = "Your own symbols: put KiCad .kicad_sym files under .rusty/symbols/ and they join the library."
 not-for-chip = "not available for this chip"
 wizard-runs = "rusty runs it and opens the result."
@@ -1205,9 +1215,23 @@ loading = "Loading the picture…"
 
 [quick]
 # The file finder: the title bar's box, and Ctrl+P.
-placeholder = "Type a file name…"
+placeholder = "Type a file name, : and a line, @ for symbols in the file, # for symbols anywhere…"
 no-match = "No file matches"
-hint = "Enter opens · Ctrl+Enter opens to the side"
+hint = "Enter opens · Ctrl+Enter opens to the side · : line · @ symbols in this file · # symbols anywhere"
+no-symbol = "No symbol matches"
+asking = "Asking rust-analyzer…"
+type-to-search = "Type part of a name to search the workspace"
+no-file = "Symbols are listed for a Rust file in front"
+no-place = "None found"
+line = "Line {line}"
+line-hint = "Type a line number, and :column after it to land on a column"
+no-document = "Open a file to go to a line in it"
+
+[places]
+# The finder's title over a list of places the language server named.
+references = "References to {name}"
+implementations = "Implementations of {name}"
+type-definition = "Type of {name}"
 
 [switcher]
 # Ctrl+Tab's list: the files open in the group, most recently used first.

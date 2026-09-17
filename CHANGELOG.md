@@ -9,6 +9,40 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.41
+
+**Large files open, edit and scroll.** Files over 5,000 lines used to open
+read-only and stop being coloured part of the way down. Now anything up to the
+2 MB limit is editable and coloured throughout, and typing stays quick however
+long the file is: after a pause, only the lines you changed are re-coloured
+(a line in a 24,000-line file takes under a millisecond, where the whole file
+took a second), and the editor draws the lines on screen rather than all of
+them, so scrolling to the middle of such a file draws in about 20 ms.
+
+**New — Go to references, implementations and type definition.** Shift+F12
+lists every use of the symbol under the cursor, Ctrl+F12 its implementations,
+and *Go to type definition* where its type is defined — from the View menu, the
+command palette or the editor's right-click menu. Each list shows the line of
+code beside every file and line number; a single implementation or type
+definition opens straight away.
+
+**New — Go to symbol and Go to line.** In the file finder (Ctrl+P), type `@` to
+list the symbols of the file in front, `#` to search symbols across the
+project, or `:` and a line number to jump to that line. Ctrl+Shift+O, Ctrl+T
+and Ctrl+G open the finder with each already typed.
+
+**New — matching brackets and occurrences are marked.** With the cursor beside
+a bracket, it and its partner are outlined; resting the cursor on a name
+highlights the other places that name is used in the file.
+
+**Fixed — Ctrl+/ comments lines again.** It toggled a line's comment and then
+toggled it straight back, so on a single line it did nothing, and over a
+selection it left the first line out.
+
+**Fixed — memory with long files.** Undo history of a very long file is capped
+by size as well as by steps, so a few long files open for a long time no
+longer hold hundreds of megabytes.
+
 ## v0.6.40
 
 **Fixed — Windows: folders can be renamed, moved and deleted while

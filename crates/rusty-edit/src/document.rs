@@ -1,13 +1,14 @@
 //! Reading and writing one file.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use syntect::parsing::SyntaxSet;
 
 use crate::{
     error::{Error, Result},
-    highlight,
-    model::Document,
+    highlight::{self, Painting},
+    model::{Document, Line, Repaint},
 };
 
 /// Files bigger than this are refused rather than shown.
@@ -42,13 +43,49 @@ pub fn read_bytes(root: &Path, relative: &str) -> Result<Vec<u8>> {
     std::fs::read(&path).map_err(read)
 }
 
-/// Holds the grammars.
+/// How many files' paintings are kept for repainting. A painting weighs
+/// about what its file does; a dozen covers every tab anybody is typing in,
+/// and a file past it is painted whole once, on its next edit.
+const KEPT_PAINTINGS: usize = 12;
+
+/// Holds the grammars, and the paintings of the files being edited.
 ///
 /// `SyntaxSet::load_defaults_newlines` parses a bundled binary dump and takes
 /// long enough that doing it per file is noticeable — so it is built once and
 /// kept.
 pub struct Files {
     syntaxes: SyntaxSet,
+    /// What an edit is repainted against ([`Files::repaint`]).
+    paintings: Mutex<Paintings>,
+}
+
+/// The paintings of the files most recently opened or edited, the most
+/// recent last, each under the number the editor names it by.
+#[derive(Default)]
+struct Paintings {
+    kept: Vec<(String, u32, Painting)>,
+    issued: u32,
+}
+
+impl Paintings {
+    fn take(&mut self, path: &str) -> Option<(u32, Painting)> {
+        let at = self.kept.iter().position(|(kept, ..)| kept == path)?;
+        let (_, number, painting) = self.kept.remove(at);
+        Some((number, painting))
+    }
+
+    /// Keep a painting, and say what it is called. The numbers only count
+    /// up, so a request names one painting or none: one that was evicted or
+    /// replaced is missed, never mistaken for another.
+    fn keep(&mut self, path: &str, painting: Painting) -> u32 {
+        self.issued = self.issued.wrapping_add(1);
+        self.kept.retain(|(kept, ..)| kept != path);
+        self.kept.push((path.to_string(), self.issued, painting));
+        if self.kept.len() > KEPT_PAINTINGS {
+            self.kept.remove(0);
+        }
+        self.issued
+    }
 }
 
 impl Default for Files {
@@ -61,22 +98,53 @@ impl Files {
     pub fn new() -> Self {
         Files {
             syntaxes: SyntaxSet::load_defaults_newlines(),
+            paintings: Mutex::default(),
         }
     }
 
-    /// Highlight text that is not (or not yet) what is on disk.
+    /// Repaint text that is not (or not yet) what is on disk, against the
+    /// painting the editor holds.
     ///
-    /// The editor calls this as the user types, so the colours track the draft
-    /// rather than the last save — without it the painted layer under the
-    /// caret shows stale text, which reads as corruption.
-    pub fn highlight_source(&self, path: &str, text: &str) -> Vec<crate::model::Line> {
-        crate::highlight::lines(&self.syntaxes, path, text).0
+    /// The editor calls this when typing pauses, so the colours track the
+    /// draft rather than the last save — without it the painted layer under
+    /// the caret shows stale text, which reads as corruption. `base` is the
+    /// number the editor's painting came with, and `stale` the lines it shows
+    /// plain. When `base` is not the painting kept here — never kept, evicted,
+    /// or moved on by an edit from another window — the whole text is
+    /// painted, and the answer says so by starting at line 0 with every line.
+    pub fn repaint(
+        &self,
+        path: &str,
+        text: &str,
+        base: Option<u32>,
+        stale: Option<(u32, u32)>,
+    ) -> Repaint {
+        let kept = self.paintings().take(path);
+        let (mut painting, stale) = match kept {
+            Some((number, painting)) if base == Some(number) => (
+                painting,
+                stale.map_or(0..0, |(from, to)| from as usize..to as usize),
+            ),
+            _ => (Painting::blank(&self.syntaxes, path), 0..0),
+        };
+        let repainted = painting.repaint(&self.syntaxes, text, stale);
+        Repaint {
+            version: self.paintings().keep(path, painting),
+            from: repainted.from as u32,
+            lines: repainted.lines,
+        }
+    }
+
+    fn paintings(&self) -> MutexGuard<'_, Paintings> {
+        self.paintings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Highlight a fenced code block by the language its fence names — what a
     /// Markdown page asks for, where there is no path to read a grammar off.
-    pub fn highlight_snippet(&self, lang: &str, text: &str) -> Vec<crate::model::Line> {
-        crate::highlight::snippet(&self.syntaxes, lang, text)
+    pub fn highlight_snippet(&self, lang: &str, text: &str) -> Vec<Line> {
+        highlight::snippet(&self.syntaxes, lang, text)
     }
 
     /// Read a file under `root`, highlighted.
@@ -106,7 +174,9 @@ impl Files {
             return Ok(refused(relative, Refusal::Binary));
         }
 
-        let (lines, language, truncated) = highlight::lines(&self.syntaxes, relative, &text);
+        let (painting, lines) = Painting::new(&self.syntaxes, relative, &text);
+        let language = painting.language(&self.syntaxes);
+        let paint = self.paintings().keep(relative, painting);
         Ok(Document {
             path: relative.to_string(),
             lines,
@@ -114,7 +184,7 @@ impl Files {
             language,
             binary: false,
             too_large: false,
-            truncated,
+            paint: Some(paint),
             read_only: false,
         })
     }
@@ -145,15 +215,16 @@ impl Files {
             return Ok(document);
         };
 
-        let (lines, language, truncated) = highlight::lines(&self.syntaxes, absolute, &text);
+        // Nobody edits a library's source here, so nothing is kept to repaint.
+        let (painting, lines) = Painting::new(&self.syntaxes, absolute, &text);
         Ok(Document {
             path: absolute.replace('\\', "/"),
             lines,
             text,
-            language,
+            language: painting.language(&self.syntaxes),
             binary: false,
             too_large: false,
-            truncated,
+            paint: None,
             read_only: true,
         })
     }
@@ -264,7 +335,7 @@ fn refused(relative: &str, why: Refusal) -> Document {
         language: None,
         binary: true,
         too_large: matches!(why, Refusal::TooLarge),
-        truncated: false,
+        paint: None,
         read_only: false,
     }
 }
@@ -334,6 +405,35 @@ mod tests {
         assert_eq!(document.text, "fn main() {}\n");
         assert_eq!(document.language.as_deref(), Some("Rust"));
         assert!(!document.lines.is_empty());
+        assert!(document.paint.is_some(), "kept, for the first edit");
+    }
+
+    /// The editor names the painting it holds. Named right, an edit costs
+    /// its own lines; named wrong — evicted, or moved on by another window —
+    /// the answer is the whole file from the top, which is right whatever
+    /// the editor held.
+    #[test]
+    fn a_repaint_against_the_painting_held_is_the_edit_and_against_any_other_the_file() {
+        let dir = scratch();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn a() {}\nfn b() {}\nfn c() {}\n",
+        )
+        .unwrap();
+        let files = Files::new();
+        let document = files.open(dir.path(), "src/lib.rs").unwrap();
+        let edited = "fn a() {}\nfn b() { 1 }\nfn c() {}\n";
+
+        let repaint = files.repaint("src/lib.rs", edited, document.paint, None);
+        assert_eq!((repaint.from, repaint.lines.len()), (1, 1));
+        assert_ne!(Some(repaint.version), document.paint);
+
+        let again = files.repaint("src/lib.rs", edited, document.paint, Some((0, 1)));
+        assert_eq!(
+            (again.from, again.lines.len()),
+            (0, 4),
+            "the first number names nothing now"
+        );
     }
 
     /// Binary files sit in the same tree as the source. Rendering one as text

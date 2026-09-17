@@ -240,13 +240,14 @@ pub async fn lsp_apply_action(
 #[tauri::command]
 pub async fn lsp_semantic(
     path: String,
+    lines: Option<(u32, u32)>,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::SemanticSpan>, CommandError> {
     let Some(client) = state.lsp().await else {
         return Ok(Vec::new());
     };
     Ok(
-        tokio::task::spawn_blocking(move || client.semantic_tokens(&path))
+        tokio::task::spawn_blocking(move || client.semantic_tokens(&path, lines))
             .await
             .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
     )
@@ -285,6 +286,93 @@ pub async fn lsp_definition(
             .await
             .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
     )
+}
+
+/// Every use of the symbol at this position, its declaration included.
+#[tauri::command]
+pub async fn lsp_references(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::Place>, CommandError> {
+    places(state, move |client| client.references(&path, line, col)).await
+}
+
+/// What implements the trait or method at this position, or the impls of
+/// the type there.
+#[tauri::command]
+pub async fn lsp_implementations(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::Place>, CommandError> {
+    places(state, move |client| {
+        client.implementations(&path, line, col)
+    })
+    .await
+}
+
+/// Where the type of the thing at this position is defined.
+#[tauri::command]
+pub async fn lsp_type_definition(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::Place>, CommandError> {
+    places(state, move |client| {
+        client.type_definition(&path, line, col)
+    })
+    .await
+}
+
+/// The other places in the file the name at this position occurs.
+#[tauri::command]
+pub async fn lsp_highlights(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::EditRange>, CommandError> {
+    places(state, move |client| {
+        client.document_highlights(&path, line, col)
+    })
+    .await
+}
+
+/// The file's outline, flattened in document order.
+#[tauri::command]
+pub async fn lsp_document_symbols(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::Symbol>, CommandError> {
+    places(state, move |client| client.document_symbols(&path)).await
+}
+
+/// Symbols across the workspace whose names match `query`.
+#[tauri::command]
+pub async fn lsp_workspace_symbols(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::Symbol>, CommandError> {
+    places(state, move |client| client.workspace_symbols(&query)).await
+}
+
+/// Ask the server on the blocking pool, and answer with nothing when there
+/// is no server: a list that is empty while rust-analyzer starts is the
+/// warm-up talking, as a definition that finds nothing is.
+async fn places<T: Send + 'static>(
+    state: State<'_, AppState>,
+    ask: impl FnOnce(&rusty_lsp::LspClient) -> rusty_lsp::Result<Vec<T>> + Send + 'static,
+) -> Result<Vec<T>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(Vec::new());
+    };
+    Ok(tokio::task::spawn_blocking(move || ask(&client))
+        .await
+        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
 }
 
 /// Rename the symbol at this position across the whole project.

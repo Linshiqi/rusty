@@ -359,7 +359,7 @@ pub(super) fn Header(
     let state = AppState::expect();
     let saved = document.text.clone();
     let path = document.path.clone();
-    let read_only = document.truncated || document.read_only;
+    let read_only = document.read_only;
     let dirty = Signal::derive(move || state.editor.draft.with(|draft| draft != &saved));
     // In no crate's module tree, so rust-analyzer answers nothing here. Said
     // by *dimming* the name, as VS Code says a file the project does not
@@ -480,15 +480,6 @@ pub(super) fn Header(
                             title=t!("tabs.read-only-hint")
                         >
                             {t!("tabs.read-only")}
-                        </span>
-                    }
-                })}
-            {document
-                .truncated
-                .then(|| {
-                    view! {
-                        <span class="text-footnote text-amber">
-                            {t!("misc.tab-cap")}
                         </span>
                     }
                 })}

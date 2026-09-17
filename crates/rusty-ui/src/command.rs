@@ -47,6 +47,17 @@ pub enum Action {
     OpenPalette,
     /// The file finder: type part of a name, Enter opens it.
     QuickOpen,
+    /// The finder over the symbols of the file in front (`@`), or of the
+    /// whole workspace (`#`).
+    GoToSymbolInFile,
+    GoToSymbolInWorkspace,
+    /// The finder with `:` typed: a line of the file in front, by number.
+    GoToLine,
+    /// Where the symbol at the caret is used, implemented or typed, through
+    /// the language server: a jump to one place, the finder for several.
+    FindReferences,
+    GoToImplementations,
+    GoToTypeDefinition,
     /// Fold the Files panel's tree away, or bring it back.
     ToggleTree,
     /// Move the focused group's file to the group beside it.
@@ -225,6 +236,19 @@ pub fn all(state: AppState) -> Vec<Command> {
         &t!("menu.view.quick-open"),
         chord(Action::QuickOpen),
     ));
+    for (action, title) in [
+        (Action::GoToLine, t!("menu.view.go-to-line")),
+        (Action::GoToSymbolInFile, t!("menu.view.symbol-in-file")),
+        (
+            Action::GoToSymbolInWorkspace,
+            t!("menu.view.symbol-in-workspace"),
+        ),
+        (Action::FindReferences, t!("menu.view.references")),
+        (Action::GoToImplementations, t!("menu.view.implementations")),
+        (Action::GoToTypeDefinition, t!("menu.view.type-definition")),
+    ] {
+        out.push(view(action, &title, chord(action)));
+    }
     out.push(view(
         Action::ToggleTree,
         &t!("menu.view.toggle-tree"),
@@ -367,6 +391,36 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             Action::QuickOpen,
             &t!("menu.view.quick-open"),
             chord(Action::QuickOpen),
+        ),
+        project_entry(
+            Action::GoToLine,
+            &t!("menu.view.go-to-line"),
+            chord(Action::GoToLine),
+        ),
+        project_entry(
+            Action::GoToSymbolInFile,
+            &t!("menu.view.symbol-in-file"),
+            chord(Action::GoToSymbolInFile),
+        ),
+        project_entry(
+            Action::GoToSymbolInWorkspace,
+            &t!("menu.view.symbol-in-workspace"),
+            chord(Action::GoToSymbolInWorkspace),
+        ),
+        project_entry(
+            Action::FindReferences,
+            &t!("menu.view.references"),
+            chord(Action::FindReferences),
+        ),
+        project_entry(
+            Action::GoToImplementations,
+            &t!("menu.view.implementations"),
+            chord(Action::GoToImplementations),
+        ),
+        project_entry(
+            Action::GoToTypeDefinition,
+            &t!("menu.view.type-definition"),
+            chord(Action::GoToTypeDefinition),
         ),
         Item::Separator,
         Item::Submenu {
@@ -710,10 +764,30 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::ToggleDock => state.layout.dock_open.update(|open| *open = !*open),
         Action::ShowDock(tab) => state.show_dock(tab),
         Action::OpenPalette => chrome.palette_open.set(true),
-        Action::QuickOpen => {
+        Action::QuickOpen
+        | Action::GoToLine
+        | Action::GoToSymbolInFile
+        | Action::GoToSymbolInWorkspace => {
             if state.has_project_now() {
+                let seed = match action {
+                    Action::GoToLine => ":",
+                    Action::GoToSymbolInFile => "@",
+                    Action::GoToSymbolInWorkspace => "#",
+                    _ => "",
+                };
+                state.layout.quick_places.set(None);
+                state.layout.quick_seed.set(seed.to_string());
                 state.layout.quick_open.set(true);
             }
+        }
+        Action::FindReferences => {
+            controller::find_places(state.focused(), controller::PlaceQuery::References)
+        }
+        Action::GoToImplementations => {
+            controller::find_places(state.focused(), controller::PlaceQuery::Implementations)
+        }
+        Action::GoToTypeDefinition => {
+            controller::find_places(state.focused(), controller::PlaceQuery::TypeDefinition)
         }
         Action::ToggleTree => controller::toggle_tree(state),
         Action::SplitEditor => controller::split_active(state),

@@ -6,8 +6,6 @@
 
 use leptos::{html, prelude::*};
 
-use rusty_edit::{Line, Span, Token};
-
 use super::*;
 use crate::{controller, state::AppState};
 
@@ -197,57 +195,33 @@ pub(super) fn paste_into(
 /// A line diff against what the paint currently shows: unchanged lines keep
 /// their colours, edited ones are swapped for plain text immediately. The
 /// debounced pulse recolours them a beat later — the same catch-up every
-/// editor's highlighting does, built from a splice instead of a parser.
+/// editor's highlighting does, built from a splice instead of a parser. The
+/// lines written plain are marked (`crate::paint`), so the repaint brings
+/// them back even when the text they hold is what it was.
 pub(super) fn echo_edit(state: AppState, new: &str) {
     let old = state.editor.echo_text.get_untracked();
     if old == new {
         return;
     }
 
-    let (prefix, suffix, replacement) = line_patch(&old, new);
-    let old_len = old.split('\n').count();
-
+    let edit = crate::paint::line_edit(&old, new);
+    let replacement = crate::paint::plain_lines(new, edit);
     state.editor.highlighted.update(|lines| {
-        // The paint can be shorter than the text (a truncated open); clamp so
-        // a splice out of range cannot panic the whole window.
-        let end = (old_len - suffix).min(lines.len());
-        let start = prefix.min(end);
+        // Clamped all the same: a splice out of range panics the window.
+        let end = (edit.old - edit.suffix).min(lines.len());
+        let start = edit.prefix.min(end);
         lines.splice(start..end, replacement);
     });
+    state
+        .editor
+        .paint
+        .update_value(|paint| paint.stale = crate::paint::stale_after(paint.stale, edit));
+    state.editor.painting.update_value(|ask| {
+        if let Some(ask) = ask {
+            ask.since = crate::paint::stale_after(ask.since, edit);
+        }
+    });
     state.editor.echo_text.set(new.to_string());
-}
-
-/// The line diff behind [`echo_edit`]: how many leading and trailing lines
-/// `old` and `new` share, and the plain-text lines that replace the middle.
-///
-/// Pure, so the arithmetic that decides which painted rows survive a
-/// keystroke can be tested without a textarea.
-fn line_patch(old: &str, new: &str) -> (usize, usize, Vec<Line>) {
-    let old_lines: Vec<&str> = old.split('\n').collect();
-    let new_lines: Vec<&str> = new.split('\n').collect();
-
-    let prefix = old_lines
-        .iter()
-        .zip(&new_lines)
-        .take_while(|(a, b)| a == b)
-        .count();
-    let suffix = old_lines[prefix..]
-        .iter()
-        .rev()
-        .zip(new_lines[prefix..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let replacement: Vec<Line> = new_lines[prefix..new_lines.len() - suffix]
-        .iter()
-        .map(|text| Line {
-            spans: vec![Span {
-                text: (*text).to_string(),
-                token: Token::Plain,
-            }],
-        })
-        .collect();
-    (prefix, suffix, replacement)
 }
 
 /// Snapshot the draft before an edit replaces it.
@@ -255,7 +229,6 @@ fn line_patch(old: &str, new: &str) -> (usize, usize, Vec<Line>) {
 /// Bursts coalesce: pushes within 600ms collapse into one undo step, so
 /// Ctrl+Z after typing a word removes the word, not one letter.
 pub(super) fn record_edit(state: AppState) {
-    const CAP: usize = 200;
     const BURST_MS: f64 = 600.0;
 
     let now = js_sys::Date::now();
@@ -265,9 +238,7 @@ pub(super) fn record_edit(state: AppState) {
         let burst = now - history.last_push < BURST_MS && !history.undo.is_empty();
         if !burst && history.undo.last() != Some(&text) {
             history.undo.push(text);
-            if history.undo.len() > CAP {
-                history.undo.remove(0);
-            }
+            history.trim();
         }
         history.last_push = now;
     });
@@ -340,9 +311,22 @@ fn line_comment(state: AppState) -> Option<&'static str> {
         .editor
         .document
         .with_untracked(|d| d.as_ref().and_then(|d| d.language.clone()))?;
-    match language.as_str() {
-        "rust" | "c" | "cpp" | "javascript" | "json" => Some("//"),
-        "toml" | "python" | "shell" | "yaml" => Some("#"),
+    comment_marker(&language)
+}
+
+/// The line comment for a grammar, by the name the backend reports it under.
+///
+/// Those are syntect's names — `Rust`, `C++`, `TOML`, `Bourne Again Shell
+/// (bash)` — so they are compared without regard to case. This matched
+/// `"rust"` alone for as long as it existed, which is what `mock.js` calls
+/// the language and nothing the app ever sends: Ctrl+/ and Vim's `gc` did
+/// nothing in a Rust file, in the app, while working in the browser.
+fn comment_marker(language: &str) -> Option<&'static str> {
+    match language.to_ascii_lowercase().as_str() {
+        "rust" | "c" | "c++" | "cpp" | "javascript" | "json" | "go" | "java" => Some("//"),
+        "toml" | "python" | "yaml" | "makefile" | "shell" | "bourne again shell (bash)" => {
+            Some("#")
+        }
         _ => None,
     }
 }
@@ -465,52 +449,27 @@ mod history_tests {
 }
 
 #[cfg(test)]
-mod echo_tests {
-    use super::line_patch;
-
-    fn texts(lines: &[rusty_edit::Line]) -> Vec<String> {
-        lines
-            .iter()
-            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect())
-            .collect()
-    }
-
-    /// Only the edited line is repainted plain; the lines around it keep
-    /// their colours. Typing on line two of three touches one row.
-    #[test]
-    fn an_edit_inside_one_line_replaces_only_that_line() {
-        let (prefix, suffix, replaced) = line_patch("a\nb\nc", "a\nbX\nc");
-        assert_eq!((prefix, suffix), (1, 1));
-        assert_eq!(texts(&replaced), vec!["bX"]);
-    }
-
-    /// Enter in the middle of a file inserts a row rather than repainting
-    /// everything below it.
-    #[test]
-    fn a_new_line_is_an_insertion_not_a_repaint_of_the_rest() {
-        let (prefix, suffix, replaced) = line_patch("a\nb\nc", "a\nb\n\nc");
-        assert_eq!((prefix, suffix), (2, 1));
-        assert_eq!(texts(&replaced), vec![""]);
-    }
-
-    /// Deleting a line is an empty replacement over one row, and a repeated
-    /// line is not mistaken for context: "a\na" minus the second "a" removes
-    /// one row rather than claiming both survived.
-    #[test]
-    fn a_deleted_line_is_an_empty_replacement() {
-        let (prefix, suffix, replaced) = line_patch("a\nb\nc", "a\nc");
-        assert_eq!((prefix, suffix), (1, 1));
-        assert!(replaced.is_empty());
-
-        let (prefix, suffix, replaced) = line_patch("a\na", "a");
-        assert_eq!(prefix + suffix, 1);
-        assert!(replaced.is_empty());
-    }
-}
-
-#[cfg(test)]
 mod comment_tests {
-    use super::toggle_comment_lines;
+    use super::{comment_marker, toggle_comment_lines};
+
+    /// The names the backend sends are syntect's, capitalised as syntect
+    /// capitalises them; the browser mock's lower-case `rust` is not one of
+    /// them, and was the only name this used to answer.
+    #[test]
+    fn the_marker_is_found_by_the_grammar_names_the_backend_sends() {
+        for (language, marker) in [
+            ("Rust", Some("//")),
+            ("C", Some("//")),
+            ("C++", Some("//")),
+            ("TOML", Some("#")),
+            ("Python", Some("#")),
+            ("Bourne Again Shell (bash)", Some("#")),
+            ("rust", Some("//")),
+            ("Markdown", None),
+        ] {
+            assert_eq!(comment_marker(language), marker, "{language}");
+        }
+    }
 
     /// A block that is not entirely commented gets commented — at the first
     /// non-blank, so indentation keeps its shape — and blank lines are left

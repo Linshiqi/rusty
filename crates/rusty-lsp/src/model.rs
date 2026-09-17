@@ -173,6 +173,35 @@ pub struct Location {
     pub external: bool,
 }
 
+/// A place the server named, with its line as it reads now — a row in a list
+/// of references or implementations, which nobody chooses from by line
+/// number alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Place {
+    pub location: Location,
+    /// Where the name ends on that line, in scalars: what the row marks.
+    pub end_col: u32,
+    /// The line, or its first thousand characters. Empty when the file could
+    /// not be read.
+    pub text: String,
+}
+
+/// Something with a name in the code: a function, a struct, an impl block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Symbol {
+    pub name: String,
+    /// What it is, in words: `function`, `struct`, `trait`, `impl`.
+    pub kind: String,
+    /// What it sits in — `impl Point`, `mod regs` — which tells apart two
+    /// `new`s in one file.
+    pub container: Option<String>,
+    /// How deep in its file's outline; 0 for a workspace search's answers.
+    pub depth: u32,
+    pub location: Location,
+}
+
 /// One text replacement inside a code action, scalar-addressed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
