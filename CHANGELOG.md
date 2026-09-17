@@ -9,6 +9,19 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.38
+
+**Added — Ctrl+Tab switches between open files.** As in VS Code: a quick
+Ctrl+Tab goes back to the file you were in before, and another takes you
+back again, so two files can be flipped between. Hold Ctrl and keep pressing
+Tab to see the open files, most recently used first, and move down the list
+(Shift+Tab moves up); let go of Ctrl to open the highlighted one, or press Esc
+to stay where you are. It works wherever the focus is, the terminal included,
+and with the editor split it switches within the side you are working in. Both
+shortcuts can be changed in Settings ▸ Keyboard, and "Switch to recent file"
+is in the command palette and the View menu. Ctrl+Tab in the editor used to
+insert four spaces; it no longer does.
+
 ## v0.6.37
 
 **Fixed — Vim mode has a cursor again.** In normal and visual mode the cursor

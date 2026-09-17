@@ -843,6 +843,26 @@ written for one group — every component, controller and effect reads
   Ranking is pure and under tests. Ctrl+P, Ctrl+B (fold the tree) and
   Ctrl+\ (split) are VS Code's chords, so hands that know them need not
   learn ours.
+- **Ctrl+Tab is the focused group's files by recent use** (`view/switcher.rs`,
+  VS Code's editor history in a group). Held, Tab walks down the list and
+  Shift+Tab back up, and letting go opens the pick; a tap opens the file
+  before this one, and the list waits 150 ms before it draws, so flipping
+  between two files never flashes it. The order is `RecentEditors`, touched
+  at the two doors a file comes on screen through (`show_document`,
+  `front_parked`) and *reconciled with the strip when read*: a closed, moved
+  or renamed tab drops out, and a restored tab nobody has fronted follows
+  in strip order — nothing else keeps it in step, because a list of every
+  place a tab changes is a list that drifts. **Its listener is the one in
+  the capture phase.** Every other binding bubbles, and a Tab that reaches
+  the focused element first is an indent, an accepted completion or a tab
+  sent to the shell — and the terminal and Vim stop the events they take, so
+  a bubbling listener would never hear Ctrl+Tab from either. It matches the
+  binding ids, not the keys, so Settings can rebind the pair; letting go is
+  the `keyup` that leaves no modifier down, so a chord rebound to a bare
+  function key is a tap; and the window losing focus with Ctrl still down
+  puts the list away, because that `keyup` will never come. From the
+  palette or the View menu there is no key to let go of, so the action is
+  the tap.
 
 ## The Git panel
 

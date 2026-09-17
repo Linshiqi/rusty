@@ -655,6 +655,12 @@ fn show_document(state: AppState, document: Document, announce: bool) {
             caret: None,
         }));
     }
+    // One of the two doors a file comes on screen through; `front_parked` is
+    // the other. Ctrl+Tab's order is read off this.
+    state
+        .editor
+        .recent
+        .update_value(|recent| recent.touch(&document.path));
     state.editor.document.set(Some(document));
 }
 
@@ -748,6 +754,10 @@ fn front_parked(state: AppState, path: &str) -> bool {
     state.editor.draft.set(entry.draft.clone());
     state.editor.echo_text.set(entry.draft);
     state.editor.highlighted.set(entry.highlighted);
+    state
+        .editor
+        .recent
+        .update_value(|recent| recent.touch(path));
     state.editor.document.set(Some(entry.document));
     // Back to what was on screen, not merely to the caret: the view puts the
     // caret where it was without scrolling, then the scroller where it was.

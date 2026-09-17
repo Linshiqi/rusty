@@ -84,6 +84,21 @@ pub fn defaults() -> Vec<Binding> {
             default: "Alt+ArrowRight".into(),
             action: Action::NavForward,
         },
+        // VS Code's pair. Held, the chord walks the list and letting go of
+        // its modifiers opens the pick — whatever it is rebound to, which is
+        // why `view/switcher.rs` matches these ids rather than the keys.
+        Binding {
+            id: "editor.switch".into(),
+            label: t!("bind.switch-editor"),
+            default: "Ctrl+Tab".into(),
+            action: Action::SwitchEditor,
+        },
+        Binding {
+            id: "editor.switch-back".into(),
+            label: t!("bind.switch-editor-back"),
+            default: "Ctrl+Shift+Tab".into(),
+            action: Action::SwitchEditorBack,
+        },
         Binding {
             id: "search.project".into(),
             label: t!("bind.search"),

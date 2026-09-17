@@ -279,6 +279,96 @@ impl NavHistory {
     }
 }
 
+/// A group's open files in the order they were last on screen, most recent
+/// first — Ctrl+Tab's order, VS Code's "most recently used editor in group".
+///
+/// A ranking, reconciled with the strip each time it is read ([`Self::order`])
+/// rather than kept in step with it: a tab that closed, moved to the other
+/// group or was renamed drops out on the next read, and a tab nobody has
+/// fronted yet — a strip restored from last session — follows the ones that
+/// were, in strip order. Keeping it in step would be one more list of every
+/// place a tab can change, and a list like that drifts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecentEditors {
+    paths: Vec<String>,
+}
+
+impl RecentEditors {
+    /// Far more than a strip holds; past it the oldest go, as `NavHistory`'s do.
+    const CAP: usize = 64;
+
+    /// `path` has just been put on screen.
+    pub fn touch(&mut self, path: &str) {
+        self.paths.retain(|recent| recent != path);
+        self.paths.insert(0, path.to_string());
+        self.paths.truncate(Self::CAP);
+    }
+
+    /// Every tab on the strip, the one on screen first, then the rest by how
+    /// recently they were, then any never fronted in strip order.
+    pub fn order(&self, tabs: &[String], active: Option<&str>) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(tabs.len());
+        let first = active.into_iter().map(str::to_string);
+        for path in first
+            .chain(self.paths.iter().cloned())
+            .chain(tabs.iter().cloned())
+        {
+            if tabs.contains(&path) && !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+}
+
+/// Ctrl+Tab's list, while Ctrl is held: whose files, in recent order, and the
+/// one letting go will open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Switcher {
+    pub group: Group,
+    pub paths: Vec<String>,
+    pub at: usize,
+    /// Drawn yet. A tap — Ctrl+Tab and straight off — switches before the
+    /// list would appear, so flipping between two files never flashes it.
+    pub shown: bool,
+}
+
+impl Switcher {
+    /// The list for `paths` (the file on screen first), on the file before
+    /// it — so a tap goes back, and a second tap comes back again — or, going
+    /// backwards, on the least recent. Nothing when there is nothing to
+    /// switch to.
+    pub fn open(group: Group, paths: Vec<String>, back: bool) -> Option<Self> {
+        if paths.len() < 2 {
+            return None;
+        }
+        let at = if back { paths.len() - 1 } else { 1 };
+        Some(Switcher {
+            group,
+            paths,
+            at,
+            shown: false,
+        })
+    }
+
+    /// One more press: the next row, or the one before, wrapping at both ends.
+    pub fn step(&mut self, back: bool) {
+        let count = self.paths.len();
+        if count == 0 {
+            return;
+        }
+        self.at = if back {
+            (self.at + count - 1) % count
+        } else {
+            (self.at + 1) % count
+        };
+    }
+
+    pub fn picked(&self) -> Option<&str> {
+        self.paths.get(self.at).map(String::as_str)
+    }
+}
+
 /// What the bottom dock is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DockTab {
@@ -904,6 +994,10 @@ pub struct Editor {
     pub history: RwSignal<EditHistory>,
     /// Where the caret has been. Shared by Vim's jump keys and the menu.
     pub nav: RwSignal<NavHistory>,
+    /// This group's files by how recently each was on screen: Ctrl+Tab's
+    /// order. Not reactive — nothing draws it; the switcher reads it once,
+    /// when it opens.
+    pub recent: StoredValue<RecentEditors>,
     /// A rename waiting for its new name: where the symbol is, and what it
     /// is called now. `None` when no rename is being typed.
     pub rename: RwSignal<Option<(String, u32, u32, String)>>,
@@ -1016,6 +1110,7 @@ impl Editor {
             parked: RwSignal::new(Vec::new()),
             history: RwSignal::new(EditHistory::default()),
             nav: RwSignal::new(NavHistory::default()),
+            recent: StoredValue::new(RecentEditors::default()),
             rename: RwSignal::new(None),
             reveal: RwSignal::new(None),
             viewport: RwSignal::new(None),
@@ -1896,6 +1991,8 @@ pub struct Layout {
     pub tree_hidden: RwSignal<bool>,
     /// The file finder (Ctrl+P) is up.
     pub quick_open: RwSignal<bool>,
+    /// Ctrl+Tab's list, while Ctrl is held.
+    pub switcher: RwSignal<Option<Switcher>>,
 }
 
 impl Layout {
@@ -2240,6 +2337,7 @@ impl AppState {
                 )),
                 tree_hidden: RwSignal::new(stored_tree_hidden()),
                 quick_open: RwSignal::new(false),
+                switcher: RwSignal::new(None),
             },
             dock: Dock {
                 lines: RwSignal::new(Vec::new()),
@@ -2711,5 +2809,105 @@ mod nav_tests {
             "the newest position survives the cap",
         );
         assert_eq!(nav.at, nav.entries.len() - 1, "and stays pointed at it");
+    }
+}
+
+#[cfg(test)]
+mod switcher_tests {
+    use super::*;
+
+    fn paths(list: &[&str]) -> Vec<String> {
+        list.iter().map(|path| path.to_string()).collect()
+    }
+
+    /// Visited `b`, then `c`, then back to `a`: the one on screen, then the
+    /// last one before it, then the one before that — and a tab never
+    /// fronted since the strip was restored comes last, in strip order.
+    #[test]
+    fn the_order_is_the_one_on_screen_then_most_recent_then_the_strip() {
+        let tabs = paths(&["a.rs", "b.rs", "c.rs", "restored.rs"]);
+        let mut recent = RecentEditors::default();
+        for path in ["b.rs", "c.rs", "a.rs"] {
+            recent.touch(path);
+        }
+        assert_eq!(
+            recent.order(&tabs, Some("a.rs")),
+            paths(&["a.rs", "c.rs", "b.rs", "restored.rs"])
+        );
+    }
+
+    /// Nothing is kept in step with the strip: a closed tab simply is not
+    /// listed, and a tab that went to the other group is not this group's.
+    #[test]
+    fn a_tab_no_longer_on_the_strip_drops_out() {
+        let mut recent = RecentEditors::default();
+        for path in ["closed.rs", "b.rs", "a.rs"] {
+            recent.touch(path);
+        }
+        assert_eq!(
+            recent.order(&paths(&["a.rs", "b.rs"]), Some("a.rs")),
+            paths(&["a.rs", "b.rs"])
+        );
+    }
+
+    /// The case a tap exists for: Ctrl+Tab lands on the file before this
+    /// one, and from there on this one — two files flipped at the speed of
+    /// the key.
+    #[test]
+    fn a_tap_opens_the_file_before_and_the_next_tap_comes_back() {
+        let tabs = paths(&["a.rs", "b.rs", "c.rs"]);
+        let mut recent = RecentEditors::default();
+        for path in ["c.rs", "a.rs", "b.rs"] {
+            recent.touch(path);
+        }
+        let first = Switcher::open(Group::First, recent.order(&tabs, Some("b.rs")), false)
+            .expect("three files to switch between");
+        assert_eq!(first.picked(), Some("a.rs"));
+
+        recent.touch("a.rs");
+        let second = Switcher::open(Group::First, recent.order(&tabs, Some("a.rs")), false)
+            .expect("still three");
+        assert_eq!(second.picked(), Some("b.rs"));
+    }
+
+    /// Held, each Tab walks down and each Shift+Tab up, round at both ends;
+    /// Ctrl+Shift+Tab alone starts from the least recent.
+    #[test]
+    fn a_held_list_steps_both_ways_and_wraps() {
+        let list = paths(&["a.rs", "b.rs", "c.rs"]);
+        let mut switcher = Switcher::open(Group::First, list.clone(), false).unwrap();
+        switcher.step(false);
+        assert_eq!(switcher.picked(), Some("c.rs"));
+        switcher.step(false);
+        assert_eq!(switcher.picked(), Some("a.rs"), "past the end is the top");
+        switcher.step(true);
+        assert_eq!(switcher.picked(), Some("c.rs"), "and back up");
+
+        let backwards = Switcher::open(Group::Second, list, true).unwrap();
+        assert_eq!(backwards.picked(), Some("c.rs"));
+    }
+
+    #[test]
+    fn one_file_has_nothing_to_switch_to() {
+        assert!(Switcher::open(Group::First, paths(&["a.rs"]), false).is_none());
+        assert!(Switcher::open(Group::First, Vec::new(), true).is_none());
+    }
+
+    #[test]
+    fn the_ranking_keeps_its_newest_and_forgets_its_oldest() {
+        let mut recent = RecentEditors::default();
+        for index in 0..100 {
+            recent.touch(&format!("{index}.rs"));
+        }
+        recent.touch("7.rs");
+        let tabs: Vec<String> = (0..100).map(|index| format!("{index}.rs")).collect();
+        let order = recent.order(&tabs, None);
+        assert_eq!(order[0], "7.rs", "a file touched again moves to the front");
+        assert_eq!(order[1], "99.rs");
+        assert_eq!(
+            order.len(),
+            100,
+            "a forgotten tab still lists, in strip order"
+        );
     }
 }

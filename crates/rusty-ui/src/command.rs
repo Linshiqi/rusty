@@ -66,6 +66,12 @@ pub enum Action {
     /// Back and forward through the positions the caret has visited.
     NavBack,
     NavForward,
+    /// The focused group's files, most recently used first — Ctrl+Tab, and
+    /// Ctrl+Shift+Tab to start from the least recent. Held, the keys walk
+    /// the list and letting go opens the pick (`view/switcher.rs`); run from
+    /// the palette or a menu, it is a tap.
+    SwitchEditor,
+    SwitchEditorBack,
     /// Comment or uncomment the selected lines. Not a Vim feature — this
     /// editor had none at all, in any mode.
     ToggleComment,
@@ -202,6 +208,16 @@ pub fn all(state: AppState) -> Vec<Command> {
         Action::NavForward,
         &t!("menu.view.forward"),
         chord(Action::NavForward),
+    ));
+    out.push(view(
+        Action::SwitchEditor,
+        &t!("menu.view.switch-editor"),
+        chord(Action::SwitchEditor),
+    ));
+    out.push(view(
+        Action::SwitchEditorBack,
+        &t!("menu.view.switch-editor-back"),
+        chord(Action::SwitchEditorBack),
     ));
     out.push(view(Action::ToggleVim, &t!("menu.view.vim"), None));
     out.push(view(
@@ -392,6 +408,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             Action::NavForward,
             &t!("menu.view.forward"),
             chord(Action::NavForward),
+        ),
+        project_entry(
+            Action::SwitchEditor,
+            &t!("menu.view.switch-editor"),
+            chord(Action::SwitchEditor),
         ),
         Item::Separator,
         entry(Action::ToggleVim, &t!("menu.view.vim"), None),
@@ -705,6 +726,13 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         // there are two.
         Action::NavBack => controller::nav_back(state.focused()),
         Action::NavForward => controller::nav_forward(state.focused()),
+        // With no key held there is nothing to let go of, so open and commit
+        // together: the tap. The held form never comes through here — the
+        // switcher's own listener takes the keys first (`view/switcher.rs`).
+        Action::SwitchEditor | Action::SwitchEditorBack => {
+            controller::switch_editor(state, action == Action::SwitchEditorBack);
+            controller::commit_switch(state);
+        }
         Action::ToggleVim => {
             let on = !state.editor.vim_on.get_untracked();
             controller::set_vim(state, on);

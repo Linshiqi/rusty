@@ -1406,8 +1406,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 }
                             }
                             // A text area would move focus on Tab. In an editor
-                            // that is never what was meant.
-                            if event.key() == "Tab" {
+                            // that is never what was meant. A Tab with Ctrl or
+                            // Alt is somebody else's — Ctrl+Tab switches files,
+                            // and in a window with no switcher (a detached
+                            // editor) it must not indent either.
+                            if event.key() == "Tab"
+                                && !event.ctrl_key()
+                                && !event.alt_key()
+                                && !event.meta_key()
+                            {
                                 event.prevent_default();
                                 if let Some(element) = area.get_untracked() {
                                     insert_at_caret(&element, state, "    ");

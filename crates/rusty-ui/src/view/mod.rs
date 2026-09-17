@@ -28,6 +28,7 @@ mod run;
 pub mod settings;
 mod setup;
 pub mod split;
+mod switcher;
 pub mod terminal;
 pub mod transport;
 mod update;
@@ -180,6 +181,7 @@ pub fn App() -> impl IntoView {
         palette_open,
     };
     palette::install(state, chrome);
+    switcher::install(state, chrome);
     // Only the shell listens for a file coming home; a detached window has no
     // business reopening one.
     controller::watch_reattach(state);
@@ -204,6 +206,7 @@ pub fn App() -> impl IntoView {
 
                 <palette::Palette open=palette_open chrome=chrome />
                 <quick::QuickOpen />
+                <switcher::EditorSwitcher />
                 // The environment check. Anchored to the working area like
                 // every other overlay, so it cannot cover the title bar and
                 // leave a window with no way out.

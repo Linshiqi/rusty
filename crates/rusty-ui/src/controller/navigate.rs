@@ -457,3 +457,90 @@ pub fn open_at(state: AppState, path: String, line: u32, col: u32) {
     remember_jump(state, &target);
     state.editor.reveal.set(Some(target));
 }
+
+// ─── Ctrl+Tab ───────────────────────────────────────────────────────────────
+
+/// How long Ctrl has to stay down before the list is drawn. A tap switches
+/// well inside it, so going back and forth between two files never flashes
+/// a list nobody meant to read.
+const SWITCHER_DELAY_MS: u64 = 150;
+
+/// Ctrl+Tab, or Ctrl+Shift+Tab: open the focused group's files, most recently
+/// used first, on the one before this — or, while the list is already open,
+/// move along it. Letting go of Ctrl is [`commit_switch`].
+pub fn switch_editor(state: AppState, back: bool) {
+    if state.layout.switcher.with_untracked(Option::is_some) {
+        state.layout.switcher.update(|switcher| {
+            if let Some(switcher) = switcher {
+                switcher.step(back);
+            }
+        });
+        return;
+    }
+    let group = state.focused();
+    let tabs = group.editor.tabs.get_untracked();
+    let active = group.active_path_now();
+    let paths = group
+        .editor
+        .recent
+        .with_value(|recent| recent.order(&tabs, active.as_deref()));
+    let Some(switcher) = crate::state::Switcher::open(group.group, paths, back) else {
+        return;
+    };
+    state.layout.switcher.set(Some(switcher));
+    set_timeout(
+        move || {
+            let waiting = state
+                .layout
+                .switcher
+                .with_untracked(|switcher| switcher.as_ref().is_some_and(|s| !s.shown));
+            if waiting {
+                state.layout.switcher.update(|switcher| {
+                    if let Some(switcher) = switcher {
+                        switcher.shown = true;
+                    }
+                });
+            }
+        },
+        std::time::Duration::from_millis(SWITCHER_DELAY_MS),
+    );
+}
+
+/// Open the file the list is on, and close the list. From the palette or the
+/// menu — where no key is held — this follows `switch_editor` at once, so it
+/// is the tap: back to the file before.
+pub fn commit_switch(state: AppState) {
+    let Some(switcher) = state.layout.switcher.get_untracked() else {
+        return;
+    };
+    state.layout.switcher.set(None);
+    let Some(path) = switcher.picked().map(str::to_string) else {
+        return;
+    };
+    // The editor is where the file will be: Files, or Search, which keeps
+    // one beside its results — the same rule a search hit follows.
+    let panel = state.layout.panel.get_untracked();
+    if panel != "files" && panel != "search" {
+        state.layout.panel.set("files".to_string());
+    }
+    state.layout.focus.set(switcher.group);
+    activate_tab(state.group(switcher.group), path);
+}
+
+/// Escape, a click outside the list, or the window losing focus with Ctrl
+/// still down: close it and open nothing.
+pub fn cancel_switch(state: AppState) {
+    if state.layout.switcher.with_untracked(Option::is_some) {
+        state.layout.switcher.set(None);
+    }
+}
+
+/// A row clicked: that file.
+pub fn pick_switch(state: AppState, index: usize) {
+    state.layout.switcher.update(|switcher| {
+        if let Some(switcher) = switcher.as_mut().filter(|s| index < s.paths.len()) {
+            switcher.at = index;
+        }
+    });
+    commit_switch(state);
+}
