@@ -18,6 +18,7 @@ mod cursors;
 mod format;
 mod gitlog;
 mod i18n;
+mod inlay;
 mod ipc;
 mod paint;
 mod state;

@@ -45,6 +45,10 @@ struct EchoRow {
     folded: Option<u32>,
     /// How many indent guides it draws (`guides.rs`).
     guides: u8,
+    /// The inlay hints drawn in it (`hints.rs`).
+    hints: Vec<Placed>,
+    /// The name drawn as a link, while Ctrl is held over it.
+    link: Option<(u32, u32)>,
 }
 
 /// The two stacked layers: highlighted text underneath, a transparent text
@@ -85,6 +89,78 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     // keep in step. And the blink restart: which of two identical animations
     // the cursor runs flips on every move (`input.css`).
     let selection_moves = RwSignal::new(0u32);
+    // A drag the editor is following (`pointer.rs`), and how far an input
+    // method's composition shifts the textarea (`caret_shift`).
+    let drag = StoredValue::new(None::<Drag>);
+    follow_drags(state, area, scroller, drag);
+    follow_caret(state, area, scroller, selection_moves);
+    let ime_shift = RwSignal::new(0.0_f64);
+
+    // The name under the pointer drawn as a link while Ctrl is held — only
+    // one with a definition to go to, as VS Code's is: (line, from, to).
+    let link = RwSignal::new(None::<(u32, u32, u32)>);
+    let link_turn = StoredValue::new(0u64);
+    let unlink = move || {
+        link_turn.update_value(|turn| *turn += 1);
+        if link.get_untracked().is_some() {
+            link.set(None);
+        }
+    };
+    let probe_link = {
+        let path = path.clone();
+        move |cell: Option<(u32, u32)>| {
+            let Some((line, col)) = cell.filter(|_| is_rust) else {
+                unlink();
+                return;
+            };
+            let span = state.editor.draft.with_untracked(|draft| {
+                name_span(
+                    draft.split('\n').nth(line as usize).unwrap_or_default(),
+                    col,
+                )
+            });
+            let Some((from, to)) = span else {
+                unlink();
+                return;
+            };
+            if link.get_untracked() == Some((line, from, to)) {
+                return;
+            }
+            unlink();
+            let turn = link_turn.get_value();
+            controller::has_definition(path.clone(), line, col, move |found| {
+                if found && link_turn.try_get_value() == Some(turn) {
+                    let _ = link.try_set(Some((line, from, to)));
+                }
+            });
+        }
+    };
+    // Ctrl pressed or let go with the pointer still: the link follows the
+    // key, not only the pointer.
+    {
+        let probe_link = probe_link.clone();
+        let pressed = window_event_listener(ev::keydown, move |event| {
+            if matches!(event.key().as_str(), "Control" | "Meta") && !event.repeat() {
+                probe_link(hover_cell.get_untracked());
+            }
+        });
+        let released = window_event_listener(ev::keyup, move |event| {
+            if matches!(event.key().as_str(), "Control" | "Meta") {
+                unlink();
+            }
+        });
+        let blurred = window_event_listener(ev::blur, move |_| unlink());
+        let listeners = StoredValue::new_local(Some((pressed, released, blurred)));
+        on_cleanup(move || {
+            if let Some(Some((pressed, released, blurred))) =
+                listeners.try_update_value(Option::take)
+            {
+                pressed.remove();
+                released.remove();
+                blurred.remove();
+            }
+        });
+    }
 
     let zoom = state.editor.zoom;
 
@@ -144,13 +220,36 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     });
     // The height of `rows` rows, as a spacer's style.
     let spacer = move |rows: u32| format!("height: {}px", f64::from(rows) * row_height(zoom.get()));
-    // The widest line, which the text column is at least as wide as.
-    let widest = Memo::new(move |_| {
-        state
-            .editor
-            .draft
-            .with(|text| text.split('\n').map(line_px).fold(0.0, f64::max))
-    });
+    // The widest line as drawn, hints and all, which the text column is at
+    // least as wide as.
+    let widest = {
+        let path = path.clone();
+        Memo::new(move |_| {
+            let mut hinted = std::collections::HashMap::new();
+            if state.editor.view.with(|view| view.inlay_hints) {
+                state.editor.hints.with(|set| {
+                    for hint in set
+                        .iter()
+                        .filter(|set| set.path == path)
+                        .flat_map(|set| &set.hints)
+                    {
+                        hinted
+                            .entry(hint.line)
+                            .or_insert_with(|| placed_on(set.as_ref(), &path, hint.line));
+                    }
+                });
+            }
+            state.editor.draft.with(|text| {
+                text.split('\n')
+                    .enumerate()
+                    .map(|(index, line)| match hinted.get(&(index as u32)) {
+                        Some(hints) => HintedLine { text: line, hints }.width_px(&advance_of),
+                        None => line_px(line),
+                    })
+                    .fold(0.0, f64::max)
+            })
+        })
+    };
     // Where the caret is in the document while nothing is selected: what the
     // bracket beside it and the name under it are marked from. It follows
     // every way the caret moves (`selection_moves`) and every edit.
@@ -336,13 +435,23 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 let guides = levels
                                     .with(|levels| levels.get(index as usize).copied())
                                     .unwrap_or(0);
+                                let hints = hints_on(state, &path, index);
+                                let link = link
+                                    .get()
+                                    .filter(|(line, ..)| *line == index)
+                                    .map(|(_, from, to)| (from, to));
                                 Some(EchoRow {
-                                    key: (index, row_hash(&line, &diags, folded, guides)),
+                                    key: (
+                                        index,
+                                        row_hash(&line, &diags, &hints, link, folded, guides),
+                                    ),
                                     index,
                                     line,
                                     diags,
                                     folded,
                                     guides,
+                                    hints,
+                                    link,
                                 })
                             })
                             .collect::<Vec<_>>()
@@ -950,7 +1059,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     // structure the caret math and diagnostics rely on. Only
                     // the matches in the window, their lines found in one walk
                     // down the text.
-                    {move || {
+                    {
+                        let path = path.clone();
+                        move || {
                         if !state.find.open.get() {
                             return ().into_any();
                         }
@@ -973,10 +1084,10 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                             && range.contains(&row_for(state, found.line))
                                     })
                                     .map(|(index, found)| {
-                                        let x = col_left(found.text, 0, found.col, z);
-                                        let width = ((column_px(found.text, 0, found.end_col)
-                                            - column_px(found.text, 0, found.col))
-                                            * z)
+                                        let hints = hints_on(state, &path, found.line);
+                                        let x = char_left(found.text, &hints, found.col, z);
+                                        let width = (edge_left(found.text, &hints, found.end_col, z)
+                                            - x)
                                             .max(2.0);
                                         let y = row_top(state, found.line, z);
                                         let wash = if index == current {
@@ -1029,10 +1140,10 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                                 })
                                                 .filter_map(|r| {
                                                     let content = text.split('\n').nth(r.start_line as usize)?;
-                                                    let x = col_left(content, 0, r.start_col, z);
-                                                    let width = ((column_px(content, 0, r.end_col)
-                                                        - column_px(content, 0, r.start_col))
-                                                        * z)
+                                                    let hints = hints_on(state, &path, r.start_line);
+                                                    let x = char_left(content, &hints, r.start_col, z);
+                                                    let width = (edge_left(content, &hints, r.end_col, z)
+                                                        - x)
                                                         .max(2.0);
                                                     let y = row_top(state, r.start_line, z);
                                                     Some(view! {
@@ -1053,7 +1164,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     }
                     // The bracket beside the caret and the one it pairs with,
                     // outlined — so where a block ends is a glance, not a count.
-                    {move || {
+                    {
+                        let path = path.clone();
+                        move || {
                         let Some((open, close)) = brackets.get() else {
                             return ().into_any();
                         };
@@ -1071,10 +1184,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     })
                                     .filter_map(|(line, col)| {
                                         let content = text.split('\n').nth(line as usize)?;
-                                        let x = col_left(content, 0, col, z);
-                                        let width = (column_px(content, 0, col + 1)
-                                            - column_px(content, 0, col))
-                                            * z;
+                                        let hints = hints_on(state, &path, line);
+                                        let x = char_left(content, &hints, col, z);
+                                        let width = edge_left(content, &hints, col + 1, z) - x;
                                         let y = row_top(state, line, z);
                                         Some(view! {
                                             <div
@@ -1090,6 +1202,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             })
                             .into_any()
                     }}
+                    // Every selection, washed behind the text (`selection.rs`).
+                    {selections(state, path.clone(), area, window, selection_moves)}
                     <pre
                         class=move || {
                             let base = "pointer-events-none m-0 overflow-visible py-2 pr-4 \
@@ -1182,7 +1296,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 view! {
                                     <div class="relative">
                                         {guides}
-                                        {decorate(row.line, row.index, &row.diags)}
+                                        {decorate(row.line, row.index, &row.diags, &row.hints, row.link)}
                                         {summary}
                                         // An empty line still occupies one, or
                                         // the caret above sits a row too high
@@ -1234,18 +1348,29 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             state.editor.vim_on.get()
                                 && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert)
                         }
-                        class=move || {
-                            let base = "absolute inset-0 m-0 resize-none overflow-hidden \
-                                        border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre \
-                                        text-transparent caret-rust outline-none";
-                            // Outside insert mode the cursor is drawn below,
-                            // and the textarea's own caret is hidden for the
-                            // one moment a paste makes it writable.
-                            let modal = state.editor.vim_on.get()
-                                && state.editor.vim.with(|vim| vim.mode != crate::vim::Mode::Insert);
-                            if modal { format!("{base} vim-modal") } else { base.to_string() }
+                        // Its own caret and selection hidden: it lays the
+                        // text out without the hints the echo draws inside
+                        // a line, so both are drawn where the text is
+                        // (`selection.rs`).
+                        class="editor-input absolute inset-0 m-0 resize-none overflow-hidden \
+                               border-0 bg-transparent py-2 pr-4 pl-2 whitespace-pre \
+                               text-transparent caret-transparent outline-none"
+                        // Shifted while an input method composes, by what the
+                        // hints before the caret push the drawn one along: the
+                        // input method places its window at the textarea's own
+                        // caret, which does not know about them.
+                        style=move || {
+                            let shift = ime_shift.get();
+                            let mut style = metrics.get();
+                            if shift != 0.0 {
+                                style.push_str(&format!("; transform: translateX({shift}px)"));
+                            }
+                            // The hand over a link, as over any other.
+                            if link.get().is_some() {
+                                style.push_str("; cursor: pointer");
+                            }
+                            style
                         }
-                        style=move || metrics.get()
                         on:selectionchange=move |_| selection_moves.update(|n| *n = n.wrapping_add(1))
                         // What the textarea holds is the *screen* text, which
                         // is the draft minus every folded region. Identical to
@@ -1302,30 +1427,13 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 event.prevent_default();
                             }
                         }
-                        // The word, not the word and the space after it —
-                        // VS Code's double-click, not Windows' (see
-                        // `word_selection_overhang`).
-                        on:dblclick=move |_| {
-                            let Some(element) = area.get_untracked() else {
-                                return;
-                            };
-                            let (Ok(Some(start)), Ok(Some(end))) =
-                                (element.selection_start(), element.selection_end())
-                            else {
-                                return;
-                            };
-                            if end <= start {
-                                return;
-                            }
-                            let value = element.value();
-                            let picked = &value[byte_of_utf16(&value, start as usize)
-                                ..byte_of_utf16(&value, end as usize)];
-                            let overhang = word_selection_overhang(picked);
-                            if overhang > 0 {
-                                let _ = element.set_selection_end(Some(end - overhang));
+                        on:compositionstart=move |_| {
+                            multi_compose(state);
+                            if let Some(element) = area.get_untracked() {
+                                ime_shift.set(caret_shift(state, &element));
                             }
                         }
-                        on:compositionstart=move |_| multi_compose(state)
+                        on:compositionend=move |_| ime_shift.set(0.0)
                         on:mousedown={
                             let path = path.clone();
                             move |event: ev::MouseEvent| {
@@ -1342,19 +1450,26 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     controller::dismiss_completion(state);
                                     state.editor.signature.set(None);
                                     state.editor.actions.set(None);
+                                    // Where the press lands is this editor's
+                                    // arithmetic, not the textarea's (`pointer.rs`).
+                                    if let Some(element) = area.get_untracked() {
+                                        press(state, &element, drag, &event);
+                                    }
                                     return;
                                 }
                                 event.prevent_default();
+                                unlink();
                                 // A pixel names a *row*; the server wants a
-                                // document line. `screen` and `line_of_row`
-                                // are both the identity while nothing is
-                                // folded.
-                                if let Some((row, col)) = cell_under(
-                                    &screen(state),
-                                    event.offset_x() as f64,
-                                    event.offset_y() as f64,
-                                    zoom.get_untracked(),
-                                ) {
+                                // document line. `line_of_row` is the
+                                // identity while nothing is folded.
+                                let Some(element) = area.get_untracked() else {
+                                    return;
+                                };
+                                let (x, y) = point_in_column(
+                                    &element,
+                                    (f64::from(event.client_x()), f64::from(event.client_y())),
+                                );
+                                if let Some((row, col)) = cell_at_point(state, x, y) {
                                     controller::goto_definition(
                                         state,
                                         path.clone(),
@@ -1366,17 +1481,25 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         }
                         on:mousemove={
                             let path = path.clone();
+                            let probe_link = probe_link.clone();
                             move |event: ev::MouseEvent| {
                                 if !is_rust {
                                     return;
                                 }
-                                let cell = cell_under(
-                                    &screen(state),
-                                    event.offset_x() as f64,
-                                    event.offset_y() as f64,
-                                    zoom.get_untracked(),
-                                )
-                                .map(|(row, col)| (line_of_row(state, row), col));
+                                let Some(element) = area.get_untracked() else {
+                                    return;
+                                };
+                                let (x, y) = point_in_column(
+                                    &element,
+                                    (f64::from(event.client_x()), f64::from(event.client_y())),
+                                );
+                                let cell = cell_at_point(state, x, y)
+                                    .map(|(row, col)| (line_of_row(state, row), col));
+                                if event.ctrl_key() || event.meta_key() {
+                                    probe_link(cell);
+                                } else {
+                                    unlink();
+                                }
                                 if hover_cell.get_untracked() == cell {
                                     return;
                                 }
@@ -1444,6 +1567,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             }
                         }
                         on:mouseleave=move |_| {
+                            unlink();
                             hover_cell.set(None);
                             let generation = hover_gen.get_untracked() + 1;
                             hover_gen.set(generation);
@@ -1929,14 +2053,25 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         let (line, x, width) = state.editor.draft.with(|text| {
                             let cursor = vim_cursor(state, &element, path.as_deref(), text);
                             let (line, col, under) = cursor_cell(text, cursor);
+                            let content = text.split('\n').nth(line as usize).unwrap_or_default();
+                            let hints = path
+                                .as_deref()
+                                .map(|path| hints_on(state, path, line))
+                                .unwrap_or_default();
                             // As wide as what it covers — a tab up to its
                             // stop — and a space wide on a line break or at
                             // the end of the text, where there is nothing.
-                            let width = match under {
-                                Some(_) => column_px(text, line, col + 1) - column_px(text, line, col),
-                                None => column_px(" ", 0, 1),
-                            } * z;
-                            (line, col_left(text, line, col, z), width)
+                            match under {
+                                Some(_) => {
+                                    let x = char_left(content, &hints, col, z);
+                                    (line, x, edge_left(content, &hints, col + 1, z) - x)
+                                }
+                                None => (
+                                    line,
+                                    caret_left(content, &hints, col, z),
+                                    line_px(" ") * z,
+                                ),
+                            }
                         });
                         let y = row_top(state, line, z);
                         let blink = if moves.is_multiple_of(2) { "vim-cursor-a" } else { "vim-cursor-b" };
@@ -1953,13 +2088,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         .into_any()
                     }}
 
-                    // Every cursor but the textarea's own (`multi.rs`). After
-                    // the textarea, so they show while it has focus.
-                    {extra_cursors(state, window)}
-
-                    // What rust-analyzer infers, after the lines it is about
-                    // (`hints.rs`).
-                    {inlay_hints(state, path.clone(), window)}
+                    // A caret at every cursor (`selection.rs`). After the
+                    // textarea, so they show while it has focus.
+                    {carets(state, path.clone(), area, window, selection_moves)}
 
                     // The tests, offered where VS Code offers them — beside
                     // the item, not at the far edge of the margin — and with
@@ -1970,7 +2101,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     // lens sits on the attribute line above the item (the row
                     // VS Code draws its lens on), after that line's text, or
                     // on the item's own line when nothing is above it.
-                    {move || {
+                    {
+                        let lens_path = path.clone();
+                        move || {
                         let found = runnables.get();
                         if found.is_empty() {
                             return ().into_any();
@@ -1984,7 +2117,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         found
                             .into_iter()
                             .filter_map(|r| {
-                                let (line, col) = lens_anchor(&lines, r.line)?;
+                                let line = lens_line(&lines, r.line)?;
                                 // Inside a collapsed region the header stands
                                 // for the line, and a stack of lenses on one
                                 // header would say nothing readable.
@@ -1992,7 +2125,10 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 if line_of_row(state, row) != line || !range.contains(&row) {
                                     return None;
                                 }
-                                let x = col_left(&draft, line, col, z);
+                                // After everything drawn on the line, hints too.
+                                let content = lines.get(line as usize).copied().unwrap_or_default();
+                                let x = line_right(content, &hints_on(state, &lens_path, line), z)
+                                    + line_px("  ") * z;
                                 let y = row_top(state, line, z);
                                 let (run_label, run_title) = match r.kind {
                                     rusty_edit::RunnableKind::Module => (
@@ -2087,12 +2223,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 return ().into_any();
                             }
                             let (range, text) = (card.range, card.text);
-                            let x = 8.0
-                                + column_px(
-                                    &state.editor.draft.get_untracked(),
-                                    range.start_line,
-                                    range.start_col,
-                                ) * zoom.get();
+                            let content = state.editor.draft.with_untracked(|draft| {
+                                draft
+                                    .split('\n')
+                                    .nth(range.start_line as usize)
+                                    .unwrap_or_default()
+                                    .to_string()
+                            });
+                            let hints = hints_on(state, &path, range.start_line);
+                            let x = char_left(&content, &hints, range.start_col, zoom.get());
                             // Above the token when the token is low in the
                             // view — a card clipped by the dock reads as no
                             // card at all.
@@ -2351,7 +2490,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 return ().into_any();
                             }
                             let chosen = picked.get().min(shown.len() - 1);
-                            let x = col_left(&draft, popup.line, popup.word_start, zoom.get());
+                            let content = draft.split('\n').nth(popup.line as usize).unwrap_or_default();
+                            let hints = hints_on(state, &path, popup.line);
+                            let x = char_left(content, &hints, popup.word_start, zoom.get());
                             let place =
                                 card_place(state, popup.line, zoom.get(), opens_up(popup.line));
                             // A window around the selection rather than a

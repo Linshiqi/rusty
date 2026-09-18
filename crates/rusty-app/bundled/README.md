@@ -10,6 +10,12 @@ fills this directory and the release workflow runs it before every build.
   where they publish them. Not macOS, which has CodeLLDB instead.
 - `espflash/` — the flasher, prebuilt, so a machine that has just installed
   Rust does not have to compile it first.
+- `rusty-shell.exe` — the built-in shell as a console program of its own,
+  on Windows only, built by the release workflow rather than by the script.
+  The app is a GUI-subsystem executable in a release build, and a
+  pseudoconsole hosts console programs only: re-entered as the terminal's
+  shell, the app exited 0 having printed nothing. Elsewhere the app re-enters
+  itself (`--builtin-shell`), as a debug build on Windows does too.
 - `codelldb/` — the LLDB adapter, on Windows and macOS. Not on Linux: it
   carries a hundred and thirty megabytes of host LLDB, and the AppImage
   bundler walks every ELF among the app's resources — which is how QEMU's

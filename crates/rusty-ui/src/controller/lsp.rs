@@ -396,6 +396,9 @@ pub fn request_hints(state: AppState, path: String) {
         from,
         to,
     };
+    // What the server was asked about: an answer that lands after more
+    // typing is about this text, and is carried to the one on screen.
+    let asked = state.editor.draft.get_untracked();
     spawn_local(async move {
         // The warm-up answers with errors and empties; the hints on screen
         // stay until an answer replaces them.
@@ -407,6 +410,10 @@ pub fn request_hints(state: AppState, path: String) {
         if state.active_path_now().as_deref() != Some(path.as_str()) {
             return;
         }
+        let Some(now) = state.editor.draft.try_get_untracked() else {
+            return;
+        };
+        crate::inlay::follow(&mut hints, &asked, &now);
         hints.sort_by_key(|hint| (hint.line, hint.col));
         let _ = state.editor.hints.try_set(Some(crate::state::HintSet {
             path,
@@ -1073,6 +1080,27 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
         {
             go_to(state, location);
         }
+    });
+}
+
+/// Whether a place has a definition to go to — asked while Ctrl is held over
+/// a name, so the name reads as a link before it is clicked, as VS Code's
+/// does. `then` hears the answer; a server still warming up is a no.
+pub fn has_definition(path: String, line: u32, col: u32, then: impl FnOnce(bool) + 'static) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        line: u32,
+        col: u32,
+    }
+
+    let args = Args { path, line, col };
+    spawn_local(async move {
+        let found = matches!(
+            ipc::call::<_, Option<rusty_lsp::Location>>(cmd::lsp::DEFINITION, &args).await,
+            Ok(Some(_))
+        );
+        then(found);
     });
 }
 

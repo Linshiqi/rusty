@@ -1,6 +1,7 @@
 //! Inlay hints: what rust-analyzer infers about the code and the editor shows
-//! beside it — the type of a binding nobody wrote down, what a method chain
-//! produces at each step, which block a closing brace ends.
+//! in it — the type of a binding nobody wrote down, the name of the
+//! parameter an argument is for, what a method chain produces at each step,
+//! which block a closing brace ends.
 
 use serde_json::{Value, json};
 
@@ -47,6 +48,8 @@ impl LspClient {
                     col,
                     label: label(&hint["label"])?,
                     parameter: hint["kind"].as_u64() == Some(2),
+                    pad_left: hint["paddingLeft"].as_bool() == Some(true),
+                    pad_right: hint["paddingRight"].as_bool() == Some(true),
                 })
             })
             .collect())
@@ -54,8 +57,8 @@ impl LspClient {
 }
 
 /// A hint's label: a string, or parts to be read one after another — the
-/// parts carry places to jump to, which a label drawn beside the line has no
-/// use for.
+/// parts carry places to jump to, which a label drawn as text has no use
+/// for.
 fn label(label: &Value) -> Option<String> {
     match label {
         Value::String(text) => Some(text.clone()),
@@ -111,7 +114,8 @@ mod tests {
                 { "position": { "line": 1, "character": 11 }, "label": ": i32", "kind": 1 },
                 { "position": { "line": 2, "character": 12 },
                   "label": [{ "value": "impl " }, { "value": "Iterator", "location": {} }], "kind": 1 },
-                { "position": { "line": 1, "character": 15 }, "label": "x:", "kind": 2 },
+                { "position": { "line": 1, "character": 15 }, "label": "x:", "kind": 2,
+                  "paddingRight": true },
             ]),
         );
         let hints = client.inlay_hints("src/main.rs", 0, 99).unwrap();
@@ -123,6 +127,11 @@ mod tests {
         assert_eq!(hints[1].label, "impl Iterator");
         assert!(!hints[1].parameter);
         assert!(hints[2].parameter);
+        assert!(
+            hints[2].pad_right && !hints[2].pad_left,
+            "the padding comes as the server said"
+        );
+        assert!(!hints[0].pad_left && !hints[0].pad_right);
         // Past the end, the range stops at the end of the last line.
         let range = seen
             .lock()

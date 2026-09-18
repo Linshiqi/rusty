@@ -39,22 +39,101 @@ const COALESCE: Duration = Duration::from_millis(8);
 
 /// The argv the stored preference means.
 ///
-/// `preference` is `workbench.toml`'s `terminal_shell`; `exe` is this
-/// executable. Auto is rusty itself re-entered as the built-in shell —
-/// compiled in, so it exists wherever rusty does, starts in the time an exec
-/// takes, and reads the same on every OS. `None` means "let rusty-term pick
-/// the system default".
-fn shell_argv(preference: Option<&str>, exe: Option<&Path>) -> Option<Vec<String>> {
+/// `preference` is `workbench.toml`'s `terminal_shell`; `builtin` is what
+/// runs the built-in shell on this machine ([`builtin_argv`]). Auto is the
+/// built-in shell — compiled in, so it exists wherever rusty does, starts in
+/// the time an exec takes, and reads the same on every OS. `None` means "let
+/// rusty-term pick the system default", which is also what auto comes to
+/// where nothing can host the built-in shell.
+fn shell_argv(preference: Option<&str>, builtin: Option<Vec<String>>) -> Option<Vec<String>> {
     match preference.map(str::trim) {
         Some("system") => None,
         Some(custom) if !custom.is_empty() && custom != "auto" => Some(vec![custom.to_string()]),
-        _ => exe.map(|exe| {
-            vec![
-                exe.to_string_lossy().into_owned(),
-                "--builtin-shell".to_string(),
-            ]
-        }),
+        _ => builtin,
     }
+}
+
+/// The built-in shell as a program of its own (`rusty-term`'s `rusty-shell`).
+const SHELL_PROGRAM: &str = if cfg!(windows) {
+    "rusty-shell.exe"
+} else {
+    "rusty-shell"
+};
+
+/// What runs the built-in shell: `rusty-shell` where it ships beside the
+/// app — the installer puts it among the bundled tools — or this executable
+/// re-entered with `--builtin-shell` when it can be a pseudoconsole's program
+/// itself. `None` when neither can.
+///
+/// **A GUI-subsystem executable cannot be.** A release build on Windows is
+/// one (`windows_subsystem`, so no console window opens behind the app), and
+/// Windows connects a pseudoconsole only to console programs: re-entered as
+/// the shell, the app had no standard handles, read end-of-input at once and
+/// exited 0 having printed nothing — "The shell exited with status 0." in an
+/// empty terminal, every time on an installed app and never in a debug build,
+/// which is a console program. Whether the executable can is read off its
+/// header ([`console_subsystem`]) rather than assumed from the build.
+///
+/// Pure over its probes, like [`shell_choices`].
+fn builtin_argv(
+    exe: &Path,
+    is_file: &dyn Fn(&Path) -> bool,
+    is_console_program: &dyn Fn(&Path) -> bool,
+) -> Option<Vec<String>> {
+    let dir = exe.parent()?;
+    for candidate in [
+        dir.join(SHELL_PROGRAM),
+        dir.join("bundled").join(SHELL_PROGRAM),
+    ] {
+        if is_file(&candidate) {
+            return Some(vec![candidate.to_string_lossy().into_owned()]);
+        }
+    }
+    is_console_program(exe).then(|| {
+        vec![
+            exe.to_string_lossy().into_owned(),
+            "--builtin-shell".to_string(),
+        ]
+    })
+}
+
+/// Whether a Windows executable image is a console program, read off its PE
+/// header: the optional header's subsystem field, 3 for the console and 2
+/// for a window. `None` for anything that is not a PE image.
+///
+/// The field sits 68 bytes into the optional header in both the 32- and the
+/// 64-bit layouts, which differ only after it.
+fn console_subsystem(image: &[u8]) -> Option<bool> {
+    if image.get(..2)? != b"MZ" {
+        return None;
+    }
+    let pe = u32::from_le_bytes(image.get(0x3c..0x40)?.try_into().ok()?) as usize;
+    if image.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let field = pe + 4 + 20 + 68;
+    let subsystem = u16::from_le_bytes(image.get(field..field + 2)?.try_into().ok()?);
+    Some(subsystem == 3)
+}
+
+/// Whether this machine can run `exe` as a pseudoconsole's program. Anything
+/// but Windows can; on Windows, a console program can and a window program
+/// cannot, and a header that cannot be read is taken at its word as "no",
+/// since a shell that exits at once is the failure being avoided.
+fn hosts_a_console(exe: &Path) -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    use std::io::Read;
+    let mut head = Vec::new();
+    let read = std::fs::File::open(exe).and_then(|file| file.take(4096).read_to_end(&mut head));
+    read.is_ok() && console_subsystem(&head) == Some(true)
+}
+
+/// [`builtin_argv`] for this process.
+fn builtin_here() -> Option<Vec<String>> {
+    let exe = std::env::current_exe().ok()?;
+    builtin_argv(&exe, &|path| path.is_file(), &hosts_a_console)
 }
 
 /// What `set_terminal_shell` stores for what the picker sent: null, "" and
@@ -139,9 +218,9 @@ fn shell_choices(
 pub async fn terminal_shell_info() -> Result<ShellInfo, CommandError> {
     blocking("reading the shell preference", || {
         let preference = storage::workbench().terminal_shell;
-        let exe = std::env::current_exe().ok();
-        let active = match shell_argv(preference.as_deref(), exe.as_deref()) {
-            Some(argv) if argv.len() > 1 => "rusty's built-in shell".to_string(),
+        let builtin = builtin_here();
+        let active = match shell_argv(preference.as_deref(), builtin.clone()) {
+            Some(argv) if Some(&argv) == builtin.as_ref() => "rusty's built-in shell".to_string(),
             Some(argv) => argv.into_iter().next().unwrap_or_default(),
             None => rusty_term::default_shell(),
         };
@@ -193,10 +272,9 @@ pub async fn terminal_open(
 ) -> Result<(), CommandError> {
     let cwd = state.firmware_root().await;
     let shell = blocking("reading the shell preference", || {
-        let exe = std::env::current_exe().ok();
         shell_argv(
             storage::workbench().terminal_shell.as_deref(),
-            exe.as_deref(),
+            builtin_here(),
         )
     })
     .await?;
@@ -298,38 +376,97 @@ mod tests {
 
     #[test]
     fn the_preference_names_the_shell_that_will_run() {
-        let exe = Path::new("/opt/rusty/rusty");
-        let builtin = Some(vec![
-            "/opt/rusty/rusty".to_string(),
-            "--builtin-shell".to_string(),
-        ]);
+        let builtin = || {
+            Some(vec![
+                "/opt/rusty/rusty".to_string(),
+                "--builtin-shell".to_string(),
+            ])
+        };
 
         assert_eq!(
-            shell_argv(None, Some(exe)),
-            builtin,
+            shell_argv(None, builtin()),
+            builtin(),
             "absent is the built-in"
         );
-        assert_eq!(shell_argv(Some("auto"), Some(exe)), builtin);
+        assert_eq!(shell_argv(Some("auto"), builtin()), builtin());
         assert_eq!(
-            shell_argv(Some("  "), Some(exe)),
-            builtin,
+            shell_argv(Some("  "), builtin()),
+            builtin(),
             "blank is absent, not a program called nothing",
         );
         assert_eq!(
-            shell_argv(Some("system"), Some(exe)),
+            shell_argv(Some("system"), builtin()),
             None,
             "None hands the choice to rusty-term's default",
         );
         assert_eq!(
-            shell_argv(Some(" C:\\Program Files\\Git\\bin\\bash.exe "), Some(exe)),
+            shell_argv(Some(" C:\\Program Files\\Git\\bin\\bash.exe "), builtin()),
             Some(vec!["C:\\Program Files\\Git\\bin\\bash.exe".to_string()]),
             "a program runs as itself, trimmed",
         );
         assert_eq!(
             shell_argv(None, None),
             None,
-            "no executable to re-enter falls back to the system shell rather than to nothing",
+            "nothing to run the built-in shell falls back to the system shell rather than to nothing",
         );
+    }
+
+    /// The shell's own program wins wherever it ships — beside the app or
+    /// among the bundled tools — and the app re-enters itself only when it
+    /// can be a pseudoconsole's program: never as a window program, which
+    /// exits at once there having printed nothing.
+    #[test]
+    fn the_built_in_shell_runs_as_a_console_program_or_not_at_all() {
+        let exe = Path::new("/opt/rusty/rusty");
+        let shell = |path: &Path| path.ends_with(format!("bundled/{SHELL_PROGRAM}"));
+        let window_program = |_: &Path| false;
+        let console_program = |_: &Path| true;
+        assert_eq!(
+            builtin_argv(exe, &shell, &window_program),
+            Some(vec![
+                Path::new("/opt/rusty")
+                    .join("bundled")
+                    .join(SHELL_PROGRAM)
+                    .to_string_lossy()
+                    .into_owned()
+            ]),
+        );
+        let nothing = |_: &Path| false;
+        assert_eq!(
+            builtin_argv(exe, &nothing, &console_program),
+            Some(vec![
+                "/opt/rusty/rusty".to_string(),
+                "--builtin-shell".to_string()
+            ]),
+        );
+        assert_eq!(
+            builtin_argv(exe, &nothing, &window_program),
+            None,
+            "a window program with no shell beside it runs the system shell instead",
+        );
+    }
+
+    /// A PE header's subsystem, in a built image and in the test's own
+    /// executable — which is a console program, as `cargo test` builds it.
+    #[test]
+    fn a_console_program_is_told_from_a_window_program_by_its_header() {
+        let image = |subsystem: u16| {
+            let mut bytes = vec![0u8; 0x200];
+            bytes[..2].copy_from_slice(b"MZ");
+            bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+            bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+            let field = 0x80 + 4 + 20 + 68;
+            bytes[field..field + 2].copy_from_slice(&subsystem.to_le_bytes());
+            bytes
+        };
+        assert_eq!(console_subsystem(&image(3)), Some(true));
+        assert_eq!(console_subsystem(&image(2)), Some(false));
+        assert_eq!(console_subsystem(b"#!/bin/sh"), None);
+        assert_eq!(console_subsystem(&image(3)[..0x90]), None, "cut short");
+        if cfg!(windows) {
+            let exe = std::env::current_exe().expect("the test's executable");
+            assert!(hosts_a_console(&exe), "a test runner is a console program");
+        }
     }
 
     #[test]

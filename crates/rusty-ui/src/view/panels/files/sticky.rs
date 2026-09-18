@@ -118,7 +118,7 @@ pub(super) fn sticky_lines(
                                 {folds_column.then(|| view! { <span class="shrink-0" style=slot.clone() /> })}
                             </div>
                         </div>
-                        <div class="pr-4 pl-2 whitespace-pre">{decorate(painted, line, &[])}</div>
+                        <div class="pr-4 pl-2 whitespace-pre">{decorate(painted, line, &[], &[], None)}</div>
                     </div>
                 })
             })

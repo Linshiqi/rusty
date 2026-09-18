@@ -55,19 +55,17 @@ pub fn echo_edit(state: AppState, new: &str) {
             ask.since = paint::stale_after(ask.since, edit);
         }
     });
-    // Hints stay on the lines they are about until the next answer, and go
-    // with the lines the edit wrote.
-    if state.editor.hints.with_untracked(Option::is_some) {
+    // Hints are drawn inside their lines, so they move with the text until
+    // the next answer (`crate::inlay`) — left where they were, a type would
+    // land in the middle of the word being typed.
+    if state
+        .editor
+        .hints
+        .with_untracked(|hints| hints.as_ref().is_some_and(|set| !set.hints.is_empty()))
+    {
         state.editor.hints.update(|hints| {
             if let Some(set) = hints {
-                set.hints
-                    .retain_mut(|hint| match edit.moved(hint.line as usize) {
-                        Some(line) => {
-                            hint.line = line as u32;
-                            true
-                        }
-                        None => false,
-                    });
+                crate::inlay::follow(&mut set.hints, &old, new);
             }
         });
     }

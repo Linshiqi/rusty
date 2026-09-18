@@ -226,18 +226,26 @@ pub struct Call {
 }
 
 /// Something rust-analyzer infers about the code at a place — the type of a
-/// binding nobody wrote down, what a chain produces, the block a closing
-/// brace ends — for the editor to show beside the line.
+/// binding nobody wrote down, a parameter's name at its argument, what a
+/// chain produces, the block a closing brace ends — for the editor to draw
+/// in the line, where it belongs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InlayHint {
     pub line: u32,
     /// Where on the line it belongs, in scalars.
     pub col: u32,
-    /// `: i32`, `impl Iterator<Item = u8>`, `fn main`.
+    /// `: i32`, `sensor:`, `impl Iterator<Item = u8>`, `fn main`.
     pub label: String,
-    /// A parameter's name at an argument, rather than a type or a block.
+    /// A parameter's name at an argument, rather than a type or a block —
+    /// which is also what it belongs to: the argument after it, where every
+    /// other hint belongs to the code before it.
     pub parameter: bool,
+    /// Drawn with a space before it, so it does not read as glued to the
+    /// code: a chain's type, a closing brace's name.
+    pub pad_left: bool,
+    /// And after it: a parameter's name, before its argument.
+    pub pad_right: bool,
 }
 
 /// What a macro call turns into, fully expanded.

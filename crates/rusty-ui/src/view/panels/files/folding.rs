@@ -58,11 +58,6 @@ pub(super) fn row_top(state: AppState, line: u32, zoom: f64) -> f64 {
     PAD_PX + f64::from(row_for(state, line)) * super::row_height(zoom)
 }
 
-/// The left edge of a scalar column on a line, in pixels, at this zoom.
-pub(super) fn col_left(text: &str, line: u32, col: u32, zoom: f64) -> f64 {
-    PAD_PX + super::column_px(text, line, col) * zoom
-}
-
 /// Where a card anchored to `line` sits: hanging from the row above it when
 /// `above`, or starting just under the row otherwise. Returns the `style`
 /// fragment, because the flip is a `translateY` and not a different `top`.

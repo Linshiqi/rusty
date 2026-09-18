@@ -114,6 +114,11 @@ cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
 # stdout, what `claude mcp add rusty -- rusty-cli mcp <project>` runs.
 cargo run -p rusty-cli -- mcp <project>
 
+# A shell in a pty the way the terminal starts one, and what it printed --
+# the check that the built-in shell comes up, pointed at any executable,
+# an installed app's included (`--builtin-shell` starts no window).
+cargo run -p rusty-term --example pty_probe -- <exe> --builtin-shell
+
 # Where the seconds go when a project is opened -- the two steps that used
 # to be awaited before the window could draw anything of the new project.
 cargo run -p rusty-core --example open_cost -- <project>
@@ -148,7 +153,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
 | `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop, and `mcp` — the registry served over the Model Context Protocol |
-| `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
+| `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
 | `rusty-git` | The repository's history, Fork-shaped: `graph.rs` lays the log out into lanes and edges (pure, tested — the frontend only turns a lane into an x), `parse.rs` reads `git`'s machine formats, `repo.rs` runs the user's own `git` in the opened project. No libgit2: one binary on PATH is one implementation of the repository format to agree with |
@@ -890,7 +895,7 @@ is what it changed.
   textarea would copy and delete nothing, and a paste over one replaces it,
   as VS Code's does; a copied line goes in above the caret only when
   nothing is selected. **A double-click selects the word and not the space
-  after it** (`word_selection_overhang`): Chromium on Windows takes the
+  after it** (`pointer::word_span`): Chromium on Windows takes the
   trailing whitespace too, the platform's convention and not VS Code's, so
   a double-clicked word pasted with a space nobody typed.
   **Paste reads the `paste` event, never `navigator.clipboard.readText()`**:
@@ -1082,28 +1087,75 @@ written for one group — every component, controller and effect reads
 Indent guides, sticky scroll, inlay hints, a minimap and more than one
 cursor — VS Code's, each but the cursors switchable in Settings ▸ Editor
 (`EditorView`, `[editor]` in `workbench.toml`, written only when a switch is
-off). Every one is an overlay or a key rule, because the surface's invariant
-— the textarea and the echo line up glyph for glyph, one row per line (see
-"Code folding") — is what every other feature stands on.
+off) — and a name held under Ctrl drawn as the link it is.
 
-- **Inlay hints go at the end of the line, because a textarea cannot make
-  room inside one.** VS Code puts `: f32` after the name; here the
-  textarea's text *is* the file, and a hint inside a line would push every
-  glyph after it off the character the caret thinks it is on. So a type hint
-  is drawn after the line's text as `name: T`, and chain and closing-brace
-  hints, which are end-of-line by nature, as they come (`hints::end_of_line`,
-  tested). Parameter-name hints are off in the handshake: at the end of a
-  line `a:, b:` names nothing. The range is the semantic colours' — the whole
-  file below 3,000 lines, the lines on screen and 400 either side above — and
-  an edit moves the hints below it with the text until the new answer lands.
-- **The first answer is empty, and only a client that says so hears when it
-  is not.** rust-analyzer answers `inlayHint` while it is still indexing,
-  with nothing, and sends `workspace/inlayHint/refresh` (and the semantic
-  tokens' equivalent) when it has something — to a client declaring
-  `refreshSupport`, and to no other. Undeclared, a file open at startup had
-  no hints until somebody typed in it. The client answers the refresh and
-  passes it on as `LspEvent::Refresh`; the editor asks again 300 ms after
-  the last one.
+- **Inlay hints are drawn in the line, as VS Code draws them**:
+  `let total: f32 = both();`, `sample(sensor: &gyro)`. They were drawn at
+  the end of the line for one release, on the argument that a textarea
+  cannot make room inside a line — true, and the user's verdict on the
+  result was that it looked wrong. **The echo makes the room; the textarea
+  stops being where anything is drawn.** The hint is a span in the echo's
+  flow (`highlight::decorate`), so the rest of the line moves over; the
+  textarea still holds the file, laid out without the hints, so from a
+  line's first hint on the two layers disagree about where a character is.
+  Everything that read the textarea's layout reads `hints::HintedLine`
+  instead — one walk of a line's characters and hints, `pen_after` for tabs,
+  answering where the caret at a column stands, where a character starts,
+  where a column begins, and which column a point is on. The caret and the
+  selection are drawn (`selection.rs`; `caret-transparent` and `::selection`
+  hide the textarea's own), a press is placed rather than left to the
+  browser (`pointer.rs`, below), every overlay measures through it — find,
+  occurrences, brackets, the Vim block, the completion popup, the hover
+  card, the lens — and the widest line counts its hints, or the textarea
+  would scroll inside itself. **The textarea's value is still the screen
+  text, and every offset read off it still means what it meant**: the
+  alternative, putting the hints' text into the textarea so the browser's
+  layout included it, would have made forty reads of `selectionStart`
+  wrong by the hints above the caret, and a missed one is a wrong write.
+- **A hint belongs to one side of its column.** A type after a name, a
+  chain's type, a closing brace's block belong to the code before them; a
+  parameter's name to the argument after it. The caret at that column
+  stands on the side of the code the hint is not about — before `: f32`,
+  after `sensor: ` — so what is typed there lands beside the code the hint
+  describes, and `crate::inlay::follow` moves hints through every edit the
+  same way (`echo_edit`), and moves an answer that lands after more typing
+  from the text it was asked about to the one on screen. Dropped until the
+  next answer, a hint takes its width with it and the rest of the line
+  slides under the caret and back. Parameter names are asked for again —
+  rust-analyzer's default, which the end-of-line version had turned off.
+- **A press is placed here, not by the browser** (`pointer.rs`), because the
+  browser places it by the textarea's layout: after a hint it landed as many
+  characters along as the hint is wide. `preventDefault`, then the focus and
+  the selection by hand; a drag followed from the window, scrolling while
+  the pointer is outside the view; a double-click takes a word (a run of
+  word characters, of spaces, or one character of anything else), a
+  triple-click the line and its break, and a drag after either grows by
+  words or lines; Shift extends from the selection's anchor; a right-click
+  outside the selection moves the caret first. Points are read from the
+  text column's rectangle and not `offsetX`, because the textarea moves
+  while an input method composes.
+- **An input method reads the textarea's own caret**, which a hint before
+  it on its line leaves short of the drawn one, so the textarea is shifted
+  by exactly that (`caret_shift`, a `translateX`) from `compositionstart` to
+  `compositionend` and the candidate window stands where the caret is.
+  Measured: the shift was the hint's width to the hundredth of a pixel, and
+  gone once the text was committed.
+- **Hints arrive whole only once the server has settled.** rust-analyzer
+  answers `inlayHint` with nothing while it loads, and its
+  `workspace/inlayHint/refresh` — which reaches only a client declaring
+  `refreshSupport`, and is passed on as `LspEvent::Refresh` — can come
+  while it is still loading, so what is asked then is empty too; a
+  restarted server answered every refresh with no hints and then said
+  nothing more, the hints appearing only once somebody typed. The client
+  sends `Refresh` itself on the turn to `quiescent` as well, once per
+  settling; the editor asks again 300 ms after the last.
+- **Ctrl over a name draws it as a link** — underlined, the link colour,
+  the hand — when the server says it has a definition (`has_definition`;
+  VS Code's behaviour, and the user's request). Asked when the pointer
+  moves with Ctrl held and when Ctrl goes down with the pointer still;
+  gone when it comes up, the pointer leaves or the window loses focus. The
+  echo draws it (`decorate`'s `link`), so the text changes colour under the
+  underline rather than an overlay covering it.
 - **Sticky scroll is the fold regions read the other way** (`sticky.rs`,
   pure and tested): the headers of the regions holding the line under the
   stuck rows, outermost first, at most five, drawn in the gutter's own style.
@@ -1127,7 +1179,7 @@ off). Every one is an overlay or a key rule, because the surface's invariant
   and not otherwise.
 - **The textarea's selection is the first cursor; the others are state**
   (`editor.cursors`; `crate::cursors` is the arithmetic, pure and tested,
-  and `multi.rs` the keys). A browser keeps one selection, so with a second
+  `multi.rs` the keys, and `selection.rs` draws them all alike). A browser keeps one selection, so with a second
   cursor every key that edits or moves is taken in `keydown` and applied at
   every cursor in one pass: one document, one undo step, through the same
   record / echo / `set_buffer` path as any other write. The second cursor
@@ -1778,11 +1830,12 @@ where anyone looks for it, and the margin had no room to say "Debug".
 - **An overlay, never a row.** VS Code inserts a row above the item. This
   editor cannot: the textarea and the echo must stay glyph for glyph (see
   "Code folding"), and a row present in one and absent from the other is a
-  caret that drifts. So `lens_anchor` (`view/panels/files/lens.rs`, pure,
+  caret that drifts. So `lens_line` (`view/panels/files/lens.rs`, pure,
   tested) puts the lens on the attribute line above the item — the row VS
-  Code's lens occupies — after that line's text, and on the item's own line
-  when nothing is above it. Positioned through `row_top`/`col_left` like
-  every overlay, skipped when its line is inside a collapsed fold.
+  Code's lens occupies — and on the item's own line when nothing is above
+  it, after everything drawn there, hints included (`hints::line_right`).
+  Positioned through `row_top` like every overlay, skipped when its line is
+  inside a collapsed fold.
 - **Run is what the arrow did**: `controller::run_test`, a substring filter
   with `--nocapture`, for the reasons written above that function.
 - **Debug builds, asks, then runs.** `debug_test` (rusty-app) runs `cargo
@@ -2447,6 +2500,24 @@ usty`) holds `location.toml`
   `release_terminal` now clears only on `Arc::ptr_eq`, `close_terminal`
   awaits the close before clearing, and a test with two real pty sessions
   pins the ordering (it fails against either old behaviour).
+- **A GUI-subsystem executable cannot be a pseudoconsole's program.** A
+  release build of the app is one on Windows (`windows_subsystem`, so no
+  console window opens behind it), and the built-in shell was that same
+  executable re-entered with `--builtin-shell`. portable-pty starts every
+  child with `STARTF_USESTDHANDLES` and invalid handles; a console
+  program's startup swaps them for the pseudoconsole's, a window program's
+  does not, and `CONIN$`, `CONOUT$` and `AllocConsole` do not reach it
+  either — each measured with a window-subsystem probe in a pty. So the
+  installed app's terminal read end-of-input at once and said "The shell
+  exited with status 0." over an empty screen, every time, while the
+  debug build — a console program — worked every time, which is how it
+  read as "sometimes". The installer carries `rusty-shell.exe`, a console
+  program that is nothing but the shell (`rusty-term`'s bin, built by the
+  release workflow into `bundled/`); `terminal::builtin_argv` runs it where
+  it is found, re-enters the app only when the app's own PE header says
+  console, and otherwise runs the system shell rather than one that exits
+  at once. `cargo run -p rusty-term --example pty_probe -- <exe>
+  --builtin-shell` is the check, and it can be pointed at an installed app.
 - **On Windows a pty read never reports end-of-file.** The master keeps the
   pseudoconsole open however dead the child is, so exit has to be detected by
   polling `Child::try_wait` on its own thread. Inferring it from the reader
@@ -2858,12 +2929,14 @@ usty`) holds `location.toml`
   the text draws it.** Both layers set `tab-size` (`TAB_SIZE`), and a tab
   goes to the next stop of four spaces — and past it to the one after when
   it is nearer than half a space, which is Blink's `Font::TabWidth`.
-  `column_px` and `cell_under` summed each character's own advance and
-  measured `\t` as one, so on a tab-indented line a find match, the
-  completion popup, the Vim cursor and hover's hit-testing all sat up to
-  three columns left of the text. `caret::pen_after` is the one rule, pure
-  and tested; measured in the app, the Vim cursor on `\t\tfoo` sits within a
-  tenth of a pixel of the glyph it covers.
+  The overlays' measure summed each character's own advance and measured
+  `\t` as one, so on a tab-indented line a find match, the completion popup,
+  the Vim cursor and hover's hit-testing all sat up to three columns left
+  of the text. `caret::pen_after` is the one rule, pure and tested, and
+  `hints::HintedLine` walks every line with it — hints included, since a
+  tab after a hint goes to the stop counted from past the hint; measured in
+  the app, the Vim cursor on `\t\tfoo` sits within a tenth of a pixel of
+  the glyph it covers.
 - **Programmatic `.value` writes destroy the textarea's native undo stack.**
   The editor writes value on every echo, completion accept and format, so
   Ctrl+Z was silently dead. The editor keeps its own snapshot history

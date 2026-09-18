@@ -38,6 +38,16 @@ windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Fou
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The built-in shell as a console program of its own. On Windows a release
+# build of the app is a GUI-subsystem executable, and a pseudoconsole hosts
+# only console programs: started as the terminal's shell, the app had no
+# standard handles, read end-of-input at once and exited 0 having printed
+# nothing (`src/bin/rusty-shell.rs`). The release workflow ships this beside it.
+[[bin]]
+name = "rusty-shell"
+path = "src/bin/rusty-shell.rs"
+required-features = ["backend"]
+
 [features]
 default = ["backend"]
 backend = ["dep:portable-pty", "dep:vt100", "dep:thiserror", "dep:brush-core", "dep:brush-builtins", "dep:tokio", "dep:clap"]

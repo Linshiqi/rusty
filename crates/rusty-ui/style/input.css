@@ -52,6 +52,11 @@
   /* Selection in a sidebar is a filled rounded rect on macOS, not a rule. */
   --selection: rgb(189 74 31 / 0.13);
   --vim-block: rgb(189 74 31 / 0.42);
+  /* Text selected in the editor, behind the text — VS Code's, since a
+     selection is the one colour everybody already knows. */
+  --text-selection: #add6ff;
+  /* An inlay hint's shade: translucent, so a selection shows through it. */
+  --inlay: rgb(0 0 0 / 0.05);
   --focus: rgb(189 74 31 / 0.45);
 
   /* The 16 ANSI colours the terminal paints with. Themed rather than fixed:
@@ -105,6 +110,8 @@
 
     --selection: rgb(228 112 63 / 0.18);
     --vim-block: rgb(228 112 63 / 0.5);
+    --text-selection: #264f78;
+    --inlay: rgb(255 255 255 / 0.07);
     --focus: rgb(228 112 63 / 0.5);
 
     /* The ANSI-and-syntax palette must flip with the surfaces. This block
@@ -158,6 +165,11 @@
   --slate-fill: rgb(61 106 147 / 0.11);
   --selection: rgb(189 74 31 / 0.13);
   --vim-block: rgb(189 74 31 / 0.42);
+  /* Text selected in the editor, behind the text — VS Code's, since a
+     selection is the one colour everybody already knows. */
+  --text-selection: #add6ff;
+  /* An inlay hint's shade: translucent, so a selection shows through it. */
+  --inlay: rgb(0 0 0 / 0.05);
   --focus: rgb(189 74 31 / 0.45);
 
   /* The mirror of the bug the dark media block had: choosing Light on a
@@ -206,6 +218,8 @@
   --slate-fill: rgb(107 163 214 / 0.15);
   --selection: rgb(228 112 63 / 0.18);
   --vim-block: rgb(228 112 63 / 0.5);
+  --text-selection: #264f78;
+  --inlay: rgb(255 255 255 / 0.07);
   --focus: rgb(228 112 63 / 0.5);
 
   --term-0: #2a2724;
@@ -251,6 +265,8 @@
   --color-slate: var(--slate);
   --color-slate-fill: var(--slate-fill);
   --color-selection: var(--selection);
+  --color-text-selection: var(--text-selection);
+  --color-inlay: var(--inlay);
 
   /* System faces: SF Pro on macOS, Segoe UI Variable on Windows, whatever the
      desktop uses on Linux — each platform looks native without shipping a font.
@@ -352,6 +368,11 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+/* Where two scrollbars meet: unstyled, it is a white square in the editor's
+   corner whenever a long line brings the second one in. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -402,6 +423,13 @@ body {
   text-decoration: underline dotted var(--slate);
   text-underline-offset: 3px;
 }
+/* A name Ctrl is held over, when it has a definition to go to: a link, as
+   VS Code draws it. After the token colours, so its colour wins. */
+.editor-link {
+  color: var(--slate);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
 /* Modal editing's block cursor, drawn by the editor (`surface.rs`).
  *
@@ -435,25 +463,52 @@ body {
 textarea:focus ~ .vim-cursor {
   display: block;
 }
-/* The cursors past the first (`multi.rs`): carets like the textarea's own,
- * and like it shown only while the textarea has focus. */
-.extra-cursors {
+/* Every cursor's caret, the textarea's own included (`selection.rs`): two
+ * pixels, as VS Code's, and shown only while the textarea has focus, as a
+ * caret is. The textarea's own is hidden (`caret-transparent`), because it is
+ * laid out without the inlay hints the echo draws inside a line and would
+ * stand a hint's width left of the text after one. Two identical blinks, the
+ * vim cursor's trick: the editor swaps them on every move, so a caret that
+ * moved shows at once. */
+.editor-carets {
   display: none;
 }
-textarea:focus ~ .extra-cursors {
+textarea:focus ~ .editor-carets {
   display: block;
 }
-.extra-caret {
+.editor-caret {
   position: absolute;
   width: 2px;
   pointer-events: none;
   background: var(--rust);
-  animation: extra-caret-blink 1.06s step-end infinite;
+  animation-duration: 1.06s;
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
 }
-@keyframes extra-caret-blink {
+@keyframes caret-blink-a {
   50% {
     opacity: 0;
   }
+}
+@keyframes caret-blink-b {
+  50% {
+    opacity: 0;
+  }
+}
+/* The textarea's own selection, hidden for the caret's reason: it is washed
+ * behind the text where the text is instead. */
+.editor-input::selection {
+  background: transparent;
+  color: transparent;
+}
+/* An inlay hint, in its line (`highlight.rs`): quieter than the code, on a
+ * shade of its own. No padding and no margin — its width is its text's,
+ * exactly as `hints.rs` measures it, or everything after it on the line would
+ * sit off its glyph. */
+.inlay-hint {
+  color: var(--label-3);
+  background: var(--inlay);
+  border-radius: 3px;
 }
 @keyframes vim-cursor-a {
   50% {
@@ -464,10 +519,4 @@ textarea:focus ~ .extra-cursors {
   50% {
     opacity: 0;
   }
-}
-/* The textarea's own caret, hidden outside insert mode: a paste makes the
- * field writable for a moment, and a thin caret flashing beside the block
- * would be a second cursor. */
-.vim-modal {
-  caret-color: transparent;
 }

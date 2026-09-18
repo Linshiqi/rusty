@@ -153,6 +153,21 @@ jobs:
           with open("Cargo.toml", "w", encoding="utf-8", newline="") as out:
               out.write(head + sep + tail)
 
+      # The built-in shell as a console program of its own, among the bundled
+      # tools (`bundle.resources`), where the app looks for it first. Windows
+      # only, and not optional there: the app is a GUI-subsystem executable
+      # in a release build, a pseudoconsole hosts console programs only, and
+      # the app re-entered as the shell exited 0 having printed nothing —
+      # every installed terminal said "The shell exited with status 0." After
+      # the version stamp, so the app's build reuses what this one compiled.
+      - name: Build the built-in shell (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build -p rusty-term --bin rusty-shell --release
+          mkdir -p crates/rusty-app/bundled
+          cp target/release/rusty-shell.exe crates/rusty-app/bundled/
+
       - name: Build the app bundle
         working-directory: crates/rusty-app
         shell: bash

@@ -9,12 +9,25 @@ use leptos::prelude::*;
 use rusty_edit::{Line, Span, Token};
 use rusty_lsp::{DiagSeverity, FileDiagnostic, SemanticSpan};
 
-/// A line's spans with the diagnostics for that line woven in.
+use super::Placed;
+
+/// A line's spans with the diagnostics for that line and its inlay hints
+/// woven in.
 ///
 /// Splitting the highlight runs at the diagnostic's scalar columns keeps the
 /// squiggle in the text flow — an absolutely-positioned overlay multiplied by
-/// `ch` would drift on every CJK glyph, which is two columns wide.
-pub(super) fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyView {
+/// `ch` would drift on every CJK glyph, which is two columns wide. The hints
+/// are in the flow for the same reason, and for one more: everything after a
+/// hint on its line has to move over, and only the flow moves it
+/// (`hints.rs`). `link` is the name Ctrl over it would go to the definition
+/// of, drawn as a link while Ctrl is held.
+pub(super) fn decorate(
+    line: Line,
+    index: u32,
+    diags: &[FileDiagnostic],
+    hints: &[Placed],
+    link: Option<(u32, u32)>,
+) -> AnyView {
     let mut segments: Vec<(u32, u32, DiagSeverity, String)> = Vec::new();
     let length = line
         .spans
@@ -40,7 +53,7 @@ pub(super) fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyV
         segments.push((from, to, d.severity, d.message.clone()));
     }
 
-    if segments.is_empty() {
+    if segments.is_empty() && hints.is_empty() && link.is_none() {
         return line
             .spans
             .into_iter()
@@ -58,26 +71,49 @@ pub(super) fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyV
             .map(|(_, _, severity, message)| (*severity, message.as_str()))
     };
 
-    // One painted run: its text, its syntax class, and the squiggle over it.
-    type Run = (String, Token, Option<(DiagSeverity, String)>);
-    let mut out: Vec<Run> = Vec::new();
+    // One painted run — its text, its syntax class, and the squiggle over
+    // it — or a hint, between two of them.
+    enum Piece<'h> {
+        Run(String, Token, Option<(DiagSeverity, String)>, bool),
+        Hint(&'h Placed),
+    }
+    let mut out: Vec<Piece> = Vec::new();
     let mut col = 0u32;
+    let mut next = 0;
     for span in line.spans {
         for ch in span.text.chars() {
+            while let Some(hint) = hints.get(next).filter(|hint| hint.col.min(length) == col) {
+                out.push(Piece::Hint(hint));
+                next += 1;
+            }
             let mark = mark_at(col).map(|(severity, message)| (severity, message.to_string()));
+            let linked = link.is_some_and(|(from, to)| (from..to).contains(&col));
             match out.last_mut() {
-                Some((text, token, last_mark)) if *token == span.token && *last_mark == mark => {
+                Some(Piece::Run(text, token, last_mark, last_linked))
+                    if *token == span.token && *last_mark == mark && *last_linked == linked =>
+                {
                     text.push(ch);
                 }
-                _ => out.push((ch.to_string(), span.token, mark)),
+                _ => out.push(Piece::Run(ch.to_string(), span.token, mark, linked)),
             }
             col += 1;
         }
     }
+    // At the end of the line, and past it: a line shortened under a hint
+    // before the next answer draws the hint at its end.
+    out.extend(hints[next.min(hints.len())..].iter().map(Piece::Hint));
 
     out.into_iter()
-        .map(|(text, token, mark)| {
-            let base = class_of(token);
+        .map(|piece| {
+            let (text, token, mark, linked) = match piece {
+                Piece::Run(text, token, mark, linked) => (text, token, mark, linked),
+                Piece::Hint(hint) => return hint_view(hint),
+            };
+            let base = if linked {
+                format!("{} editor-link", class_of(token))
+            } else {
+                class_of(token).to_string()
+            };
             match mark {
                 None => view! { <span class=base>{text}</span> }.into_any(),
                 Some((severity, message)) => {
@@ -95,6 +131,19 @@ pub(super) fn decorate(line: Line, index: u32, diags: &[FileDiagnostic]) -> AnyV
         })
         .collect_view()
         .into_any()
+}
+
+/// A hint as the echo draws it: its label on a shade of its own, and the
+/// spaces it asked for either side of it outside the shade, as VS Code
+/// draws them. No padding and no margin — the hint is exactly as wide as
+/// `hints.rs` measures it, or everything after it would sit off its glyph.
+fn hint_view(hint: &Placed) -> AnyView {
+    view! {
+        {hint.pad_left.then_some(" ")}
+        <span class="inlay-hint">{hint.label.clone()}</span>
+        {hint.pad_right.then_some(" ")}
+    }
+    .into_any()
 }
 
 /// Hover markdown, minimally: fenced blocks become highlighted code, `---`
@@ -216,11 +265,13 @@ pub(super) fn semantic_on(spans: &[SemanticSpan], line: u32) -> &[SemanticSpan] 
 }
 
 /// Everything a row of the echo draws, as one number: its runs, the
-/// squiggles over it, its fold and its indent guides. A row whose number did
-/// not change draws what it drew, so the window keeps its markup.
+/// squiggles over it, its hints, its fold and its indent guides. A row whose
+/// number did not change draws what it drew, so the window keeps its markup.
 pub(super) fn row_hash(
     line: &Line,
     diags: &[FileDiagnostic],
+    hints: &[Placed],
+    link: Option<(u32, u32)>,
     folded: Option<u32>,
     guides: u8,
 ) -> u64 {
@@ -236,6 +287,8 @@ pub(super) fn row_hash(
         (place, d.severity as u8).hash(&mut hasher);
         d.message.hash(&mut hasher);
     }
+    hints.hash(&mut hasher);
+    link.hash(&mut hasher);
     folded.hash(&mut hasher);
     guides.hash(&mut hasher);
     hasher.finish()
@@ -339,16 +392,23 @@ mod semantic_tests {
     }
 
     /// A row's number moves with anything it draws — a token, a squiggle, a
-    /// fold, its indent guides — and stays put otherwise, which is what keeps a row's markup.
+    /// hint, a fold, its indent guides — and stays put otherwise, which is
+    /// what keeps a row's markup.
     #[test]
     fn a_rows_hash_changes_with_what_it_draws_and_only_then() {
         let line = line_of("let x = 1;");
-        let base = row_hash(&line, &[], None, 0);
-        assert_eq!(row_hash(&line_of("let x = 1;"), &[], None, 0), base);
-        assert_ne!(row_hash(&line_of("let x = 2;"), &[], None, 0), base);
+        let base = row_hash(&line, &[], &[], None, None, 0);
+        assert_eq!(
+            row_hash(&line_of("let x = 1;"), &[], &[], None, None, 0),
+            base
+        );
+        assert_ne!(
+            row_hash(&line_of("let x = 2;"), &[], &[], None, None, 0),
+            base
+        );
         let mut keyword = line.clone();
         keyword.spans[0].token = Token::Keyword;
-        assert_ne!(row_hash(&keyword, &[], None, 0), base);
+        assert_ne!(row_hash(&keyword, &[], &[], None, None, 0), base);
         let squiggle = FileDiagnostic {
             severity: DiagSeverity::Error,
             message: "no".to_string(),
@@ -360,11 +420,23 @@ mod semantic_tests {
             end_col: 5,
         };
         assert_ne!(
-            row_hash(&line, std::slice::from_ref(&squiggle), None, 0),
+            row_hash(&line, std::slice::from_ref(&squiggle), &[], None, None, 0),
             base
         );
-        assert_ne!(row_hash(&line, &[], Some(12), 0), base);
-        assert_ne!(row_hash(&line, &[], None, 2), base);
+        assert_ne!(row_hash(&line, &[], &[], None, Some(12), 0), base);
+        assert_ne!(row_hash(&line, &[], &[], None, None, 2), base);
+        let hint = Placed {
+            col: 5,
+            label: ": i32".to_string(),
+            pad_left: false,
+            pad_right: false,
+            parameter: false,
+        };
+        assert_ne!(
+            row_hash(&line, &[], std::slice::from_ref(&hint), None, None, 0),
+            base
+        );
+        assert_ne!(row_hash(&line, &[], &[], Some((4, 5)), None, 0), base);
     }
 
     fn line_of(text: &str) -> Line {

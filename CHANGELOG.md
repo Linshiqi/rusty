@@ -9,6 +9,30 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.44
+
+**Inlay hints are drawn where they belong, as in VS Code.** A type now sits
+right after the name it is about — `let total: f32 = both();` — and the rest
+of the line moves over to make room, instead of the hint trailing at the end
+of the line. Parameter names are back in front of the arguments they name
+(`sample(sensor: &gyro)`). Hints stay attached to their name while you type,
+and appear as soon as rust-analyzer has finished loading, where before they
+could stay missing until the file was edited.
+
+To make that possible the editor now draws its own caret and selection and
+places every click itself: a click after a hint lands where you clicked, and
+the input method's candidate window follows the caret. The selection is VS
+Code's blue, the caret two pixels wide.
+
+**New — Ctrl over a name makes it a link.** Holding Ctrl (⌘ on macOS) over
+a name that has a definition underlines it and shows the hand, as VS Code
+does; clicking goes there.
+
+**Fixed — the built-in shell ("rusty bash") in the installed app.** The
+terminal said "The shell exited with status 0." and showed nothing, every
+time in an installed copy: on Windows the app cannot be the terminal's shell
+itself, and now ships the shell as a program of its own.
+
 ## v0.6.43
 
 **New — more than one cursor.** Alt+Click adds a cursor, Ctrl+Alt+Up and

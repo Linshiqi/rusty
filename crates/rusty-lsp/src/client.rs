@@ -1064,14 +1064,6 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
         "workspace".into(),
         json!({ "symbol": { "search": { "kind": "all_symbols" } } }),
     );
-    // No parameter names: the editor draws hints after the line rather than
-    // inside it (a transparent textarea over the text cannot make room
-    // mid-line), and `x:` at the end of a line names nothing. Types, chains
-    // and closing braces read as well there as in place.
-    options.insert(
-        "inlayHints".into(),
-        json!({ "parameterHints": { "enable": false } }),
-    );
 
     let params = json!({
         "processId": std::process::id(),
@@ -1295,6 +1287,13 @@ fn dispatch(shared: &Shared, message: Value) {
             let quiescent = params["quiescent"].as_bool().unwrap_or(false);
             if quiescent && !shared.quiescent.swap(true, Ordering::AcqRel) {
                 let _ = shared.notify("rust-analyzer/runFlycheck", json!({ "textDocument": null }));
+                // And what the editor draws over the text is asked for again.
+                // rust-analyzer's own refresh comes while it is still loading,
+                // and what is asked then comes back empty — measured as a
+                // restarted server answering every refresh with no hints and
+                // then saying nothing more, the hints appearing only once
+                // somebody typed. Settled is when an answer is whole.
+                let _ = shared.events.send(LspEvent::Refresh {});
             } else if !quiescent {
                 shared.quiescent.store(false, Ordering::Release);
             }
@@ -2114,6 +2113,44 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert!(answered, "workspace/inlayHint/refresh went unanswered");
+    }
+
+    /// Settling after a load asks the editor to ask again, as a refresh
+    /// does: what it asked for while the server loaded came back empty, and
+    /// rust-analyzer's own refresh had come before the load was done. Once
+    /// per settling — a server that stays quiescent says so on every change
+    /// of its status and must not set off a round of asks each time.
+    #[test]
+    fn settling_after_a_load_asks_for_the_hints_again() {
+        let root = tempfile::tempdir().unwrap();
+        let status = |quiescent: bool| {
+            json!({
+                "jsonrpc": "2.0",
+                "method": "experimental/serverStatus",
+                "params": { "health": "ok", "quiescent": quiescent },
+            })
+        };
+        let (reader, writer, _seen) = fake_server(move |message, writer| {
+            if method(message) == "initialized" {
+                for quiescent in [false, true, true] {
+                    let _ = rpc::write_message(writer, &status(quiescent));
+                }
+            }
+            default_handle(message, writer)
+        });
+        let (_client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut refreshes = 0;
+        while let Some(event) =
+            events.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            if matches!(event, LspEvent::Refresh {}) {
+                refreshes += 1;
+            }
+        }
+        assert_eq!(refreshes, 1, "one settling, one ask");
     }
 
     /// A lazy action whose resolve fails, and nothing else to offer. That

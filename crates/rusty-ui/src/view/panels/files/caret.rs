@@ -183,71 +183,6 @@ pub(super) fn utf16_offset_of(text: &str, line: u32, col: u32) -> u32 {
     positions::position_to_character(text, line, col, Utf16)
 }
 
-/// Which (line, scalar column) sits under a point in the text column.
-///
-/// The column is found by measuring, not dividing: a CJK glyph is two cells
-/// wide in a monospace font, so `x / ch` drifts one column per ideograph and
-/// hover would describe the wrong token on any line with a Chinese comment.
-pub(super) fn cell_under(
-    text: &str,
-    offset_x: f64,
-    offset_y: f64,
-    zoom: f64,
-) -> Option<(u32, u32)> {
-    // The 8s are the text column's pl-2 / py-2.
-    let line = ((offset_y - 8.0) / (row_height(zoom))).floor();
-    if line < 0.0 {
-        return None;
-    }
-    let line = line as u32;
-    let content = text.split('\n').nth(line as usize)?;
-
-    let x = (offset_x - 8.0) / zoom;
-    if x < 0.0 {
-        return Some((line, 0));
-    }
-    let mut reached = 0.0;
-    for (index, ch) in content.chars().enumerate() {
-        let next = pen_after(reached, ch, advance_of);
-        if next > x {
-            return Some((line, index as u32));
-        }
-        reached = next;
-    }
-    // Past the end of the line: the last column, where "what is this?" still
-    // usually means the token the line ends with.
-    Some((line, content.chars().count() as u32))
-}
-
-/// Pixels from the line start to a scalar column, for anchoring the tooltip.
-pub(super) fn column_px(text: &str, line: u32, col: u32) -> f64 {
-    text.split('\n')
-        .nth(line as usize)
-        .map(|content| {
-            content
-                .chars()
-                .take(col as usize)
-                .fold(0.0, |x, ch| pen_after(x, ch, advance_of))
-        })
-        .unwrap_or(0.0)
-}
-
-/// How many UTF-16 units to take off the end of what a double-click
-/// selected: the spaces and tabs after the word.
-///
-/// Chromium on Windows selects a word *with* the whitespace after it — the
-/// platform's convention, and not VS Code's — so a double-clicked
-/// `Quaternion` was copied as `Quaternion ` and pasted with a space nobody
-/// typed. A selection that is nothing but whitespace is left alone: the
-/// run of spaces is what was double-clicked.
-pub(super) fn word_selection_overhang(picked: &str) -> u32 {
-    let kept = picked.trim_end_matches([' ', '\t']);
-    if kept.is_empty() {
-        return 0;
-    }
-    utf16_len(&picked[kept.len()..])
-}
-
 /// Where the pen is after drawing `ch` from `x`, at zoom 1.
 ///
 /// A character's own advance — except a tab, which goes to the next stop,
@@ -289,7 +224,7 @@ pub(super) fn line_px(content: &str) -> f64 {
 /// One glyph's advance in the editor's font, measured once per character via
 /// canvas and cached — measuring is what makes CJK correct, caching is what
 /// makes it affordable on every mouse move.
-fn advance_of(ch: char) -> f64 {
+pub(super) fn advance_of(ch: char) -> f64 {
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -368,20 +303,7 @@ pub(super) fn centre_view(
 
 #[cfg(test)]
 mod tests {
-    use super::{pen_after, utf16_offset_of, word_selection_overhang};
-
-    #[test]
-    fn a_double_clicked_word_loses_the_space_after_it_and_nothing_else() {
-        assert_eq!(word_selection_overhang("Quaternion "), 1);
-        assert_eq!(word_selection_overhang("pub\t "), 2);
-        assert_eq!(word_selection_overhang("中文"), 0, "nothing to trim");
-        assert_eq!(
-            word_selection_overhang("   "),
-            0,
-            "a run of spaces double-clicked stays selected"
-        );
-        assert_eq!(word_selection_overhang(""), 0);
-    }
+    use super::{pen_after, utf16_offset_of};
 
     /// Where a column lands, in cells, with every character one cell wide
     /// and `中` two — what the editor's monospace font does.

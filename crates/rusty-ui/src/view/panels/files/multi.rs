@@ -1,6 +1,6 @@
 //! The editor's side of several cursors (`crate::cursors`): the keys that
-//! add them and move them, the edits made at every one of them, and the
-//! carets and selections drawn for every cursor but the textarea's own.
+//! add them and move them, and the edits made at every one of them. They
+//! are drawn with the textarea's own (`selection.rs`).
 //!
 //! The textarea holds one selection, so it is the first cursor and the
 //! others are this editor's to keep, draw and edit at. A key that edits is
@@ -15,8 +15,6 @@
 //! to mid-composition, so composing drops the other cursors and goes on with
 //! the first — the one gap against VS Code, said here rather than found.
 
-use std::ops::Range;
-
 use leptos::{ev, html, prelude::*};
 use web_sys::HtmlTextAreaElement;
 
@@ -29,20 +27,7 @@ use crate::{
 
 /// Every cursor: the textarea's selection first, then the others.
 fn all_cursors(state: AppState, area: &HtmlTextAreaElement) -> Vec<Cursor> {
-    let (from, to) = doc_selection(area, state);
-    let backward = area.selection_direction().ok().flatten().as_deref() == Some("backward");
-    let first = if backward {
-        Cursor {
-            anchor: to,
-            head: from,
-        }
-    } else {
-        Cursor {
-            anchor: from,
-            head: to,
-        }
-    };
-    let mut all = vec![first];
+    let mut all = vec![textarea_cursor(state, area)];
     all.extend(state.editor.cursors.get_untracked());
     all
 }
@@ -288,15 +273,11 @@ pub(super) fn multi_click(
         return false;
     }
     event.prevent_default();
-    let zoom = state.editor.zoom.get_untracked();
-    let Some((row, col)) = cell_under(
-        &screen(state),
-        f64::from(event.offset_x()),
-        f64::from(event.offset_y()),
-        zoom,
-    ) else {
-        return true;
-    };
+    let (x, y) = point_in_column(
+        area,
+        (f64::from(event.client_x()), f64::from(event.client_y())),
+    );
+    let (row, col) = caret_at_point(state, x, y);
     let line = line_of_row(state, row);
     let draft = state.editor.draft.get_untracked();
     let Some(at) = byte_at(&draft, line, col) else {
@@ -329,69 +310,6 @@ fn byte_at(text: &str, line: u32, col: u32) -> Option<usize> {
 /// Composing drops the other cursors: see the module's head.
 pub(super) fn multi_compose(state: AppState) {
     collapse(state);
-}
-
-/// The other cursors, drawn: a caret at each, its selection washed. After
-/// the textarea, so they show only while it has focus, as its own caret does
-/// (`input.css`).
-pub(super) fn extra_cursors(state: AppState, window: Memo<Range<u32>>) -> impl IntoView {
-    let zoom = state.editor.zoom;
-    move || {
-        let extra = state.editor.cursors.get();
-        if extra.is_empty() {
-            return ().into_any();
-        }
-        let draft = state.editor.draft.get();
-        let z = zoom.get();
-        let height = row_height(z);
-        let rows = window.get();
-        let space = line_px(" ") * z;
-        let mut marks = Vec::new();
-        for cursor in extra {
-            let (first, from) = line_col_of_byte(&draft, cursor.start());
-            let (last, to) = line_col_of_byte(&draft, cursor.end());
-            if !cursor.is_caret() {
-                for line in first..=last {
-                    if !rows.contains(&row_for(state, line)) {
-                        continue;
-                    }
-                    let left_col = if line == first { from } else { 0 };
-                    let x0 = col_left(&draft, line, left_col, z);
-                    let x1 = if line == last {
-                        col_left(&draft, line, to, z)
-                    } else {
-                        let len = draft
-                            .split('\n')
-                            .nth(line as usize)
-                            .map_or(0, |l| l.chars().count());
-                        col_left(&draft, line, len as u32, z) + space
-                    };
-                    let top = row_top(state, line, z);
-                    marks.push(view! {
-                        <div
-                            class="pointer-events-none absolute bg-selection"
-                            style=format!(
-                                "left: {x0}px; top: {top}px; width: {}px; height: {height}px",
-                                (x1 - x0).max(2.0),
-                            )
-                        />
-                    });
-                }
-            }
-            let (line, col) = line_col_of_byte(&draft, cursor.head);
-            if rows.contains(&row_for(state, line)) {
-                let x = col_left(&draft, line, col, z);
-                let top = row_top(state, line, z);
-                marks.push(view! {
-                    <div
-                        class="extra-caret"
-                        style=format!("left: {x}px; top: {top}px; height: {height}px")
-                    />
-                });
-            }
-        }
-        view! { <div class="extra-cursors">{marks}</div> }.into_any()
-    }
 }
 
 #[cfg(test)]
