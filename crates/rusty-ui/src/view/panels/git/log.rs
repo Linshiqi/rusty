@@ -211,13 +211,17 @@ pub(super) fn Log() -> impl IntoView {
             };
             let end = range.end.min(history.rows.len());
             let start = range.start.min(end);
-            history.rows[start..end]
-                .iter()
-                .map(|row| {
+            // Each row with the lane of the commit under it, which decides
+            // where the lines leaving it turn (`gitlog::edge_line`).
+            (start..end)
+                .map(|at| {
+                    let row = &history.rows[at];
+                    let next = history.rows.get(at + 1).map(|below| below.lane);
                     (
-                        gitlog::row_key(row, history.lanes),
+                        gitlog::row_key(row, history.lanes, next),
                         row.clone(),
                         history.lanes,
+                        next,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -253,9 +257,9 @@ pub(super) fn Log() -> impl IntoView {
                         >
                             <For
                                 each=rows
-                                key=|(key, _, _)| *key
-                                children=move |(_, row, lanes)| {
-                                    view! { <Row row=row lanes=lanes needle=needle /> }
+                                key=|(key, ..)| *key
+                                children=move |(_, row, lanes, next)| {
+                                    view! { <Row row=row lanes=lanes next=next needle=needle /> }
                                 }
                             />
                         </div>
@@ -298,7 +302,7 @@ pub(super) fn Log() -> impl IntoView {
 /// commit does not match it — dimmed rather than hidden, so the lines still
 /// join up.
 #[component]
-fn Row(row: GraphRow, lanes: u32, needle: Memo<String>) -> impl IntoView {
+fn Row(row: GraphRow, lanes: u32, next: Option<u32>, needle: Memo<String>) -> impl IntoView {
     let state = AppState::expect();
     let commit = row.commit.clone();
     let picked = {
@@ -337,13 +341,11 @@ fn Row(row: GraphRow, lanes: u32, needle: Memo<String>) -> impl IntoView {
         RefKind::Remote => 2,
         RefKind::Tag => 3,
     });
+    let lane = row.lane;
     let labels = refs
         .iter()
         .take(MAX_LABELS)
-        .map(|label| {
-            let (tone, text) = label_look(label);
-            view! { <Pill label=text tone=tone uppercase=false /> }
-        })
+        .map(|label| label_view(label, lane))
         .collect_view();
     let more = (refs.len() > MAX_LABELS).then(|| {
         let names = refs[MAX_LABELS..]
@@ -377,7 +379,7 @@ fn Row(row: GraphRow, lanes: u32, needle: Memo<String>) -> impl IntoView {
                 }));
             }
         >
-            {graph_cell(&row, lanes)}
+            {graph_cell(&row, lanes, next)}
             <div class=text>
                 {labels}
                 {more}
@@ -394,46 +396,86 @@ fn Row(row: GraphRow, lanes: u32, needle: Memo<String>) -> impl IntoView {
     }
 }
 
-/// A label's colour and words. Names as spelled: a branch or a tag is an
-/// identifier the user types, and `MASTER` names nothing.
-fn label_look(label: &RefLabel) -> (Tone, String) {
+/// A lane's colour.
+fn lane_colour(lane: u32) -> &'static str {
+    LANE_COLOURS[(lane as usize) % LANE_COLOURS.len()]
+}
+
+/// A label on a commit. A branch is the colour of the line it sits on, as
+/// Fork draws it — a label in a colour of its own said "branch" and nothing
+/// about which line it was; filled, with dark words, which read on every one
+/// of the lane colours in both themes. The branch checked out carries a
+/// tick; a remote's is the same colour as a tint with an edge, since it is a
+/// copy of a branch rather than one; a tag keeps its own colour, because it
+/// is not a line. Names as spelled: a branch or a tag is an identifier the
+/// user types, and `MASTER` names nothing.
+fn label_view(label: &RefLabel, lane: u32) -> AnyView {
+    let colour = lane_colour(lane);
+    let shape = "inline-flex h-[18px] shrink-0 items-center rounded-full px-2 font-mono \
+                 text-caption font-semibold whitespace-nowrap";
     match label.kind {
-        RefKind::Head if label.name.is_empty() => (Tone::Rust, t!("git.head")),
-        RefKind::Head => (Tone::Rust, label.name.clone()),
-        RefKind::Branch => (Tone::Patina, label.name.clone()),
-        RefKind::Remote => (Tone::Slate, label.name.clone()),
-        RefKind::Tag => (Tone::Amber, label.name.clone()),
+        RefKind::Tag => {
+            view! { <Pill label=label.name.clone() tone=Tone::Amber uppercase=false /> }.into_any()
+        }
+        RefKind::Remote => view! {
+            <span
+                class=format!("{shape} text-label")
+                style=format!("background: {colour}33; box-shadow: inset 0 0 0 1px {colour}")
+            >
+                {label.name.clone()}
+            </span>
+        }
+        .into_any(),
+        RefKind::Head | RefKind::Branch => {
+            let text = match label.kind {
+                RefKind::Head if label.name.is_empty() => format!("✓ {}", t!("git.head")),
+                RefKind::Head => format!("✓ {}", label.name),
+                _ => label.name.clone(),
+            };
+            view! {
+                <span class=shape style=format!("background: {colour}; color: #15130f")>
+                    {text}
+                </span>
+            }
+            .into_any()
+        }
     }
 }
 
 /// One row's slice of the graph. Lines run from this row's centre to the
-/// next row's centre, so they spill past the bottom edge on purpose.
-fn graph_cell(row: &GraphRow, lanes: u32) -> AnyView {
+/// next row's centre, so they spill past the bottom edge on purpose. Their
+/// shapes are `gitlog::edge_line`'s — straight down a lane, a quarter circle
+/// into a commit, Fork's rather than a slant — and turning into a commit
+/// depends on where the next row's commit is, which is `next`.
+fn graph_cell(row: &GraphRow, lanes: u32, next: Option<u32>) -> AnyView {
     let width = lanes.max(1) * LANE_PX;
     let x = |lane: u32| f64::from(lane * LANE_PX + LANE_PX / 2);
     let mid = f64::from(ROW_PX) / 2.0;
-    let colour = |lane: u32| LANE_COLOURS[(lane as usize) % LANE_COLOURS.len()];
     let lines: Vec<_> = row
         .edges
         .iter()
         .map(|edge| {
-            // A line takes the colour of the lane it arrives in, so a branch
-            // leaving a merge is coloured as the branch it becomes.
-            let stroke = colour(edge.to);
+            let line = gitlog::edge_line(
+                edge.from,
+                edge.to,
+                edge.from == row.lane,
+                next == Some(edge.to),
+                f64::from(LANE_PX),
+                f64::from(ROW_PX),
+            );
             view! {
-                <line
-                    x1=x(edge.from)
-                    y1=mid
-                    x2=x(edge.to)
-                    y2=mid + f64::from(ROW_PX)
-                    stroke=stroke
+                <path
+                    d=line.d
+                    stroke=lane_colour(line.lane)
                     stroke-width="2"
                     stroke-linecap="round"
+                    stroke-linejoin="round"
+                    fill="none"
                 />
             }
         })
         .collect();
-    let dot = colour(row.lane);
+    let dot = lane_colour(row.lane);
     view! {
         <svg
             // Above the row backgrounds: a row's lines run into the next row,

@@ -1440,7 +1440,13 @@ The view is a directory, one module per region, where it was one file of
   that go wrong — a merge, two tips, a branch bending back into a lane that
   was waiting for it, a lane reused once free. The view turns a lane index
   into an x coordinate and nothing more, so which lane a commit sits in is
-  one fact rather than two opinions.
+  one fact rather than two opinions. **A commit takes the leftmost lane
+  waiting for it.** A first parent another lane already waited for joined
+  that lane whichever side it was on, so a main line jogged over into the
+  lane of a branch merged into it, at the commit the branch grew from; only
+  a lane to the left is joined now, and one to the right converges into the
+  commit — the main line straight, the branch bent back in, as Fork and
+  `git log --graph` draw it.
 - **One row is one SVG whose lines run past its bottom edge.** Each row knows
   only its outgoing edges (this row's centre to the next row's), so a line is
   drawn by the row it leaves and `overflow: visible` lets it reach the row it
@@ -1449,10 +1455,24 @@ The view is a directory, one module per region, where it was one file of
   a stray tail. The SVG is `relative z-10`, because the next row's hover or
   selection fill is painted after it and covered the part of the line that
   had crossed into that row — the graph looked cut at whichever row the
-  pointer was on.
+  pointer was on. **A line is Fork's shape, not a slant** (`gitlog::edge_line`,
+  pure and tested): straight down a lane, a quarter circle where it joins a
+  commit on the lane to its left — out of a merge at the top, into the
+  commit a branch grew from at the bottom — and an S where a lane only
+  shifts, with no commit to turn at. Which end has a commit depends on the
+  next row, so each row is handed the next row's lane and keyed on it
+  (`gitlog::row_key`); a turn is coloured as the lane it runs down, so a
+  branch's curve into the commit it grew from is the branch's colour.
 - **Lane colours are fixed hex, the board sheet's exemption applied again**:
   a commit graph is the same colours in every client that draws one, and a
   lane that changed colour with the theme would read as a different branch.
+  **A branch's label is its line's colour** (`label_view`): a fixed colour
+  per kind — rust for the checked-out branch, green for any other — said
+  "branch" and nothing about which line it sat on. Filled, with dark words,
+  which read on every lane colour in both themes; the checked-out one
+  carries a tick; a remote's is a tint with an edge in the same colour, a
+  copy of a branch rather than one; a tag keeps its own colour, because it
+  is not a line.
 - **`git`, not libgit2.** Every question is one invocation with a machine
   format — `%x1f`/`%x1e` separators for the log and the commit, because a
   subject can carry tabs and newlines; `%1f` fields for `for-each-ref`;

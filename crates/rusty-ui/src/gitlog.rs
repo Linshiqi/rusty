@@ -1,5 +1,6 @@
 //! The Git log's arithmetic, pure: which rows to draw, where to scroll, what
-//! a search matches, and what a drawn row is keyed on.
+//! a search matches, what a drawn row is keyed on, and the shape of every
+//! line between two rows.
 //!
 //! The log drew every row it had — four hundred small SVGs, each with its
 //! labels — and rebuilt all of them whenever the selection moved or the
@@ -87,12 +88,21 @@ pub fn hits(rows: &[GraphRow], query: &str) -> Vec<usize> {
 
 /// What a drawn row depends on, as one number. The log keys its rows on it,
 /// so a history read again redraws only the rows whose lane, lines or labels
-/// moved. The hash stands for the rest of the commit: its subject, author
-/// and time cannot change without the hash changing.
-pub fn row_key(row: &GraphRow, lanes: u32) -> u64 {
+/// moved — or whose next row's commit moved lane, which decides where the
+/// lines leaving this one turn ([`edge_line`]). The hash stands for the rest
+/// of the commit: its subject, author and time cannot change without the
+/// hash changing.
+pub fn row_key(row: &GraphRow, lanes: u32, next_lane: Option<u32>) -> u64 {
     let mut hasher = DefaultHasher::new();
     row.commit.id.hash(&mut hasher);
-    (row.lane, lanes, row.edges.len(), row.commit.refs.len()).hash(&mut hasher);
+    (
+        row.lane,
+        lanes,
+        next_lane,
+        row.edges.len(),
+        row.commit.refs.len(),
+    )
+        .hash(&mut hasher);
     for edge in &row.edges {
         (edge.from, edge.to).hash(&mut hasher);
     }
@@ -106,6 +116,69 @@ pub fn row_key(row: &GraphRow, lanes: u32) -> u64 {
         (kind, &label.name).hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// One line of the graph as drawn: an SVG path from a row's centre to the
+/// next row's, and the lane whose colour it takes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EdgeLine {
+    pub d: String,
+    pub lane: u32,
+}
+
+/// How a line runs from lane `from` at one row to lane `to` at the next, the
+/// way Fork draws it rather than as a slant: straight down within a lane,
+/// and where it joins a commit on the lane to its left, a quarter circle
+/// into it — a merge leaving for its second parent turns out of the commit
+/// and down the parent's lane, and a branch arriving at the commit it grew
+/// from comes down its own lane and turns into it. The turn is always at the
+/// left lane's end, so the vertical run is the right lane's and the line
+/// takes that lane's colour. `dot_above` is whether this row's commit sits
+/// in `from`, `dot_below` whether the next row's sits in `to`: a line that
+/// only shifts lanes, with no commit on the side it would turn at, is an S
+/// instead, because a turn that ended nowhere would read as a corner.
+pub fn edge_line(
+    from: u32,
+    to: u32,
+    dot_above: bool,
+    dot_below: bool,
+    lane_px: f64,
+    row_px: f64,
+) -> EdgeLine {
+    let x = |lane: u32| f64::from(lane) * lane_px + lane_px / 2.0;
+    let (x1, x2) = (x(from), x(to));
+    let top = row_px / 2.0;
+    let bottom = top + row_px;
+    let r = lane_px.min(row_px / 2.0);
+    if from == to {
+        return EdgeLine {
+            d: format!("M {x1} {top} V {bottom}"),
+            lane: to,
+        };
+    }
+    if from < to && dot_above {
+        // Out of the commit to the right, then down the parent's lane.
+        let bend = x2 - r;
+        let down = top + r;
+        return EdgeLine {
+            d: format!("M {x1} {top} H {bend} A {r} {r} 0 0 1 {x2} {down} V {bottom}"),
+            lane: to,
+        };
+    }
+    if from > to && dot_below {
+        // Down its own lane, then into the commit on the left.
+        let turn = bottom - r;
+        let across = x1 - r;
+        return EdgeLine {
+            d: format!("M {x1} {top} V {turn} A {r} {r} 0 0 1 {across} {bottom} H {x2}"),
+            lane: from,
+        };
+    }
+    let middle = top + row_px / 2.0;
+    EdgeLine {
+        d: format!("M {x1} {top} C {x1} {middle} {x2} {middle} {x2} {bottom}"),
+        lane: to,
+    }
 }
 
 /// The next hit after `at` (the first when nothing is selected), or the one
@@ -225,25 +298,74 @@ mod tests {
     fn a_row_is_keyed_on_what_it_draws() {
         let plain = row("20d12f8aaa", "Fix the mixer", "Lin", &[]);
         assert_eq!(
-            row_key(&plain, 2),
-            row_key(&plain.clone(), 2),
+            row_key(&plain, 2, None),
+            row_key(&plain.clone(), 2, None),
             "the same row, the same key"
         );
         let mut moved = plain.clone();
         moved.lane = 1;
-        assert_ne!(row_key(&plain, 2), row_key(&moved, 2), "its dot moved lane");
+        assert_ne!(
+            row_key(&plain, 2, None),
+            row_key(&moved, 2, None),
+            "its dot moved lane"
+        );
         let mut joined = plain.clone();
         joined.edges.push(Edge { from: 0, to: 1 });
-        assert_ne!(row_key(&plain, 2), row_key(&joined, 2), "a line leaves it");
+        assert_ne!(
+            row_key(&plain, 2, None),
+            row_key(&joined, 2, None),
+            "a line leaves it"
+        );
         let labelled = row("20d12f8aaa", "Fix the mixer", "Lin", &["main"]);
         assert_ne!(
-            row_key(&plain, 2),
-            row_key(&labelled, 2),
+            row_key(&plain, 2, None),
+            row_key(&labelled, 2, None),
             "a branch arrived on it"
         );
-        assert_ne!(row_key(&plain, 2), row_key(&plain, 3), "the graph widened");
+        assert_ne!(
+            row_key(&plain, 2, None),
+            row_key(&plain, 3, None),
+            "the graph widened"
+        );
+        assert_ne!(
+            row_key(&plain, 2, Some(0)),
+            row_key(&plain, 2, Some(1)),
+            "the commit below moved lane, and the lines turn at it"
+        );
         let other = row("59ea8cd0bb", "Fix the mixer", "Lin", &[]);
-        assert_ne!(row_key(&plain, 2), row_key(&other, 2), "another commit");
+        assert_ne!(
+            row_key(&plain, 2, None),
+            row_key(&other, 2, None),
+            "another commit"
+        );
+    }
+
+    /// Straight within a lane; a quarter circle where a line joins a commit
+    /// on the lane to its left — out of a merge above, into the commit a
+    /// branch grew from below — coloured as the lane it runs down; an S
+    /// where it only shifts over.
+    #[test]
+    fn lines_turn_into_commits_and_bend_between_lanes() {
+        let straight = edge_line(1, 1, true, true, 14.0, 26.0);
+        assert_eq!(straight.d, "M 21 13 V 39");
+        assert_eq!(straight.lane, 1);
+
+        let merge = edge_line(0, 1, true, true, 14.0, 26.0);
+        assert_eq!(merge.d, "M 7 13 H 8 A 13 13 0 0 1 21 26 V 39");
+        assert_eq!(merge.lane, 1, "the branch's colour, down the branch's lane");
+
+        let grew_from = edge_line(1, 0, true, true, 14.0, 26.0);
+        assert_eq!(grew_from.d, "M 21 13 V 26 A 13 13 0 0 1 8 39 H 7");
+        assert_eq!(grew_from.lane, 1, "the branch's colour, into the commit");
+
+        let far = edge_line(0, 2, true, false, 14.0, 26.0);
+        assert!(far.d.starts_with("M 7 13 H 22 A 13 13"), "{}", far.d);
+
+        let shift = edge_line(2, 1, false, false, 14.0, 26.0);
+        assert_eq!(shift.d, "M 35 13 C 35 26 21 26 21 39");
+        assert_eq!(shift.lane, 1);
+        // Leaving a commit leftwards with nothing to turn into below.
+        assert!(edge_line(1, 0, true, false, 14.0, 26.0).d.contains(" C "));
     }
 
     #[test]

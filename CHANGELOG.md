@@ -9,6 +9,19 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.45
+
+**The Git history's lines curve like Fork's.** Where a line joins a commit on
+another lane it turns into it with a rounded corner instead of cutting across
+diagonally: a merge's branch leaves the merge with a curve, and a branch
+bends back into the commit it grew from. The main line now stays straight
+where a merged branch rejoins it, instead of jogging over into the branch's
+lane.
+
+**Branch labels are the colour of their line.** A branch's name in the
+history is drawn in the same colour as the line it sits on; the checked-out
+branch carries a tick, and a remote branch is a tint of the same colour.
+
 ## v0.6.44
 
 **Inlay hints are drawn where they belong, as in VS Code.** A type now sits

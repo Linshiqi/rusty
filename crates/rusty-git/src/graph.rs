@@ -3,10 +3,10 @@
 //! The input is the log in topological order — every commit before any of its
 //! parents, which is what `git log --topo-order` promises and what the
 //! algorithm relies on. Each lane holds the hash it is waiting to see next;
-//! a commit takes the lane that was waiting for it, hands the lane on to its
-//! first parent, and opens a new lane for every other parent. A lane whose
-//! commit turns out to be one another lane also reached has converged, and
-//! is closed at that row.
+//! a commit takes the leftmost lane that was waiting for it, hands the lane
+//! on to its first parent, and opens a new lane for every other parent. A
+//! lane whose commit turns out to be one another lane also reached has
+//! converged, and is closed at that row.
 //!
 //! Computed here, on the backend, rather than in the view: the frontend
 //! draws rows and lines and never decides where they go, so the lane a commit
@@ -65,15 +65,22 @@ pub fn lay_out(commits: Vec<Commit>) -> History {
         let mut edges = Vec::new();
         let mut parents = commit.parents.iter();
 
-        // First parent inherits this lane — unless another lane is already
-        // waiting for it, in which case this line joins that one below.
+        // First parent inherits this lane — unless a lane to its left is
+        // already waiting for it, in which case this line joins that one
+        // below. A lane to its right waiting for the same commit is the one
+        // that gives way: the commit takes the leftmost lane waiting for it,
+        // and the other converges into it there. Joining whichever lane was
+        // waiting first sent a main line sideways into the lane of a branch
+        // merged into it, at the commit the branch had grown from — a jog in
+        // the line everybody reads down, where Fork and `git log --graph`
+        // keep it straight and bend the branch back in.
         match parents.next() {
             None => lanes[lane] = None,
             Some(first) => match lanes
                 .iter()
                 .position(|slot| slot.as_deref() == Some(first.as_str()))
             {
-                Some(other) if other != lane => {
+                Some(other) if other < lane => {
                     lanes[lane] = None;
                     edges.push(Edge {
                         from: lane as u32,
@@ -238,6 +245,26 @@ mod tests {
             h.rows[0].edges,
             vec![Edge { from: 0, to: 0 }, Edge { from: 0, to: 1 }]
         );
+    }
+
+    /// A merged branch that grew from the commit the main line's own parent
+    /// chain reaches: the main line keeps its lane, and the branch's lane
+    /// bends back into it at that commit rather than the main line jogging
+    /// over into the branch's.
+    #[test]
+    fn the_main_line_stays_straight_where_a_merged_branch_rejoins_it() {
+        let h = lay_out(vec![
+            commit("m", &["a", "f"]),
+            commit("f", &["c"]),
+            commit("a", &["c"]),
+            commit("c", &[]),
+        ]);
+        assert_eq!(lanes_of(&h), vec![0, 1, 0, 0]);
+        // `a` goes straight down its own lane, with the branch's passing by
+        // — and that line is the one redirected into `c`'s dot.
+        assert!(h.rows[2].edges.contains(&Edge { from: 0, to: 0 }));
+        assert!(h.rows[2].edges.contains(&Edge { from: 1, to: 0 }));
+        assert_eq!(h.rows[2].edges.len(), 2);
     }
 
     /// Lanes are reused once free, so a long history with short-lived
