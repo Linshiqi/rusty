@@ -202,6 +202,12 @@ pub mod lsp {
     pub const DOCUMENT_SYMBOLS: &str = "lsp_document_symbols";
     /// Symbols across the workspace matching a query.
     pub const WORKSPACE_SYMBOLS: &str = "lsp_workspace_symbols";
+    /// The function at a position, as the start of a call hierarchy.
+    pub const CALL_HIERARCHY: &str = "lsp_call_hierarchy";
+    /// The calls into or out of a function of a call hierarchy.
+    pub const CALLS: &str = "lsp_calls";
+    /// The macro call at a position, expanded, as a read-only document.
+    pub const EXPAND_MACRO: &str = "lsp_expand_macro";
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
     pub const ACTIONS: &str = "lsp_code_actions";

@@ -65,6 +65,32 @@ pub struct Line {
     pub spans: Vec<Span>,
 }
 
+/// Where a macro expansion is shown: a document with no file behind it,
+/// named after its macro. Nothing reads or writes it on disk, and this prefix
+/// is how every part of the editor tells it from a file.
+pub const EXPANSION_PREFIX: &str = "expansion:/";
+
+/// Whether an open document is a macro expansion rather than a file.
+pub fn is_expansion(path: &str) -> bool {
+    path.starts_with(EXPANSION_PREFIX)
+}
+
+/// The name the expansion of the macro called on `line` (0-based) of `path`
+/// is shown under. The call's file and line come first and the macro's name
+/// last, so a tab reads `println!` and two expansions of `println!` are told
+/// apart by where they were called — and the same call expanded again is
+/// the same document, shown again rather than beside itself.
+pub fn expansion_path(path: &str, line: u32, name: &str) -> String {
+    format!("{EXPANSION_PREFIX}{path}:{}/{name}", line + 1)
+}
+
+/// Where an expansion's macro was called, as `file:line`, and the macro's
+/// name — what its header and its tab's tooltip say in place of a path.
+/// `None` for a path that is a file.
+pub fn expansion_parts(path: &str) -> Option<(&str, &str)> {
+    path.strip_prefix(EXPANSION_PREFIX)?.rsplit_once('/')
+}
+
 /// A file, ready to show.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -215,4 +241,21 @@ pub struct FileChanges {
     /// Separate because the two answers cost very different amounts: rereading
     /// one open file is nothing, and walking the project is not.
     pub tree: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name an expansion is shown under says where the macro was called
+    /// and what it was, and reads back as both.
+    #[test]
+    fn an_expansion_is_named_by_its_call_and_its_macro() {
+        let path = expansion_path("src/nav.rs", 37, "println!");
+        assert_eq!(path, "expansion:/src/nav.rs:38/println!");
+        assert!(is_expansion(&path));
+        assert_eq!(expansion_parts(&path), Some(("src/nav.rs:38", "println!")));
+        assert_eq!(expansion_parts("src/nav.rs"), None);
+        assert!(!is_expansion("src/nav.rs"));
+    }
 }

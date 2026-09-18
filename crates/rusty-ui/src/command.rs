@@ -58,9 +58,16 @@ pub enum Action {
     FindReferences,
     GoToImplementations,
     GoToTypeDefinition,
+    /// Who calls the function at the caret, and what it calls, in the
+    /// dock's Calls tab.
+    ShowCallHierarchy,
+    /// The macro call at the caret expanded all the way down, opened beside
+    /// the code.
+    ExpandMacro,
     /// Fold the Files panel's tree away, or bring it back.
     ToggleTree,
-    /// Move the focused group's file to the group beside it.
+    /// The left group's file opened on the right as well: a second view of
+    /// the same document.
     SplitEditor,
     OpenSettings,
     /// The environment check, on purpose rather than because it interrupted.
@@ -246,6 +253,8 @@ pub fn all(state: AppState) -> Vec<Command> {
         (Action::FindReferences, t!("menu.view.references")),
         (Action::GoToImplementations, t!("menu.view.implementations")),
         (Action::GoToTypeDefinition, t!("menu.view.type-definition")),
+        (Action::ShowCallHierarchy, t!("menu.view.call-hierarchy")),
+        (Action::ExpandMacro, t!("menu.view.expand-macro")),
     ] {
         out.push(view(action, &title, chord(action)));
     }
@@ -421,6 +430,16 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             Action::GoToTypeDefinition,
             &t!("menu.view.type-definition"),
             chord(Action::GoToTypeDefinition),
+        ),
+        project_entry(
+            Action::ShowCallHierarchy,
+            &t!("menu.view.call-hierarchy"),
+            chord(Action::ShowCallHierarchy),
+        ),
+        project_entry(
+            Action::ExpandMacro,
+            &t!("menu.view.expand-macro"),
+            chord(Action::ExpandMacro),
         ),
         Item::Separator,
         Item::Submenu {
@@ -789,6 +808,8 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::GoToTypeDefinition => {
             controller::find_places(state.focused(), controller::PlaceQuery::TypeDefinition)
         }
+        Action::ShowCallHierarchy => controller::show_call_hierarchy(state.focused()),
+        Action::ExpandMacro => controller::expand_macro(state.focused()),
         Action::ToggleTree => controller::toggle_tree(state),
         Action::SplitEditor => controller::split_active(state),
         Action::OpenSettings => chrome.settings_open.set(true),

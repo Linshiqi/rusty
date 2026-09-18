@@ -104,8 +104,19 @@ fn absorb(state: AppState, changes: FileChanges) {
 /// notice it: the watcher is debounced, and a failure to start it is silence
 /// by design. A project-wide replace calls this for each file it changed.
 pub fn follow(state: AppState, path: String) {
-    // Each group answers for its own strip; a file is in one of them.
-    for group in state.open_groups() {
+    // One read however many views the file has: the group it is on screen
+    // in, else each group that holds it parked. A view on screen carries the
+    // answer to the other side itself (`share_document`), where two reads
+    // would each leave a painting of their own for the backend to keep.
+    let groups = state.open_groups();
+    if let Some(group) = groups
+        .iter()
+        .find(|group| group.active_path_now().as_deref() == Some(path.as_str()))
+    {
+        follow_in(*group, path);
+        return;
+    }
+    for group in groups {
         follow_in(group, path.clone());
     }
 }
@@ -229,6 +240,7 @@ fn adopt_active(state: AppState, document: Document) {
     let path = document.path.clone();
     let text = document.text.clone();
     state.editor.document.set(Some(document));
+    share_document(state);
     // The server has its own copy of the buffer and no idea the disk moved.
     if state.lsp.status.get_untracked() == crate::state::LspStatus::Ready {
         lsp_changed_doc(path, text);

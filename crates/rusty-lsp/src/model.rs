@@ -187,6 +187,47 @@ pub struct Place {
     pub text: String,
 }
 
+/// A function in a call hierarchy: its name, where it is, and the server's
+/// own description of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallItem {
+    pub name: String,
+    /// What it is, in words, as a [`Symbol`]'s kind is.
+    pub kind: String,
+    /// What the server says beside the name — for rust-analyzer, the
+    /// signature.
+    pub detail: Option<String>,
+    /// Its name, with the line it is on.
+    pub place: Place,
+    /// The item exactly as the server sent it. Nobody reads it but the
+    /// server: the next level of the hierarchy is asked for by handing it
+    /// back, and the server is free to put whatever it needs in there.
+    pub item: String,
+}
+
+/// One end of a call: the function at the other end, and every place the
+/// call is made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Call {
+    /// The caller, for the calls into a function; the callee, for the calls
+    /// out of one.
+    pub item: CallItem,
+    /// Where the calls are, with their lines: in the caller's file either
+    /// way — `item`'s for a call in, the asked function's for a call out.
+    pub sites: Vec<Place>,
+}
+
+/// What a macro call turns into, fully expanded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroExpansion {
+    /// The macro, by the name it was called with.
+    pub name: String,
+    pub expansion: String,
+}
+
 /// Something with a name in the code: a function, a struct, an impl block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

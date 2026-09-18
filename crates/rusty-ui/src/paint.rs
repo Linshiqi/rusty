@@ -91,6 +91,85 @@ pub fn plain_lines(new: &str, edit: LineEdit) -> Vec<Line> {
         .collect()
 }
 
+/// Patch painted lines that depict `old` so they depict `new`: the lines the
+/// edit wrote go in as plain text, and the rest keep their colours. Clamped,
+/// since a splice out of range panics the window. What `echo_edit` does to
+/// the lines on screen and a mirrored edit does to a parked tab's.
+pub fn echo(lines: &mut Vec<Line>, old: &str, new: &str) -> LineEdit {
+    let edit = line_edit(old, new);
+    let end = (edit.old - edit.suffix).min(lines.len());
+    let start = edit.prefix.min(end);
+    lines.splice(start..end, plain_lines(new, edit));
+    edit
+}
+
+/// Where a position — a line and a scalar column — in `old` is in `new`, for
+/// a caret in the other view of a file, which the edit was not made at. By
+/// character, not by line, as VS Code's other view moves: in front of what
+/// changed it stays, behind it it moves with the text — along its own line
+/// too, when the change was earlier on that line — and inside what the edit
+/// replaced it goes to where the change starts.
+pub fn follow(old: &str, new: &str, (line, col): (usize, u32)) -> (usize, u32) {
+    position_at(new, follow_byte(old, new, byte_at(old, line, col)))
+}
+
+/// [`follow`] for a byte offset: where byte `at` of `old` is in `new`.
+pub fn follow_byte(old: &str, new: &str, at: usize) -> usize {
+    let mut prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !old.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let room = old.len().min(new.len()) - prefix;
+    let mut suffix = old
+        .bytes()
+        .rev()
+        .zip(new.bytes().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !old.is_char_boundary(old.len() - suffix) {
+        suffix -= 1;
+    }
+    if at <= prefix {
+        at
+    } else if at >= old.len() - suffix {
+        at + new.len() - old.len()
+    } else {
+        prefix
+    }
+}
+
+/// The byte a line and a scalar column name, clamped to the line's end.
+fn byte_at(text: &str, line: usize, col: u32) -> usize {
+    let mut start = 0;
+    for (index, text_line) in text.split('\n').enumerate() {
+        if index == line {
+            return start
+                + text_line
+                    .char_indices()
+                    .nth(col as usize)
+                    .map_or(text_line.len(), |(byte, _)| byte);
+        }
+        start += text_line.len() + 1;
+    }
+    text.len()
+}
+
+/// The line and scalar column of a byte.
+fn position_at(text: &str, byte: usize) -> (usize, u32) {
+    let before = &text[..byte.min(text.len())];
+    let line = before.matches('\n').count();
+    let col = before
+        .rsplit('\n')
+        .next()
+        .map_or(0, |tail| tail.chars().count());
+    (line, col as u32)
+}
+
 /// Every line of `text` as plain text.
 pub fn all_plain(text: &str) -> Vec<Line> {
     let whole = LineEdit {
@@ -311,6 +390,39 @@ mod tests {
         ];
         let stale = echoed.into_iter().fold(None, stale_after);
         assert_eq!(stale, Some((0, 3)), "fn a is inside what stays stale");
+    }
+
+    /// The other view's caret goes with the text it is in: down past lines
+    /// added above it, along its line past what was typed before it on the
+    /// same line, not at all for what was typed after it, and to the start of
+    /// a change that took the text it stood in — with a `中` on the line, so a
+    /// column counted in bytes cannot pass for one counted in scalars.
+    #[test]
+    fn a_position_follows_its_text_across_an_edit() {
+        let old = "a\nb\nc";
+        let added = "a\nX\nY\nb\nc";
+        assert_eq!(follow(old, added, (2, 1)), (4, 1));
+        assert_eq!(follow(old, added, (0, 1)), (0, 1));
+        let line = "let 中 = sample();";
+        let typed = "let 中 = my_sample();";
+        assert_eq!(
+            follow(line, typed, (0, 14)),
+            (0, 17),
+            "behind it on its line"
+        );
+        assert_eq!(follow(line, typed, (0, 3)), (0, 3), "in front of it");
+        let old = "a\nbbb\nc\nd";
+        assert_eq!(follow(old, "a\nd", (1, 2)), (1, 0), "inside what went");
+        assert_eq!(follow("a\nb", "", (1, 0)), (0, 0));
+        assert_eq!(follow("ab", "ab", (0, 9)), (0, 2), "clamped to its line");
+    }
+
+    #[test]
+    fn echoing_an_edit_keeps_every_line_it_did_not_write() {
+        let mut lines = vec![painted("a"), painted("b"), painted("c")];
+        let edit = echo(&mut lines, "a\nb\nc", "a\nbX\nY\nc");
+        assert_eq!(edit.written(), Some((1, 3)));
+        assert_eq!(lines, [painted("a"), plain("bX"), plain("Y"), painted("c")]);
     }
 
     #[test]

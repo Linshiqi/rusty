@@ -16,7 +16,7 @@ use rusty_i18n::t;
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, EditHistory, LspStatus, ParkedEditor, ParkedViewport},
+    state::{AppState, LspStatus, ParkedEditor, ParkedViewport},
 };
 
 /// Create a file or directory, then show it — the tree refreshes, and a new
@@ -73,6 +73,7 @@ pub(crate) fn retarget(path: &str, from: &str, to: &str, is_dir: bool) -> Option
 /// new name from the buffer the editor already holds.
 fn follow_move(state: AppState, from: &str, to: &str, is_dir: bool) {
     let moved = |path: &str| retarget(path, from, to, is_dir);
+    let mut announced = std::collections::HashSet::new();
     for group in state.open_groups() {
         group.editor.tabs.update(|tabs| {
             for tab in tabs.iter_mut() {
@@ -105,11 +106,26 @@ fn follow_move(state: AppState, from: &str, to: &str, is_dir: bool) {
         // The old name closed and the new one opened: left open, the server
         // kept a document at a path that no longer exists — a second copy
         // of the module, under its old name, for as long as the session ran.
+        // Once per file: a file open on both sides moved once.
         for (old, new, text) in reopened {
-            lsp_closed_doc(old);
-            lsp_open_doc(new, text);
+            if announced.insert(old.clone()) {
+                lsp_closed_doc(old);
+                lsp_open_doc(new, text);
+            }
         }
     }
+    // The undo history is the file's, under whatever it is called now.
+    state.editor.histories.update_value(|all| {
+        let moved: Vec<(String, String)> = all
+            .keys()
+            .filter_map(|path| moved(path).map(|new| (path.clone(), new)))
+            .collect();
+        for (old, new) in moved {
+            if let Some(history) = all.remove(&old) {
+                all.insert(new, history);
+            }
+        }
+    });
     let rename_all = |list: &mut Vec<String>| {
         for path in list.iter_mut() {
             if let Some(new) = moved(path) {
@@ -460,17 +476,9 @@ pub fn open_file(state: AppState, path: String) {
         activate_tab(state, path);
         return;
     }
-    // One group per file. A path the other group holds is fronted there and
-    // focus follows — rather than a second draft of the same file that a
-    // save from either side would silently overwrite the other with.
-    let other = state.other();
-    if other
-        .editor
-        .tabs
-        .with_untracked(|tabs| tabs.iter().any(|t| t == &path))
-    {
-        state.layout.focus.set(other.group);
-        open_file(other, path);
+    // The other group holds it: a second view of the same document, never a
+    // second read of the disk beside an unsaved draft (`views.rs`).
+    if other_holds(state, &path) && open_view(state, &path) {
         return;
     }
 
@@ -496,6 +504,11 @@ pub(crate) fn reopen_file(state: AppState, path: String) {
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
+    }
+
+    // Restored on both sides, and the other side has read it already.
+    if other_holds(state, &path) && open_view(state, &path) {
+        return;
     }
 
     let args = Args { path: path.clone() };
@@ -619,13 +632,16 @@ fn reload_active(state: AppState, path: String) {
 ///
 /// A different path parks the current editor first; the same path replaces it
 /// in place, which is how a save's re-read lands without disturbing the strip.
-fn show_document(state: AppState, document: Document, announce: bool) {
+pub(super) fn show_document(state: AppState, document: Document, announce: bool) {
     let active = state.active_path_now();
-    if active.is_some() && active.as_deref() != Some(document.path.as_str()) {
+    let reread = active.as_deref() == Some(document.path.as_str());
+    if active.is_some() && !reread {
         park_active(state);
     }
-    if active.as_deref() != Some(document.path.as_str()) {
-        state.editor.history.set(EditHistory::default());
+    // A file read fresh is a new document, and its history starts empty —
+    // unless the other side holds it, whose edits the history is of.
+    if !reread && !other_holds(state, &document.path) {
+        state.editor.forget_history(&document.path);
     }
     state.editor.tabs.update(|tabs| {
         if !tabs.iter().any(|t| t == &document.path) {
@@ -667,6 +683,10 @@ fn show_document(state: AppState, document: Document, announce: bool) {
         .recent
         .update_value(|recent| recent.touch(&document.path));
     state.editor.document.set(Some(document));
+    // A save's re-read: what the disk holds now, for the other view too.
+    if reread {
+        share_document(state);
+    }
 }
 
 /// A whole painting went on screen: say which it is and which of its lines
@@ -681,7 +701,7 @@ pub(crate) fn painted_whole(state: AppState, version: Option<u32>, stale: crate:
 }
 
 /// Stash the on-screen editor into the parked set, caret and all.
-fn park_active(state: AppState) {
+pub(super) fn park_active(state: AppState) {
     let Some(document) = state.editor.document.get_untracked() else {
         return;
     };
@@ -690,7 +710,6 @@ fn park_active(state: AppState) {
         highlighted: state.editor.highlighted.get_untracked(),
         paint: state.editor.paint.get_value(),
         caret: active_caret(state),
-        history: state.editor.history.get_untracked(),
         folds: state.editor.folds.get_untracked(),
         viewport: viewport_position(state),
         document,
@@ -727,6 +746,8 @@ fn clear_editor_transients(state: AppState) {
     // A viewport still waiting for a view that never mounted belongs to a
     // document that is no longer coming.
     state.editor.viewport.set(None);
+    // Whatever the textarea was behind on is not on screen any more.
+    state.editor.lagging.set(false);
 }
 
 /// Front an already open tab, parking the current one.
@@ -755,7 +776,7 @@ pub fn activate_tab(state: AppState, path: String) {
 }
 
 /// Move a parked editor onto the screen. False when no such entry exists.
-fn front_parked(state: AppState, path: &str) -> bool {
+pub(super) fn front_parked(state: AppState, path: &str) -> bool {
     let mut taken = None;
     state.editor.parked.update(|parked| {
         if let Some(at) = parked.iter().position(|e| e.document.path == path) {
@@ -768,7 +789,6 @@ fn front_parked(state: AppState, path: &str) -> bool {
     clear_editor_transients(state);
     let dirty = entry.draft != entry.document.text;
     let read_only = entry.document.read_only;
-    state.editor.history.set(entry.history);
     // After `clear_editor_transients` has reset them, or the tab comes back
     // flat while its caret comes back where it was.
     state.editor.folds.set(entry.folds);
@@ -821,7 +841,9 @@ pub fn close_tab(state: AppState, path: String) {
                 .is_some_and(|e| !e.document.read_only && e.draft != e.document.text)
         })
     };
-    if dirty {
+    // Open on the other side too, the draft is not going anywhere: that view
+    // holds the same document, and closing this one loses nothing.
+    if dirty && !other_holds(state, &path) {
         // Asked through `ipc::confirm`, never `window.confirm` directly: in
         // the app that global is the dialog plugin's async shim, and read as
         // a boolean it is always "no" — a dirty tab that could not be closed.
@@ -850,9 +872,12 @@ fn remove_tab(state: AppState, path: String) {
         .editor
         .parked
         .update(|parked| parked.retain(|e| e.document.path != path));
-    // One group per file, so a closed tab is a file no editor holds: the
-    // server goes back to the disk for it.
-    lsp_closed_doc(path.clone());
+    // A file no view holds any more: the server goes back to the disk for
+    // it, and its undo history goes with the document.
+    if !other_holds(state, &path) {
+        lsp_closed_doc(path.clone());
+        state.editor.forget_history(&path);
+    }
 
     if is_active {
         clear_editor_transients(state);
@@ -878,7 +903,6 @@ fn clear_screen(state: AppState) {
     state.editor.echo_text.set(String::new());
     state.editor.highlighted.set(Vec::new());
     painted_whole(state, None, None);
-    state.editor.history.set(EditHistory::default());
 }
 
 // ─── two groups ─────────────────────────────────────────────────────────────────
@@ -890,92 +914,26 @@ fn clear_screen(state: AppState) {
 /// nothing further right, and the first version sent a file to "the other
 /// group": from the right group that moved it left, and when it was the
 /// right group's last file the right group vanished under the click — read,
-/// correctly, as the split closing for no reason. Files move into the right
-/// group and never out of it; the right group closes only when its last tab
-/// does. A file the left group holds moves across rather than opening
-/// twice (one group per file); one the right group holds is fronted there.
+/// correctly, as the split closing for no reason. A file the left group
+/// holds opens on the right as a second view of the same document and stays
+/// on the left, as VS Code's split does (`views.rs`); one the right group
+/// holds is fronted there.
 pub fn open_beside(state: AppState, path: String) {
-    let first = state.group(crate::state::Group::First);
     let second = state.group(crate::state::Group::Second);
     state.layout.split.set(true);
-    if first
-        .editor
-        .tabs
-        .with_untracked(|tabs| tabs.iter().any(|t| t == &path))
-    {
-        transplant(first, second, &path);
-    } else {
-        // Already on the right, or open nowhere yet: either way `open_file`
-        // on the right group does the right thing.
-        state.layout.focus.set(second.group);
-        open_file(second, path);
-    }
+    state.layout.focus.set(second.group);
+    open_file(second, path);
 }
 
-/// The left strip's split button and Ctrl+\: the left group's file moves to
-/// the right group, opening it if need be. Only the left group has the
-/// button — there is nothing further right of the right group — and it
-/// wants a second tab to leave behind: a left pane emptied by its only file
-/// moving across would close again at once, and the click would look like
-/// nothing happened.
+/// The left strip's split button and Ctrl+\: the left group's file opens on
+/// the right as well. Only the left group has the button — there is nothing
+/// further right of the right group.
 pub fn split_active(state: AppState) {
     let first = state.group(crate::state::Group::First);
     let Some(path) = first.active_path_now() else {
         return;
     };
-    if first.editor.tabs.with_untracked(|tabs| tabs.len() < 2) {
-        return;
-    }
     open_beside(first, path);
-}
-
-/// Carry an open file from one group to the other with its draft, caret and
-/// history. The strip it leaves shows its neighbour, as a close would.
-fn transplant(from: AppState, to: AppState, path: &str) {
-    let was_active = from.active_path_now().as_deref() == Some(path);
-    let next = neighbour_after_close(&from.editor.tabs.get_untracked(), path);
-    if was_active {
-        park_active(from);
-    }
-    let mut entry = None;
-    from.editor.parked.update(|list| {
-        if let Some(at) = list.iter().position(|e| e.document.path == path) {
-            entry = Some(list.remove(at));
-        }
-    });
-    from.editor.tabs.update(|tabs| tabs.retain(|t| t != path));
-    if was_active {
-        clear_editor_transients(from);
-        if !next.as_deref().is_some_and(|n| front_parked(from, n)) {
-            clear_screen(from);
-            // A neighbour listed with no body — restored from last session
-            // and never clicked — is read, as `remove_tab` reads one. Moving
-            // the one loaded file of a restored strip to the side left the
-            // group it came from blank under four tab names.
-            if let Some(next) = next {
-                open_file(from, next);
-            }
-        }
-    }
-    to.layout.focus.set(to.group);
-    match entry {
-        Some(entry) => {
-            to.editor.tabs.update(|tabs| {
-                if !tabs.iter().any(|t| t == path) {
-                    tabs.push(path.to_string());
-                }
-            });
-            to.editor.parked.update(|list| {
-                list.retain(|e| e.document.path != path);
-                list.push(entry);
-            });
-            activate_tab(to, path.to_string());
-        }
-        // Listed but never loaded — a tab restored from last session and not
-        // clicked since. Nothing to carry; the other side reads it fresh.
-        None => open_file(to, path.to_string()),
-    }
-    settle_groups(from);
 }
 
 /// After a group lost a file. A second group with nothing left closes; a
@@ -1017,6 +975,8 @@ fn settle_groups(state: AppState) {
 pub fn reset_group(state: AppState) {
     state.editor.tabs.set(Vec::new());
     state.editor.parked.set(Vec::new());
+    // Keyed by path, and the next project has a `src/main.rs` too.
+    state.editor.histories.update_value(|all| all.clear());
     clear_editor_transients(state);
     clear_screen(state);
     state.editor.reveal.set(None);
@@ -1129,6 +1089,9 @@ pub fn autosave_file(state: AppState) {
                     open.text = text.clone();
                 }
             });
+            if state.active_path_now().as_deref() == Some(path.as_str()) {
+                share_document(state);
+            }
         },
     );
 }

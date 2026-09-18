@@ -184,10 +184,11 @@ pub(super) fn vim_key(
     // own coalescing is by time, which would split `ciwfoo<Esc>` into pieces.
     if step.seal {
         record_edit(state);
-        state
-            .editor
-            .history
-            .update(|history| history.last_push = 0.0);
+        if let Some(path) = state.active_path_now() {
+            state
+                .editor
+                .with_history(&path, |history| history.last_push = 0.0);
+        }
     }
 
     let after = if let Some(next) = step.text.clone() {

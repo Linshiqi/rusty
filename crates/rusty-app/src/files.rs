@@ -111,7 +111,14 @@ pub async fn delete_entry(path: String, state: State<'_, AppState>) -> Result<()
 pub async fn reveal_entry(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
     blocking("revealing the entry", move || {
-        let target = rusty_edit::absolute(&root, &path)?;
+        // A library's source, open where a definition led, is held by its
+        // absolute path; everything else is under the project.
+        let outside = std::path::Path::new(&path);
+        let target = if outside.is_absolute() && rusty_edit::is_library_source(outside) {
+            outside.to_path_buf()
+        } else {
+            rusty_edit::absolute(&root, &path)?
+        };
         let mut command = if cfg!(target_os = "windows") {
             let mut command = rusty_embed::process::command("explorer");
             // One argument, no space after the comma: Explorer parses the

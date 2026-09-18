@@ -260,6 +260,21 @@ impl Folded {
 
     /// Drop folds the given document line range disturbed, and shift the rest.
     ///
+    /// Carry the folds across an edit made somewhere else — in the other view
+    /// of the same file — that replaced document lines `from..to` and moved
+    /// everything below them by `delta`. A fold the edit reached into opens,
+    /// since what it hid is not what it hides now; one wholly below moves with
+    /// its lines, and one wholly above stays.
+    pub fn follow(&mut self, from: u32, to: u32, delta: i64) {
+        self.regions.retain(|r| r.last < from || r.header >= to);
+        for region in &mut self.regions {
+            if region.header >= to {
+                region.header = (i64::from(region.header) + delta) as u32;
+                region.last = (i64::from(region.last) + delta) as u32;
+            }
+        }
+    }
+
     /// Called after an edit. A fold whose hidden body was inside the replaced
     /// range no longer describes anything, and keeping it would hide whatever
     /// happens to be at those line numbers now.
@@ -760,6 +775,27 @@ fn other() {
         ] {
             assert_eq!(regions(source), regions_line_by_line(source));
         }
+    }
+
+    /// Lines 3..5 replaced by one: a fold above stays, a fold the edit reached
+    /// into opens, a fold below moves up by the two lines that went, and a
+    /// line inserted just above a fold's header moves it down whole.
+    #[test]
+    fn folds_follow_an_edit_made_in_the_other_view() {
+        let mut folds = Folded::default();
+        folds.fold(Region { header: 0, last: 2 });
+        folds.fold(Region { header: 4, last: 6 });
+        folds.fold(Region { header: 8, last: 9 });
+        folds.follow(3, 5, -1);
+        assert_eq!(
+            folds.regions(),
+            [Region { header: 0, last: 2 }, Region { header: 7, last: 8 }]
+        );
+        folds.follow(7, 7, 1);
+        assert_eq!(
+            folds.regions(),
+            [Region { header: 0, last: 2 }, Region { header: 8, last: 9 }]
+        );
     }
 
     #[test]

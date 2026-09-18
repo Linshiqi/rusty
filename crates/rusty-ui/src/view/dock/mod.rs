@@ -9,7 +9,7 @@
 //! renders it.
 //!
 //! The strip carries the tabs that have something to say. Problems, Output
-//! and Terminal are always there; the other six appear when something puts
+//! and Terminal are always there; the others appear when something puts
 //! them there — a button or the View menu through `show_dock`, or the first
 //! protocol line carrying what a tab shows through `reveal_tab` — and go when
 //! the user hides them with the × on the tab. Nine tabs on a window with no
@@ -65,6 +65,7 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Registers => view! { <RegistersTab /> }.into_any(),
                         DockTab::Devices => view! { <DevicesTab /> }.into_any(),
                         DockTab::Flight => view! { <FlightTab /> }.into_any(),
+                        DockTab::Calls => view! { <CallsTab /> }.into_any(),
                     }}
                 </div>
             </section>
@@ -253,6 +254,7 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             // the telemetry is arriving at all.
             DockTab::Plot => (state.sim.plot.with(|p| p.channels.len()), Tone::Neutral),
             DockTab::Devices => (0, Tone::Neutral),
+            DockTab::Calls => (0, Tone::Neutral),
             // How many motors are being driven right now. Worth a glance
             // from another tab for one reason: it is not zero when it should
             // be zero.
@@ -342,6 +344,7 @@ struct DiagMenuAt {
     message: String,
 }
 
+mod calls;
 mod debug;
 mod devices;
 mod flight;
@@ -350,6 +353,7 @@ mod problems;
 mod registers;
 mod shell;
 
+use calls::*;
 use debug::*;
 use devices::*;
 use flight::*;

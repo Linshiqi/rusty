@@ -24,7 +24,11 @@ pub(super) fn EditorGroup(which: Group) -> impl IntoView {
     let shell = AppState::expect();
     let state = shell.group(which);
     provide_context(state);
+    // Used: this group is where the work is, and its textarea is written if
+    // an edit in the other view of its file left it behind — before the
+    // press places a caret in it or a key reaches it.
     let focus = move || {
+        crate::controller::catch_up(state);
         if shell.layout.focus.get_untracked() != which {
             shell.layout.focus.set(which);
         }

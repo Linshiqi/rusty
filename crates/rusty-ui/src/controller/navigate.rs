@@ -51,12 +51,24 @@ pub fn remember_tabs(state: AppState) {
         second: Vec<String>,
         second_active: Option<String>,
     }
+    // A macro's expansion has no file to come back from, so it is not
+    // remembered: the next launch would find it gone and drop it anyway.
+    let files = |tabs: Vec<String>| -> Vec<String> {
+        tabs.into_iter()
+            .filter(|tab| !rusty_edit::is_expansion(tab))
+            .collect()
+    };
+    let active = |group: AppState| {
+        group
+            .active_path_now()
+            .filter(|p| !rusty_edit::is_expansion(p))
+    };
     let args = Args {
         root,
-        tabs: first.editor.tabs.get_untracked(),
-        active: first.active_path_now(),
-        second: second.editor.tabs.get_untracked(),
-        second_active: second.active_path_now(),
+        tabs: files(first.editor.tabs.get_untracked()),
+        active: active(first),
+        second: files(second.editor.tabs.get_untracked()),
+        second_active: active(second),
     };
     // Fire and forget: a tab strip that failed to save is not worth a banner
     // over the edit the user was making when it happened.
@@ -380,7 +392,9 @@ pub(super) fn caret_position(state: AppState) -> Option<(u32, u32)> {
     use rusty_lsp::positions::{self, Encoding::Utf16};
 
     let element = editor_area(state.group)?;
-    let units = element.selection_start().ok().flatten()? as usize;
+    // Behind the draft, a textarea's selection is about the text it holds.
+    let (units, _) = selection_now(state, &element)?;
+    let units = units as usize;
     let text = state.editor.draft.get_untracked();
     let byte = positions::byte_of_character(&text, units, Utf16);
     let (line, character) = positions::offset_to_position(&text, byte, Utf16);

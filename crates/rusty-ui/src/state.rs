@@ -81,8 +81,6 @@ pub struct ParkedEditor {
     pub highlighted: Vec<rusty_edit::Line>,
     /// Where the caret was, as (line, scalar column), when it could be read.
     pub caret: Option<(u32, u32)>,
-    /// The tab's undo/redo stacks, so history survives switching away.
-    pub history: EditHistory,
     /// And its collapsed regions. Carried for the same reason the caret is:
     /// coming back to a tab should be coming back to what you were looking
     /// at, and a file that unfolds itself every time you glance at another
@@ -105,6 +103,20 @@ pub struct ParkedEditor {
 pub struct PlaceList {
     pub title: String,
     pub places: Vec<rusty_lsp::Place>,
+}
+
+/// What the dock's Calls tab shows (`view/dock/calls.rs`).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum CallsView {
+    /// Nothing asked for yet.
+    #[default]
+    Idle,
+    /// The server is being asked what function the caret is in; the ask's
+    /// number, so an older answer is not shown for a newer ask.
+    Asking(u64),
+    /// The caret was on nothing a hierarchy starts from — the word it was on.
+    NoFunction(String),
+    Tree(crate::calls::CallTree),
 }
 
 /// Symbols the finder asked for, and the ask they answer: `@` and the file's
@@ -174,6 +186,27 @@ pub struct EditHistory {
     pub redo: Vec<String>,
     /// When the last snapshot was pushed (ms), for burst coalescing.
     pub last_push: f64,
+}
+
+impl Editor {
+    /// Work on the undo history of `path`, made empty the first time it is
+    /// asked for.
+    pub fn with_history<T>(
+        &self,
+        path: &str,
+        work: impl FnOnce(&mut EditHistory) -> T,
+    ) -> Option<T> {
+        self.histories
+            .try_update_value(|all| work(all.entry(path.to_string()).or_default()))
+    }
+
+    /// Let a file's history go: the file is open nowhere now, or is a
+    /// different file than the one the history was of.
+    pub fn forget_history(&self, path: &str) {
+        self.histories.update_value(|all| {
+            all.remove(path);
+        });
+    }
 }
 
 impl EditHistory {
@@ -465,16 +498,19 @@ pub enum DockTab {
     Registers,
     /// A control loop's attitude and its outputs, side by side.
     Flight,
+    /// Who calls a function and what it calls, a level at a time.
+    Calls,
 }
 
 impl DockTab {
     /// Every tab there is, in the order the strip draws them. The View menu
     /// and the palette list these; the strip itself carries a subset
     /// ([`Layout::dock_tabs`]).
-    pub const ALL: [DockTab; 9] = [
+    pub const ALL: [DockTab; 10] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
+        DockTab::Calls,
         DockTab::Waves,
         DockTab::Plot,
         DockTab::Debug,
@@ -535,6 +571,7 @@ impl DockTab {
             DockTab::Debug => t!("dock.tab.debug"),
             DockTab::Registers => t!("dock.tab.registers"),
             DockTab::Flight => t!("dock.tab.flight"),
+            DockTab::Calls => t!("dock.tab.calls"),
         }
     }
 }
@@ -1075,8 +1112,21 @@ pub struct Editor {
     pub tabs: RwSignal<Vec<String>>,
     /// Open editors that are not on screen, holding their unsaved drafts.
     pub parked: RwSignal<Vec<ParkedEditor>>,
-    /// The active editor's undo/redo stacks.
-    pub history: RwSignal<EditHistory>,
+    /// Undo and redo, one pair of stacks per open file, shared by both
+    /// groups: a file open on both sides is one document, and an undo in
+    /// either view undoes the last edit made in either. Kept per file and not
+    /// per tab, so switching away and back loses nothing and there is nothing
+    /// to park. Not reactive: nothing draws it.
+    pub histories: StoredValue<HashMap<String, EditHistory>>,
+    /// The textarea is behind the draft. An edit made in the other view of
+    /// this file changes the draft here, the folds and the echo — everything
+    /// on screen — and leaves the textarea, whose text is transparent, to be
+    /// written when this view is next used (`controller::catch_up`).
+    /// Rewriting a textarea's whole value lays the whole file out again:
+    /// measured at 120 ms for 24,000 lines, twice over, on every keystroke
+    /// typed on the other side, where the view being typed in lays out only
+    /// what changed.
+    pub lagging: RwSignal<bool>,
     /// Where the caret has been. Shared by Vim's jump keys and the menu.
     pub nav: RwSignal<NavHistory>,
     /// This group's files by how recently each was on screen: Ctrl+Tab's
@@ -1198,7 +1248,8 @@ impl Editor {
             drawn_lines: StoredValue::new((0, 0)),
             tabs: RwSignal::new(Vec::new()),
             parked: RwSignal::new(Vec::new()),
-            history: RwSignal::new(EditHistory::default()),
+            histories: StoredValue::new(HashMap::new()),
+            lagging: RwSignal::new(false),
             nav: RwSignal::new(NavHistory::default()),
             recent: StoredValue::new(RecentEditors::default()),
             rename: RwSignal::new(None),
@@ -1247,6 +1298,7 @@ impl Editor {
             source_view: self.source_view,
             images: self.images,
             snippets: self.snippets,
+            histories: self.histories,
             stale: self.stale,
             unlinked: self.unlinked,
             watch_session: self.watch_session,
@@ -2059,7 +2111,7 @@ pub struct Layout {
     /// no project open was nine names for things that were not happening.
     ///
     /// Session state, not persisted: nothing is running at boot, so the strip
-    /// starts with what is true at boot, and the View menu lists all nine for
+    /// starts with what is true at boot, and the View menu lists them all for
     /// anyone who wants one before it has anything to show.
     pub dock_tabs: RwSignal<Vec<DockTab>>,
     pub panel: RwSignal<String>,
@@ -2092,6 +2144,8 @@ pub struct Layout {
     pub quick_symbols: RwSignal<Option<SymbolAnswer>>,
     /// Ctrl+Tab's list, while Ctrl is held.
     pub switcher: RwSignal<Option<Switcher>>,
+    /// The call hierarchy in the dock's Calls tab.
+    pub calls: RwSignal<CallsView>,
 }
 
 impl Layout {
@@ -2440,6 +2494,7 @@ impl AppState {
                 quick_places: RwSignal::new(None),
                 quick_symbols: RwSignal::new(None),
                 switcher: RwSignal::new(None),
+                calls: RwSignal::new(CallsView::Idle),
             },
             dock: Dock {
                 lines: RwSignal::new(Vec::new()),

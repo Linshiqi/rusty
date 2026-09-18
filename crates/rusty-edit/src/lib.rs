@@ -43,7 +43,7 @@ mod tree;
 mod watch;
 
 #[cfg(feature = "backend")]
-pub use document::{Files, create, read_bytes, save};
+pub use document::{Files, create, is_library_source, read_bytes, save};
 #[cfg(feature = "backend")]
 pub use entries::{absolute, copy_entry, delete_entry, move_entry, rename_entry};
 #[cfg(feature = "backend")]

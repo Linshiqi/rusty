@@ -360,6 +360,72 @@ pub async fn lsp_workspace_symbols(
     places(state, move |client| client.workspace_symbols(&query)).await
 }
 
+/// The function at this position, where a call hierarchy starts.
+#[tauri::command]
+pub async fn lsp_call_hierarchy(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::CallItem>, CommandError> {
+    places(state, move |client| client.call_hierarchy(&path, line, col)).await
+}
+
+/// Who calls the function `item` names, or what it calls: `item` is the
+/// server's own description of it, handed back untouched.
+#[tauri::command]
+pub async fn lsp_calls(
+    item: String,
+    incoming: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::Call>, CommandError> {
+    places(state, move |client| {
+        if incoming {
+            client.incoming_calls(&item)
+        } else {
+            client.outgoing_calls(&item)
+        }
+    })
+    .await
+}
+
+/// The macro call at this position expanded all the way down, as a
+/// read-only Rust document — `None` when nothing there is a macro, or no
+/// server is running to ask.
+///
+/// Headed as VS Code heads it, which is what a Rust programmer who has
+/// expanded a macro before has seen: generated code, so the comment is code
+/// and stays English like the expansion under it.
+#[tauri::command]
+pub async fn lsp_expand_macro(
+    path: String,
+    line: u32,
+    col: u32,
+    state: State<'_, AppState>,
+) -> Result<Option<rusty_edit::Document>, CommandError> {
+    let Some(client) = state.lsp().await else {
+        return Ok(None);
+    };
+    let files = state.files();
+    Ok(tokio::task::spawn_blocking(move || {
+        let Some(expanded) = client.expand_macro(&path, line, col)? else {
+            return Ok::<_, rusty_lsp::Error>(None);
+        };
+        let heading = format!("// Recursive expansion of {} macro", expanded.name);
+        let rule = format!("// {}", "=".repeat(heading.chars().count() - 3));
+        // rust-analyzer starts some expansions with a line break of its own.
+        let expansion = expanded
+            .expansion
+            .trim_start_matches(['\r', '\n'])
+            .trim_end();
+        let text = format!("{heading}\n{rule}\n\n{expansion}\n");
+        let shown = rusty_edit::expansion_path(&path, line, &expanded.name);
+        Ok(Some(files.virtual_document(&shown, "expansion.rs", text)))
+    })
+    .await
+    .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
+}
+
 /// Ask the server on the blocking pool, and answer with nothing when there
 /// is no server: a list that is empty while rust-analyzer starts is the
 /// warm-up talking, as a definition that finds nothing is.

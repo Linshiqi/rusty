@@ -190,39 +190,9 @@ pub(super) fn paste_into(
     true
 }
 
-/// Patch the painted lines for an edit, without waiting for the re-highlight.
-///
-/// A line diff against what the paint currently shows: unchanged lines keep
-/// their colours, edited ones are swapped for plain text immediately. The
-/// debounced pulse recolours them a beat later — the same catch-up every
-/// editor's highlighting does, built from a splice instead of a parser. The
-/// lines written plain are marked (`crate::paint`), so the repaint brings
-/// them back even when the text they hold is what it was.
-pub(super) fn echo_edit(state: AppState, new: &str) {
-    let old = state.editor.echo_text.get_untracked();
-    if old == new {
-        return;
-    }
-
-    let edit = crate::paint::line_edit(&old, new);
-    let replacement = crate::paint::plain_lines(new, edit);
-    state.editor.highlighted.update(|lines| {
-        // Clamped all the same: a splice out of range panics the window.
-        let end = (edit.old - edit.suffix).min(lines.len());
-        let start = edit.prefix.min(end);
-        lines.splice(start..end, replacement);
-    });
-    state
-        .editor
-        .paint
-        .update_value(|paint| paint.stale = crate::paint::stale_after(paint.stale, edit));
-    state.editor.painting.update_value(|ask| {
-        if let Some(ask) = ask {
-            ask.since = crate::paint::stale_after(ask.since, edit);
-        }
-    });
-    state.editor.echo_text.set(new.to_string());
-}
+/// The echo lives with the controller now, which carries an edit to the
+/// other view of a file with the same function (`controller::views`).
+pub(super) use crate::controller::echo_edit;
 
 /// Snapshot the draft before an edit replaces it.
 ///
@@ -233,7 +203,10 @@ pub(super) fn record_edit(state: AppState) {
 
     let now = js_sys::Date::now();
     let text = state.editor.draft.get_untracked();
-    state.editor.history.update(|history| {
+    let Some(path) = state.active_path_now() else {
+        return;
+    };
+    state.editor.with_history(&path, |history| {
         history.redo.clear();
         let burst = now - history.last_push < BURST_MS && !history.undo.is_empty();
         if !burst && history.undo.last() != Some(&text) {
@@ -252,8 +225,11 @@ pub(super) fn apply_history(
     undo: bool,
 ) {
     let current = state.editor.draft.get_untracked();
+    let Some(path) = state.active_path_now() else {
+        return;
+    };
     let mut target = None;
-    state.editor.history.update(|history| {
+    state.editor.with_history(&path, |history| {
         let (from, to) = if undo {
             (&mut history.undo, &mut history.redo)
         } else {

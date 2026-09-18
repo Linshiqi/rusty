@@ -1,6 +1,7 @@
 //! Finding your way around: where a thing is used, what implements it, what
-//! its type is, the outline of a file and the symbols of the workspace, and
-//! the other places a name occurs in the file it is in.
+//! its type is, the outline of a file and the symbols of the workspace, the
+//! other places a name occurs in the file it is in, who calls a function and
+//! what it calls, and what a macro call expands to.
 //!
 //! Every answer that names places answers with the line each place is on, as
 //! it reads now, because every consumer is a list somebody reads before
@@ -13,7 +14,7 @@ use serde_json::{Value, json};
 use super::LspClient;
 use crate::{
     error::Result,
-    model::{EditRange, Location, Place, Symbol},
+    model::{Call, CallItem, EditRange, Location, MacroExpansion, Place, Symbol},
     positions::character_to_scalar,
     uri::{uri_to_absolute, uri_to_relative},
 };
@@ -130,6 +131,99 @@ impl LspClient {
                 })
             })
             .collect())
+    }
+
+    /// The function at this position, as the start of a call hierarchy —
+    /// usually one item; none on something that is not a function or a call.
+    pub fn call_hierarchy(&self, path: &str, line: u32, col: u32) -> Result<Vec<CallItem>> {
+        let result = self.shared.request(
+            "textDocument/prepareCallHierarchy",
+            self.position_params(path, line, col),
+        )?;
+        let mut texts = HashMap::new();
+        Ok(result
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| self.call_item(item, &mut texts))
+            .collect())
+    }
+
+    /// Who calls `item` — an item this client was handed by
+    /// [`Self::call_hierarchy`] or by a call before — and from where.
+    pub fn incoming_calls(&self, item: &str) -> Result<Vec<Call>> {
+        self.calls(item, "callHierarchy/incomingCalls", "from")
+    }
+
+    /// What `item` calls, and where in it.
+    pub fn outgoing_calls(&self, item: &str) -> Result<Vec<Call>> {
+        self.calls(item, "callHierarchy/outgoingCalls", "to")
+    }
+
+    /// Both directions are one shape: the function at the other end under
+    /// `end`, and `fromRanges` in the caller's file — which is the other end
+    /// for a call in, and the item asked about for a call out.
+    fn calls(&self, item: &str, method: &str, end: &str) -> Result<Vec<Call>> {
+        let asked: Value = serde_json::from_str(item).map_err(crate::error::Error::Item)?;
+        let result = self
+            .shared
+            .request(method, json!({ "item": asked.clone() }))?;
+        let mut texts = HashMap::new();
+        Ok(result
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|call| {
+                let other = self.call_item(&call[end], &mut texts)?;
+                let caller = if end == "from" { &call[end] } else { &asked };
+                let uri = caller["uri"].as_str()?;
+                let sites = call["fromRanges"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|range| self.place(uri, range, &mut texts))
+                    .collect();
+                Some(Call { item: other, sites })
+            })
+            .collect())
+    }
+
+    /// One `CallHierarchyItem`, placed at its name and kept whole for the
+    /// next ask.
+    fn call_item(
+        &self,
+        item: &Value,
+        texts: &mut HashMap<String, Option<String>>,
+    ) -> Option<CallItem> {
+        let range = item.get("selectionRange").or_else(|| item.get("range"))?;
+        let place = self.place(item["uri"].as_str()?, range, texts)?;
+        Some(CallItem {
+            name: item["name"].as_str()?.to_string(),
+            kind: symbol_kind(&item["kind"]),
+            detail: item["detail"]
+                .as_str()
+                .filter(|detail| !detail.is_empty())
+                .map(str::to_string),
+            place,
+            item: item.to_string(),
+        })
+    }
+
+    /// The macro call at this position, expanded all the way down —
+    /// rust-analyzer's own request, which VS Code's "Expand macro
+    /// recursively" sends. `None` when nothing there is a macro.
+    pub fn expand_macro(&self, path: &str, line: u32, col: u32) -> Result<Option<MacroExpansion>> {
+        let result = self.shared.request(
+            "rust-analyzer/expandMacro",
+            self.position_params(path, line, col),
+        )?;
+        Ok(result
+            .get("expansion")
+            .and_then(Value::as_str)
+            .map(|expansion| MacroExpansion {
+                name: result["name"].as_str().unwrap_or_default().to_string(),
+                expansion: expansion.to_string(),
+            }))
     }
 
     fn position_params(&self, path: &str, line: u32, col: u32) -> Value {
@@ -509,5 +603,122 @@ mod tests {
             .map(|r| (r.start_line, r.start_col, r.end_col))
             .collect();
         assert_eq!(spans, [(1, 4, 6), (1, 9, 11)]);
+    }
+
+    /// A call hierarchy item as rust-analyzer sends one, `data` and all.
+    fn call_item(root: &std::path::Path, file: &str, name: &str, line: u32) -> Value {
+        json!({
+            "name": name, "kind": 12, "detail": format!("fn {name}()"),
+            "uri": path_to_uri(&root.join(file)),
+            "range": range(line, 0, 20), "selectionRange": range(line, 3, 3 + name.len() as u32),
+            "data": { "opaque": [line, name] },
+        })
+    }
+
+    /// The hierarchy starts at the function under the caret, and each level
+    /// is asked for by handing back the item exactly as the server sent it —
+    /// `data` included, which only the server understands.
+    #[test]
+    fn calls_in_are_asked_about_the_item_the_server_sent() {
+        let files = [
+            (
+                "src/lib.rs",
+                "fn gain() {}\nfn step() {\n    gain(); gain();\n}\n",
+            ),
+            ("src/main.rs", "fn main() {\n    lib::gain();\n}\n"),
+        ];
+        let (client, _root, seen) = client_with(&files, |message, root| match method(message) {
+            "textDocument/prepareCallHierarchy" => {
+                Some(json!([call_item(root, "src/lib.rs", "gain", 0)]))
+            }
+            "callHierarchy/incomingCalls" => Some(json!([
+                { "from": call_item(root, "src/lib.rs", "step", 1),
+                  "fromRanges": [range(2, 4, 8), range(2, 12, 16)] },
+                { "from": call_item(root, "src/main.rs", "main", 0),
+                  "fromRanges": [range(1, 9, 13)] },
+            ])),
+            _ => None,
+        });
+        let roots = client.call_hierarchy("src/lib.rs", 0, 4).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].name, "gain");
+        assert_eq!(roots[0].detail.as_deref(), Some("fn gain()"));
+        assert_eq!(
+            (roots[0].place.location.line, roots[0].place.location.col),
+            (0, 3)
+        );
+
+        let calls = client.incoming_calls(&roots[0].item).unwrap();
+        let handed_back = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|m| method(m) == "callHierarchy/incomingCalls")
+            .map(|m| m["params"]["item"]["data"].clone());
+        assert_eq!(handed_back, Some(json!({ "opaque": [0, "gain"] })));
+        // Each caller, and where in it the calls are — in the caller's file.
+        let rows: Vec<String> = calls
+            .iter()
+            .map(|call| {
+                let sites: Vec<String> = call
+                    .sites
+                    .iter()
+                    .map(|s| format!("{}:{}:{}", s.location.path, s.location.line, s.location.col))
+                    .collect();
+                format!("{} <- {}", call.item.name, sites.join(" "))
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "step <- src/lib.rs:2:4 src/lib.rs:2:12",
+                "main <- src/main.rs:1:9"
+            ]
+        );
+        assert_eq!(calls[1].sites[0].text, "    lib::gain();");
+    }
+
+    /// A call out is made in the function asked about, so its sites are in
+    /// that function's file, not the callee's.
+    #[test]
+    fn calls_out_are_placed_in_the_callers_file() {
+        let files = [
+            ("src/lib.rs", "pub fn gain() {}\n"),
+            ("src/main.rs", "fn main() {\n    lib::gain();\n}\n"),
+        ];
+        let (client, root, _) = client_with(&files, |message, root| {
+            (method(message) == "callHierarchy/outgoingCalls").then(|| {
+                json!([{ "to": call_item(root, "src/lib.rs", "gain", 0),
+                         "fromRanges": [range(1, 9, 13)] }])
+            })
+        });
+        let main = call_item(root.path(), "src/main.rs", "main", 0).to_string();
+        let calls = client.outgoing_calls(&main).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].item.name, "gain");
+        assert_eq!(calls[0].item.place.location.path, "src/lib.rs");
+        assert_eq!(calls[0].sites[0].location.path, "src/main.rs");
+        assert_eq!(calls[0].sites[0].text, "    lib::gain();");
+        assert!(matches!(
+            client.outgoing_calls("not json"),
+            Err(crate::error::Error::Item(_))
+        ));
+    }
+
+    #[test]
+    fn a_macro_expands_and_nothing_there_is_none() {
+        let (client, _root, _) = client_with(&[("src/main.rs", "fn main() {}\n")], |message, _| {
+            (method(message) == "rust-analyzer/expandMacro").then(|| {
+                if message["params"]["position"]["line"] == 0 {
+                    json!({ "name": "vec", "expansion": "<[_]>::into_vec(Box::new([1]))" })
+                } else {
+                    Value::Null
+                }
+            })
+        });
+        let expanded = client.expand_macro("src/main.rs", 0, 3).unwrap().unwrap();
+        assert_eq!(expanded.name, "vec");
+        assert_eq!(expanded.expansion, "<[_]>::into_vec(Box::new([1]))");
+        assert_eq!(client.expand_macro("src/main.rs", 1, 0).unwrap(), None);
     }
 }

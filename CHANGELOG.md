@@ -9,6 +9,31 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.42
+
+**The same file on both sides of the split.** *Open to the side*, the split
+button and Ctrl+\ used to move a file to the right-hand side; now they open it
+there as well, as VS Code does. Both sides show one document: what you type on
+one side appears on the other straight away, undo on either side undoes the
+last change made on either, saving from either saves both, and each side keeps
+its own cursor, scroll position and folds. The split button no longer needs a
+second file open.
+
+**New — call hierarchy.** *Show call hierarchy*, from the editor's right-click
+menu, the View menu or the command palette, lists who calls the function under
+the cursor in a new Calls tab of the bottom panel — or, switched to *Outgoing
+calls*, what it calls. Each caller opens to show its own callers, a click goes
+to the call and a double-click to the function, and a function called more
+than once from one place shows how many times.
+
+**New — expand macro.** *Expand macro recursively* opens what the macro call
+under the cursor expands to, all the way down, beside your code as a read-only
+Rust file.
+
+**New — a tab shows where its file is.** Hovering over a tab shows the file's
+full path, and a tab's right-click menu can reveal the file in Explorer (Finder
+on macOS) and copy its full or relative path.
+
 ## v0.6.41
 
 **Large files open, edit and scroll.** Files over 5,000 lines used to open

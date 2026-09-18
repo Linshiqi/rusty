@@ -16,6 +16,7 @@
 //! for the views to learn.
 
 mod assistant;
+mod calls;
 mod crates;
 mod debug;
 mod devices;
@@ -30,11 +31,13 @@ mod setup;
 mod simulate;
 mod storage;
 mod terminal;
+mod views;
 mod watch;
 mod wizard;
 mod workbench;
 
 pub use assistant::*;
+pub use calls::*;
 pub use crates::*;
 pub use debug::*;
 pub use devices::*;
@@ -49,6 +52,7 @@ pub use setup::*;
 pub use simulate::*;
 pub use storage::*;
 pub use terminal::*;
+pub use views::*;
 pub use watch::*;
 pub use wizard::*;
 pub use workbench::*;

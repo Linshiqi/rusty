@@ -1031,20 +1031,6 @@ fn parent_of(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The path the OS knows the entry by, spelled with the root's own
-/// separators: what "Copy path" puts on the clipboard.
-fn absolute_path(root: &str, relative: &str) -> String {
-    let root = root.trim_end_matches(['/', '\\']);
-    if relative.is_empty() {
-        return root.to_string();
-    }
-    if root.contains('\\') {
-        format!("{root}\\{}", relative.replace('/', "\\"))
-    } else {
-        format!("{root}/{relative}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,19 +1075,6 @@ mod tests {
             drop_target_for(&src, Some(&at("src2", true))).as_deref(),
             Some("src2")
         );
-    }
-
-    #[test]
-    fn an_absolute_path_takes_the_roots_own_separators() {
-        assert_eq!(
-            absolute_path("E:\\work\\blinky", "src/main.rs"),
-            "E:\\work\\blinky\\src\\main.rs"
-        );
-        assert_eq!(
-            absolute_path("/home/a/blinky/", "src"),
-            "/home/a/blinky/src"
-        );
-        assert_eq!(absolute_path("E:\\work\\blinky\\", ""), "E:\\work\\blinky");
     }
 }
 

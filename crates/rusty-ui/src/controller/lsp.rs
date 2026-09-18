@@ -773,10 +773,6 @@ fn worst_at(
     found
 }
 
-/// Jump to wherever the thing at this position is defined.
-///
-/// The target lands in `state.editor.reveal`; if it is in another file, that file is
-/// opened first and the editor applies the reveal once the document arrives.
 /// Which places a command asks the server for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaceQuery {
@@ -850,7 +846,7 @@ pub fn find_places(state: AppState, query: PlaceQuery) {
 
 /// The identifier a position is on or just after — what a list of its uses
 /// is titled with.
-fn word_around(text: &str, line: u32, col: u32) -> String {
+pub(super) fn word_around(text: &str, line: u32, col: u32) -> String {
     let chars: Vec<char> = text
         .split('\n')
         .nth(line as usize)
@@ -862,6 +858,46 @@ fn word_around(text: &str, line: u32, col: u32) -> String {
     let before = chars[..at].iter().rev().take_while(is_word).count();
     let after = chars[at..].iter().take_while(is_word).count();
     chars[at - before..at + after].iter().collect()
+}
+
+/// Expand the macro call under this group's caret all the way down, and open
+/// the expansion beside the code, read-only — VS Code's "Expand macro
+/// recursively", which opens it beside as well. Nothing to expand says so in
+/// the dock, as a rename that found nothing does, rather than letting the
+/// command seem to do nothing.
+pub fn expand_macro(state: AppState) {
+    let Some(path) = state.active_path_now().filter(|path| path.ends_with(".rs")) else {
+        return;
+    };
+    if state.lsp.status.get_untracked() != LspStatus::Ready {
+        return;
+    }
+    let Some((line, col)) = caret_position(state) else {
+        return;
+    };
+    let args = Ask { path, line, col };
+    spawn_local(async move {
+        match ipc::call::<_, Option<rusty_edit::Document>>(cmd::lsp::EXPAND_MACRO, &args).await {
+            Ok(Some(document)) => {
+                // Beside is the right group, from either side.
+                let beside = state.group(crate::state::Group::Second);
+                state.layout.split.set(true);
+                state.layout.focus.set(beside.group);
+                let panel = state.layout.panel.get_untracked();
+                if panel != "files" && panel != "search" {
+                    state.layout.panel.set("files".to_string());
+                }
+                show_document(beside, document, false);
+            }
+            Ok(None) => state.push_log(LogLine {
+                stream: LogStream::Stderr,
+                text: t!("misc.no-macro"),
+                level: Some(LogLevel::Warn),
+            }),
+            // The server warming up, as for a definition: not worth a banner.
+            Err(_) => {}
+        }
+    });
 }
 
 /// Ask for the symbols the finder lists: the outline of this group's file
@@ -929,6 +965,10 @@ pub fn go_to(state: AppState, location: rusty_lsp::Location) {
     state.editor.reveal.set(Some(location));
 }
 
+/// Jump to wherever the thing at this position is defined.
+///
+/// The target lands in `state.editor.reveal`; if it is in another file, that file is
+/// opened first and the editor applies the reveal once the document arrives.
 pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
     #[derive(serde::Serialize)]
     struct Args {
@@ -966,6 +1006,9 @@ const AUTOSAVE_AFTER: Duration = Duration::from_millis(1000);
 /// accepted, a quick fix applied — and a second list of edit sites would be
 /// a list that drifts from this one.
 pub fn schedule_pulse(state: AppState) {
+    // The file open on the other side too is the same document: the edit
+    // reaches it now, not when typing pauses (`views.rs`).
+    share_edit(state);
     // Marks of where a name occurs are about the text before the edit, and
     // wash whatever moved under them; they come back when the caret rests.
     if state.editor.occurrences.with_untracked(Option::is_some) {
@@ -1026,7 +1069,13 @@ fn edit_pulse(state: AppState) {
     }
 
     if path.ends_with(".rs") && state.lsp.status.get_untracked() == LspStatus::Ready {
-        request_semantic(state, path.clone());
+        // Each view of the file asks for its own colours: a long file's are
+        // asked for around the lines that view is drawing.
+        for group in state.open_groups() {
+            if group.active_path_now().as_deref() == Some(path.as_str()) {
+                request_semantic(group, path.clone());
+            }
+        }
         lsp_sync(
             cmd::lsp::CHANGE,
             Args {
@@ -1103,16 +1152,30 @@ pub fn repaint(state: AppState, path: String) {
             && active.as_deref() == Some(ask.path.as_str())
         {
             let now = state.editor.echo_text.get_untracked();
+            // The other view of the file, if there is one, takes the same
+            // lines: it has had the same edits.
+            let shared = other_holds(state, &ask.path).then(|| answer.lines.clone());
             let mut placed = false;
             state.editor.highlighted.update(|lines| {
                 placed =
                     crate::paint::place(lines, &ask.sent, &now, answer.from as usize, answer.lines);
             });
             if placed {
-                state.editor.paint.set_value(PaintState {
+                let paint = PaintState {
                     version: Some(answer.version),
                     stale: ask.since,
-                });
+                };
+                state.editor.paint.set_value(paint);
+                if let Some(lines) = shared {
+                    share_repaint(
+                        state,
+                        &ask.path,
+                        &ask.sent,
+                        answer.from as usize,
+                        lines,
+                        paint,
+                    );
+                }
             } else {
                 // The lines are not the text line for line, which no edit
                 // should allow: start again from plain text, all of it stale,

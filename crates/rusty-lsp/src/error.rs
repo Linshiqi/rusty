@@ -35,6 +35,12 @@ pub enum Error {
     #[error("rust-analyzer refused `{method}`: {message}")]
     Server { method: String, message: String },
 
+    /// A call hierarchy item handed back that is not the JSON the server
+    /// sent. It crosses to the frontend and back untouched, so this is
+    /// damage on the way, not anything the server said.
+    #[error("the call hierarchy item is not the server's JSON: {0}")]
+    Item(#[source] serde_json::Error),
+
     /// An edit the server sent could not be put on disk — the file it names
     /// could not be read or written. Nothing was applied: a rename lands
     /// whole or not at all, because half of one is a build that fails in

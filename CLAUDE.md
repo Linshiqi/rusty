@@ -148,7 +148,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
 | `rusty-git` | The repository's history, Fork-shaped: `graph.rs` lays the log out into lanes and edges (pure, tested — the frontend only turns a lane into an x), `parse.rs` reads `git`'s machine formats, `repo.rs` runs the user's own `git` in the opened project. No libgit2: one binary on PATH is one implementation of the repository format to agree with |
-| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens, and navigation — references, implementations, type definitions, outlines, workspace symbols and the occurrences of a name (`client/navigate.rs`, every answer a place with its line). `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
+| `rusty-lsp` | rust-analyzer client: stdio JSON-RPC, diagnostics, completion, hover, definition, signature help, code actions, semantic tokens, and navigation — references, implementations, type definitions, outlines, workspace symbols, the occurrences of a name, call hierarchies and macro expansion (`client/navigate.rs`, every answer a place with its line). `client.rs` is the session and the requests; `discover.rs` finds the binary and spawns it, `uri.rs` is the one percent-decoder and drive-letter folder, `convert.rs` turns replies into `model`, `pull.rs` is the diagnostics-pull loop. `positions` is on the wasm side with `model` — the editor converts scalars to UTF-16 at the DOM boundary exactly as the client converts at its own, and it used to do it with its own untested copy |
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
@@ -917,30 +917,65 @@ written for one group — every component, controller and effect reads
   expanded folders, the text zoom, the Vim switch, the source-view choice and
   the stale list from the first group; only what is open and how it is being
   edited is fresh. Separate copies would be a zoom that took on one side only.
-- **One group per file.** Two drafts of one path would overwrite each other
-  on save, so `open_file` fronts a path the other group holds and focus
-  follows; "Open to the side" and the strip's split button *move* a file
-  (`transplant`: draft, caret, history and all). `is_dirty` and `follow`
-  look at both groups because of this rule, not in spite of it. VS Code
-  would open a second copy; the same file in two groups needs a document
-  model shared between them, which this editor does not have yet.
+- **One file open on both sides is one document in two views**
+  (`controller/views.rs`), as VS Code's split is. It was one group per file
+  for a release — `open_file` fronted a path the other group held, and the
+  split button *moved* a file — because two drafts of one path overwrite
+  each other on save. The document is not one object now either: every
+  component reads its own group's signals, so each group keeps a copy of the
+  file's draft, painting and disk text, and **the copies are kept the same
+  by carrying every change across the moment it happens**, from the group it
+  happened in. An edit rides `schedule_pulse`, the hook every edit path
+  already goes through (`share_edit`); a repaint that lands carries its
+  lines (`share_repaint`); a save's re-read, a reload from the disk and an
+  auto-save carry the document (`share_document`). Only the group the edit
+  was made in repaints and syncs rust-analyzer, so the backend keeps one
+  painting and the server hears once. **The undo history is shared rather
+  than copied** (`Editor::histories`, one pair of stacks per path for both
+  groups): an undo in either view undoes the last edit made in either, and
+  a history per group would let one view's undo put back a text from before
+  the other's edits.
+- **What stays each view's own is where it is looking**: the caret, the
+  selection, the folds, the scroll, Vim's mode, the popups. A file opened on
+  the other side copies the view there (`open_view`) instead of reading the
+  disk, which would put the disk's text beside an unsaved draft. Closing one
+  view of a dirty file asks nothing, since the other still holds it; the
+  last view to close is the one that asks, gives the file back to
+  rust-analyzer and drops its history. `follow` reads a changed file once
+  however many views it has.
+- **The other view's textarea is written when it is used, not per
+  keystroke** (`Editor::lagging`). An edit carried across moves that view's
+  folds with the text (`Folded::follow`) and puts the new text in its echo
+  at once — everything anybody sees — and leaves the textarea, whose text is
+  transparent, behind. **Rewriting a textarea's whole value lays the whole
+  file out again**: measured at 120 ms, twice per keystroke, with a
+  24,000-line file open on both sides, where the view being typed in lays
+  out only what changed; written per keystroke, typing there took 200–280
+  ms a key, and lagging, 36–45 ms, which is what one view costs.
+  `catch_up` writes it when the view is next used — a press or focus
+  anywhere in the group (`EditorGroup`), which a jump into it and a menu's
+  key both cause before they touch the selection — and moves its selection
+  from what the textarea holds to what it should, by character
+  (`paint::follow_byte`), so a caret after an edit earlier on its own line
+  moves along the line. Reading its caret maps the same way without writing
+  (`selection_now`); a textarea that has the keyboard is written at once,
+  since the next key lands in it; the `prop:value` binding leaves a lagging
+  textarea alone, and showing another document clears the flag.
 - **"Beside" is the right group, from either side.** The first version sent
   a file to *the other* group: from the right group that moved it left, and
   when it was the right group's last file the right group vanished under
-  the click. Files move into the right group and never out of it; the right
-  group closes only when its last tab does; the split button and "Open to
-  the side" appear only in the left strip, because there is nothing further
+  the click. "Open to the side" and the split button open the file on the
+  right as well — a second view, the left keeps its own — and from the right
+  group they front it there; the right group closes only when its last tab
+  does; both appear only in the left strip, because there is nothing further
   right of the right group. Ctrl+\ acts on the left group whichever has
-  focus, for the same reason.
+  focus, for the same reason. The split button needs only a file in front:
+  it wanted a second tab to leave behind when splitting meant moving.
 - **The split never shows an empty pane.** `settle_groups` closes a second
   group that lost its last file, and a first group that lost its last file
   takes the second's files — so the layout is never "nothing on the left,
-  the work on the right". The split button wants a second tab to leave
-  behind for the same reason. And a file moved to the side is followed by
-  its neighbour even when that neighbour was never loaded — a tab restored
-  from last session and not clicked since: `transplant` reads it as
-  `remove_tab` does, where it used to leave the group blank under the
-  strip's names.
+  the work on the right". "Move to new window" closes the file on both
+  sides, because a detached window is one more editor of it.
 - **A group's textarea is found by its group, never by an id.** Both were
   `id="editor-area"`, and a lookup by id answers with the first in the
   document whichever group asked: the right group parked its tabs with the
@@ -975,6 +1010,33 @@ written for one group — every component, controller and effect reads
   arrives with its line (`rusty_lsp::Place`), because a row of `lib.rs:41`
   is a riddle. `controller::go_to` is the one jump — the panel, the file,
   Back, the reveal — and Ctrl+click's definition goes through it too.
+- **Who calls a function is a tree, in the dock** (`DockTab::Calls`,
+  `view/dock/calls.rs`) — VS Code's call hierarchy, which is a tree in a
+  side view there, and a list in the finder could not be: each level is
+  asked of rust-analyzer when its row opens (`callHierarchy/incomingCalls`
+  and `outgoingCalls`), handing back the item the server sent exactly as it
+  sent it (`CallItem.item`, opaque JSON — the server puts what it needs to
+  answer the next level in `data`). The tree is a flat list of rows with
+  depths (`crate::calls`, pure and tested), and an answer finds its row by
+  number, so opening a row above one that is still asking does not put the
+  answer in the wrong place; a tree started afresh drops answers meant for
+  the old one. A click goes where the call is made — in the caller, which
+  is the row for calls in and the row above for calls out — a double-click
+  to the function, and a count lists every call in the finder. A function
+  under itself says *recursive*. No default key: VS Code's Shift+Alt+H is an
+  Alt-letter chord, which this binding system leaves to menu mnemonics and
+  AltGr.
+- **A macro's expansion is a document with no file**
+  (`rust-analyzer/expandMacro`, VS Code's "Expand macro recursively"),
+  opened beside the code, read-only and painted as Rust by the backend
+  (`Files::virtual_document`). Its path is `expansion:/<file>:<line>/<macro>`
+  (`rusty_edit::expansion_path`): the tab reads the macro's name, two
+  expansions of one macro are told apart by where they were called, and the
+  same call expanded again is the same tab. `is_expansion` is how everything
+  that would touch the disk leaves it alone — no reveal, no relative path,
+  no window of its own, not remembered with the strip, and never announced
+  to rust-analyzer, which hears only about `.rs` paths anyway. Nothing to
+  expand says so in the dock, as a rename that found nothing does.
 - **Ctrl+Tab is the focused group's files by recent use** (`view/switcher.rs`,
   VS Code's editor history in a group). Held, Tab walks down the list and
   Shift+Tab back up, and letting go opens the pick; a tap opens the file
@@ -1812,7 +1874,7 @@ reachable from nowhere but a click on the strip. `Divider::ALL` and
 `Divider::default_size` play the same role for Reset layout.
 
 **The dock's strip carries the tabs that have something to say.** Problems,
-Output and Terminal (`DockTab::PINNED`) are always there; the other six
+Output and Terminal (`DockTab::PINNED`) are always there; the others
 appear when something puts them there and go when the user hides them with
 the × on the tab. Two doors: `show_dock` — a button, the View menu, the
 palette — puts a tab on the strip *and* in front; `reveal_tab` puts it on
@@ -1821,7 +1883,8 @@ reading Output is the banner that reflowed the workspace again. The second
 is called from `absorb`, beside the reading of the protocol: telemetry or a
 tunable reveals Plot, a sensor declaration reveals Flight, a gpio report
 reveals Waves, and a debug session reveals Debug and Registers together. A
-`[rusty:pwm]` line reveals nothing, since a servo is a duty too. The strip
+`[rusty:pwm]` line reveals nothing, since a servo is a duty too. Calls
+comes through the first door, from *Show call hierarchy*. The strip
 is session state (`Layout.dock_tabs`), not persisted: nothing is running at
 boot, so the strip starts with what is true at boot, and Reset layout puts
 it back. Nine tabs on a window with no project open was nine names for
@@ -2723,7 +2786,8 @@ usty`) holds `location.toml`
 - **Programmatic `.value` writes destroy the textarea's native undo stack.**
   The editor writes value on every echo, completion accept and format, so
   Ctrl+Z was silently dead. The editor keeps its own snapshot history
-  (`EditHistory`), parked per tab; the caret after undo is recomputed from
+  (`EditHistory`), one per file and shared by both groups
+  (`Editor::histories`); the caret after undo is recomputed from
   where the two texts diverge rather than stored.
 - **Setting a selection before a mounted textarea has its value snaps to
   EOF.** The reveal effect fires on a freshly opened file before the value
@@ -3114,8 +3178,10 @@ usty`) holds `location.toml`
   clicked; `activate_tab` read that same state as a corrupt strip entry and
   *dropped* it — so after every restart the first click on any restored tab
   closed it instead of opening it, and the user reported "clicking a file
-  makes its tab disappear". `open_file` and `transplant` already knew the
-  lazy case; the strip's own click handler was the one caller that did not.
+  makes its tab disappear". `open_file` already knew the lazy case — and
+  `open_view`, which copies the other side's view of a file, answers false
+  for it so its caller reads the disk — and the strip's own click handler
+  was the one caller that did not.
   When two functions read one state, grep for every reader before changing
   what the state means.
 - **The working area's scroller is one DOM element for every document that

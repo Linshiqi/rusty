@@ -646,6 +646,22 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     })
                                 />
                                 <MenuItem
+                                    label=t!("menu.view.call-hierarchy")
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        editor_menu.set(None);
+                                        controller::show_call_hierarchy(state);
+                                    })
+                                />
+                                <MenuItem
+                                    label=t!("menu.view.expand-macro")
+                                    disabled=!is_rust
+                                    on_select=Callback::new(move |_| {
+                                        editor_menu.set(None);
+                                        controller::expand_macro(state);
+                                    })
+                                />
+                                <MenuItem
                                     label=t!("context.editor-quick-fix")
                                     shortcut="Ctrl+."
                                     disabled=!is_rust
@@ -1162,8 +1178,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         // What the textarea holds is the *screen* text, which
                         // is the draft minus every folded region. Identical to
                         // the draft while nothing is collapsed, so this is a
-                        // no-op for a file nobody has folded.
-                        prop:value=move || screen_tracked(state)
+                        // no-op for a file nobody has folded. Left as it is
+                        // while it lags the other view of its file, which
+                        // `controller::catch_up` writes when this one is used.
+                        prop:value=move || {
+                            if state.editor.lagging.get() {
+                                return area.get_untracked().map(|a| a.value()).unwrap_or_default();
+                            }
+                            screen_tracked(state)
+                        }
                         on:contextmenu=move |event: ev::MouseEvent| {
                             event.prevent_default();
                             editor_menu

@@ -189,6 +189,23 @@ impl Files {
         })
     }
 
+    /// A text with no file behind it, painted as a file called `like` would
+    /// be, and read-only, since there is nowhere to save it: a macro's
+    /// expansion. Nothing is kept to repaint.
+    pub fn virtual_document(&self, path: &str, like: &str, text: String) -> Document {
+        let (painting, lines) = Painting::new(&self.syntaxes, like, &text);
+        Document {
+            path: path.to_string(),
+            lines,
+            text,
+            language: painting.language(&self.syntaxes),
+            binary: false,
+            too_large: false,
+            paint: None,
+            read_only: true,
+        }
+    }
+
     /// Open a file outside the project, read-only — where goto-definition
     /// lands when the answer is in a dependency.
     ///
@@ -231,7 +248,7 @@ impl Files {
 }
 
 /// Whether a path is somewhere dependency source lives.
-fn is_library_source(path: &std::path::Path) -> bool {
+pub fn is_library_source(path: &std::path::Path) -> bool {
     let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
         return false;
     };

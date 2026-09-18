@@ -21,6 +21,14 @@ use crate::{
 pub(super) fn TabStrip() -> impl IntoView {
     let state = AppState::expect();
     let menu = RwSignal::new(None::<(f64, f64, String)>);
+    // The project's root, which a tab's whole path is under.
+    let root = move || {
+        state
+            .project
+            .detected
+            .with(|p| p.as_ref().map(|p| p.root.clone()))
+            .unwrap_or_default()
+    };
 
     if state.app.detached.with_untracked(Option::is_some) {
         return ().into_any();
@@ -115,9 +123,20 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 )));
                             }
                         };
+                        // The whole path, as the OS knows it — the strip shows a
+                        // name, and a name is what two files can share. An
+                        // expansion has no path, and says what it expands.
+                        let whole = match rusty_edit::expansion_parts(&path) {
+                            Some((place, name)) => t!(
+                                "files.expansion-of",
+                                name = name.to_string(),
+                                place = place.to_string()
+                            ),
+                            None => full_path(&root(), &path),
+                        };
                         view! {
                             <div
-                                title=path.clone()
+                                title=whole
                                 on:click=activate
                                 on:auxclick=middle_close
                                 on:contextmenu=open_menu
@@ -182,16 +201,16 @@ pub(super) fn TabStrip() -> impl IntoView {
             </div>
             // Split, at the strip's end where VS Code keeps it — on the left
             // group only, since there is nothing further right of the right
-            // group. Disabled with one tab: moving a group's only file across
-            // leaves an empty pane.
+            // group. The file in front opens on the right as well, a second
+            // view of the same document, so one tab is enough.
             {(state.group == crate::state::Group::First).then(|| {
                 view! {
                     {move || {
-                        let enough = state.editor.tabs.with(|tabs| tabs.len() >= 2);
+                        let enough = state.active_path().is_some();
                         view! {
                             <button
                                 type="button"
-                                title=if enough { t!("files.split") } else { t!("files.split-needs-two") }
+                                title=t!("files.split")
                                 disabled=!enough
                                 on:click=move |_| controller::split_active(state)
                                 class="grid w-8 shrink-0 place-items-center border-l border-line text-label-3 hover:bg-sunken hover:text-label disabled:pointer-events-none disabled:opacity-35"
@@ -206,13 +225,26 @@ pub(super) fn TabStrip() -> impl IntoView {
             {move || {
                 let (x, y, path) = menu.get()?;
                 let close = Callback::new(move |_| menu.set(None));
-                let (this, others, copy, float, beside) = (
-                    path.clone(),
+                let (this, others, float, beside) = (
                     path.clone(),
                     path.clone(),
                     path.clone(),
                     path.clone(),
                 );
+                let whole = full_path(&root(), &path);
+                // A project file has a place in the tree and one on disk to
+                // show; a library's source only the one on disk, and a macro
+                // expansion neither.
+                let expansion = rusty_edit::is_expansion(&path);
+                let in_project = !expansion && !is_outside(&path);
+                let (reveal, relative) = (path.clone(), path.clone());
+                let reveal_label = if controller::host_is_windows() {
+                    t!("context.tree-reveal-explorer")
+                } else if controller::host_is_mac() {
+                    t!("context.tree-reveal-finder")
+                } else {
+                    t!("context.tree-reveal")
+                };
                 Some(
                     view! {
                         <ContextMenu x=x y=y on_close=close>
@@ -238,16 +270,34 @@ pub(super) fn TabStrip() -> impl IntoView {
                                     />
                                 }
                             })}
-                            <MenuItem
-                                label=t!("context.tab-new-window")
-                                on_select=Callback::new(move |_| {
-                                    controller::detach_file(state, float.clone());
-                                    // The dirty guard inside close_tab still
-                                    // applies: unsaved work keeps its tab here.
-                                    controller::close_tab(state, float.clone());
-                                    menu.set(None);
-                                })
-                            />
+                            // A window of its own reads its file from the disk,
+                            // and an expansion has none.
+                            {(!expansion).then(|| {
+                                let float = float.clone();
+                                view! {
+                                    <MenuItem
+                                        label=t!("context.tab-new-window")
+                                        on_select=Callback::new(move |_| {
+                                            controller::detach_file(state, float.clone());
+                                            // Off both sides: a file in its own window
+                                            // is one editor there, and a second here
+                                            // would be a second draft of it. The dirty
+                                            // guard inside close_tab still applies —
+                                            // unsaved work keeps its tab here.
+                                            for group in state.open_groups() {
+                                                let held = group
+                                                    .editor
+                                                    .tabs
+                                                    .with_untracked(|tabs| tabs.contains(&float));
+                                                if held {
+                                                    controller::close_tab(group, float.clone());
+                                                }
+                                            }
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                            })}
                             <MenuItem
                                 label=t!("context.tab-close-others")
                                 on_select=Callback::new(move |_| {
@@ -260,13 +310,42 @@ pub(super) fn TabStrip() -> impl IntoView {
                                 })
                             />
                             <MenuSeparator />
-                            <MenuItem
-                                label=t!("context.tab-copy-path")
-                                on_select=Callback::new(move |_| {
-                                    copy_to_clipboard(&copy);
-                                    menu.set(None);
-                                })
-                            />
+                            {(!expansion).then(|| {
+                                let reveal = reveal.clone();
+                                view! {
+                                    <MenuItem
+                                        label=reveal_label.clone()
+                                        on_select=Callback::new(move |_| {
+                                            controller::reveal_entry(state, reveal.clone());
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                            })}
+                            {(!expansion).then(|| {
+                                let whole = whole.clone();
+                                view! {
+                                    <MenuItem
+                                        label=t!("context.tab-copy-path")
+                                        on_select=Callback::new(move |_| {
+                                            copy_to_clipboard(&whole);
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                            })}
+                            {in_project.then(|| {
+                                let relative = relative.clone();
+                                view! {
+                                    <MenuItem
+                                        label=t!("context.tree-copy-relative-path")
+                                        on_select=Callback::new(move |_| {
+                                            copy_to_clipboard(&relative);
+                                            menu.set(None);
+                                        })
+                                    />
+                                }
+                            })}
                         </ContextMenu>
                     },
                 )
@@ -360,6 +439,15 @@ pub(super) fn Header(
     let saved = document.text.clone();
     let path = document.path.clone();
     let read_only = document.read_only;
+    // A macro's expansion has no path to show: it says what it expands.
+    let shown = match rusty_edit::expansion_parts(&path) {
+        Some((place, name)) => t!(
+            "files.expansion-of",
+            name = name.to_string(),
+            place = place.to_string()
+        ),
+        None => document.path.clone(),
+    };
     let dirty = Signal::derive(move || state.editor.draft.with(|draft| draft != &saved));
     // In no crate's module tree, so rust-analyzer answers nothing here. Said
     // by *dimming* the name, as VS Code says a file the project does not
@@ -388,7 +476,7 @@ pub(super) fn Header(
                     if unlinked.get() { t!("misc.unlinked-file") } else { String::new() }
                 }
             >
-                {document.path}
+                {shown}
             </span>
             {move || {
                 dirty
