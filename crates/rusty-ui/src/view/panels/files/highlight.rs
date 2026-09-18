@@ -216,9 +216,14 @@ pub(super) fn semantic_on(spans: &[SemanticSpan], line: u32) -> &[SemanticSpan] 
 }
 
 /// Everything a row of the echo draws, as one number: its runs, the
-/// squiggles over it and its fold. A row whose number did not change draws
-/// what it drew, so the window keeps its markup.
-pub(super) fn row_hash(line: &Line, diags: &[FileDiagnostic], folded: Option<u32>) -> u64 {
+/// squiggles over it, its fold and its indent guides. A row whose number did
+/// not change draws what it drew, so the window keeps its markup.
+pub(super) fn row_hash(
+    line: &Line,
+    diags: &[FileDiagnostic],
+    folded: Option<u32>,
+    guides: u8,
+) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
@@ -232,6 +237,7 @@ pub(super) fn row_hash(line: &Line, diags: &[FileDiagnostic], folded: Option<u32
         d.message.hash(&mut hasher);
     }
     folded.hash(&mut hasher);
+    guides.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -333,16 +339,16 @@ mod semantic_tests {
     }
 
     /// A row's number moves with anything it draws — a token, a squiggle, a
-    /// fold — and stays put otherwise, which is what keeps a row's markup.
+    /// fold, its indent guides — and stays put otherwise, which is what keeps a row's markup.
     #[test]
     fn a_rows_hash_changes_with_what_it_draws_and_only_then() {
         let line = line_of("let x = 1;");
-        let base = row_hash(&line, &[], None);
-        assert_eq!(row_hash(&line_of("let x = 1;"), &[], None), base);
-        assert_ne!(row_hash(&line_of("let x = 2;"), &[], None), base);
+        let base = row_hash(&line, &[], None, 0);
+        assert_eq!(row_hash(&line_of("let x = 1;"), &[], None, 0), base);
+        assert_ne!(row_hash(&line_of("let x = 2;"), &[], None, 0), base);
         let mut keyword = line.clone();
         keyword.spans[0].token = Token::Keyword;
-        assert_ne!(row_hash(&keyword, &[], None), base);
+        assert_ne!(row_hash(&keyword, &[], None, 0), base);
         let squiggle = FileDiagnostic {
             severity: DiagSeverity::Error,
             message: "no".to_string(),
@@ -353,8 +359,12 @@ mod semantic_tests {
             end_line: 3,
             end_col: 5,
         };
-        assert_ne!(row_hash(&line, std::slice::from_ref(&squiggle), None), base);
-        assert_ne!(row_hash(&line, &[], Some(12)), base);
+        assert_ne!(
+            row_hash(&line, std::slice::from_ref(&squiggle), None, 0),
+            base
+        );
+        assert_ne!(row_hash(&line, &[], Some(12), 0), base);
+        assert_ne!(row_hash(&line, &[], None, 2), base);
     }
 
     fn line_of(text: &str) -> Line {

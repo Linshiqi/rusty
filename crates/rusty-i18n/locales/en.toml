@@ -500,6 +500,12 @@ text-size = "Text size"
 page-size = "Page text size"
 text-size-note = "Ctrl+wheel over the editor or a Markdown page changes its size too; Ctrl+= and Ctrl+- work in the editor."
 reset = "Reset"
+view = "Around the code"
+view-note = "What VS Code draws beside the text, and what it turns on by default."
+inlay-hints = "Inlay hints"
+minimap = "Minimap"
+sticky-scroll = "Sticky scroll"
+indent-guides = "Indent guides"
 
 [settings.keyboard]
 shortcuts = "Shortcuts"

@@ -61,5 +61,6 @@ pub use wizard::{
     CrateNameProblem, Explanation, WizardChoice, WizardLayout, WizardOption, crate_name_problem,
 };
 pub use workbench::{
-    AssistantChoice, ProjectTabs, RelocateReport, StorageLocation, UpdateProgress, UpdateStatus,
+    AssistantChoice, EditorView, ProjectTabs, RelocateReport, StorageLocation, UpdateProgress,
+    UpdateStatus,
 };

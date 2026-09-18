@@ -33,6 +33,7 @@ use std::{
 
 use serde_json::{Value, json};
 
+mod hints;
 mod navigate;
 
 use crate::{
@@ -1063,6 +1064,14 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
         "workspace".into(),
         json!({ "symbol": { "search": { "kind": "all_symbols" } } }),
     );
+    // No parameter names: the editor draws hints after the line rather than
+    // inside it (a transparent textarea over the text cannot make room
+    // mid-line), and `x:` at the end of a line names nothing. Types, chains
+    // and closing braces read as well there as in place.
+    options.insert(
+        "inlayHints".into(),
+        json!({ "parameterHints": { "enable": false } }),
+    );
 
     let params = json!({
         "processId": std::process::id(),
@@ -1116,6 +1125,7 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 // Nested, so an outline has its impl blocks' methods under
                 // them rather than beside them with a container name.
                 "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                "inlayHint": {},
                 // Actions come back as literals with lazily-resolved edits;
                 // both halves are declared or rust-analyzer sends commands
                 // this client cannot execute.
@@ -1153,6 +1163,11 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
                 "workspaceFolders": false,
                 "configuration": false,
                 "diagnostics": { "refreshSupport": true },
+                // Told when to ask again: what was asked while the workspace
+                // was still loading came back thin, and no edit is coming to
+                // ask twice.
+                "inlayHint": { "refreshSupport": true },
+                "semanticTokens": { "refreshSupport": true },
                 // The client watches the disk, so the server does not — and
                 // on Windows a server watching for itself holds the
                 // workspace's directories open, which no rename or move of
@@ -1223,6 +1238,15 @@ fn dispatch(shared: &Shared, message: Value) {
                 // This is the moment the push model silently wiped instead.
                 let _ = shared.respond(id, Value::Null);
                 shared.poke_all_open();
+                return;
+            }
+            if method == "workspace/inlayHint/refresh"
+                || method == "workspace/semanticTokens/refresh"
+            {
+                // The same for what the editor draws over the text: asked for
+                // before the workspace loaded, it came back thin.
+                let _ = shared.respond(id, Value::Null);
+                let _ = shared.events.send(LspEvent::Refresh {});
                 return;
             }
             if method == "client/registerCapability" {
@@ -2047,6 +2071,49 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert!(answered, "window/workDoneProgress/create went unanswered");
+    }
+
+    /// The server asking for its inlay hints and colours to be asked for
+    /// again is answered, and becomes an event the editor acts on.
+    #[test]
+    fn a_refresh_from_the_server_is_answered_and_passed_on() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server(|message, writer| {
+            if method(message) == "textDocument/didOpen" {
+                rpc::write_message(
+                    writer,
+                    &json!({ "jsonrpc": "2.0", "id": 81, "method": "workspace/inlayHint/refresh" }),
+                )
+                .unwrap();
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Some(LspEvent::Refresh {}) => break,
+                Some(_) => continue,
+                None => panic!("the refresh never became an event"),
+            }
+        }
+        // The answer reaches the fake server on its own thread.
+        let answered = loop {
+            let done = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.get("id") == Some(&json!(81)) && m.get("method").is_none());
+            if done || Instant::now() > deadline {
+                break done;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(answered, "workspace/inlayHint/refresh went unanswered");
     }
 
     /// A lazy action whose resolve fails, and nothing else to offer. That

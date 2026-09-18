@@ -371,6 +371,17 @@ pub async fn lsp_call_hierarchy(
     places(state, move |client| client.call_hierarchy(&path, line, col)).await
 }
 
+/// The inlay hints over lines `from..to` of a file.
+#[tauri::command]
+pub async fn lsp_inlay_hints(
+    path: String,
+    from: u32,
+    to: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<rusty_lsp::InlayHint>, CommandError> {
+    places(state, move |client| client.inlay_hints(&path, from, to)).await
+}
+
 /// Who calls the function `item` names, or what it calls: `item` is the
 /// server's own description of it, handed back untouched.
 #[tauri::command]

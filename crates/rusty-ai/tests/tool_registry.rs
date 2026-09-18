@@ -53,6 +53,7 @@ fn call(name: &str, args: Value, ctx: &ToolContext<'_>) -> Value {
 fn project_ctx(root: &Path) -> ToolContext<'_> {
     ToolContext {
         workspace: None,
+        workspace_on_demand: None,
         root: Some(root),
         firmware: None,
         // Left unset so the tool falls back to the built-in catalogue, which is

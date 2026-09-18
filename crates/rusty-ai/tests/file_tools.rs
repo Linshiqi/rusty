@@ -38,6 +38,7 @@ fn project() -> TempDir {
 fn ctx(root: &Path) -> ToolContext<'_> {
     ToolContext {
         workspace: None,
+        workspace_on_demand: None,
         root: Some(root),
         firmware: None,
         catalog: None,

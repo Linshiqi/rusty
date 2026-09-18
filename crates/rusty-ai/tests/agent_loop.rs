@@ -150,6 +150,7 @@ async fn a_question_about_a_chapter_reads_the_chapter_before_answering() {
     let assistant = Assistant::new(config::build(&config, None, &Http::default()).unwrap());
     let ctx = ToolContext {
         workspace: None,
+        workspace_on_demand: None,
         root: Some(project.path()),
         firmware: None,
         catalog: None,

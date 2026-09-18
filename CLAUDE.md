@@ -110,6 +110,10 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
 
+# The assistant's tools for somebody else's assistant: MCP on stdin and
+# stdout, what `claude mcp add rusty -- rusty-cli mcp <project>` runs.
+cargo run -p rusty-cli -- mcp <project>
+
 # Where the seconds go when a project is opened -- the two steps that used
 # to be awaited before the window could draw anything of the new project.
 cargo run -p rusty-core --example open_cost -- <project>
@@ -143,7 +147,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
 | `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware |
-| `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop |
+| `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop, and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
 | `rusty-dbg` | Debugging, two protocols behind one handle (`any.rs`): `session.rs` is gdb's machine interface, `dap.rs` is the Debug Adapter Protocol for LLDB. Both fold into the same session state — breakpoints, stepping, stack, variables |
@@ -153,7 +157,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen |
-| `rusty-cli` | Headless entry point; the CI and bug-report surface |
+| `rusty-cli` | Headless entry point; the CI and bug-report surface, and `rusty-cli mcp` |
 
 ## The rules that are load-bearing
 
@@ -196,8 +200,23 @@ not read `.cargo/config.toml` and theorise; it calls `project_status` and gets
 the actual mismatch. Tool descriptions are written against the specific failure
 they exist to prevent, not as feature summaries — see `tools/embedded.rs`.
 
-Adding an analysis means adding a tool. The same definitions are intended to
-back an MCP server later, so third parties get them too.
+Adding an analysis means adding a tool, and a tool added to the registry is
+served to other assistants too: `rusty-cli mcp` (`rusty_ai::mcp`) is the
+Model Context Protocol over stdio — `initialize`, `ping`, `tools/list`,
+`tools/call`, nothing else — so Claude Code or Cursor calls the same
+`project_status` the drawer does and gets the same JSON and the same
+refusals. A refusal is a result with `isError`, the agent loop's rule; only a
+name that is no tool is a protocol error. **The Cargo workspace is loaded by
+the first tool that needs it** (`LazyWorkspace`, the context's
+`workspace_on_demand`), not before the question: resolving the graph is
+`cargo metadata`, unbounded where no lockfile exists, and most questions
+need none. It was a workspace or nothing once, and the app only had one
+after the Crates panel had loaded it — so the drawer's Cargo tools told a
+user with a project open to open a project. The app seeds it with the
+panel's and keeps what a tool loaded (`keep_workspace`); the MCP server,
+connected for a whole session while the project changes under it, keeps it
+while a stamp of the root manifest, the lockfile and every member's manifest
+holds, and reads the catalogue and the newest firmware afresh on every call.
 
 **The project's files are tools as well** (`tools/files.rs`: `read_file`,
 `search_project`, `list_files`), through `rusty_edit` so the model sees the
@@ -1057,6 +1076,68 @@ written for one group — every component, controller and effect reads
   puts the list away, because that `keyup` will never come. From the
   palette or the View menu there is no key to let go of, so the action is
   the tap.
+
+## What the editor draws beside the text
+
+Indent guides, sticky scroll, inlay hints, a minimap and more than one
+cursor — VS Code's, each but the cursors switchable in Settings ▸ Editor
+(`EditorView`, `[editor]` in `workbench.toml`, written only when a switch is
+off). Every one is an overlay or a key rule, because the surface's invariant
+— the textarea and the echo line up glyph for glyph, one row per line (see
+"Code folding") — is what every other feature stands on.
+
+- **Inlay hints go at the end of the line, because a textarea cannot make
+  room inside one.** VS Code puts `: f32` after the name; here the
+  textarea's text *is* the file, and a hint inside a line would push every
+  glyph after it off the character the caret thinks it is on. So a type hint
+  is drawn after the line's text as `name: T`, and chain and closing-brace
+  hints, which are end-of-line by nature, as they come (`hints::end_of_line`,
+  tested). Parameter-name hints are off in the handshake: at the end of a
+  line `a:, b:` names nothing. The range is the semantic colours' — the whole
+  file below 3,000 lines, the lines on screen and 400 either side above — and
+  an edit moves the hints below it with the text until the new answer lands.
+- **The first answer is empty, and only a client that says so hears when it
+  is not.** rust-analyzer answers `inlayHint` while it is still indexing,
+  with nothing, and sends `workspace/inlayHint/refresh` (and the semantic
+  tokens' equivalent) when it has something — to a client declaring
+  `refreshSupport`, and to no other. Undeclared, a file open at startup had
+  no hints until somebody typed in it. The client answers the refresh and
+  passes it on as `LspEvent::Refresh`; the editor asks again 300 ms after
+  the last one.
+- **Sticky scroll is the fold regions read the other way** (`sticky.rs`,
+  pure and tested): the headers of the regions holding the line under the
+  stuck rows, outermost first, at most five, drawn in the gutter's own style.
+  **The search for that line only ever adds rows.** A stuck row covers the
+  line it sits on, which changes which regions hold the first line still
+  showing, which changes the count: at a block's closing brace one row fewer
+  uncovers a line of the block and one more covers the brace, and the first
+  version took turns between the two — nothing stuck at all at the offset
+  where it mattered. `stuck` grows from the first row's headers until the
+  line under them adds none, a fixed point rather than an oscillation.
+- **The minimap is a canvas coloured by the theme.** Two pixels a row and
+  one a character, scrolled against the editor with VS Code's arithmetic
+  (`minimap::frame`, tested). A token class's colour is read off a hidden span
+  carrying the echo's own classes, so a theme change recolours it with
+  nothing to keep in step. A drag listens on the window and gives the
+  listeners back on cleanup.
+- **Indent guides** come from the indentation (`guides::indent_levels`; a
+  blank line takes the deeper of its neighbours, or every empty line in a
+  block would break its guide), and the bright one is the block the caret is
+  in. The levels are in `row_hash`, so a row redraws when its guides change
+  and not otherwise.
+- **The textarea's selection is the first cursor; the others are state**
+  (`editor.cursors`; `crate::cursors` is the arithmetic, pure and tested,
+  and `multi.rs` the keys). A browser keeps one selection, so with a second
+  cursor every key that edits or moves is taken in `keydown` and applied at
+  every cursor in one pass: one document, one undo step, through the same
+  record / echo / `set_buffer` path as any other write. The second cursor
+  opens the folds, because every cursor is a document position and a
+  textarea holding the folded screen would need each one mapped across them
+  for every key. **An input method composes at one place**, and the textarea
+  cannot be written mid-composition, so a composition starting drops the
+  other cursors rather than type the composed text at one of them. A paste
+  with one line per cursor gives each its line in document order, as VS
+  Code's does. Off in Vim mode, whose keys are Vim's.
 
 ## The Git panel
 

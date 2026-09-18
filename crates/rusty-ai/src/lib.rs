@@ -52,6 +52,8 @@ mod error;
 #[cfg(feature = "backend")]
 pub mod http;
 #[cfg(feature = "backend")]
+pub mod mcp;
+#[cfg(feature = "backend")]
 pub mod provider;
 #[cfg(feature = "backend")]
 pub mod secrets;
@@ -71,7 +73,7 @@ pub use http::Http;
 #[cfg(feature = "backend")]
 pub use provider::{ChatRequest, Provider};
 #[cfg(feature = "backend")]
-pub use tools::{Tool, ToolContext, ToolRegistry};
+pub use tools::{LazyWorkspace, Tool, ToolContext, ToolRegistry};
 
 #[cfg(feature = "backend")]
 use provider::ToolCallAccumulator;

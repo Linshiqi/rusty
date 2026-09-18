@@ -43,6 +43,8 @@ struct EchoRow {
     line: Line,
     diags: Vec<FileDiagnostic>,
     folded: Option<u32>,
+    /// How many indent guides it draws (`guides.rs`).
+    guides: u8,
 }
 
 /// The two stacked layers: highlighted text underneath, a transparent text
@@ -93,6 +95,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     // after the view has gone would call a dropped closure, and this one reads
     // only through `try_` and finds nothing.
     let view_top = RwSignal::new(0.0_f64);
+    // And how far across, for what is drawn over the text and not in it.
+    let view_left = RwSignal::new(0.0_f64);
     let view_height = RwSignal::new(0.0_f64);
     let observer = StoredValue::new_local(None::<web_sys::ResizeObserver>);
     Effect::new(move |_| {
@@ -205,7 +209,9 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                 (folds.doc_of_view(range.start), folds.doc_of_view(range.end))
             });
             state.editor.drawn_lines.set_value(drawn);
-            if !is_rust || controller::semantic_covers(state, drawn.0, drawn.1) {
+            let colours = controller::semantic_covers(state, drawn.0, drawn.1);
+            let hints = controller::hints_cover(state, drawn.0, drawn.1);
+            if !is_rust || (colours && hints) {
                 return;
             }
             let turn = semantic_wait.get_value() + 1;
@@ -214,7 +220,12 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             set_timeout(
                 move || {
                     if semantic_wait.try_get_value() == Some(turn) {
-                        controller::request_semantic(state, path);
+                        if !colours {
+                            controller::request_semantic(state, path.clone());
+                        }
+                        if !hints {
+                            controller::request_hints(state, path);
+                        }
                     }
                 },
                 std::time::Duration::from_millis(150),
@@ -239,6 +250,21 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     // per gutter row made drawing a thousand-line file quadratic in the
     // number of rows on screen.
     let foldables = Memo::new(move |_| rusty_edit::fold::regions(&state.editor.draft.get()));
+
+    // How many indent guides each line draws, when they are on (`guides.rs`):
+    // one pass over the text per edit, like the fold scan beside it.
+    let levels = Memo::new(move |_| {
+        if !state.editor.view.with(|view| view.indent_guides) {
+            return Vec::new();
+        }
+        state.editor.draft.with(|text| indent_levels(text))
+    });
+    // The guide of the block the caret is in, drawn brighter: each guide
+    // reads it for itself, so a caret moving redraws no row.
+    let lit_guide = Memo::new(move |_| {
+        let (line, _) = caret_at.get()?;
+        levels.with(|levels| active_guide(levels, line as usize))
+    });
 
     // The margin's rows in the window. The icons scale with the row: a fixed
     // 13px chevron is taller than the row itself once the editor is zoomed
@@ -307,12 +333,16 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                     .iter()
                                     .find(|region| region.header == index)
                                     .map(rusty_edit::Region::hidden);
+                                let guides = levels
+                                    .with(|levels| levels.get(index as usize).copied())
+                                    .unwrap_or(0);
                                 Some(EchoRow {
-                                    key: (index, row_hash(&line, &diags, folded)),
+                                    key: (index, row_hash(&line, &diags, folded, guides)),
                                     index,
                                     line,
                                     diags,
                                     folded,
+                                    guides,
                                 })
                             })
                             .collect::<Vec<_>>()
@@ -474,9 +504,35 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
         )
     });
 
+    // The margin's style, which sticky scroll's numbers take too so they stand
+    // where the margin's do.
+    let gutter_style = Signal::derive(move || {
+        // Tailwind's border-box made a bare `width: 5ch` mean "5ch including
+        // 20px of padding", which left 4-digit numbers 14px of room — they
+        // clipped against the code column. The width now names the digits
+        // and adds the padding explicitly.
+        let digits = line_count.get().to_string().len().max(3);
+        // Padding, the breakpoint dot and its gap, plus a column for the fold
+        // chevron when the file has anything to fold. Reserving it
+        // unconditionally would push the code right by two characters in
+        // every flat file; reserving *nothing* was the bug that once made the
+        // run arrows invisible — the row is `justify-end`, so anything that
+        // does not fit overflows off the left edge rather than wrapping or
+        // scrolling. (The arrows have since moved beside the item, as a lens.)
+        let columns = usize::from(foldables.with(|found| !found.is_empty()));
+        let extra = 32 + columns * 17;
+        // The dot's column, then the digits, then the padding — a width that
+        // only counted digits clipped the number the moment a dot appeared.
+        format!("{}; width: calc({digits}ch + {extra}px)", metrics.get())
+    });
+
     let on_input = {
         let path = path.clone();
         move |event: ev::Event| {
+            // Anything that reaches the textarea itself went in at its own
+            // selection alone — an input method's, a dropped text — so the
+            // other cursors go.
+            multi_compose(state);
             // The textarea holds the screen text, so what comes out of an
             // input event is the screen *after* the edit. Turning that back
             // into a document edit is the one write path folding introduces,
@@ -718,6 +774,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     )
                 }
             }
+        // The scroller, and the minimap down its right-hand edge (`minimap.rs`).
+        <div class="flex min-h-0 flex-1">
         <div
             node_ref=scroller
             // Tagged with the group, so parking reads this group's offset
@@ -730,6 +788,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
             on:scroll=move |_| {
                 if let Some(element) = scroller.get_untracked() {
                     view_top.set(f64::from(element.scroll_top()));
+                    view_left.set(f64::from(element.scroll_left()));
                 }
             }
             on:wheel=move |event: ev::WheelEvent| {
@@ -743,6 +802,17 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                 crate::state::remember_zoom(zoom.get_untracked());
             }
         >
+            // The lines of the blocks the top of the view is in (`sticky.rs`).
+            {sticky_lines(
+                state,
+                path.clone(),
+                scroller,
+                view_top,
+                view_left,
+                foldables,
+                metrics,
+                gutter_style,
+            )}
             // w-max: the row is as wide as the longest line, so the textarea
             // overlay (inset-0 in the column beside the gutter) covers every
             // glyph. At viewport width, a long line overflowed the column and
@@ -755,29 +825,7 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                 // above and below it — the echo beside it draws the same rows.
                 <div
                     class="flex-none py-2 pr-2 pl-3 text-right text-label-4 select-none"
-                    style=move || {
-                        // Tailwind's border-box made a bare `width: 5ch` mean
-                        // "5ch including 20px of padding", which left 4-digit
-                        // numbers 14px of room — they clipped against the code
-                        // column. The width now names the digits and adds the
-                        // padding explicitly.
-                        let digits = line_count.get().to_string().len().max(3);
-                        // Padding, the breakpoint dot and its gap, plus a
-                        // column for the fold chevron when the file has
-                        // anything to fold. Reserving it unconditionally would
-                        // push the code right by two characters in every flat
-                        // file; reserving *nothing* was the bug that once made
-                        // the run arrows invisible — the row is `justify-end`,
-                        // so anything that does not fit overflows off the left
-                        // edge rather than wrapping or scrolling. (The arrows
-                        // have since moved beside the item, as a lens.)
-                        let columns = usize::from(foldables.with(|found| !found.is_empty()));
-                        let extra = 32 + columns * 17;
-                        // The dot's column, then the digits, then the padding —
-                        // a width that only counted digits clipped the number
-                        // the moment a dot appeared.
-                        format!("{}; width: calc({digits}ch + {extra}px)", metrics.get())
-                    }
+                    style=gutter_style
                 >
                     <div style=move || spacer(window.get().start)></div>
                     <For
@@ -1108,8 +1156,32 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                             </span>
                                         }
                                     });
+                                // A line one pixel wide at each stop the
+                                // line is indented past, in `ch` so a zoom
+                                // moves it with the text; brighter for the
+                                // block the caret is in.
+                                let index = row.index as usize;
+                                let guides = (0..row.guides)
+                                    .map(|stop| {
+                                        let class = move || {
+                                            let lit = lit_guide.with(|lit| {
+                                                lit.is_some_and(|(at, first, last)| {
+                                                    at == stop && (first..=last).contains(&index)
+                                                })
+                                            });
+                                            if lit {
+                                                "pointer-events-none absolute inset-y-0 w-px bg-label-4"
+                                            } else {
+                                                "pointer-events-none absolute inset-y-0 w-px bg-line"
+                                            }
+                                        };
+                                        let left = u32::from(stop) * TAB_SIZE as u32;
+                                        view! { <span class=class style=format!("left: {left}ch") /> }
+                                    })
+                                    .collect_view();
                                 view! {
-                                    <div>
+                                    <div class="relative">
+                                        {guides}
                                         {decorate(row.line, row.index, &row.diags)}
                                         {summary}
                                         // An empty line still occupies one, or
@@ -1224,7 +1296,8 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 return;
                             };
                             if let Some(element) = area.get_untracked()
-                                && paste_into(state, &element, &pasted, read_only)
+                                && (multi_paste(state, &element, &pasted, scroller)
+                                    || paste_into(state, &element, &pasted, read_only))
                             {
                                 event.prevent_default();
                             }
@@ -1252,9 +1325,17 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                                 let _ = element.set_selection_end(Some(end - overhang));
                             }
                         }
+                        on:compositionstart=move |_| multi_compose(state)
                         on:mousedown={
                             let path = path.clone();
                             move |event: ev::MouseEvent| {
+                                // Alt adds a cursor; a plain press is back to
+                                // one (`multi.rs`).
+                                if let Some(element) = area.get_untracked()
+                                    && multi_click(state, &element, &event, scroller)
+                                {
+                                    return;
+                                }
                                 // Ctrl+Click asks where this is defined — the
                                 // gesture every editor has taught.
                                 if !(event.ctrl_key() || event.meta_key()) || !is_rust {
@@ -1390,6 +1471,15 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                             // candidate and Tab moves through them. Stealing
                             // either would break Chinese input entirely.
                             if event.is_composing() {
+                                return;
+                            }
+                            // Several cursors take their keys first, and a
+                            // character typed at all of them skips the rules
+                            // written for one (`multi.rs`).
+                            if let Some(element) = area.get_untracked()
+                                && multi_key(state, &element, &event, scroller)
+                            {
+                                event.stop_propagation();
                                 return;
                             }
                             // Modal editing gets the key first, and takes only
@@ -1863,6 +1953,14 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                         .into_any()
                     }}
 
+                    // Every cursor but the textarea's own (`multi.rs`). After
+                    // the textarea, so they show while it has focus.
+                    {extra_cursors(state, window)}
+
+                    // What rust-analyzer infers, after the lines it is about
+                    // (`hints.rs`).
+                    {inlay_hints(state, path.clone(), window)}
+
                     // The tests, offered where VS Code offers them — beside
                     // the item, not at the far edge of the margin — and with
                     // the half the margin never had room for: Debug. An
@@ -2323,6 +2421,23 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     }
                 </div>
             </div>
+        </div>
+        {move || {
+            state
+                .editor
+                .view
+                .with(|view| view.minimap)
+                .then(|| {
+                    view! {
+                        <Minimap
+                            scroller=scroller
+                            view_top=view_top
+                            view_height=view_height
+                            rows_total=rows_total
+                        />
+                    }
+                })
+        }}
         </div>
         </div>
     }

@@ -46,6 +46,10 @@ pub mod workbench {
     pub const SET_VIM: &str = "set_vim";
     pub const AUTO_SAVE: &str = "auto_save_enabled";
     pub const SET_AUTO_SAVE: &str = "set_auto_save";
+    /// What the editor draws around the code: inlay hints, the minimap,
+    /// sticky scroll, indent guides.
+    pub const EDITOR_VIEW: &str = "editor_view";
+    pub const SET_EDITOR_VIEW: &str = "set_editor_view";
     /// A rust-analyzer the user named, in place of the one rusty finds.
     pub const RUST_ANALYZER: &str = "rust_analyzer_path";
     pub const SET_RUST_ANALYZER: &str = "set_rust_analyzer_path";
@@ -208,6 +212,8 @@ pub mod lsp {
     pub const CALLS: &str = "lsp_calls";
     /// The macro call at a position, expanded, as a read-only document.
     pub const EXPAND_MACRO: &str = "lsp_expand_macro";
+    /// What rust-analyzer infers over a range of a file's lines.
+    pub const INLAY_HINTS: &str = "lsp_inlay_hints";
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
     pub const ACTIONS: &str = "lsp_code_actions";

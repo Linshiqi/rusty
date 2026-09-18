@@ -7,10 +7,10 @@
 //! a build fails — it calls `project_status` and gets the actual mismatch, with
 //! the fix.
 //!
-//! The same definitions are intended to back three consumers: the built-in
-//! assistant, an MCP server (so Claude Code and Cursor users get these analyses
-//! too), and the CLI. Adding an analysis should mean adding a tool here, not
-//! wiring three integrations.
+//! The same definitions back the built-in assistant and the MCP server
+//! (`crate::mcp`, so Claude Code and Cursor users get these analyses too).
+//! Adding an analysis should mean adding a tool here, not wiring two
+//! integrations.
 
 mod cargo;
 mod context;
@@ -26,7 +26,7 @@ use crate::{
     model::{ToolDef, ToolSource},
 };
 
-pub use context::ToolContext;
+pub use context::{LazyWorkspace, ToolContext};
 
 pub trait Tool: Send + Sync {
     fn def(&self) -> ToolDef;

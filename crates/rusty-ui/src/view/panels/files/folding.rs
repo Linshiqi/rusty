@@ -196,6 +196,14 @@ pub(super) fn unfold_all(state: AppState) {
 /// [`rusty_edit::fold::splice`] can map back exactly.
 pub(super) fn set_buffer(state: AppState, area: &web_sys::HtmlTextAreaElement, text: &str) {
     unfold_all(state);
+    // A text written wholesale leaves nowhere the other cursors stood.
+    if state
+        .editor
+        .cursors
+        .with_untracked(|extra| !extra.is_empty())
+    {
+        state.editor.cursors.set(Vec::new());
+    }
     state.editor.draft.set(text.to_string());
     area.set_value(text);
 }

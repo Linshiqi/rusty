@@ -10,6 +10,7 @@ authors.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
+rusty-ai = { path = "../rusty-ai" }
 rusty-core = { path = "../rusty-core" }
 rusty-embed = { path = "../rusty-embed" }
 serde = "1.0.229"

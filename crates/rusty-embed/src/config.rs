@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Error, Result},
-    model::{AssistantChoice, ProjectTabs, RelocateReport, StorageLocation},
+    model::{AssistantChoice, EditorView, ProjectTabs, RelocateReport, StorageLocation},
 };
 
 /// The fixed anchor. Everything else is reachable from here.
@@ -241,6 +241,11 @@ pub struct WorkbenchState {
     /// the first was told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_update: Option<String>,
+    /// What the editor draws around the code — inlay hints, the minimap,
+    /// sticky scroll, indent guides. A file for `vim`'s reason: a second
+    /// window drawing the editor differently from the first is not a shrug.
+    #[serde(default)]
+    pub editor: EditorView,
 }
 
 /// How many projects keep their tab strip. Beyond this the oldest is dropped:
@@ -290,7 +295,7 @@ fn workbench_path() -> Option<PathBuf> {
 mod file {
     use serde::{Deserialize, Serialize};
 
-    use crate::model::{AssistantChoice, ProjectTabs};
+    use crate::model::{AssistantChoice, EditorView, ProjectTabs};
 
     #[derive(Debug, Default, Serialize, Deserialize)]
     pub(super) struct Workbench {
@@ -318,6 +323,65 @@ mod file {
         pub open_tabs: Vec<Tabs>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub skipped_update: Option<String>,
+        /// `[editor]`, written only when something in it is off.
+        #[serde(default, skip_serializing_if = "Editor::is_default")]
+        pub editor: Editor,
+    }
+
+    /// The editor's switches as the file spells them: each key present only
+    /// when it is off, since on is what an absent key means.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Editor {
+        #[serde(default = "on", skip_serializing_if = "is_on")]
+        pub inlay_hints: bool,
+        #[serde(default = "on", skip_serializing_if = "is_on")]
+        pub minimap: bool,
+        #[serde(default = "on", skip_serializing_if = "is_on")]
+        pub sticky_scroll: bool,
+        #[serde(default = "on", skip_serializing_if = "is_on")]
+        pub indent_guides: bool,
+    }
+
+    fn on() -> bool {
+        true
+    }
+
+    fn is_on(value: &bool) -> bool {
+        *value
+    }
+
+    impl Default for Editor {
+        fn default() -> Self {
+            EditorView::default().into()
+        }
+    }
+
+    impl Editor {
+        fn is_default(&self) -> bool {
+            EditorView::from(self) == EditorView::default()
+        }
+    }
+
+    impl From<EditorView> for Editor {
+        fn from(view: EditorView) -> Self {
+            Editor {
+                inlay_hints: view.inlay_hints,
+                minimap: view.minimap,
+                sticky_scroll: view.sticky_scroll,
+                indent_guides: view.indent_guides,
+            }
+        }
+    }
+
+    impl From<&Editor> for EditorView {
+        fn from(file: &Editor) -> Self {
+            EditorView {
+                inlay_hints: file.inlay_hints,
+                minimap: file.minimap,
+                sticky_scroll: file.sticky_scroll,
+                indent_guides: file.indent_guides,
+            }
+        }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -379,6 +443,7 @@ mod file {
                     })
                     .collect(),
                 skipped_update: file.skipped_update,
+                editor: EditorView::from(&file.editor),
             }
         }
     }
@@ -416,6 +481,7 @@ mod file {
                     })
                     .collect(),
                 skipped_update: state.skipped_update.clone(),
+                editor: state.editor.into(),
             }
         }
     }
@@ -714,6 +780,13 @@ mod tests {
                 second_active: Some("src/lib.rs".into()),
             }],
             skipped_update: Some("0.9.9".into()),
+            // Every switch off its default, which is on.
+            editor: EditorView {
+                inlay_hints: false,
+                minimap: false,
+                sticky_scroll: false,
+                indent_guides: false,
+            },
         };
         save_workbench_at(&path, &state).unwrap();
         let back = workbench_at(&path);
@@ -730,12 +803,32 @@ mod tests {
         assert_eq!(back.assistant, state.assistant);
         assert_eq!(back.open_tabs, state.open_tabs);
         assert_eq!(back.skipped_update, state.skipped_update);
+        assert_eq!(back.editor, state.editor);
         assert!(
             !path
                 .with_extension(format!("toml.{}.tmp", std::process::id()))
                 .exists(),
             "the temporary is renamed away"
         );
+    }
+
+    /// The editor's switches are on unless a file says otherwise, and a file
+    /// that leaves them all on does not mention them.
+    #[test]
+    fn the_editor_switches_are_on_until_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        std::fs::write(&path, "recent_projects = []\n").unwrap();
+        assert_eq!(workbench_at(&path).editor, EditorView::default());
+
+        std::fs::write(&path, "[editor]\nminimap = false\n").unwrap();
+        let read = workbench_at(&path);
+        assert!(!read.editor.minimap);
+        assert!(read.editor.inlay_hints && read.editor.sticky_scroll && read.editor.indent_guides);
+
+        save_workbench_at(&path, &WorkbenchState::default()).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("[editor]"), "{written}");
     }
 
     #[test]

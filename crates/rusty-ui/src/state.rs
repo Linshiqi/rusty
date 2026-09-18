@@ -105,6 +105,15 @@ pub struct PlaceList {
     pub places: Vec<rusty_lsp::Place>,
 }
 
+/// Inlay hints rust-analyzer gave for a file: which file, the lines they were
+/// asked for over, and the hints, in line order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HintSet {
+    pub path: String,
+    pub lines: (u32, u32),
+    pub hints: Vec<rusty_lsp::InlayHint>,
+}
+
 /// What the dock's Calls tab shows (`view/dock/calls.rs`).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum CallsView {
@@ -1104,6 +1113,12 @@ pub struct Editor {
     /// The lines `semantic` covers, when it is not the whole file: a long
     /// file is asked about the lines around the ones on screen.
     pub semantic_lines: StoredValue<Option<(u32, u32)>>,
+    /// The inlay hints for the document on screen, and the lines they were
+    /// asked for over (`view/panels/files/hints.rs`).
+    pub hints: RwSignal<Option<HintSet>>,
+    /// Every cursor but the textarea's own, when there are several
+    /// (`crate::cursors`, `view/panels/files/multi.rs`). Empty is one cursor.
+    pub cursors: RwSignal<Vec<crate::cursors::Cursor>>,
     /// The document lines the view is drawing, first and one past the last —
     /// what a long file's semantic colours are asked for around.
     pub drawn_lines: StoredValue<(u32, u32)>,
@@ -1215,6 +1230,10 @@ pub struct Editor {
     /// Write the file a beat after typing stops. Mirrors `workbench.toml`
     /// like [`Self::vim_on`], and for the same reason.
     pub auto_save: RwSignal<bool>,
+    /// What the editor draws around the code — inlay hints, the minimap,
+    /// sticky scroll, indent guides. Mirrors `workbench.toml`, and one for
+    /// both groups.
+    pub view: RwSignal<rusty_embed::EditorView>,
     /// A rust-analyzer the user named, in place of the one rusty finds.
     /// Empty is "whichever rusty finds"; it exists for the upstream bug in
     /// `rusty_lsp::convert::explain_health`, and mirrors `workbench.toml`.
@@ -1244,6 +1263,8 @@ impl Editor {
             actions: RwSignal::new(None),
             semantic: RwSignal::new(None),
             semantic_lines: StoredValue::new(None),
+            hints: RwSignal::new(None),
+            cursors: RwSignal::new(Vec::new()),
             occurrences: RwSignal::new(None),
             drawn_lines: StoredValue::new((0, 0)),
             tabs: RwSignal::new(Vec::new()),
@@ -1271,6 +1292,7 @@ impl Editor {
             vim: RwSignal::new(crate::vim::Vim::default()),
             vim_caret: StoredValue::new(None),
             auto_save: RwSignal::new(false),
+            view: RwSignal::new(rusty_embed::EditorView::default()),
             rust_analyzer: RwSignal::new(String::new()),
             save_gen: RwSignal::new(0),
         }
@@ -1294,6 +1316,7 @@ impl Editor {
             page_zoom: self.page_zoom,
             vim_on: self.vim_on,
             auto_save: self.auto_save,
+            view: self.view,
             rust_analyzer: self.rust_analyzer,
             source_view: self.source_view,
             images: self.images,

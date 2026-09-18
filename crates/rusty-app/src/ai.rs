@@ -6,7 +6,9 @@
 
 use std::time::Duration;
 
-use rusty_ai::{AgentEvent, Assistant, Message, ProviderConfig, ToolContext, config};
+use rusty_ai::{
+    AgentEvent, Assistant, LazyWorkspace, Message, ProviderConfig, ToolContext, config,
+};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -52,8 +54,16 @@ pub async fn ai_ask(
     // all — "which ESP32 has 802.15.4?" needs no project — and each tool
     // reports for itself what it is missing.
     let catalog = state.catalog().await;
+    // The Cargo analysis is loaded by the first tool that needs it, not
+    // before the question — most questions need none, and it is `cargo
+    // metadata` — starting from the one the Crates panel loaded, if it has.
+    let lazy = open.root.clone().map(|root| match open.workspace.clone() {
+        Some(workspace) => LazyWorkspace::holding(root, workspace),
+        None => LazyWorkspace::new(root),
+    });
     let context = ToolContext {
-        workspace: open.workspace.as_deref(),
+        workspace: None,
+        workspace_on_demand: lazy.as_ref(),
         root: open.root(),
         firmware: open.firmware.clone(),
         catalog: Some(&catalog),
@@ -101,6 +111,10 @@ pub async fn ai_ask(
         }
     };
     state.end_ask(ticket).await;
+    if let (Some(root), Some(loaded)) = (open.root(), lazy.as_ref().and_then(LazyWorkspace::loaded))
+    {
+        state.keep_workspace(root, loaded).await;
+    }
     if let Some(cap) = assistant.learned_cap() {
         state.learn_output_cap(cap_key, cap).await;
     }

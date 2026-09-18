@@ -56,6 +56,15 @@ pub(super) fn EditorSettings() -> impl IntoView {
             </Row>
         </Group>
 
+        // What the editor draws around the code, each on unless turned off,
+        // as in VS Code.
+        <Group title=t!("settings.editor.view") footer=t!("settings.editor.view-note")>
+            {view_switch(state, t!("settings.editor.inlay-hints"), |v| v.inlay_hints, |v, on| v.inlay_hints = on)}
+            {view_switch(state, t!("settings.editor.minimap"), |v| v.minimap, |v, on| v.minimap = on)}
+            {view_switch(state, t!("settings.editor.sticky-scroll"), |v| v.sticky_scroll, |v, on| v.sticky_scroll = on)}
+            {view_switch(state, t!("settings.editor.indent-guides"), |v| v.indent_guides, |v, on| v.indent_guides = on)}
+        </Group>
+
         // Its own group, because it is not about how the editor behaves: it
         // chooses the program behind completion and navigation, and the
         // footer says what it is for so the field does not read as a knob
@@ -76,6 +85,27 @@ pub(super) fn EditorSettings() -> impl IntoView {
                 />
             </Row>
         </Group>
+    }
+}
+
+/// One of the editor's drawing switches, as a row.
+fn view_switch(
+    state: AppState,
+    label: String,
+    read: fn(&rusty_embed::EditorView) -> bool,
+    write: fn(&mut rusty_embed::EditorView, bool),
+) -> impl IntoView {
+    view! {
+        <Row label=label>
+            <Switch
+                on=Signal::derive(move || state.editor.view.with(read))
+                on_toggle=Callback::new(move |on| {
+                    let mut view = state.editor.view.get_untracked();
+                    write(&mut view, on);
+                    controller::set_editor_view(state, view);
+                })
+            />
+        </Row>
     }
 }
 

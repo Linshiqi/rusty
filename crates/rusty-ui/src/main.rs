@@ -14,6 +14,7 @@
 mod calls;
 mod command;
 mod controller;
+mod cursors;
 mod format;
 mod gitlog;
 mod i18n;

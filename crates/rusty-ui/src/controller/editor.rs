@@ -663,6 +663,7 @@ pub(super) fn show_document(state: AppState, document: Document, announce: bool)
     if announce && !document.read_only && state.lsp.status.get_untracked() == LspStatus::Ready {
         lsp_open_doc(document.path.clone(), document.text.clone());
         request_semantic(state, document.path.clone());
+        request_hints(state, document.path.clone());
     }
     // A different document opens at the top. The working area's scroller is
     // one DOM element for every document that passes through it, so without
@@ -738,6 +739,8 @@ fn clear_editor_transients(state: AppState) {
     state.editor.signature.set(None);
     state.editor.hover.set(None);
     state.editor.semantic.set(None);
+    state.editor.hints.set(None);
+    state.editor.cursors.set(Vec::new());
     state.editor.semantic_lines.set_value(None);
     state.editor.occurrences.set(None);
     // A new document opens at its top; the view says otherwise once it draws.
@@ -818,6 +821,7 @@ pub(super) fn front_parked(state: AppState, path: &str) -> bool {
     }
     if !read_only {
         request_semantic(state, path.to_string());
+        request_hints(state, path.to_string());
     }
     true
 }

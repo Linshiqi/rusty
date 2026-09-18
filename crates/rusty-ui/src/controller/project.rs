@@ -362,6 +362,7 @@ pub fn restore(state: AppState) {
     // to load only when a project came back through the recents list.
     load_vim(state);
     load_auto_save(state);
+    load_editor_view(state);
     load_rust_analyzer(state);
     load_keybinds(state);
     apply_ui_zoom(state);

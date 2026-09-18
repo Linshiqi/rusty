@@ -468,6 +468,12 @@ text-size = "文字大小"
 page-size = "页面文字大小"
 text-size-note = "在编辑器或 Markdown 页面上按住 Ctrl 滚动滚轮也能调整；编辑器里还可以用 Ctrl+= 和 Ctrl+-。"
 reset = "重置"
+view = "代码周围"
+view-note = "VS Code 在代码旁绘制的内容，默认同样全部开启。"
+inlay-hints = "内联提示"
+minimap = "缩略图"
+sticky-scroll = "粘性滚动"
+indent-guides = "缩进参考线"
 
 [settings.keyboard]
 shortcuts = "快捷键"

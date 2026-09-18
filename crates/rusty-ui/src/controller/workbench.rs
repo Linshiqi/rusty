@@ -247,6 +247,44 @@ pub fn set_vim(state: AppState, enabled: bool) {
     );
 }
 
+/// Read what the editor draws around the code, at startup and for every
+/// window, like the other editor switches.
+pub fn load_editor_view(state: AppState) {
+    track(
+        state,
+        async move { ipc::call::<_, rusty_embed::EditorView>(cmd::workbench::EDITOR_VIEW, &()).await },
+        move |view| state.editor.view.set(view),
+    );
+}
+
+/// Change what the editor draws, and remember.
+pub fn set_editor_view(state: AppState, view: rusty_embed::EditorView) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        view: rusty_embed::EditorView,
+    }
+    let hints_were = state.editor.view.with_untracked(|view| view.inlay_hints);
+    state.editor.view.set(view);
+    // Hints turned on are asked for now, not at the next edit; turned off,
+    // they go.
+    if view.inlay_hints != hints_were {
+        for group in state.open_groups() {
+            if view.inlay_hints {
+                if let Some(path) = group.active_path_now() {
+                    request_hints(group, path);
+                }
+            } else {
+                group.editor.hints.set(None);
+            }
+        }
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::workbench::SET_EDITOR_VIEW, &Args { view }).await },
+        move |()| {},
+    );
+}
+
 /// Read the auto-save switch at startup, like the modal-editing one: a
 /// second window that did not auto-save would lose work on the assumption
 /// that it had.

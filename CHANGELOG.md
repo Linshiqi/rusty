@@ -9,6 +9,49 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.43
+
+**New — more than one cursor.** Alt+Click adds a cursor, Ctrl+Alt+Up and
+Ctrl+Alt+Down add one on the line above or below, Ctrl+D selects the word under
+the cursor and then its next occurrence, and Ctrl+Shift+L every occurrence at
+once — VS Code's keys. Typing, Backspace and Delete, Enter, Tab, the arrow
+keys, Home and End (with Shift to select) and cut and copy act at every cursor;
+pasting as many lines as there are cursors puts one line at each; one Ctrl+Z
+undoes the whole edit; Escape goes back to one cursor. Not in Vim mode, where
+the keys are Vim's.
+
+**New — inlay hints.** The types rust-analyzer infers now appear in grey at the
+end of the line — `let total = 0.0;` is followed by `total: f32` — along with
+the type at each step of a long method chain and the name of the block a
+closing brace ends.
+They appear as soon as rust-analyzer has finished indexing, without an edit to
+wake them.
+
+**New — sticky scroll.** While you scroll through a long function, its first
+line — and the `impl` or `mod` it sits in — stays pinned at the top of the
+editor. Click one to jump to it.
+
+**New — a minimap.** A miniature of the whole file down the editor's right
+edge, in the file's own colours, with the part on screen shaded. Click or drag
+it to scroll.
+
+**New — indent guides.** A faint vertical line at each indentation level, and
+a brighter one for the block the cursor is in.
+
+Each of the four can be switched off in Settings ▸ Editor.
+
+**New — rusty's analyses for other assistants.** `rusty-cli mcp` serves the
+built-in assistant's tools over the Model Context Protocol, so Claude Code,
+Cursor or any other MCP client can ask what your project targets and what is
+wrong with its toolchain, where the firmware's bytes went, what a Cargo
+feature costs, and which chips and boards rusty knows — computed, not guessed
+from your files. For Claude Code: `claude mcp add rusty -- rusty-cli mcp
+<project folder>`. Every tool only reads.
+
+**Fixed — the assistant's Cargo tools said to open a project** when one was
+open, unless the Crates panel had been visited first. They now load the
+project's dependency graph the first time a question needs it.
+
 ## v0.6.42
 
 **The same file on both sides of the split.** *Open to the side*, the split

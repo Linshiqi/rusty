@@ -78,6 +78,12 @@ pub enum LspEvent {
         /// What went wrong, in the server's own words.
         message: Option<String>,
     },
+    /// The server's picture of the code moved on without an edit — the
+    /// workspace finished loading, a dependency changed — so what the editor
+    /// asked about the text on screen, its colours and its inlay hints, is
+    /// worth asking again. What were asked for while it was still indexing
+    /// came back thin or empty, and nothing else would have asked twice.
+    Refresh {},
     Exited {},
 }
 
@@ -217,6 +223,21 @@ pub struct Call {
     /// Where the calls are, with their lines: in the caller's file either
     /// way — `item`'s for a call in, the asked function's for a call out.
     pub sites: Vec<Place>,
+}
+
+/// Something rust-analyzer infers about the code at a place — the type of a
+/// binding nobody wrote down, what a chain produces, the block a closing
+/// brace ends — for the editor to show beside the line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlayHint {
+    pub line: u32,
+    /// Where on the line it belongs, in scalars.
+    pub col: u32,
+    /// `: i32`, `impl Iterator<Item = u8>`, `fn main`.
+    pub label: String,
+    /// A parameter's name at an argument, rather than a type or a block.
+    pub parameter: bool,
 }
 
 /// What a macro call turns into, fully expanded.

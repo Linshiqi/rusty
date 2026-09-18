@@ -364,6 +364,71 @@ pub fn request_semantic(state: AppState, path: String) {
     });
 }
 
+/// Ask for the inlay hints over the lines of this group's file on screen —
+/// the whole file when it is short enough to be asked about whole, as its
+/// semantic colours are — when hints are on.
+pub fn request_hints(state: AppState, path: String) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        from: u32,
+        to: u32,
+    }
+
+    if !path.ends_with(".rs")
+        || state.lsp.status.get_untracked() != LspStatus::Ready
+        || !state.editor.view.with_untracked(|view| view.inlay_hints)
+    {
+        return;
+    }
+    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
+    let (from, to) = if count > SEMANTIC_WHOLE_LINES {
+        let (from, to) = state.editor.drawn_lines.get_value();
+        (
+            from.saturating_sub(SEMANTIC_MARGIN),
+            to.saturating_add(SEMANTIC_MARGIN).min(count),
+        )
+    } else {
+        (0, count)
+    };
+    let args = Args {
+        path: path.clone(),
+        from,
+        to,
+    };
+    spawn_local(async move {
+        // The warm-up answers with errors and empties; the hints on screen
+        // stay until an answer replaces them.
+        let Ok(mut hints) =
+            ipc::call::<_, Vec<rusty_lsp::InlayHint>>(cmd::lsp::INLAY_HINTS, &args).await
+        else {
+            return;
+        };
+        if state.active_path_now().as_deref() != Some(path.as_str()) {
+            return;
+        }
+        hints.sort_by_key(|hint| (hint.line, hint.col));
+        let _ = state.editor.hints.try_set(Some(crate::state::HintSet {
+            path,
+            lines: (from, to),
+            hints,
+        }));
+    });
+}
+
+/// Whether the hints on hand cover document lines `from..to` of the file on
+/// screen — any answer, for a file short enough to be asked about whole.
+pub fn hints_cover(state: AppState, from: u32, to: u32) -> bool {
+    let path = state.active_path_now();
+    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
+    state.editor.hints.with_untracked(|hints| {
+        hints.as_ref().is_some_and(|set| {
+            Some(&set.path) == path.as_ref()
+                && (count <= SEMANTIC_WHOLE_LINES || (set.lines.0 <= from && to <= set.lines.1))
+        })
+    })
+}
+
 /// Where the name at this position occurs in its file, for the editor to
 /// mark. Only the latest ask is answered: the caret has moved on from the
 /// others.
@@ -476,7 +541,8 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
             for group in state.open_groups() {
                 if let Some(path) = group.active_path_now() {
                     lsp_open_doc(path.clone(), group.editor.draft.get_untracked());
-                    request_semantic(group, path);
+                    request_semantic(group, path.clone());
+                    request_hints(group, path);
                 }
             }
         }
@@ -521,6 +587,27 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
                 }
                 state.lsp.health.set(next);
             }
+        }
+        // Once the refreshes stop for a moment: rust-analyzer sends one per
+        // change of heart while it loads, and each would be a round trip for
+        // every file on screen.
+        LspEvent::Refresh {} => {
+            static TURN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let turn = TURN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            set_timeout(
+                move || {
+                    if TURN.load(std::sync::atomic::Ordering::Relaxed) != turn {
+                        return;
+                    }
+                    for group in state.open_groups() {
+                        if let Some(path) = group.active_path_now() {
+                            request_semantic(group, path.clone());
+                            request_hints(group, path);
+                        }
+                    }
+                },
+                Duration::from_millis(300),
+            );
         }
         LspEvent::Exited {} => {
             state.lsp.progress.set(None);
@@ -1083,6 +1170,12 @@ fn edit_pulse(state: AppState) {
                 text: text.clone(),
             },
         );
+        // After the change, so the server answers about this text.
+        for group in state.open_groups() {
+            if group.active_path_now().as_deref() == Some(path.as_str()) {
+                request_hints(group, path.clone());
+            }
+        }
     }
 
     repaint(state, path);

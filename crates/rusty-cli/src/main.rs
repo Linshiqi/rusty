@@ -120,6 +120,18 @@ enum Command {
         json: bool,
     },
 
+    /// Serve rusty's analyses to another assistant — Claude Code, Cursor —
+    /// over the Model Context Protocol on stdin and stdout: the tools the
+    /// built-in assistant calls, answering about the project at `path`.
+    ///
+    /// Registered with the client rather than run by hand, e.g.
+    /// `claude mcp add rusty -- rusty-cli mcp /path/to/project`. Every tool
+    /// reads; none writes.
+    Mcp {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+
     /// Cargo dependency health: duplicates, direct vs transitive, build scripts.
     Deps {
         #[arg(default_value = ".")]
@@ -345,6 +357,17 @@ fn main() -> Result<()> {
                     stale.len()
                 );
             }
+        }
+
+        Command::Mcp { path } => {
+            // Absolute, not canonical: a canonical path on Windows is a
+            // verbatim `\\?\` one, which a tool that appends to it cannot use.
+            let root = std::path::absolute(&path)
+                .with_context(|| format!("resolving {}", path.display()))?;
+            if !root.is_dir() {
+                anyhow::bail!("{} is not a directory", root.display());
+            }
+            rusty_ai::mcp::serve(root, std::io::stdin().lock(), std::io::stdout().lock())?;
         }
 
         Command::Deps { path, json } => {

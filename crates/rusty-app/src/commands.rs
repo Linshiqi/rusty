@@ -222,6 +222,27 @@ pub async fn set_auto_save(enabled: bool, state: State<'_, AppState>) -> Answer<
         .await
 }
 
+/// What the editor draws around the code. Read at startup by every window,
+/// like `vim_enabled`, so two windows draw the editor alike.
+#[tauri::command]
+pub async fn editor_view() -> Answer<rusty_embed::EditorView> {
+    blocking("reading the editor's settings", || {
+        storage::workbench().editor
+    })
+    .await
+}
+
+/// Change what the editor draws, for good and for every window.
+#[tauri::command]
+pub async fn set_editor_view(
+    view: rusty_embed::EditorView,
+    state: State<'_, AppState>,
+) -> Answer<()> {
+    state
+        .update_workbench(move |workbench| workbench.editor = view)
+        .await
+}
+
 /// The stored display language, or `None` for "follow the system".
 ///
 /// Read at startup by every window, like `vim_enabled`: two windows in two

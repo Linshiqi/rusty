@@ -435,6 +435,26 @@ body {
 textarea:focus ~ .vim-cursor {
   display: block;
 }
+/* The cursors past the first (`multi.rs`): carets like the textarea's own,
+ * and like it shown only while the textarea has focus. */
+.extra-cursors {
+  display: none;
+}
+textarea:focus ~ .extra-cursors {
+  display: block;
+}
+.extra-caret {
+  position: absolute;
+  width: 2px;
+  pointer-events: none;
+  background: var(--rust);
+  animation: extra-caret-blink 1.06s step-end infinite;
+}
+@keyframes extra-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
 @keyframes vim-cursor-a {
   50% {
     opacity: 0;

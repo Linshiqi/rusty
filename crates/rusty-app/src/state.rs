@@ -261,6 +261,17 @@ impl AppState {
         Some(Arc::clone(guard.workspace.get_or_insert(loaded)))
     }
 
+    /// Keep a workspace something else loaded — a tool of the assistant's —
+    /// so the Crates panel and the next question do not load it again. Only
+    /// while the project it belongs to is still the open one, and never over
+    /// one already kept.
+    pub async fn keep_workspace(&self, root: &Path, loaded: Arc<Workspace>) {
+        let mut guard = self.inner.lock().await;
+        if guard.root.as_deref() == Some(root) && guard.workspace.is_none() {
+            guard.workspace = Some(loaded);
+        }
+    }
+
     pub async fn root(&self) -> Option<PathBuf> {
         self.inner.lock().await.root.clone()
     }

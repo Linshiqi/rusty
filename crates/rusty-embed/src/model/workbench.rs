@@ -45,6 +45,34 @@ pub struct ProjectTabs {
     pub second_active: Option<String>,
 }
 
+/// What the editor draws around the code, beyond the text: the four things
+/// VS Code draws there and lets people turn off. On unless turned off, as in
+/// VS Code; a file written before they existed has them on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorView {
+    /// Types and names rust-analyzer infers, beside the line they are about.
+    pub inlay_hints: bool,
+    /// The whole file, small, down the right-hand edge.
+    pub minimap: bool,
+    /// The lines that open the blocks the top of the view is in, kept at the
+    /// top while the view scrolls through them.
+    pub sticky_scroll: bool,
+    /// A faint line at every indentation stop.
+    pub indent_guides: bool,
+}
+
+impl Default for EditorView {
+    fn default() -> Self {
+        EditorView {
+            inlay_hints: true,
+            minimap: true,
+            sticky_scroll: true,
+            indent_guides: true,
+        }
+    }
+}
+
 /// Where rusty keeps its data, for the settings screen to show.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
