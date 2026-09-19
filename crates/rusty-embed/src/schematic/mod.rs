@@ -19,6 +19,7 @@ pub mod kicad_sch;
 pub mod kicad_sym;
 pub mod place;
 pub(crate) mod sexpr;
+pub mod wokwi;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -127,6 +128,27 @@ pub fn load(project: Option<&Path>) -> Library {
         library.read_dir(&root.join(".rusty").join("symbols"));
     }
     library
+}
+
+/// Read a Wokwi `diagram.json` onto the sheet: the parts rusty has a
+/// counterpart for, wired to the devkit rows of `chip`, and in the notes
+/// everything that did not come across and why.
+pub fn import_wokwi(
+    root: &Path,
+    file: &Path,
+    chip: &str,
+) -> crate::error::Result<crate::model::Sheet> {
+    let text = read_file(file)?;
+    let rows = crate::simulate::kit_rows_for(root, chip);
+    let mut sheet =
+        wokwi::read(&text, chip, &rows).map_err(|error| crate::error::Error::Refused {
+            detail: format!(
+                "{} is not a Wokwi diagram rusty can read: {error}",
+                file.display()
+            ),
+        })?;
+    crate::simulate::resolve_symbols(&mut sheet, &load(Some(root)));
+    Ok(sheet)
 }
 
 /// Read a `.kicad_sch` into a project.

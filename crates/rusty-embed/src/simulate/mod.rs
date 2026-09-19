@@ -23,6 +23,8 @@
 //! `tools`.
 
 mod board_file;
+mod channel;
+pub mod headless;
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +35,7 @@ use crate::schematic::Library;
 use crate::{project, toolchain, tools};
 
 pub use board_file::save as save_board;
+pub use channel::{PinChannel, Sensor, Start, connect, pin_level, start_of};
 
 /// Chips Espressif's QEMU actually models, with the system emulator each
 /// needs. Kept small and honest — c6/h2/p4 have no machine model yet.
@@ -69,6 +72,30 @@ impl Machine {
                 .ok()
                 .filter(|dir| !dir.trim().is_empty()),
         }
+    }
+
+    /// The emulator to boot: the first copy on the ladder that is rusty's
+    /// current build, or the first copy when none is.
+    ///
+    /// For every other tool the first copy found wins, because somebody put
+    /// it there. The emulator is the one binary whose copies are told apart
+    /// by what they can do, and the copy in the data directory is usually
+    /// rusty's own download from whenever it was installed: a release from
+    /// before the converter and the buses were modelled beat the current
+    /// build sitting in the bundle, and firmware reading a knob hung in its
+    /// own `read_oneshot()` with the right emulator installed one directory
+    /// away.
+    fn find_emulator(&self, binary: &str) -> Option<PathBuf> {
+        let roots: Vec<PathBuf> = [self.tools.clone(), self.bundled.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let found = tools::candidates(binary, &roots);
+        found
+            .iter()
+            .find(|path| is_current_build(path))
+            .or(found.first())
+            .cloned()
     }
 
     fn find(&self, binary: &str) -> Option<PathBuf> {
@@ -127,7 +154,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
             PathBuf::from("espflash")
         }
     };
-    let qemu = match machine.find(emulator) {
+    let qemu = match machine.find_emulator(emulator) {
         Some(path) => path,
         None => {
             missing.push(SimTool {
@@ -149,6 +176,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         name: emulator.to_string(),
         path: qemu.display().to_string(),
         gpio_model: has_gpio_model(&qemu),
+        peripherals: has_peripherals(&qemu),
     });
     // A refusal past this point still carries what it found missing: the
     // panel offers the installs alongside the reason rather than after it.
@@ -310,6 +338,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         debug,
         debug_tool,
         notes,
+        limits: crate::model::SimLimit::for_chip(chip),
     }
 }
 
@@ -491,6 +520,24 @@ const GPIO_MODEL_MARKER: &[u8] = b"[rusty:gpio@";
 /// `adc.read_oneshot()` and hangs there, and the failure names a
 /// conversion rather than an emulator.
 const ADC_MODEL_MARKER: &[u8] = b"[rusty:adc@";
+/// And the two buses', which arrived with the converter's generation and
+/// are asked for by name all the same: an assumption that one marker stands
+/// for three models is the proxy check again.
+const I2C_MODEL_MARKER: &[u8] = b"[rusty:i2c@";
+const SPI_MODEL_MARKER: &[u8] = b"[rusty:spi@";
+
+/// Does this emulator model the converter and both buses?
+pub fn has_peripherals(qemu: &Path) -> bool {
+    [ADC_MODEL_MARKER, I2C_MODEL_MARKER, SPI_MODEL_MARKER]
+        .into_iter()
+        .all(|marker| carries(qemu, marker))
+}
+
+/// Is this rusty's current build — every model this version of rusty
+/// drives present?
+pub fn is_current_build(qemu: &Path) -> bool {
+    has_gpio_model(qemu) && has_peripherals(qemu)
+}
 
 /// Does this emulator model GPIO, or is it the stock one whose write handler
 /// is an empty function?
@@ -505,20 +552,33 @@ const ADC_MODEL_MARKER: &[u8] = b"[rusty:adc@";
 /// Cached on path, length and mtime, because it is asked once per run and the
 /// answer costs a scan of a hundred-megabyte file.
 pub fn has_adc_model(qemu: &Path) -> bool {
-    scan_for(qemu, ADC_MODEL_MARKER)
+    carries(qemu, ADC_MODEL_MARKER)
 }
 
 pub fn has_gpio_model(qemu: &Path) -> bool {
+    carries(qemu, GPIO_MODEL_MARKER)
+}
+
+/// Does this binary carry `marker`, asked once per binary?
+///
+/// Cached on path, length and mtime, because each is asked at every plan and
+/// every run, and the answer costs a scan of a file tens of megabytes long.
+fn carries(qemu: &Path, marker: &'static [u8]) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    type Stamp = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    type Stamp = (
+        std::path::PathBuf,
+        u64,
+        Option<std::time::SystemTime>,
+        &'static [u8],
+    );
     static SEEN: OnceLock<Mutex<HashMap<Stamp, bool>>> = OnceLock::new();
 
     let Ok(meta) = std::fs::metadata(qemu) else {
         return false;
     };
-    let stamp: Stamp = (qemu.to_path_buf(), meta.len(), meta.modified().ok());
+    let stamp: Stamp = (qemu.to_path_buf(), meta.len(), meta.modified().ok(), marker);
 
     let cache = SEEN.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(seen) = cache.lock()
@@ -527,7 +587,7 @@ pub fn has_gpio_model(qemu: &Path) -> bool {
         return *known;
     }
 
-    let found = scan_for(qemu, GPIO_MODEL_MARKER);
+    let found = scan_for(qemu, marker);
     if let Ok(mut seen) = cache.lock() {
         seen.insert(stamp, found);
     }
@@ -577,10 +637,21 @@ fn scan_for(path: &Path, needle: &[u8]) -> bool {
 /// QEMU listens and rusty connects, which is the arrangement the CI gate
 /// proves; having rusty listen would be a second arrangement nothing has
 /// booted.
+///
+/// **And QEMU waits for the connection (`wait=on`) before the guest runs.**
+/// With `wait=off` the guest started at once and the channel caught up
+/// when the emulator's main loop got round to it — measured on Windows at
+/// four hundred milliseconds, by which time a sensor's firmware had asked
+/// for its `WHO_AM_I`, found nothing declared on the bus, and given up,
+/// and a blinky's first edge had gone unreported. The sheet's analog
+/// values and bus devices have to be said before the firmware looks for
+/// them, and only a guest that has not started yet is guaranteed not to
+/// have looked. The channel retries until it is hung up, so a waiting
+/// emulator is never left waiting on a caller that has stopped trying.
 pub fn pins_args(port: u16) -> Vec<String> {
     vec![
         "-chardev".to_string(),
-        format!("socket,id=pins,host=127.0.0.1,port={port},server=on,wait=off"),
+        format!("socket,id=pins,host=127.0.0.1,port={port},server=on,wait=on"),
         "-global".to_string(),
         "driver=esp32.gpio,property=pins,value=pins".to_string(),
     ]
@@ -710,14 +781,60 @@ mod tests {
         }
     }
 
-    /// Both sockets are the emulator's own, and neither waits for anybody:
-    /// a board that only booted when something was listening would be a
-    /// window that never fills.
+    /// An early build of rusty's QEMU in the data directory — pins, no
+    /// converter, no buses — loses to the current build in the bundle, and
+    /// the plan says what the one it chose can do. A stock build is still
+    /// found when it is all there is.
     #[test]
-    fn the_emulators_two_sockets_are_named_and_neither_waits() {
+    fn the_current_build_of_the_emulator_wins_wherever_it_is() {
+        let dir = firmware(BLINKY);
+        let write = |root: &Path, contents: &[u8]| {
+            let path = root
+                .join("qemu")
+                .join("bin")
+                .join(tools::exe("qemu-system-riscv32"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, contents).unwrap();
+            path
+        };
+        let early = write(&dir.path().join("data"), b"....[rusty:gpio@....");
+        let current = write(
+            &dir.path().join("bundle"),
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@",
+        );
+        let both = Machine {
+            tools: Some(dir.path().join("data")),
+            bundled: Some(dir.path().join("bundle")),
+            target_dir: None,
+        };
+        assert_eq!(both.find_emulator("qemu-system-riscv32"), Some(current));
+        assert!(!has_peripherals(&early));
+
+        let only_early = Machine {
+            tools: Some(dir.path().join("data")),
+            bundled: None,
+            target_dir: None,
+        };
+        assert_eq!(
+            only_early.find_emulator("qemu-system-riscv32"),
+            Some(early.clone()),
+            "the early build is still better than none",
+        );
+        let plan = plan_on(&c3(dir.path()), false, &only_early);
+        let emulator = plan.emulator.expect("found");
+        assert!(emulator.gpio_model);
+        assert!(!emulator.peripherals, "and the plan says what it lacks");
+    }
+
+    /// Both sockets are the emulator's own. The pin channel waits for rusty
+    /// before the guest boots, because the sheet has to be declared before
+    /// the firmware reaches for it; the monitor does not, because nothing
+    /// about a run depends on it.
+    #[test]
+    fn the_pin_channel_waits_for_rusty_and_the_monitor_does_not() {
         let pins = pins_args(5555).join(" ");
         assert!(pins.contains("id=pins"), "{pins}");
-        assert!(pins.contains("server=on,wait=off"), "{pins}");
+        assert!(pins.contains("server=on,wait=on"), "{pins}");
         assert!(pins.contains("driver=esp32.gpio,property=pins"), "{pins}");
 
         let qmp = qmp_args(5556).join(" ");
@@ -995,10 +1112,8 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("socket,id=pins"), "{joined}");
         assert!(joined.contains("port=4444"), "{joined}");
-        // QEMU listens, rusty connects — the arrangement CI boots. `wait=off`
-        // so a run still starts when nothing ever connects.
+        // QEMU listens, rusty connects — the arrangement CI boots.
         assert!(joined.contains("server=on"), "{joined}");
-        assert!(joined.contains("wait=off"), "{joined}");
         // -global, because the machine creates the device; there is no
         // -device line to attach the chardev to.
         assert!(

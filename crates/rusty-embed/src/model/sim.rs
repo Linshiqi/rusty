@@ -5,6 +5,70 @@ use serde::{Deserialize, Serialize};
 
 use super::{CommandPlan, Sheet, Symbol};
 
+/// Something the emulator cannot do on this chip, said before the run so
+/// that a hang or a silence is not blamed on the firmware.
+///
+/// A stable `kind` beside the English, as a `Problem` carries one: the
+/// frontend says it in the reader's language, the CLI prints the English.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimLimit {
+    /// `esp32-float`, `esp32-peripherals`, `s3-unproven`.
+    pub kind: String,
+    pub text: String,
+}
+
+impl SimLimit {
+    fn new(kind: &str, text: &str) -> Self {
+        SimLimit {
+            kind: kind.to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    /// What rusty's emulator is known not to do on `chip`.
+    ///
+    /// The C3 is the chip every model was written and proven against, so it
+    /// has none. The others are listed by what they cost in the user's own
+    /// code, because that is where each one shows: a run that ends
+    /// mid-boot, a `read` that never returns, a board that stays dark.
+    pub fn for_chip(chip: &str) -> Vec<SimLimit> {
+        match chip {
+            "esp32" => vec![
+                SimLimit::new(
+                    "esp32-float",
+                    "Espressif's QEMU stops at the first floating-point instruction an ESP32 \
+                     application runs: the log ends mid-boot with \"Fatal error: divide by \
+                     zero\". Integer firmware runs; float-heavy firmware needs an ESP32-C3 build \
+                     to be watched.",
+                ),
+                SimLimit::new(
+                    "esp32-peripherals",
+                    "rusty's models of the ADC, the I2C master and SPI2 are the ESP32-C3's. On \
+                     an ESP32 a read_oneshot() or a bus transaction waits for ever, and GPIO \
+                     interrupts through esp-hal are unproven. The pins themselves are modelled.",
+                ),
+            ],
+            "esp32s3" => vec![SimLimit::new(
+                "s3-unproven",
+                "Nothing in rusty's emulator has been checked on the ESP32-S3: its pins, \
+                 converter and buses are whatever Espressif's machine does, and the board \
+                 shows only what the firmware prints.",
+            )],
+            _ => Vec::new(),
+        }
+    }
+
+    /// A line the emulator printed that one of these limits explains, so
+    /// the explanation lands where the run stopped rather than only on a
+    /// panel somebody may not be looking at.
+    pub fn explaining(chip: &str, line: &str) -> Option<SimLimit> {
+        (chip == "esp32" && line.contains("divide by zero"))
+            .then(|| SimLimit::for_chip(chip).into_iter().next())
+            .flatten()
+    }
+}
+
 /// A tool the simulator needs and cannot find, with the way to get it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +89,12 @@ pub struct Emulator {
     pub name: String,
     pub path: String,
     pub gpio_model: bool,
+    /// Whether it also models the converter and both buses — the ADC, the
+    /// I2C master and SPI2. An early build of rusty's has the pins and none
+    /// of these, and firmware reading any of them there waits for ever in
+    /// its own `read`, so the panel offers the upgrade for that too.
+    #[serde(default)]
+    pub peripherals: bool,
 }
 
 /// Serde's skip test for the common case: most parts are never turned.
@@ -138,6 +208,9 @@ pub struct SimPlan {
     /// have to make the plan unsupported to be seen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// What the emulator is known not to do on this chip ([`SimLimit`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<SimLimit>,
 }
 
 impl SimPlan {
@@ -158,6 +231,7 @@ impl SimPlan {
             debug: None,
             debug_tool: None,
             notes: Vec::new(),
+            limits: Vec::new(),
         }
     }
 }
@@ -165,6 +239,35 @@ impl SimPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The C3 is the chip every model was proven on and has no limits; the
+    /// others each name what they cost, and the one that ends a run is
+    /// recognised in the emulator's own last words.
+    #[test]
+    fn each_chip_names_what_the_emulator_cannot_do_on_it() {
+        assert!(SimLimit::for_chip("esp32c3").is_empty());
+        let esp32: Vec<String> = SimLimit::for_chip("esp32")
+            .into_iter()
+            .map(|l| l.kind)
+            .collect();
+        assert_eq!(esp32, ["esp32-float", "esp32-peripherals"]);
+        assert_eq!(SimLimit::for_chip("esp32s3")[0].kind, "s3-unproven");
+
+        let fatal = "qemu-system-xtensa: Fatal error: divide by zero";
+        assert_eq!(
+            SimLimit::explaining("esp32", fatal).map(|l| l.kind),
+            Some("esp32-float".to_string())
+        );
+        assert_eq!(
+            SimLimit::explaining("esp32c3", fatal),
+            None,
+            "not this chip's limit"
+        );
+        assert_eq!(
+            SimLimit::explaining("esp32", "ets Jun  8 2016 00:22:57"),
+            None
+        );
+    }
 
     /// The H-bridge table, which is the one piece of real hardware knowledge
     /// this type carries. `1,1` is the entry worth having a test for: it is

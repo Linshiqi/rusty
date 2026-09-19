@@ -13,7 +13,7 @@ exclude = ["crates/rusty-core/tests/fixtures"]
 # `cargo tauri dev` at HEAD would still call itself the old one and be
 # offered its own release as an update. `tests/version_sync.rs` in rusty-app
 # holds this, tauri.conf.json and the newest CHANGELOG heading to one number.
-version = "0.6.45"
+version = "0.6.46"
 edition = "2024"
 rust-version = "1.88"
 # Not MIT/Apache: this is source you may read, run and change, but not sell.

@@ -1997,6 +1997,11 @@ pub struct Sim {
     pub sensor_values: RwSignal<HashMap<String, Vec<f32>>>,
     /// Raw ADC counts the panel is holding on each pin.
     pub analog: RwSignal<HashMap<u8, u16>>,
+    /// The readings of the sheet's register sensors the panel moved during
+    /// this run, by part and channel (`("U2", "ax")`). Empty when a run
+    /// starts, so the sliders stand where the sheet's props say the run
+    /// began.
+    pub readings: RwSignal<HashMap<(String, String), f64>>,
     /// The last transactions on the emulator's I2C bus, oldest first and
     /// capped, from `[rusty:i2c]`.
     ///
@@ -2436,6 +2441,7 @@ impl AppState {
                 sensors: RwSignal::new(Vec::new()),
                 sensor_values: RwSignal::new(std::collections::HashMap::new()),
                 analog: RwSignal::new(std::collections::HashMap::new()),
+                readings: RwSignal::new(std::collections::HashMap::new()),
                 adc: RwSignal::new(std::collections::HashMap::new()),
                 i2c: RwSignal::new(Vec::new()),
                 spi: RwSignal::new(Vec::new()),

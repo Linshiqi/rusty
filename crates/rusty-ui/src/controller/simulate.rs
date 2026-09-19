@@ -178,6 +178,46 @@ pub(super) fn sim_send(state: AppState, text: String) {
     });
 }
 
+/// A register sensor's reading moved on the board view: held for the
+/// slider, and while a run is going, written into the part's registers by
+/// the backend so a driver reading the bus sees it.
+///
+/// Refused aloud — in the banner, which a second refusal replaces rather
+/// than stacks — when the emulator running has no bus to put it on.
+pub fn sim_reading(state: AppState, part: String, key: String, value: f64) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        part: String,
+        key: String,
+        value: f64,
+    }
+    state.sim.readings.update(|held| {
+        held.insert((part.clone(), key.clone()), value);
+    });
+    if !state.app.session_running.get_untracked() {
+        return;
+    }
+    let args = Args { part, key, value };
+    spawn_local(async move {
+        if let Err(error) = ipc::call::<_, ()>(cmd::sim::SENSOR_SET, &args).await {
+            say(state, error.message);
+        }
+    });
+}
+
+/// A line typed into the running simulation's serial port, from the
+/// Output dock — what a serial monitor's input box is. Said in the dock as
+/// well, marked as sent, so the firmware's answer reads against the
+/// question.
+pub fn sim_type(state: AppState, text: String) {
+    state.push_log(LogLine {
+        stream: LogStream::Stdout,
+        text: format!("» {text}"),
+        level: None,
+    });
+    sim_send(state, text);
+}
+
 /// A button transition on the board view.
 pub fn sim_press(state: AppState, pin: u8, down: bool) {
     sim_send(state, format!("B{pin}={}", if down { 1 } else { 0 }));
@@ -326,15 +366,27 @@ pub fn sim_analog(state: AppState, pin: u8, count: u16) {
 
 /// Persist the board editor's layout, then re-plan so the panel shows what
 /// the file now says.
-/// Read a `.kicad_sch` onto the sheet.
+/// Read a KiCad `.kicad_sch` or a Wokwi `diagram.json` onto the sheet,
+/// told apart by the file's extension.
 ///
 /// The sheet arrives with its own `notes` filled — what could not be drawn,
-/// and whether it can be simulated at all — and those go to the dock rather
-/// than nowhere: an imported board that cannot run is a fact the user needs
-/// before pressing Run, not after.
-pub fn import_kicad(state: AppState, on_sheet: Callback<rusty_embed::Sheet>) {
+/// what did not come across, and whether it can be simulated at all — and
+/// those go to the dock rather than nowhere: an imported board that cannot
+/// run is a fact the user needs before pressing Run, not after.
+pub fn import_schematic(state: AppState, on_sheet: Callback<rusty_embed::Sheet>) {
     spawn_local(async move {
-        let picked = match ipc::pick_file(&t!("simulate.kicad-import"), "kicad_sch", false).await {
+        let kicad = t!("simulate.filter-kicad");
+        let wokwi = t!("simulate.filter-wokwi");
+        let picked = match ipc::pick_file_of(
+            &t!("simulate.schematic-import"),
+            &[
+                (kicad.as_str(), &["kicad_sch"]),
+                (wokwi.as_str(), &["json"]),
+            ],
+            false,
+        )
+        .await
+        {
             Ok(Some(path)) => path,
             // A cancelled dialog is an answer, not a failure.
             Ok(None) => return,
@@ -344,14 +396,18 @@ pub fn import_kicad(state: AppState, on_sheet: Callback<rusty_embed::Sheet>) {
         struct Args {
             path: String,
         }
-        match ipc::call::<_, rusty_embed::Sheet>(cmd::sim::IMPORT_KICAD, &Args { path: picked })
-            .await
-        {
+        let from_wokwi = picked.to_ascii_lowercase().ends_with(".json");
+        let (command, tag) = if from_wokwi {
+            (cmd::sim::IMPORT_WOKWI, "wokwi")
+        } else {
+            (cmd::sim::IMPORT_KICAD, "kicad")
+        };
+        match ipc::call::<_, rusty_embed::Sheet>(command, &Args { path: picked }).await {
             Ok(sheet) => {
                 for note in &sheet.notes {
                     state.push_log(LogLine {
                         stream: LogStream::Stdout,
-                        text: format!("[kicad] {note}"),
+                        text: format!("[{tag}] {note}"),
                         level: None,
                     });
                 }

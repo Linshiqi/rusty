@@ -503,9 +503,181 @@ pub fn set_param_line(name: &str, value: f32) -> String {
     format!("S{name}={value}")
 }
 
+// ── The pin channel's inbound lines ───────────────────────────────────────
+//
+// What the host says to rusty's QEMU on the channel the pin reports come back
+// on. Beside the console's messages because two of them are the same number
+// said twice — `A3=2048` to firmware reading this protocol and to the
+// converter the firmware actually samples — and a firmware reading the text
+// and a firmware reading its ADC must not be shown different worlds.
+
+/// `<pin>=<level>` — a level the host drives onto a pin, which unmodified
+/// firmware reads through `GPIO_IN`.
+pub fn pin_line(pin: u32, level: u8) -> String {
+    format!("{pin}={level}\n")
+}
+
+/// `A<pin>=<counts>` — an analog value on a pin, in the converter's own
+/// counts: the same spelling and the same number as [`analog_line`].
+pub fn analog_pin_line(pin: u32, count: u16) -> String {
+    format!("A{pin}={count}\n")
+}
+
+/// `i2c 68:3b=0102…` for each run of registers, without declaring the
+/// device — what a sensor's moving reading writes.
+pub fn bus_register_lines(address: u8, runs: &[(u8, Vec<u8>)]) -> Vec<String> {
+    runs.iter()
+        .map(|(at, bytes)| {
+            let mut line = format!("i2c {address:02x}:{at:02x}=");
+            for byte in bytes {
+                line.push_str(&format!("{byte:02x}"));
+            }
+            line.push('\n');
+            line
+        })
+        .collect()
+}
+
+/// One I2C device: `i2c 68=+` and then its registers.
+///
+/// The bare declaration first and always, even for a device with
+/// registers. A device that only appeared through a register write would
+/// not exist until it had one, and a display — which nobody reads from —
+/// would then never be on the bus at all.
+pub fn bus_lines(address: u8, runs: &[(u8, Vec<u8>)]) -> Vec<String> {
+    let mut lines = vec![format!("i2c {address:02x}=+\n")];
+    lines.extend(bus_register_lines(address, runs));
+    lines
+}
+
+/// `spi <cs>=<hex>` — what a chip select answers with. A device with
+/// nothing to say still needs a token the model can read: `-` is not hex,
+/// and anything that is not hex clears the buffer.
+pub fn wire_line(select: u8, miso: &[u8]) -> String {
+    let mut line = format!("spi {select}=");
+    for byte in miso {
+        line.push_str(&format!("{byte:02x}"));
+    }
+    if miso.is_empty() {
+        line.push('-');
+    }
+    line.push('\n');
+    line
+}
+
+/// `B<pin>=<pressed>` — the board's button message, and nothing else.
+///
+/// Any non-zero value is pressed, because the message is a state and not a
+/// count.
+pub fn button_press(text: &str) -> Option<(u32, u8)> {
+    let (pin, level) = text.trim().strip_prefix('B')?.split_once('=')?;
+    let level: u8 = level.trim().parse().ok()?;
+    Some((pin.trim().parse().ok()?, u8::from(level != 0)))
+}
+
+/// `A<pin>=<counts>` — an analog source on the board, in the converter's own
+/// counts.
+///
+/// Deliberately not the potentiometer's `P34=128`. That message is rusty's
+/// own eight-bit convention, and what a wiper at a given position converts to
+/// depends on what its two ends are connected to; turning 128 into counts
+/// would be asserting a rail-to-rail divider nobody stated. `A` already
+/// carries the number the firmware's own ADC would have produced, so it needs
+/// no conversion to reach the model — which is why it is the one that goes
+/// down the pin channel.
+pub fn analog_set(text: &str) -> Option<(u32, u16)> {
+    let (pin, count) = text.trim().strip_prefix('A')?.split_once('=')?;
+    Some((pin.trim().parse().ok()?, count.trim().parse().ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two inbound messages a console line can carry to a pin as well.
+    #[test]
+    fn a_button_press_is_read_off_the_console_and_written_to_the_pin_channel() {
+        assert_eq!(button_press("B14=1"), Some((14, 1)));
+        assert_eq!(button_press("B14=0"), Some((14, 0)));
+        assert_eq!(
+            button_press(" B2 = 7 "),
+            Some((2, 1)),
+            "a level is a level: non-zero is high, whitespace is noise",
+        );
+        assert_eq!(
+            button_press("P34=128"),
+            None,
+            "the potentiometer is analog, and a GPIO carries one bit"
+        );
+        assert_eq!(button_press("14=1"), None, "the prefix is the message");
+        assert_eq!(button_press("B=1"), None);
+        assert_eq!(button_press("Bx=1"), None);
+        assert_eq!(button_press("Skp=8.5"), None, "a tunable is not a pin");
+
+        assert_eq!(pin_line(14, 1), "14=1\n");
+        assert_eq!(
+            button_press("B14=1").map(|(pin, level)| pin_line(pin, level)),
+            Some("14=1\n".to_string()),
+            "the console message and the pin line name the same pin at the same level",
+        );
+    }
+
+    /// The two messages that reach the emulator's pins are told apart by
+    /// their first letter and by nothing else, so each has to refuse the
+    /// other's traffic — and both have to refuse the potentiometer's `P`,
+    /// which stays on the console because what a wiper converts to depends
+    /// on what its ends are wired to.
+    #[test]
+    fn the_pin_channel_takes_buttons_and_analog_sources_and_nothing_else() {
+        assert_eq!(button_press("B14=7"), Some((14, 1)), "any non-zero is down");
+        assert_eq!(button_press("A3=2048"), None);
+
+        assert_eq!(analog_set("A3=2048"), Some((3, 2048)));
+        assert_eq!(analog_set(" A3=0 \n"), Some((3, 0)));
+        assert_eq!(analog_set("B14=1"), None);
+        assert_eq!(analog_set("P34=128"), None, "the pot stays on the console");
+        assert_eq!(analog_set("A3=notanumber"), None);
+        assert_eq!(analog_set("A3"), None);
+    }
+
+    /// A device is announced before its registers, always.
+    #[test]
+    fn a_bus_device_is_declared_before_the_registers_behind_it() {
+        assert_eq!(
+            bus_lines(0x68, &[(0x75, vec![0x68]), (0x3b, vec![0x01, 0x02])]),
+            vec![
+                "i2c 68=+\n".to_string(),
+                "i2c 68:75=68\n".to_string(),
+                "i2c 68:3b=0102\n".to_string(),
+            ]
+        );
+        assert_eq!(bus_lines(0x3c, &[]), vec!["i2c 3c=+\n".to_string()]);
+        assert_eq!(
+            bus_register_lines(0x68, &[(0x3b, vec![0xff])]),
+            vec!["i2c 68:3b=ff\n".to_string()],
+            "a moving reading writes registers and declares nothing",
+        );
+    }
+
+    /// A chip select with nothing to say still has to send a token: the
+    /// model reads a run of hex and clears the buffer on anything else, so
+    /// an empty line would be a device that kept the previous run's answer.
+    #[test]
+    fn a_chip_select_with_no_answer_still_says_so() {
+        assert_eq!(wire_line(0, &[0x1a, 0x68]), "spi 0=1a68\n");
+        assert_eq!(wire_line(1, &[]), "spi 1=-\n");
+    }
+
+    /// One value said twice, to two readers that must not be shown
+    /// different worlds: the console's message and the pin channel's line
+    /// carry the same number for the same pin.
+    #[test]
+    fn the_console_and_the_pin_channel_agree_about_an_analog_value() {
+        let console = analog_line(3, 2048);
+        assert_eq!(console, "A3=2048");
+        assert_eq!(analog_pin_line(3, 2048), format!("{console}\n"));
+        assert_eq!(analog_set(&console), Some((3, 2048)));
+    }
 
     #[test]
     fn telemetry_carries_named_channels_and_a_stamp() {

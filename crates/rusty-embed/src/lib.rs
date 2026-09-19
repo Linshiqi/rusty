@@ -16,6 +16,10 @@ pub mod model;
 pub mod nets;
 pub mod plant;
 pub mod protocol;
+// A sensor's registers from the readings a slider sets — the backend encodes
+// a run's first readings and every later move with it, and the frontend
+// reads its channels to draw the sliders.
+pub mod sensor;
 // What a fresh machine is missing, derived from the toolchain report. Pure,
 // and unconditional so the setup screen can reason about a report it already
 // holds rather than asking the backend what it just told it.

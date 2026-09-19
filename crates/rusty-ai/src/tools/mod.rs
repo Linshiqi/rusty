@@ -16,6 +16,7 @@ mod cargo;
 mod context;
 mod embedded;
 mod files;
+mod simulate;
 
 use serde_json::Value;
 
@@ -44,6 +45,17 @@ impl ToolRegistry {
         tools.extend(embedded::tools());
         tools.extend(files::tools());
         Self { tools }
+    }
+
+    /// The built-in set, plus the tools that run commands: what the MCP
+    /// server offers, because its clients ask the user before a tool that
+    /// is not read-only runs (the `readOnlyHint` annotation says which).
+    /// The built-in assistant has no such step yet and stays with
+    /// [`ToolRegistry::workbench`].
+    pub fn served() -> Self {
+        let mut registry = Self::workbench();
+        registry.register(Box::new(simulate::Simulate));
+        registry
     }
 
     /// Add a tool from outside the built-in set.

@@ -77,11 +77,25 @@ pub async fn pick_folder(title: &str) -> Answer<Option<String>> {
 /// that need not exist yet — which is what an export wants, and what the
 /// open dialog would refuse.
 pub async fn pick_file(title: &str, extension: &str, save: bool) -> Answer<Option<String>> {
+    pick_file_of(title, &[(extension, &[extension])], save).await
+}
+
+/// The same dialog offering several kinds of file, each a name and its
+/// extensions — one door for two formats that mean the same thing.
+pub async fn pick_file_of(
+    title: &str,
+    kinds: &[(&str, &[&str])],
+    save: bool,
+) -> Answer<Option<String>> {
+    let filters: Vec<serde_json::Value> = kinds
+        .iter()
+        .map(|(name, extensions)| serde_json::json!({ "name": name, "extensions": extensions }))
+        .collect();
     let options = serde_wasm_bindgen::to_value(&serde_json::json!({
         "directory": false,
         "multiple": false,
         "title": title,
-        "filters": [{ "name": extension, "extensions": [extension] }],
+        "filters": filters,
     }))
     .map_err(|e| IpcError::local(format!("could not encode dialog options: {e}")))?;
 

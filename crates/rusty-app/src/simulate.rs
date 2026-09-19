@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use rusty_embed::{
-    LogLine, LogStream, Sheet, SimPlan, Symbol, install, nets, process, project, simulate,
+    LogLine, LogStream, Sheet, SimPlan, Symbol, install, process, project, simulate,
 };
 use tauri::{State, ipc::Channel};
 
@@ -55,6 +55,26 @@ pub async fn sim_import_kicad(
     let chip = state.chip().await.unwrap_or_else(|| "esp32c3".to_string());
     blocking("importing the schematic", move || {
         rusty_embed::schematic::import(&root, Path::new(&path), &chip)
+    })
+    .await?
+    .map_err(CommandError::from)
+}
+
+/// Read a Wokwi `diagram.json` onto the sheet — the parts rusty has a
+/// counterpart for, wired to this chip's devkit, and in the sheet's notes
+/// everything that did not come across and why.
+#[tauri::command]
+pub async fn sim_import_wokwi(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Sheet, CommandError> {
+    let root = state
+        .firmware_root()
+        .await
+        .ok_or_else(CommandError::no_project)?;
+    let chip = state.chip().await.unwrap_or_else(|| "esp32c3".to_string());
+    blocking("importing the diagram", move || {
+        rusty_embed::schematic::import_wokwi(&root, Path::new(&path), &chip)
     })
     .await?
     .map_err(CommandError::from)
@@ -210,136 +230,6 @@ pub async fn save_sim_trace(
     .await?
 }
 
-/// The emulator's pin channel: its own account of every pin, and the way to
-/// drive one back.
-///
-/// Only rusty's build of QEMU has it. Espressif's discards every GPIO write,
-/// so there is nothing on the other end and this is simply absent.
-#[derive(Clone)]
-pub struct PinChannel {
-    out: std::sync::Arc<std::sync::Mutex<Option<std::net::TcpStream>>>,
-    /// The buttons whose press pulls the pin *low* — the board file's
-    /// `active_low`, read once when the run started. A press on any other
-    /// button drives high. The console message says "pressed" either way;
-    /// this is where the wiring turns that into a level.
-    low_when_pressed: std::sync::Arc<std::collections::HashSet<u32>>,
-}
-
-impl PinChannel {
-    /// The level a press or release puts on this button's pin.
-    fn level_for(&self, pin: u32, pressed: u8) -> u8 {
-        pin_level(pressed, self.low_when_pressed.contains(&pin))
-    }
-
-    /// Drive a pin from the host — a button press, reaching the firmware
-    /// through `GPIO_IN` rather than through a message it had to be written
-    /// to expect.
-    pub fn drive(&self, pin: u32, level: u8) {
-        self.say(&pin_line(pin, level));
-    }
-
-    /// Put an analog value on a pin, in the converter's own counts, so
-    /// `adc.read_oneshot()` returns it. The same refusal as everywhere else:
-    /// counts and not volts, because rusty does not know the divider.
-    pub fn analog(&self, pin: u32, count: u16) {
-        self.say(&analog_pin_line(pin, count));
-    }
-
-    /// Put a device on the emulator's I2C bus: the address first so it
-    /// acknowledges even with nothing behind it, then each run of registers.
-    pub fn bus_device(&self, device: &rusty_embed::nets::BusDevice) {
-        for line in bus_device_lines(device) {
-            self.say(&line);
-        }
-    }
-
-    /// What a chip select answers with. Nothing declared is a device that is
-    /// written to and says nothing back, which is what a display is.
-    pub fn wire_device(&self, device: &rusty_embed::nets::WireDevice) {
-        self.say(&wire_device_line(device));
-    }
-
-    fn say(&self, line: &str) {
-        use std::io::Write;
-        if let Ok(mut socket) = self.out.lock()
-            && let Some(stream) = socket.as_mut()
-        {
-            let _ = stream.write_all(line.as_bytes());
-            let _ = stream.flush();
-        }
-    }
-}
-
-/// The pin channel's inbound line, `<pin>=<level>\n` — what rusty's GPIO
-/// model reads on the socket it was told to listen on.
-///
-/// One of the two inbound wire formats this file writes; the other is
-/// [`button_press`]'s `B<pin>=<level>` on the console. Both are the serial
-/// protocol's and belong in `rusty_embed::protocol` beside its parsers, where
-/// the outbound half already is; they are here, tested, until that move.
-fn pin_line(pin: u32, level: u8) -> String {
-    format!("{pin}={level}\n")
-}
-
-/// The pin channel's analog line, `A<pin>=<counts>\n`.
-///
-/// Deliberately the same spelling as the console's [`rusty_embed::analog_line`]
-/// and the same number: one value, said twice to two readers, so a firmware
-/// reading rusty's text protocol and a firmware reading its own ADC cannot be
-/// shown different worlds. The console's is a message; this one reaches the
-/// converter the firmware actually samples.
-fn analog_pin_line(pin: u32, count: u16) -> String {
-    format!("A{pin}={count}\n")
-}
-
-/// The pin channel's lines for one I2C device: `i2c 68=+` and then
-/// `i2c 68:75=68` per run of registers.
-///
-/// The bare declaration first and always, even for a device with registers.
-/// A device that only ever appeared through a register write would not exist
-/// until it had one, and a display — which nobody reads from — would then
-/// never be on the bus at all.
-fn wire_device_line(device: &rusty_embed::nets::WireDevice) -> String {
-    let mut line = format!("spi {}=", device.select);
-    for byte in &device.miso {
-        line.push_str(&format!("{byte:02x}"));
-    }
-    // A device with nothing to say still needs a token the model can read:
-    // `-` is not hex, and anything that is not hex clears the buffer.
-    if device.miso.is_empty() {
-        line.push('-');
-    }
-    line.push('\n');
-    line
-}
-
-fn bus_device_lines(device: &rusty_embed::nets::BusDevice) -> Vec<String> {
-    let address = device.address;
-    let mut lines = vec![format!("i2c {address:02x}=+\n")];
-    for (at, bytes) in &device.regs {
-        let mut line = format!("i2c {address:02x}:{at:02x}=");
-        for byte in bytes {
-            line.push_str(&format!("{byte:02x}"));
-        }
-        line.push('\n');
-        lines.push(line);
-    }
-    lines
-}
-
-/// The pin level a button state means: pressed is high, unless the board
-/// says the button pulls low — the button to ground with a pull-up on the
-/// pin, which is the commonest wiring and what `Pull::Up` + `is_low()` reads.
-/// Before this, every press drove high, and firmware written for a pull-up
-/// button saw the emulator's button *release* when the user pressed it.
-fn pin_level(pressed: u8, active_low: bool) -> u8 {
-    if active_low {
-        u8::from(pressed == 0)
-    } else {
-        pressed
-    }
-}
-
 /// A port nothing else is on, learned by binding and letting go.
 ///
 /// QEMU listens and rusty connects — the arrangement the CI gate boots. The
@@ -351,157 +241,6 @@ fn free_port() -> Option<u16> {
     let port = listener.local_addr().ok()?.port();
     drop(listener);
     Some(port)
-}
-
-/// Connect to the emulator's pin channel and feed every line into the same
-/// stream the serial console uses.
-///
-/// The same channel deliberately: `[rusty:gpio@…] 0=1` is the line the
-/// frontend already parses, and it is parsed in exactly one place. Reading
-/// this stream anywhere else would be the second reader that made telemetry
-/// work in the simulator and vanish on hardware.
-fn open_pin_channel(
-    port: u16,
-    feed: Channel<LogLine>,
-    low_when_pressed: std::collections::HashSet<u32>,
-    analog_start: Vec<(u32, u16)>,
-    bus_start: Vec<rusty_embed::nets::BusDevice>,
-    wire_start: Vec<rusty_embed::nets::WireDevice>,
-    mut live: Option<rusty_embed::live::Live>,
-) -> PinChannel {
-    use std::io::{BufRead, BufReader};
-
-    let out = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let handle = PinChannel {
-        out: out.clone(),
-        low_when_pressed: std::sync::Arc::new(low_when_pressed),
-    };
-    let handle_for_start = handle.clone();
-
-    std::thread::spawn(move || {
-        // QEMU has to get as far as opening its listening socket, which is
-        // after argument parsing and machine creation. Retry rather than
-        // assume, and give up quietly: a missing pin channel is a board that
-        // falls back to the firmware's own narration, not an error.
-        let mut stream = None;
-        for _ in 0..100 {
-            match std::net::TcpStream::connect(("127.0.0.1", port)) {
-                Ok(socket) => {
-                    stream = Some(socket);
-                    break;
-                }
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
-            }
-        }
-        let Some(socket) = stream else {
-            return;
-        };
-        let Ok(reader) = socket.try_clone() else {
-            return;
-        };
-        if let Ok(mut slot) = out.lock() {
-            *slot = Some(socket);
-        }
-        // The first thing said down the channel, before any line is read:
-        // what the sheet says is on each analog pin. The emulator starts with
-        // nothing on them and no way to find out.
-        for (pin, count) in &analog_start {
-            handle_for_start.analog(*pin, *count);
-        }
-        for device in &bus_start {
-            handle_for_start.bus_device(device);
-        }
-        for device in &wire_start {
-            handle_for_start.wire_device(device);
-        }
-
-        // The channel the circuit's own thread listens on, when there is
-        // one. `None` once it has gone, so a dead thread costs one failed
-        // send rather than a send per line for the rest of the run.
-        let mut watched: Option<std::sync::mpsc::Sender<String>> = None;
-
-        let mut lines = BufReader::new(reader)
-            .lines()
-            .map_while(Result::ok)
-            .filter(|line| !line.is_empty());
-        // Every line the emulator says goes to the frontend as it always
-        // did, and on the way past it also drives the circuit the sheet
-        // draws. What comes back is what the converter should read — the
-        // firmware's own pins, solved, and sent to the pin it samples.
-        //
-        // The solver only speaks for a pin whose full scale the sheet
-        // stated; an `Analog` part declares its counts directly and is left
-        // alone, so the two do not argue over one pin unless somebody asks
-        // them to.
-        // The circuit runs on its own thread, and that is not tidiness —
-        // it is the fix for a deadlock a real run found. The emulator
-        // reports a conversion only when the value *changed*, and the value
-        // only changes when the host sends one; so after a pin moves,
-        // nothing is said, the reader blocks, the circuit stays frozen at
-        // the instant of the edge, and the firmware's next reading jumps to
-        // wherever it had got to by the following edge. A reading that
-        // steps instead of climbing is a host echoing a pin level in a
-        // circuit's clothes. So this side has a clock: a line advances the
-        // circuit to the instant the guest names, and silence advances it
-        // by the slice.
-        if let Some(mut board) = live.take() {
-            let (tx, rx) = std::sync::mpsc::channel::<String>();
-            watched = Some(tx);
-            let back = handle_for_start.clone();
-            std::thread::spawn(move || {
-                // Half a millisecond: shorter than any interval a firmware
-                // polls a converter on, so the host is never what limits
-                // the shape the firmware can see.
-                const SLICE: std::time::Duration = std::time::Duration::from_micros(500);
-                loop {
-                    let moved = match rx.recv_timeout(SLICE) {
-                        Ok(line) => board.absorb(&line),
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) if board.settling() => {
-                            board.advance_by(SLICE.as_secs_f64())
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(Vec::new()),
-                        // The reader is gone, so the run is over.
-                        Err(_) => return,
-                    };
-                    match moved {
-                        Ok(counts) => {
-                            for (pin, count) in counts {
-                                back.analog(u32::from(pin), count);
-                            }
-                        }
-                        // A circuit that stops having an answer stops
-                        // answering, and says so once rather than every
-                        // line: the run is still worth watching, and a
-                        // failure repeated at the emulator's rate is a log
-                        // nobody can read.
-                        Err(trouble) => {
-                            eprintln!("the sheet's circuit could not be solved: {trouble}");
-                            return;
-                        }
-                    }
-                }
-            });
-        }
-
-        stream::forward(
-            || {
-                let text = lines.next()?;
-                if let Some(tx) = watched.as_ref()
-                    && tx.send(text.clone()).is_err()
-                {
-                    watched = None;
-                }
-                Some(LogLine {
-                    stream: LogStream::Stdout,
-                    text,
-                    level: None,
-                })
-            },
-            &feed,
-        );
-    });
-
-    handle
 }
 
 /// Stop the emulator's clock, or start it again.
@@ -546,38 +285,37 @@ pub async fn sim_send(text: String, state: State<'_, AppState>) -> Result<(), Co
         input.send_line(&text);
     }
     if let Some(pins) = state.pins().await {
-        if let Some((pin, pressed)) = button_press(&text) {
-            pins.drive(pin, pins.level_for(pin, pressed));
-        } else if let Some((pin, count)) = analog_set(&text) {
-            pins.analog(pin, count);
-        }
+        pins.follow(&text);
     }
     Ok(())
 }
 
-/// `B<pin>=<pressed>` — the board's button message, and nothing else.
+/// Move one reading of a sensor on the sheet while the simulation runs: the
+/// part, the channel (`ax`, `temp`), and the value in the channel's unit.
 ///
-/// Any non-zero value is pressed, because the message is a state and not a
-/// count.
-fn button_press(text: &str) -> Option<(u32, u8)> {
-    let (pin, level) = text.trim().strip_prefix('B')?.split_once('=')?;
-    let level: u8 = level.trim().parse().ok()?;
-    Some((pin.trim().parse().ok()?, u8::from(level != 0)))
-}
-
-/// `A<pin>=<counts>` — an analog source on the board, in the converter's own
-/// counts.
-///
-/// Deliberately not the potentiometer's `P34=128`. That message is rusty's
-/// own eight-bit convention, and what a wiper at a given position converts to
-/// depends on what its two ends are connected to; turning 128 into counts
-/// would be asserting a rail-to-rail divider nobody stated. `A` already
-/// carries the number the firmware's own ADC would have produced, so it needs
-/// no conversion to reach the model — which is why it is the one that goes
-/// down this channel.
-fn analog_set(text: &str) -> Option<(u32, u16)> {
-    let (pin, count) = text.trim().strip_prefix('A')?.split_once('=')?;
-    Some((pin.trim().parse().ok()?, count.trim().parse().ok()?))
+/// Refused when nothing is running that has the sensor, rather than taken
+/// and dropped: a slider that silently did nothing would read as firmware
+/// ignoring the part.
+#[tauri::command]
+pub async fn sim_sensor_set(
+    part: String,
+    key: String,
+    value: f64,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let Some(pins) = state.pins().await else {
+        return Err(CommandError::new(
+            "nothing is running that can take a sensor reading — only rusty's emulator puts \
+             sensors on the bus",
+        ));
+    };
+    if pins.set_sensor(&part, &key, value) {
+        Ok(())
+    } else {
+        Err(CommandError::new(format!(
+            "{part} is not a sensor on this run's bus with a reading called {key}"
+        )))
+    }
 }
 
 /// QEMU: in-process download with a mirror fallback, then tar extraction.
@@ -682,104 +420,12 @@ pub async fn run_simulation(
         }
         return Err(CommandError::new(lines.join("\n")));
     }
-    // Which buttons pull their pin low when pressed: read off the sheet's
-    // wires once here — a switch to ground drives low, one to 3V3 high —
-    // so the pin channel drives the level the wiring means rather than the
-    // level the message happens to spell.
-    let low_when_pressed: std::collections::HashSet<u32> = plan
+    // What the run declares down the pin channel before the firmware's first
+    // instruction: button polarity, analog pins, and everything on the buses.
+    let start = plan
         .board
         .as_ref()
-        .map(|sheet| {
-            let rows = simulate::kit_rows_for(&root, &sheet.chip);
-            sheet
-                .parts
-                .iter()
-                .filter(|part| {
-                    sheet
-                        .symbol_of(&part.reference)
-                        .is_some_and(|s| nets::behaviour_of(s) == nets::Behaviour::Switch)
-                })
-                .filter_map(|part| nets::button_drives(sheet, &rows, &part.reference))
-                .filter(|(_, high)| !high)
-                .map(|(gpio, _)| u32::from(gpio))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // And where each analog source starts, so a run begins in the state the
-    // sheet describes rather than at zero.
-    //
-    // The device clears its analog values on reset like every other register,
-    // which makes the host the one authority on what is on a pin — so the
-    // host has to say, once, as soon as there is anything listening. The
-    // slider reads the same `start` prop, so the panel and the converter
-    // cannot disagree before anybody has touched anything.
-    let analog_start: Vec<(u32, u16)> = plan
-        .board
-        .as_ref()
-        .map(|sheet| {
-            let rows = simulate::kit_rows_for(&root, &sheet.chip);
-            sheet
-                .parts
-                .iter()
-                .filter(|part| {
-                    sheet
-                        .symbol_of(&part.reference)
-                        .is_some_and(|s| nets::behaviour_of(s) == nets::Behaviour::Analog)
-                })
-                .filter_map(|part| {
-                    let gpio = nets::gpio_of(sheet, &rows, &part.reference, "OUT")?;
-                    Some((u32::from(gpio), part.prop::<u16>("start").unwrap_or(0)))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // And every potentiometer whose track the sheet has committed to. Same
-    // reason as the analog sources above: the device clears its converter on
-    // reset, so the host is the one authority on what is on a pin and has to
-    // say once, as soon as there is anything listening. A pot the sheet has
-    // not committed to sends nothing here and stays what it always was — a
-    // `P<pin>=` line for firmware that reads rusty's own text protocol.
-    let pot_start: Vec<(u32, u16)> = plan
-        .board
-        .as_ref()
-        .map(|sheet| {
-            let rows = simulate::kit_rows_for(&root, &sheet.chip);
-            sheet
-                .parts
-                .iter()
-                .filter_map(|part| {
-                    let span = nets::pot_span(sheet, &rows, &part.reference)?;
-                    let turn = part.prop::<u8>("start").unwrap_or(128);
-                    let max = part.prop::<u16>("max").unwrap_or(4095);
-                    Some((u32::from(span.gpio), span.counts(turn, max)))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let analog_start: Vec<(u32, u16)> = analog_start.into_iter().chain(pot_start).collect();
-
-    // And what is on the I2C bus. Same reason and same moment: the emulator
-    // starts with an empty bus and only the host knows what the sheet says
-    // is on it. Every device is declared even when it answers zeros — being
-    // *there* is what a driver probes for, and an address that acknowledges
-    // is a different fact from one that has registers.
-    let bus_start: Vec<nets::BusDevice> = plan
-        .board
-        .as_ref()
-        .map(|sheet| {
-            let rows = simulate::kit_rows_for(&root, &sheet.chip);
-            nets::bus_devices(sheet, &rows).0
-        })
-        .unwrap_or_default();
-    let wire_start: Vec<nets::WireDevice> = plan
-        .board
-        .as_ref()
-        .map(|sheet| {
-            let rows = simulate::kit_rows_for(&root, &sheet.chip);
-            nets::wire_devices(sheet, &rows).0
-        })
+        .map(|sheet| simulate::start_of(sheet, &simulate::kit_rows_for(&root, &sheet.chip)))
         .unwrap_or_default();
 
     // A debug run freezes the CPU at reset so breakpoints can be placed before
@@ -930,17 +576,25 @@ pub async fn run_simulation(
                 }
                 None => None,
             };
-            state
-                .set_pins(Some(open_pin_channel(
-                    port,
-                    on_line.clone(),
-                    low_when_pressed.clone(),
-                    analog_start.clone(),
-                    bus_start.clone(),
-                    wire_start.clone(),
-                    live,
-                )))
-                .await;
+            // Every line the emulator reports goes into the same stream the
+            // serial console uses: `[rusty:gpio@…] 0=1` is parsed in exactly
+            // one place, and a second reader is what once made telemetry
+            // work in the simulator and vanish on hardware.
+            let feed = on_line.clone();
+            let mut open = true;
+            let channel = simulate::connect(port, start.clone(), live, move |text| {
+                // A failed send means the WebView is gone; the session's own
+                // slot ends the run.
+                open = open
+                    && feed
+                        .send(LogLine {
+                            stream: LogStream::Stdout,
+                            text,
+                            level: None,
+                        })
+                        .is_ok();
+            });
+            state.set_pins(Some(channel)).await;
         }
 
         let feed = on_line.clone();
@@ -962,8 +616,12 @@ pub async fn run_simulation(
     if let Some(ours) = current {
         state.release_session(&ours).await;
     }
-    // QEMU has exited; there is no longer anything to attach to, and
-    // nothing to pause.
+    // QEMU has exited; there is no longer anything to attach to, nothing to
+    // pause, and no pin channel to keep trying to reach.
+    if let Some(pins) = state.pins().await {
+        pins.hang_up();
+    }
+    state.set_pins(None).await;
     state.set_attach(None).await;
     state.set_qmp(None).await;
     Ok(last_code)
@@ -1009,126 +667,5 @@ mod tests {
             "no shorthand with a hidden port"
         );
         assert!(debug_args(4321).contains(&"tcp::4321".to_string()));
-    }
-
-    /// The two inbound wire formats this file writes.
-    #[test]
-    fn a_button_press_is_read_off_the_console_and_written_to_the_pin_channel() {
-        assert_eq!(button_press("B14=1"), Some((14, 1)));
-        assert_eq!(button_press("B14=0"), Some((14, 0)));
-        assert_eq!(
-            button_press(" B2 = 7 "),
-            Some((2, 1)),
-            "a level is a level: non-zero is high, whitespace is noise",
-        );
-        assert_eq!(
-            button_press("P34=128"),
-            None,
-            "the potentiometer is analog, and a GPIO carries one bit"
-        );
-        assert_eq!(button_press("14=1"), None, "the prefix is the message");
-        assert_eq!(button_press("B=1"), None);
-        assert_eq!(button_press("Bx=1"), None);
-        assert_eq!(button_press("Skp=8.5"), None, "a tunable is not a pin");
-
-        assert_eq!(pin_line(14, 1), "14=1\n");
-        assert_eq!(
-            button_press("B14=1").map(|(pin, level)| pin_line(pin, level)),
-            Some("14=1\n".to_string()),
-            "the console message and the pin line name the same pin at the same level",
-        );
-    }
-
-    /// The board file's polarity is what turns "pressed" into a level. A
-    /// pull-up button pressed is *low*; before this every press drove high,
-    /// and firmware reading `is_low()` saw a release.
-    #[test]
-    fn a_pressed_button_drives_the_level_its_wiring_means() {
-        assert_eq!(pin_level(1, false), 1, "to 3V3: pressed is high");
-        assert_eq!(pin_level(0, false), 0);
-        assert_eq!(
-            pin_level(1, true),
-            0,
-            "to ground with a pull-up: pressed is low"
-        );
-        assert_eq!(pin_level(0, true), 1, "and released rests high");
-    }
-
-    /// The two messages that reach the emulator's pins are told apart by
-    /// their first letter and by nothing else, so each has to refuse the
-    /// other's traffic — and both have to refuse the potentiometer's `P`,
-    /// which stays on the console because what a wiper converts to depends
-    /// on what its ends are wired to.
-    #[test]
-    fn the_pin_channel_takes_buttons_and_analog_sources_and_nothing_else() {
-        assert_eq!(button_press("B14=1"), Some((14, 1)));
-        assert_eq!(button_press("B14=7"), Some((14, 1)), "any non-zero is down");
-        assert_eq!(button_press("A3=2048"), None);
-
-        assert_eq!(analog_set("A3=2048"), Some((3, 2048)));
-        assert_eq!(analog_set(" A3=0 \n"), Some((3, 0)));
-        assert_eq!(analog_set("B14=1"), None);
-        assert_eq!(analog_set("P34=128"), None, "the pot stays on the console");
-        assert_eq!(analog_set("A3=notanumber"), None);
-        assert_eq!(analog_set("A3"), None);
-    }
-
-    /// A device is announced before its registers, always. Something that
-    /// only appeared through a register write would not be on the bus until
-    /// it had one — and a display, which nobody reads from, would never be
-    /// on it at all.
-    #[test]
-    fn a_bus_device_is_declared_before_the_registers_behind_it() {
-        let device = rusty_embed::nets::BusDevice {
-            part: "U2".into(),
-            address: 0x68,
-            regs: vec![(0x75, vec![0x68]), (0x3b, vec![0x01, 0x02])],
-        };
-        assert_eq!(
-            bus_device_lines(&device),
-            vec![
-                "i2c 68=+\n".to_string(),
-                "i2c 68:75=68\n".to_string(),
-                "i2c 68:3b=0102\n".to_string(),
-            ]
-        );
-
-        let display = rusty_embed::nets::BusDevice {
-            part: "U3".into(),
-            address: 0x3c,
-            regs: Vec::new(),
-        };
-        assert_eq!(bus_device_lines(&display), vec!["i2c 3c=+\n".to_string()]);
-    }
-
-    /// A chip select with nothing to say still has to send a token: the
-    /// model reads a run of hex and clears the buffer on anything else, so
-    /// an empty line would be a device that kept the previous run's answer.
-    #[test]
-    fn a_chip_select_with_no_answer_still_says_so() {
-        let sensor = rusty_embed::nets::WireDevice {
-            part: "U2".into(),
-            select: 0,
-            miso: vec![0x1a, 0x68],
-        };
-        assert_eq!(wire_device_line(&sensor), "spi 0=1a68\n");
-
-        let display = rusty_embed::nets::WireDevice {
-            part: "U3".into(),
-            select: 1,
-            miso: Vec::new(),
-        };
-        assert_eq!(wire_device_line(&display), "spi 1=-\n");
-    }
-
-    /// One value said twice, to two readers that must not be shown
-    /// different worlds: the console's message and the pin channel's line
-    /// carry the same number for the same pin.
-    #[test]
-    fn the_console_and_the_pin_channel_agree_about_an_analog_value() {
-        let console = rusty_embed::analog_line(3, 2048);
-        assert_eq!(console, "A3=2048");
-        assert_eq!(analog_pin_line(3, 2048), format!("{console}\n"));
-        assert_eq!(analog_set(&console), Some((3, 2048)));
     }
 }

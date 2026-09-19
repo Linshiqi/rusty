@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{KIT_REFERENCE, Pin, PinKind, PinRef, Sheet, Symbol, Wire};
+use crate::model::{Instance, KIT_REFERENCE, Pin, PinKind, PinRef, Sheet, Symbol, Wire};
 
 /// What a placed symbol *does* on the sheet. Read off the symbol's library
 /// and name, then its reference prefix and pin names — so a part imported
@@ -439,6 +439,10 @@ pub enum Warning {
     /// A part with an address whose `SDA` or `SCL` reaches no GPIO. The
     /// emulator would answer it anyway; the desk would not.
     BusNotWired { part: String },
+    /// A part carrying a `model` that is not a sensor rusty can answer for.
+    /// It still goes on the bus with whatever `regs` says; it just reads
+    /// nothing a slider could move.
+    SensorModelUnknown { part: String, value: String },
     /// A part carrying a `cs` that is not a chip select this part has, or a
     /// `miso` that is not hex bytes.
     WireSelectUnreadable { part: String, value: String },
@@ -475,6 +479,7 @@ impl Warning {
             | Warning::BusAddressUnreadable { part, .. }
             | Warning::BusRegistersUnreadable { part, .. }
             | Warning::BusNotWired { part }
+            | Warning::SensorModelUnknown { part, .. }
             | Warning::WireSelectUnreadable { part, .. }
             | Warning::WireNotWired { part }
             | Warning::PinReachesNothing { part, .. } => Some(part),
@@ -522,6 +527,10 @@ impl std::fmt::Display for Warning {
             Warning::BusNotWired { part } => write!(
                 f,
                 "{part} has an address but its SDA or SCL reaches no GPIO: the emulator would answer it and the board on your desk would not"
+            ),
+            Warning::SensorModelUnknown { part, value } => write!(
+                f,
+                "{part}'s model {value:?} is not a sensor rusty answers for (mpu6050, bmp280, bme280), so it reads only what its registers say"
             ),
             Warning::WireSelectUnreadable { part, value } => write!(
                 f,
@@ -662,6 +671,17 @@ fn parse_regs(text: &str) -> Option<Vec<(u8, Vec<u8>)>> {
     Some(runs)
 }
 
+/// The sensor a part says it is, from its `model` prop: `Ok(None)` when it
+/// names none, and the text it named when that is no model rusty knows.
+pub fn sensor_model(part: &Instance) -> Result<Option<crate::sensor::Model>, String> {
+    match part.props.get("model").map(|text| text.trim()) {
+        None | Some("") => Ok(None),
+        Some(text) => crate::sensor::Model::from_id(text)
+            .map(Some)
+            .ok_or_else(|| text.to_string()),
+    }
+}
+
 /// Every device the sheet puts on the bus, and what it wants said about the
 /// ones it could not.
 ///
@@ -700,20 +720,32 @@ pub fn bus_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<BusDevice>, Vec<Warning>
             });
             continue;
         }
-        let regs = match part.props.get("regs").map(String::as_str) {
-            None => Vec::new(),
-            Some(text) if text.trim().is_empty() => Vec::new(),
-            Some(text) => match parse_regs(text) {
-                Some(regs) => regs,
-                None => {
-                    warnings.push(Warning::BusRegistersUnreadable {
-                        part: part.reference.clone(),
-                        value: text.to_string(),
-                    });
-                    Vec::new()
-                }
-            },
+        // A sensor rusty answers for starts with its own registers — who it
+        // is, how it is calibrated, what it reads — and anything the sheet
+        // spells out in `regs` lands over them, so a hand-written register
+        // still means what it says.
+        let mut regs = match sensor_model(part) {
+            Ok(Some(model)) => crate::sensor::Device::new(model, &part.props).registers(),
+            Ok(None) => Vec::new(),
+            Err(value) => {
+                warnings.push(Warning::SensorModelUnknown {
+                    part: part.reference.clone(),
+                    value,
+                });
+                Vec::new()
+            }
         };
+        match part.props.get("regs").map(String::as_str) {
+            None => {}
+            Some(text) if text.trim().is_empty() => {}
+            Some(text) => match parse_regs(text) {
+                Some(explicit) => regs.extend(explicit),
+                None => warnings.push(Warning::BusRegistersUnreadable {
+                    part: part.reference.clone(),
+                    value: text.to_string(),
+                }),
+            },
+        }
         devices.push(BusDevice {
             part: part.reference.clone(),
             address: parsed,
@@ -2608,6 +2640,43 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(devices[0].address, 0x3c);
         assert!(devices[0].regs.is_empty());
+    }
+
+    /// A sensor rusty answers for brings its own registers, and what the
+    /// sheet spells out lands over them. A model rusty does not know is
+    /// named, and the part keeps what its registers say.
+    #[test]
+    fn a_sensor_model_brings_its_registers_onto_the_bus() {
+        let mut s = sheet();
+        place_on_bus(
+            &mut s,
+            "U2",
+            &[("addr", "68"), ("model", "MPU-6050"), ("regs", "75=70")],
+        );
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let regs = &devices[0].regs;
+        let who_am_i: Vec<u8> = regs
+            .iter()
+            .filter(|(at, _)| *at == 0x75)
+            .map(|(_, bytes)| bytes[0])
+            .collect();
+        assert_eq!(who_am_i, vec![0x68, 0x70], "the model's, then the sheet's");
+        assert!(
+            regs.iter()
+                .any(|(at, bytes)| *at == 0x3b && bytes.len() == 14)
+        );
+
+        let mut s = sheet();
+        place_on_bus(&mut s, "U2", &[("addr", "68"), ("model", "mpu9250")]);
+        let (devices, warnings) = bus_devices(&s, &rows());
+        assert_eq!(devices.len(), 1, "still on the bus");
+        assert!(devices[0].regs.is_empty());
+        assert!(
+            matches!(&warnings[..], [Warning::SensorModelUnknown { part, value }]
+                     if part == "U2" && value == "mpu9250"),
+            "{warnings:?}"
+        );
     }
 
     /// No address is not an address of zero. A part without one is the part

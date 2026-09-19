@@ -9,6 +9,47 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.46
+
+**Sensors that move.** A sensor module on the board sheet can now be an
+MPU-6050, a BMP280 or a BME280: pick the model in the part's properties and
+it answers on the I2C bus the way the real part does, so firmware using an
+ordinary driver crate reads it. Sliders under the part set its readings —
+acceleration and rotation, temperature, pressure, humidity — and move them
+while the firmware runs. Between runs, a slider sets where the next run
+starts, and it is saved with the board.
+
+**Type into the simulated serial port.** While a simulation runs, the input
+line at the foot of the Output panel sends what you type to the firmware's
+serial port, like a serial monitor.
+
+**Run the simulator from the command line.** `rusty-cli sim` builds the
+project, boots it in the emulator and prints what the firmware says. Give it
+text to expect or to fail on, a timeout, a file of steps — wait for a line,
+press a button on the board, set a sensor reading, check a pin — and a file
+to record every pin change into; its exit code says whether the run passed,
+so it drops into CI. The same run is offered to other assistants over MCP as
+the `simulate` tool (`rusty-cli mcp`), which they ask before using.
+
+**Import a Wokwi diagram.** The board sheet's import button now also reads a
+Wokwi `diagram.json`: LEDs, resistors, buttons, potentiometers, RGB LEDs,
+seven-segment digits, buzzers, servos, an SSD1306 display and an MPU-6050
+come across with their wiring. Anything rusty has no counterpart for is
+listed in the Output panel rather than left out silently.
+
+**The simulator says what it cannot do on your chip.** Projects for an
+ESP32 or an ESP32-S3 now show, above the board, what the emulator does not
+model there — on an ESP32, floating-point code stops the emulator, and the
+ADC and the I2C and SPI buses are not modelled yet. The plan's other notes,
+such as a board file drawn for another chip, are shown there too.
+
+**Fixed:** a sensor that the firmware reads right after starting was not
+yet on the bus when it looked, and neither was an analog value, because the
+simulation started before rusty had connected to it — it now waits. And an
+older copy of rusty's emulator in the data folder was used in preference to
+the newer one that comes with the app, so reading an ADC or a bus waited for
+ever; the newest copy is now used, and an older one is offered an upgrade.
+
 ## v0.6.45
 
 **The Git history's lines curve like Fork's.** Where a line joins a commit on

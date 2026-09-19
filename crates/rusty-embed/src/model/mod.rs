@@ -52,7 +52,7 @@ pub use repo::{REPO, REPO_ISSUES, REPO_RELEASES};
 pub use sheet::{Instance, KIT_REFERENCE, PinRef, Sheet, Wire};
 #[cfg(feature = "backend")]
 pub(crate) use sim::is_upright;
-pub use sim::{Drive, Emulator, SimDebug, SimPlan, SimTool};
+pub use sim::{Drive, Emulator, SimDebug, SimLimit, SimPlan, SimTool};
 pub use symbol::{Fill, Graphic, MM_PX, Pin, PinKind, Symbol};
 pub use toolchain::{
     ToolStatus, Toolchain, ToolchainReport, ToolchainStatus, cargo_loses_dependencies,

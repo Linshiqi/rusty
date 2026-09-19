@@ -63,16 +63,31 @@ pub(super) fn OutputTab() -> impl IntoView {
         );
     });
 
+    // While a simulation runs, the line goes to the firmware's serial port —
+    // a serial monitor's input box — and nothing else a session holds can be
+    // typed into: a build is not listening, and `espflash monitor` reads its
+    // keyboard from the console rather than from a pipe.
+    let simulating =
+        move || state.app.session_running.get() && state.dock.source.get() == "simulate";
     let send = move || {
-        let line = draft.get_untracked().trim().to_string();
-        if line.is_empty() || state.app.session_running.get_untracked() {
-            return;
+        let line = draft.get_untracked();
+        let simulating = state.app.session_running.get_untracked()
+            && state.dock.source.get_untracked() == "simulate";
+        if simulating {
+            // Kept as typed: a firmware reading a line may care about its
+            // spaces, and an empty line is a line.
+            controller::sim_type(state, line);
+        } else {
+            let line = line.trim().to_string();
+            if line.is_empty() || state.app.session_running.get_untracked() {
+                return;
+            }
+            controller::run_command(state, line);
         }
         draft.set(String::new());
         if let Some(element) = input.get_untracked() {
             element.set_value("");
         }
-        controller::run_command(state, line);
     };
 
     view! {
@@ -228,12 +243,16 @@ pub(super) fn OutputTab() -> impl IntoView {
         </div>
 
         <div class="flex flex-none items-center gap-2 border-t border-line px-3 py-1.5">
-            <span class="shrink-0 font-mono text-footnote text-label-3">"$"</span>
+            <span class="shrink-0 font-mono text-footnote text-label-3">
+                {move || if simulating() { "»" } else { "$" }}
+            </span>
             <input
                 node_ref=input
                 class="min-w-0 flex-1 bg-transparent font-mono text-footnote outline-none placeholder:text-label-3"
                 placeholder=move || {
-                    if state.has_project() {
+                    if simulating() {
+                        t!("dock.chrome.serial-placeholder")
+                    } else if state.has_project() {
                         t!("dock.chrome.command-placeholder")
                     } else {
                         t!("dock.chrome.command-needs-project")

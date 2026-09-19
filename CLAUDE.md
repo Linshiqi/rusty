@@ -110,6 +110,13 @@ cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app
 cargo run -p rusty-cli -- size .   # or the project: newest ELF under target/
 cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
 
+# The firmware run without the window: build, image, boot, watch. Serial to
+# stdout, everything else to stderr; exit 0 passed, 1 failed or timed out, 2
+# could not run. A scenario is TOML — [[step]] tables of wait-serial,
+# write-serial, press/release, delay, expect-pin and set.
+cargo run -p rusty-cli -- sim <project> --timeout 10 --expect "ready" --vcd pins.vcd
+cargo run -p rusty-cli -- sim <project> --scenario scenario.toml
+
 # The assistant's tools for somebody else's assistant: MCP on stdin and
 # stdout, what `claude mcp add rusty -- rusty-cli mcp <project>` runs.
 cargo run -p rusty-cli -- mcp <project>
@@ -151,7 +158,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json` |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop, and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -162,7 +169,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen |
-| `rusty-cli` | Headless entry point; the CI and bug-report surface, and `rusty-cli mcp` |
+| `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp` |
 
 ## The rules that are load-bearing
 
@@ -222,6 +229,18 @@ panel's and keeps what a tool loaded (`keep_workspace`); the MCP server,
 connected for a whole session while the project changes under it, keeps it
 while a stamp of the root manifest, the lockfile and every member's manifest
 holds, and reads the catalogue and the newest firmware afresh on every call.
+
+**The MCP server also serves `simulate`, and the drawer does not.** It builds
+the firmware, boots it in rusty's emulator with the sheet on its pins and
+buses, drives the steps it is given and answers with what the firmware
+printed, which pins moved and what crossed the buses — the one tool that
+answers "does it do what I think" by watching rather than reading. It runs
+commands and cargo may fetch, so it declares `runs_commands` and `network`,
+and `ToolRegistry::served()` is the only registry that has it: an MCP client
+reads `readOnlyHint: false` and asks the user first, and the built-in
+assistant, which has no step where anybody says yes, stays on
+`ToolRegistry::workbench()`, every tool of which is read-only. The test that
+pins that is still there; it now pins the drawer's registry.
 
 **The project's files are tools as well** (`tools/files.rs`: `read_file`,
 `search_project`, `list_files`), through `rusty_edit` so the model sees the
@@ -413,6 +432,52 @@ assumed — the emulator's buses do not route through the GPIO matrix, so a
 device with no wires would answer there and be dead on the desk, which is the
 confident wrong answer in miniature. No address is not an address of zero:
 absence refuses.
+
+**A sensor rusty answers for moves.** `regs` are bytes fixed for the run —
+enough for a bus scan and a `WHO_AM_I`, and no use for a reading. A part with
+a `model` prop (`mpu6050`, `bmp280`, `bme280`; `rusty_embed::sensor`) starts
+from its own registers — identity, the calibration a Bosch part carries,
+readings encoded the way the part's datasheet decodes them — and the sliders
+under it on the sheet move those readings while the firmware runs, so an
+ordinary driver crate reads a tilted board or a warmer room. The encodings
+are the datasheets' formulas run backwards, and the tests hold them to the
+formulas run forwards, the BMP280's worked example first. **The part answers
+the firmware's writes as well**: the pin channel reads every `[rusty:i2c]` write
+on its way past (`PinChannel::answer`) — a range the firmware chose
+re-encodes every reading, a reset bit clears itself, a forced measurement
+goes back to sleep — because a register file that only stores would leave a
+driver polling a bit that never falls, the lesson the write-triggered bits
+taught the model itself. Between runs a slider sets where the next run starts,
+which is the sheet's; during one it writes the part's registers
+(`sim_sensor_set`).
+
+**The emulator waits for the pin channel before it boots** (`wait=on`). With
+`wait=off` the guest started at once and rusty's connection caught up when
+QEMU's main loop got to it — measured on Windows at about four hundred
+milliseconds, by which time a sensor firmware had asked for its `WHO_AM_I`,
+found nothing declared and given up, and a blinky's first edge had gone
+unreported. The sheet has to be declared before the firmware reaches for it,
+and only a guest that has not started is certain not to have. The channel
+retries every ten milliseconds until the run hangs it up (`hang_up`), not for
+a fixed time, so a waiting emulator is never left waiting on a caller that
+stopped trying.
+
+**Which emulator runs is the most capable copy, not the first.** For every
+other tool the first copy on the ladder wins, because somebody put it there;
+the data directory's QEMU is usually rusty's own download from whenever it
+was installed, and one from before the converter and the buses beat the
+current build in the bundle — firmware reading a knob hung in its own
+`read_oneshot()` with the right emulator one directory away. `find_emulator`
+takes the first copy carrying every model marker (`is_current_build`), and
+the plan says what the one it took can do (`Emulator.peripherals`), so an
+early build gets the panel's Upgrade as a stock one does.
+
+**What the emulator cannot do on a chip is said before the run**
+(`SimLimit`, a stable kind beside the English): on an ESP32 the first
+floating-point instruction ends the run and the converter and buses are not
+modelled; on an S3 nothing has been checked. A run that dies with QEMU's
+`divide by zero` on an ESP32 gets the explanation where it stopped
+(`SimLimit::explaining`).
 
 ### 6. Extensibility is data first
 
@@ -3440,7 +3505,14 @@ KiCad's `.kicad_sym` read and written, `schematic::easyeda` an LCSC part
 number fetched from EasyEDA's component service and read into the same type,
 `simulate::board_file` the file in both its formats, and
 `view/panels/simulate/` the editor. `rusty-cli symbol C2286` is the headless
-proof of the import.
+proof of the import. **A Wokwi `diagram.json` comes across too**
+(`schematic::wokwi`, through the same import button as a KiCad file): the
+parts rusty has a counterpart for, with their attributes — an LED's colour, a
+resistor's value, an MPU-6050's readings — and their wiring on the devkit
+rows for the same GPIOs, a board's `TX` being the chip's own console pin.
+What has no counterpart is named in the notes with the connections it took
+with it, and a pin the project's chip does not have is said rather than moved
+to one it does.
 
 - **One `Symbol` for every source.** KiCad's coordinates — millimetres, y
   up, origin at the anchor — and KiCad's pin convention: `at` is the

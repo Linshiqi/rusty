@@ -64,6 +64,30 @@ fn project_ctx(root: &Path) -> ToolContext<'_> {
 
 // ─── registry contract ───────────────────────────────────────────────────────
 
+/// The built-in assistant has no step where the user says yes, so it gets
+/// no tool that needs one; the MCP server's clients do ask, so what it serves
+/// may include tools that run commands — declared as such, so the client
+/// knows to ask.
+#[test]
+fn a_tool_that_runs_commands_is_served_only_where_a_client_asks_first() {
+    let served = ToolRegistry::served();
+    assert!(!served.is_read_only());
+    let simulate = served
+        .defs()
+        .into_iter()
+        .find(|d| d.name == "simulate")
+        .expect("the simulator is served");
+    assert!(simulate.capabilities.runs_commands);
+    assert!(simulate.capabilities.needs_approval());
+    assert!(
+        ToolRegistry::workbench()
+            .defs()
+            .iter()
+            .all(|d| d.name != "simulate"),
+        "and the built-in assistant does not get it"
+    );
+}
+
 #[test]
 fn every_tool_is_read_only_for_now() {
     let registry = ToolRegistry::workbench();

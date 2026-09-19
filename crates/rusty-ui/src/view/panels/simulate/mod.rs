@@ -98,6 +98,8 @@ pub fn Simulate() -> impl IntoView {
             missing.push(tool);
         }
         let running = state.app.session_running;
+        let limits = plan.limits.clone();
+        let notes = plan.notes.clone();
 
         view! {
             <div class="flex min-h-0 flex-1 flex-col">
@@ -131,6 +133,74 @@ pub fn Simulate() -> impl IntoView {
                                     </button>
                                 </div>
                             </div>
+                        }
+                    })}
+                // An early build of rusty's own: the pins, and none of the
+                // converter or the buses. Firmware reading either waits for
+                // ever inside its own `read`, which looks like its bug.
+                {plan
+                    .emulator
+                    .clone()
+                    .filter(|emulator| emulator.gpio_model && !emulator.peripherals)
+                    .map(|emulator| {
+                        let name = emulator.name.clone();
+                        view! {
+                            <div class="flex flex-col gap-1.5 border-b border-line bg-amber-fill px-4 py-3">
+                                <p class="max-w-[80ch] text-callout">{t!("simulate.early-qemu")}</p>
+                                <div class="flex items-center gap-2.5">
+                                    <span class="min-w-0 truncate font-mono text-caption text-label-3 select-text">
+                                        {emulator.path.clone()}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        disabled=move || running.get()
+                                        on:click=move |_| {
+                                            controller::install_sim_tool(state, name.clone())
+                                        }
+                                        class="shrink-0 rounded-[6px] bg-rust px-2.5 py-0.5 text-footnote font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+                                    >
+                                        {t!("simulate.upgrade-qemu")}
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })}
+                // What the emulator cannot do on this chip, said before the
+                // run, so a run that ends mid-boot or a read that never
+                // returns is not blamed on the firmware.
+                {(!limits.is_empty())
+                    .then(|| {
+                        view! {
+                            <div class="flex flex-col gap-1 border-b border-line bg-amber-fill px-4 py-3">
+                                {limits
+                                    .iter()
+                                    .map(|limit| {
+                                        view! {
+                                            <p class="max-w-[80ch] text-callout">{limit_text(limit)}</p>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        }
+                    })}
+                // What the plan wants read that is not a refusal: a board
+                // file for another chip, a symbol library that would not
+                // read, a migration from the first format.
+                {(!notes.is_empty())
+                    .then(|| {
+                        view! {
+                            <ul class="flex flex-col gap-0.5 border-b border-line px-4 py-2">
+                                {notes
+                                    .into_iter()
+                                    .map(|note| {
+                                        view! {
+                                            <li class="text-caption leading-snug text-label-3 select-text">
+                                                {note}
+                                            </li>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </ul>
                         }
                     })}
                 {(!missing.is_empty())
@@ -234,6 +304,9 @@ fn warning_text(warning: &Warning) -> String {
             t!("simulate.warning-bus-registers", part = part, value = value)
         }
         Warning::BusNotWired { part } => t!("simulate.warning-bus-wiring", part = part),
+        Warning::SensorModelUnknown { part, value } => {
+            t!("simulate.warning-sensor-model", part = part, value = value)
+        }
         Warning::WireSelectUnreadable { part, value } => {
             t!("simulate.warning-wire-select", part = part, value = value)
         }
@@ -244,6 +317,46 @@ fn warning_text(warning: &Warning) -> String {
         Warning::OutputsFighting { pins } => {
             t!("simulate.warning-outputs", pins = pins.join(", "))
         }
+    }
+}
+
+/// A register sensor's reading, named in the window's language.
+fn reading_label(key: &str) -> String {
+    match key {
+        "ax" => t!("simulate.reading-ax"),
+        "ay" => t!("simulate.reading-ay"),
+        "az" => t!("simulate.reading-az"),
+        "gx" => t!("simulate.reading-gx"),
+        "gy" => t!("simulate.reading-gy"),
+        "gz" => t!("simulate.reading-gz"),
+        "temp" => t!("simulate.reading-temp"),
+        "pressure" => t!("simulate.reading-pressure"),
+        "humidity" => t!("simulate.reading-humidity"),
+        other => other.to_string(),
+    }
+}
+
+/// A reading as the sheet stores it and the slider shows it: no more
+/// digits than a slider two hundred steps long can set.
+fn reading_text(value: f64) -> String {
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" {
+        "0".to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// What the emulator cannot do on this chip, in the window's language: by
+/// the limit's stable name, and in the backend's English for one this
+/// frontend has no words for yet.
+fn limit_text(limit: &rusty_embed::SimLimit) -> String {
+    match limit.kind.as_str() {
+        "esp32-float" => t!("simulate.limit-esp32-float"),
+        "esp32-peripherals" => t!("simulate.limit-esp32-peripherals"),
+        "s3-unproven" => t!("simulate.limit-s3-unproven"),
+        _ => limit.text.clone(),
     }
 }
 
@@ -1225,9 +1338,9 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                         <span class="mx-0.5 h-4 w-px bg-line" />
                         <button
                             type="button"
-                            title=t!("simulate.kicad-import")
+                            title=t!("simulate.schematic-import")
                             on:click=move |_| {
-                                controller::import_kicad(
+                                controller::import_schematic(
                                     state,
                                     Callback::new(move |brought: Sheet| {
                                         checkpoint();
@@ -2212,6 +2325,96 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         // range rusty invented is how
                                         // somebody injects 2000 deg/s into a
                                         // loop written for 250.
+                                        // A sensor rusty answers for register by
+                                        // register: a slider per reading, in the
+                                        // units a person reads. Between runs a
+                                        // slider says where the next run starts,
+                                        // which is the sheet's; during one it
+                                        // moves the reading the firmware gets.
+                                        Some(Behaviour::Sensor)
+                                            if this.with(|p| {
+                                                p.as_ref()
+                                                    .and_then(|p| p.inst.props.get("model"))
+                                                    .and_then(|id| rusty_embed::sensor::Model::from_id(id))
+                                                    .is_some()
+                                            }) =>
+                                        {
+                                            let (model, props) = this.with(|p| {
+                                                let inst = &p.as_ref()?.inst;
+                                                let model = rusty_embed::sensor::Model::from_id(inst.props.get("model")?)?;
+                                                Some((model, inst.props.clone()))
+                                            })?;
+                                            let part_ref = reference.get_untracked();
+                                            Some(view! {
+                                                <div class="pointer-events-none absolute flex flex-col gap-0.5" style=style>
+                                                    <span class="font-mono text-caption text-label-3">{model.name()}</span>
+                                                    {model
+                                                        .channels()
+                                                        .iter()
+                                                        .map(|channel| {
+                                                            let key = channel.key;
+                                                            let (min, max, unit) = (channel.min, channel.max, channel.unit);
+                                                            let start = props
+                                                                .get(key)
+                                                                .and_then(|text| text.trim().parse::<f64>().ok())
+                                                                .unwrap_or(channel.rest);
+                                                            let shown = {
+                                                                let part_ref = part_ref.clone();
+                                                                Memo::new(move |_| {
+                                                                    state.sim.readings.with(|held| {
+                                                                        held.get(&(part_ref.clone(), key.to_string())).copied()
+                                                                    })
+                                                                    .unwrap_or(start)
+                                                                })
+                                                            };
+                                                            let moved = part_ref.clone();
+                                                            view! {
+                                                                <span class="flex items-center gap-1.5">
+                                                                    <span class="w-[11ch] truncate text-caption text-label-3">
+                                                                        {reading_label(key)}
+                                                                    </span>
+                                                                    // Any value, not a grid: a stepped slider shows
+                                                                    // 0.5 g as 0.52 and moves the reading the moment
+                                                                    // it is touched.
+                                                                    <input
+                                                                        type="range"
+                                                                        min=min
+                                                                        max=max
+                                                                        step="any"
+                                                                        prop:value=move || shown.get().to_string()
+                                                                        on:pointerdown=move |event: ev::PointerEvent| {
+                                                                            event.stop_propagation()
+                                                                        }
+                                                                        on:input=move |event: ev::Event| {
+                                                                            if let Ok(value) = event_target_value(&event).parse::<f64>() {
+                                                                                controller::sim_reading(state, moved.clone(), key.to_string(), value);
+                                                                            }
+                                                                        }
+                                                                        on:change=move |event: ev::Event| {
+                                                                            if state.app.session_running.get_untracked() {
+                                                                                return;
+                                                                            }
+                                                                            if let Ok(value) = event_target_value(&event).parse::<f64>() {
+                                                                                checkpoint();
+                                                                                parts.update(|list| {
+                                                                                    edit::set_prop(list, index, key, &reading_text(value))
+                                                                                });
+                                                                                dirty.set(true);
+                                                                            }
+                                                                        }
+                                                                        class="pointer-events-auto w-[70px] accent-[#5fd0c8]"
+                                                                    />
+                                                                    <span class="w-[10ch] text-right font-mono text-caption text-label-2">
+                                                                        {move || format!("{} {unit}", reading_text(shown.get()))}
+                                                                    </span>
+                                                                </span>
+                                                            }
+                                                        })
+                                                        .collect_view()}
+                                                </div>
+                                            }
+                                                .into_any())
+                                        }
                                         Some(Behaviour::Sensor) => {
                                             let wanted = this
                                                 .with(|p| p.as_ref().map(|p| p.inst.value.trim().to_string()))
@@ -3387,6 +3590,61 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 }
                                                 class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
                                             />
+                                        </label>
+                                    }
+                                })}
+                                // Which part a sensor module is: one rusty
+                                // answers for register by register, or the
+                                // channel the firmware declared.
+                                {(behaviour == Some(Behaviour::Sensor)).then(|| {
+                                    let current = part.inst.props.get("model").cloned().unwrap_or_default();
+                                    let current_model = rusty_embed::sensor::Model::from_id(&current);
+                                    let has_address = part
+                                        .inst
+                                        .props
+                                        .get("addr")
+                                        .is_some_and(|address| !address.trim().is_empty());
+                                    view! {
+                                        <label
+                                            class="flex items-center gap-2 text-footnote text-label-2"
+                                            title=t!("simulate.sensor-model-hint")
+                                        >
+                                            <span class="shrink-0">{t!("simulate.sensor-model")}</span>
+                                            <select
+                                                on:change=move |event| {
+                                                    checkpoint();
+                                                    let id = event_target_value(&event);
+                                                    let model = rusty_embed::sensor::Model::from_id(&id);
+                                                    parts.update(|list| {
+                                                        edit::set_prop(list, index, "model", &id);
+                                                        // The address the breakout ships with,
+                                                        // unless the sheet already said one.
+                                                        if let Some(model) = model
+                                                            && !has_address
+                                                        {
+                                                            let address = format!("{:02x}", model.addresses()[0]);
+                                                            edit::set_prop(list, index, "addr", &address);
+                                                        }
+                                                    });
+                                                    dirty.set(true);
+                                                }
+                                                class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-1.5 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            >
+                                                <option value="" selected=current_model.is_none()>
+                                                    {t!("simulate.sensor-model-declared")}
+                                                </option>
+                                                {rusty_embed::sensor::Model::ALL
+                                                    .into_iter()
+                                                    .map(|model| {
+                                                        let chosen = current_model == Some(model);
+                                                        view! {
+                                                            <option value=model.id() selected=chosen>
+                                                                {model.name()}
+                                                            </option>
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                            </select>
                                         </label>
                                     }
                                 })}

@@ -273,5 +273,6 @@ does that. `espflash monitor` reads its keyboard through the console rather
 than through stdin, so a monitor rusty spawned can only listen; its telemetry
 still plots, and its tunables are read-only. Reading richer behaviours
 (framebuffers, protocol decoders) grows on these same directions. What does
-not exist yet, honestly: I2C/SPI decoding, analog waveform views, and Wokwi
-diagram import.
+not exist yet, honestly: I2C/SPI decoding and analog waveform views. A
+Wokwi `diagram.json` does come across now (`schematic::wokwi`), with every
+part rusty has no counterpart for named rather than guessed at.

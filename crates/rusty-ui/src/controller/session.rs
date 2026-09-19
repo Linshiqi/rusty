@@ -114,6 +114,7 @@ pub(super) fn clear_capture(state: AppState) {
     state.sim.gpio.set(std::collections::HashMap::new());
     state.sim.pwm.set(std::collections::HashMap::new());
     state.sim.analog.set(std::collections::HashMap::new());
+    state.sim.readings.set(std::collections::HashMap::new());
     state.sim.adc.set(std::collections::HashMap::new());
     state.sim.i2c.set(Vec::new());
     state.sim.spi.set(Vec::new());

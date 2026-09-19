@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use rusty_core::{FeatureSelection, Workspace, WorkspaceReport};
+use rusty_embed::simulate::headless::{self, Scenario};
 use rusty_embed::{
     EmbeddedProject, MemoryReport, Problem, Severity, ToolchainReport, catalog::Catalog, device,
     memory, project, toolchain,
@@ -130,6 +131,40 @@ enum Command {
     Mcp {
         #[arg(default_value = ".")]
         path: PathBuf,
+    },
+
+    /// Run the firmware in rusty's emulator without the window: build, image,
+    /// boot, and watch the serial line and the pins.
+    ///
+    /// What the firmware prints goes to stdout as it arrives; the build and
+    /// rusty's own notes go to stderr. The run passes once every `--expect`
+    /// text has appeared and every step of `--scenario` is done, and fails on
+    /// the first `--fail` text, a step whose check does not hold, or a
+    /// timeout with something still expected. With nothing expected it runs
+    /// for the whole timeout. Exit code 0 passed, 1 failed or timed out, 2
+    /// could not run at all (no chip, a missing tool, a failed build).
+    Sim {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Seconds the firmware may run, from the emulator starting.
+        #[arg(long)]
+        timeout: Option<f64>,
+        /// Text the firmware must print. Repeatable: all of them.
+        #[arg(long)]
+        expect: Vec<String>,
+        /// Text that fails the run the moment it appears. Repeatable.
+        #[arg(long)]
+        fail: Vec<String>,
+        /// A TOML file of steps, taken in order while the firmware runs:
+        /// wait-serial, write-serial, press, release, delay, expect-pin, set.
+        #[arg(long)]
+        scenario: Option<PathBuf>,
+        /// Write every pin transition to this file as a Value Change Dump.
+        #[arg(long)]
+        vcd: Option<PathBuf>,
+        /// Print nothing but the verdict.
+        #[arg(long, short)]
+        quiet: bool,
     },
 
     /// Cargo dependency health: duplicates, direct vs transitive, build scripts.
@@ -368,6 +403,86 @@ fn main() -> Result<()> {
                 anyhow::bail!("{} is not a directory", root.display());
             }
             rusty_ai::mcp::serve(root, std::io::stdin().lock(), std::io::stdout().lock())?;
+        }
+
+        Command::Sim {
+            path,
+            timeout,
+            expect,
+            fail,
+            scenario,
+            vcd,
+            quiet,
+        } => {
+            let mut plan = match &scenario {
+                Some(file) => {
+                    let text = std::fs::read_to_string(file)
+                        .with_context(|| format!("reading {}", file.display()))?;
+                    Scenario::from_toml(&text)
+                        .map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?
+                }
+                None => Scenario::default(),
+            };
+            if timeout.is_some() {
+                plan.timeout = timeout;
+            }
+            plan.expect.extend(expect);
+            plan.fail.extend(fail);
+
+            let root = std::path::absolute(&path)
+                .with_context(|| format!("resolving {}", path.display()))?;
+            let root = project::firmware_root(&root);
+            let outcome = headless::run(&root, &plan, &mut |event| {
+                if quiet {
+                    return;
+                }
+                match event {
+                    headless::Event::Command(line) => eprintln!("$ {line}"),
+                    headless::Event::Output(line) => eprintln!("{line}"),
+                    headless::Event::Serial(line) => println!("{line}"),
+                    headless::Event::Note(line) => eprintln!("rusty: {line}"),
+                }
+            });
+
+            if let Some(file) = &vcd {
+                std::fs::write(file, rusty_embed::to_vcd(&outcome.events))
+                    .with_context(|| format!("writing {}", file.display()))?;
+                if !quiet {
+                    eprintln!(
+                        "rusty: {} pin changes written to {}",
+                        outcome.events.len(),
+                        file.display()
+                    );
+                }
+            }
+            if !quiet {
+                for (pin, level) in outcome.levels() {
+                    let changes = outcome.events.iter().filter(|(_, p, _)| *p == pin).count();
+                    eprintln!(
+                        "rusty: GPIO{pin} ended {}, {changes} report(s)",
+                        u8::from(level)
+                    );
+                }
+            }
+            let code = match &outcome.verdict {
+                headless::Verdict::Passed => {
+                    eprintln!("passed");
+                    0
+                }
+                headless::Verdict::Failed(why) => {
+                    eprintln!("failed: {why}");
+                    1
+                }
+                headless::Verdict::TimedOut(why) => {
+                    eprintln!("timed out: {why}");
+                    1
+                }
+                headless::Verdict::Unrunnable(why) => {
+                    eprintln!("could not run: {why}");
+                    2
+                }
+            };
+            std::process::exit(code);
         }
 
         Command::Deps { path, json } => {

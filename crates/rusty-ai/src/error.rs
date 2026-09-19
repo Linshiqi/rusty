@@ -58,6 +58,12 @@ pub enum Error {
     #[error("tool `{name}` was called with invalid arguments: {detail}")]
     BadToolArguments { name: String, detail: String },
 
+    /// A tool that could not do what it was asked at all — the firmware
+    /// would not build, the chip cannot be emulated — with the reason in
+    /// terms the model can relay.
+    #[error("{0}")]
+    Refused(String),
+
     #[error("the OS credential store is unavailable")]
     Keychain(#[from] keyring::Error),
 

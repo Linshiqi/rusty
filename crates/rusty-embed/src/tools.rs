@@ -167,6 +167,20 @@ pub(crate) fn find_in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
 /// The tools roots alone, in order, and nothing after them — the half of the
 /// ladder that answers "did rusty put this here", which the bundle needs to
 /// ask *after* PATH rather than before it.
+/// Every copy of `name` the ladder would consider, in its order: one per
+/// root, then cargo's bin, then PATH. For the one tool whose copies are told
+/// apart by what they can do rather than by where they are — the emulator.
+pub(crate) fn candidates(name: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = roots
+        .iter()
+        .filter_map(|root| in_roots(name, std::slice::from_ref(root)))
+        .collect();
+    found.extend(cargo_bin().and_then(|bin| in_dirs(name, &[bin])));
+    found.extend(on_path(name));
+    found.dedup();
+    found
+}
+
 fn in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let file = exe(name);
     for tools in roots {

@@ -277,6 +277,11 @@ pub mod sim {
     /// patched rather than replaced, so everything rusty does not model
     /// keeps its own bytes; `docs/kicad.md` is why.
     pub const EXPORT_KICAD: &str = "sim_export_kicad";
+    /// One reading of a sensor on the sheet, moved while the simulation
+    /// runs: the part, the channel, the value in the channel's unit.
+    pub const SENSOR_SET: &str = "sim_sensor_set";
+    /// A Wokwi `diagram.json` read onto the sheet.
+    pub const IMPORT_WOKWI: &str = "sim_import_wokwi";
 }
 
 pub mod features {

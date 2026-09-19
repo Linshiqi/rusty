@@ -232,6 +232,11 @@ of it. What the sheet contributes is the *declaration*:
   display and a breakout imported from LCSC all reach the bus the same way.
 - **A part with a `cs` prop is on SPI2**, and `miso` is what it answers
   with, read from the start of every transfer.
+- **A sensor with a `model` prop answers like the part** (`mpu6050`,
+  `bmp280`, `bme280`; `rusty_embed::sensor`): its own identity and
+  calibration registers, and readings the sliders under it move while the
+  firmware runs, encoded for the range the firmware chose. `regs` still
+  lands over them, byte for byte.
 
 Both are checked rather than assumed: a part with an address whose `SDA` and
 `SCL` reach no GPIO is named and left off the bus, because the emulator does
@@ -245,15 +250,16 @@ plain labels. A screen that shows what the firmware *drew*: the bus carries
 a display's bytes now and is reported, but nothing decodes an SSD1306's
 command stream into pixels.
 
-Quantities are half here. A resistor's *value* is read (`nets::ohms`) and
-decides one thing: where a pin sits between the rails, which is what
-`divider_at` answers and what lets a potentiometer across the rails reach
-the converter as real counts. What is still not here is anything measured
-in volts or amps — the rails are on and off, because a symbol claiming to
-know 3.3 V from 5 V would claim more than it reads, and the current through
-an LED depends on a forward voltage the sheet does not carry and would not
-be right to guess. A capacitor still never charges: that wants a solver,
-which is `docs/kicad.md`'s stage 4.
+Quantities are here, and so are their refusals. The rules still say on
+and off; beside them `solve` says volts and amps — modified nodal analysis
+with a Shockley junction and a backward-Euler transient, so a capacitor
+charges and a lamp takes the current its forward voltage allows — and
+`live` walks that circuit in step with the running firmware, handing the
+converter what the firmware's own pins have made of it. What the sheet does
+not state is refused by name rather than guessed: a lamp without a `vf`, a
+rail called `VCC`, a resistor whose value is a part number (`circuit`,
+`docs/kicad.md`'s stages 4 and 5). What the solver does not model is said
+too: there are no transistors and no amplifiers in it.
 
 Four things this section used to list are done: a wire that ends on another
 wire, symbols with several units, turning the devkit, and a resistor's value

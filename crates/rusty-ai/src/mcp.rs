@@ -126,7 +126,7 @@ fn manifests(root: &Path, workspace: &Workspace) -> Vec<PathBuf> {
 impl Server {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
-            registry: ToolRegistry::workbench(),
+            registry: ToolRegistry::served(),
             root: root.into(),
             kept: None,
         }
@@ -391,7 +391,7 @@ mod tests {
         let mut server = Server::new(dir.path());
         let answer = ask(&mut server, request(1, "tools/list", json!({})));
         let listed = answer["result"]["tools"].as_array().unwrap();
-        let registry = ToolRegistry::workbench().defs();
+        let registry = ToolRegistry::served().defs();
         assert_eq!(listed.len(), registry.len());
         for def in &registry {
             let tool = listed
@@ -400,12 +400,19 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} is served", def.name));
             assert_eq!(tool["inputSchema"], def.input_schema);
             assert_eq!(tool["inputSchema"]["type"], "object");
+            // Only the tool that builds and boots the firmware may say it
+            // does more than read; a client asks the user before it runs.
+            let reads = def.name != "simulate";
             assert_eq!(
-                tool["annotations"]["readOnlyHint"], true,
-                "{} reads",
+                tool["annotations"]["readOnlyHint"], reads,
+                "{} reads: {reads}",
                 def.name
             );
         }
+        assert!(
+            listed.iter().any(|tool| tool["name"] == "simulate"),
+            "the simulator is served"
+        );
     }
 
     #[test]

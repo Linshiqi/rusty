@@ -64,7 +64,7 @@ pub struct AppState {
     /// model. Present, a button press drives the register the firmware reads;
     /// absent, the board falls back to the `B14=1` message over the UART that
     /// firmware has to be written to expect. Cleared with the session.
-    pins: Mutex<Option<crate::simulate::PinChannel>>,
+    pins: Mutex<Option<rusty_embed::simulate::PinChannel>>,
     /// Where the running emulator listens for its machine protocol, so it
     /// can be stopped and started again. A port rather than an open socket:
     /// QMP wants a capabilities handshake per connection anyway, so holding
@@ -554,11 +554,11 @@ impl AppState {
         std::mem::replace(&mut *self.downloading.lock().await, task)
     }
 
-    pub async fn set_pins(&self, pins: Option<crate::simulate::PinChannel>) {
+    pub async fn set_pins(&self, pins: Option<rusty_embed::simulate::PinChannel>) {
         *self.pins.lock().await = pins;
     }
 
-    pub async fn pins(&self) -> Option<crate::simulate::PinChannel> {
+    pub async fn pins(&self) -> Option<rusty_embed::simulate::PinChannel> {
         self.pins.lock().await.clone()
     }
 
