@@ -85,17 +85,33 @@ impl Machine {
     /// build sitting in the bundle, and firmware reading a knob hung in its
     /// own `read_oneshot()` with the right emulator installed one directory
     /// away.
+    /// The emulator to run, which is the **most capable copy** rather than
+    /// the first one on the ladder.
+    ///
+    /// Generations pile up: a build somebody installed a year ago sits in
+    /// the data directory, the installer's sits in the bundle, and each
+    /// carries the models of its own moment. Taking the first found put a
+    /// GPIO-only build in front of a bundled one with the converter and
+    /// both buses — the v0.6.46 bug in a second costume, and the same
+    /// symptom: a `read_oneshot()` that never returns. Ranked by what each
+    /// one actually carries, with the ladder breaking ties, the answer is
+    /// right whatever is lying about.
     fn find_emulator(&self, binary: &str) -> Option<PathBuf> {
         let roots: Vec<PathBuf> = [self.tools.clone(), self.bundled.clone()]
             .into_iter()
             .flatten()
             .collect();
         let found = tools::candidates(binary, &roots);
-        found
-            .iter()
-            .find(|path| is_current_build(path))
-            .or(found.first())
-            .cloned()
+        let mut best: Option<(usize, &PathBuf)> = None;
+        for path in &found {
+            let carried = models_carried(path);
+            // `>`, not `>=`: an equal copy earlier on the ladder stays,
+            // which is what makes a user's own install win over the bundle.
+            if best.is_none_or(|(most, _)| carried > most) {
+                best = Some((carried, path));
+            }
+        }
+        best.map(|(_, path)| path.clone())
     }
 
     fn find(&self, binary: &str) -> Option<PathBuf> {
@@ -534,17 +550,31 @@ const SPI_MODEL_MARKER: &[u8] = b"[rusty:spi@";
 const PWM_MODEL_MARKER: &[u8] = b"[rusty:pwm@";
 const RMT_MODEL_MARKER: &[u8] = b"[rusty:rmt@";
 
+/// Every model this rusty drives, in one list: what `has_peripherals`
+/// requires and what ranks one copy of the emulator against another.
+const PERIPHERAL_MARKERS: [&[u8]; 5] = [
+    ADC_MODEL_MARKER,
+    I2C_MODEL_MARKER,
+    SPI_MODEL_MARKER,
+    PWM_MODEL_MARKER,
+    RMT_MODEL_MARKER,
+];
+
 /// Does this emulator model the converter, both buses, LEDC and RMT?
 pub fn has_peripherals(qemu: &Path) -> bool {
-    [
-        ADC_MODEL_MARKER,
-        I2C_MODEL_MARKER,
-        SPI_MODEL_MARKER,
-        PWM_MODEL_MARKER,
-        RMT_MODEL_MARKER,
-    ]
-    .into_iter()
-    .all(|marker| carries(qemu, marker))
+    PERIPHERAL_MARKERS
+        .into_iter()
+        .all(|marker| carries(qemu, marker))
+}
+
+/// How many of rusty's models this binary carries, pins included — the
+/// number one copy is ranked against another by.
+fn models_carried(qemu: &Path) -> usize {
+    usize::from(has_gpio_model(qemu))
+        + PERIPHERAL_MARKERS
+            .into_iter()
+            .filter(|marker| carries(qemu, marker))
+            .count()
 }
 
 /// Is this rusty's current build — every model this version of rusty
@@ -793,6 +823,42 @@ mod tests {
             bundled: None,
             target_dir: None,
         }
+    }
+
+    /// Three generations at once, which is what a machine that has been
+    /// upgraded a few times actually holds. The most capable wins wherever
+    /// it is: taking the first on the ladder put a GPIO-only build from a
+    /// year ago in front of the bundle's, and firmware reading a bus there
+    /// waits for ever.
+    #[test]
+    fn the_most_capable_copy_wins_even_when_none_is_current() {
+        let dir = firmware(BLINKY);
+        let write = |root: &Path, contents: &[u8]| {
+            let path = root
+                .join("qemu")
+                .join("bin")
+                .join(tools::exe("qemu-system-riscv32"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, contents).unwrap();
+            path
+        };
+        // What a data directory holds after an install from long ago.
+        write(&dir.path().join("data"), b"....[rusty:gpio@....");
+        // And the bundle of a rusty one version behind this one.
+        let bundled = write(
+            &dir.path().join("bundle"),
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@",
+        );
+        let machine = Machine {
+            tools: Some(dir.path().join("data")),
+            bundled: Some(dir.path().join("bundle")),
+            target_dir: None,
+        };
+        assert_eq!(
+            machine.find_emulator("qemu-system-riscv32"),
+            Some(bundled),
+            "neither is current, so the one with more models wins",
+        );
     }
 
     /// An early build of rusty's QEMU in the data directory — pins, no
