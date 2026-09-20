@@ -171,6 +171,11 @@ GPIO levels; the rails are fixed; everything else follows:
   rather than taken from the traffic: the SH1106's window sits two columns
   into its RAM, and a picture two pixels out is one nobody can check.
   Without it the part shows what the firmware prints to `[rusty:disp]`.
+- **A keypad** (`rusty:Keypad`) is sixteen keys on four rows and four
+  columns, and a key **joins** its row to its column rather than driving
+  either — which is what a matrix is, and what the emulator's `sw a-b=`
+  carries. A plain switch wired between two GPIOs is the same thing
+  (`nets::switch_tie`); one wired to a rail still drives a level.
 - **A strip** (`rusty:Strip`) is addressable LEDs on one wire, lit by the
   bytes RMT clocked out on the GPIO its `DIN` reaches — three bytes a
   pixel, green first, the WS2812 family's order. Its value is how many are

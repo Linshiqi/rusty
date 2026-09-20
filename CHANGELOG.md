@@ -9,6 +9,38 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.48
+
+**A matrix keypad works.** There is a keypad part on the board sheet —
+sixteen keys, four rows and four columns — and pressing one of its keys
+does what a key does: it joins its row to its column and lets the firmware's
+own scan find it. Firmware written for a real keypad reads it without
+knowing it is in a simulator. A plain button wired between two GPIOs works
+the same way.
+
+**Buttons stop reading as held down.** The emulator now models the pads'
+own pull-up and pull-down resistors, so an input nobody is driving reads
+what the pad pulls it to. Before, `Input::new(pin, Pull::Up)` with
+`is_low()` — how nearly every button on every board is read — saw a button
+held down from the moment the firmware started until something drove the
+pin high.
+
+**The board sheet lays itself out.** A new Tidy button puts every part
+beside the pin it reaches and routes every wire round the parts instead of
+through them. Parts no longer land on top of each other when placed or
+imported: a diagram brought in from another editor arrives as a drawing you
+can read rather than a pile in one corner. A wire you draw now goes round
+what is in the way, and a part dropped on a wire pushes that wire aside —
+only that wire, and only when its path actually crosses something, so
+anything you routed by hand stays as you left it.
+
+**Junction dots.** Where wires *join* there is now the dot a schematic
+draws; where they merely cross there is not. The two used to look the same,
+and they mean opposite things.
+
+Requires rusty's emulator `qemu-v6`, which the installer carries; an older
+copy is recognised as older and offered an upgrade from the Simulate panel.
+
 ## v0.6.47
 
 **The screen on the board shows what your driver drew.** A display part that

@@ -20,6 +20,7 @@ use leptos::{ev, prelude::*};
 mod art;
 mod edit;
 mod geometry;
+mod layout;
 mod library;
 mod readout;
 
@@ -1306,6 +1307,12 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         retidy(w, &ends);
                                     }
                                 }
+                                // And any route the part was dropped on top
+                                // of goes round it. Only those: a wire whose
+                                // path crosses nothing is the author's and
+                                // is left alone, wherever its bends came
+                                // from.
+                                layout::reroute_broken(&list, all);
                             });
                             group_start.set(Vec::new());
                         }
@@ -1428,8 +1435,17 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                     Callback::new(move |brought: Sheet| {
                                         checkpoint();
                                         let rows = rows.get_untracked();
-                                        parts.set(parts_of(&brought, &rows));
-                                        wires.set(brought.wires.clone());
+                                        // Laid out on arrival: another
+                                        // editor's canvas is not this one,
+                                        // and a diagram's own coordinates
+                                        // land a dozen parts in one square
+                                        // inch here — which reads as an
+                                        // import that lost half of them.
+                                        let mut brought_parts = parts_of(&brought, &rows);
+                                        let mut brought_wires = brought.wires.clone();
+                                        layout::arrange(&mut brought_parts, &mut brought_wires);
+                                        parts.set(brought_parts);
+                                        wires.set(brought_wires);
                                         no_connect.set(brought.no_connect.clone());
                                         marked.set(Vec::new());
                                         selected.set(None);
@@ -1471,6 +1487,24 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                             class=SHEET_BUTTON
                         >
                             "↷"
+                        </button>
+                        // Lay the whole sheet out again. One undo step, and
+                        // only when asked: a board somebody arranged by hand
+                        // is theirs, and a rule that tidied on its own would
+                        // move their work out from under them.
+                        <button
+                            type="button"
+                            title=t!("simulate.tidy")
+                            on:click=move |_| {
+                                checkpoint();
+                                parts.update(|list| {
+                                    wires.update(|w| layout::arrange(list, w));
+                                });
+                                dirty.set(true);
+                            }
+                            class=SHEET_BUTTON
+                        >
+                            "⌗"
                         </button>
                         // Only while something is running: a Pause on a
                         // sheet with no emulator behind it is a button that
@@ -3147,27 +3181,23 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         .collect_view()
                                 }}
 
-                                // Junctions: a pin two or more wires meet at
-                                // gets the dot every schematic draws there.
+                                // Junctions: where wires *join*, as opposed
+                                // to where they cross. Two ends at a pin is
+                                // one — the pin is a conductor too — and so
+                                // is an end landing on another wire's line,
+                                // which a branch makes and which the old
+                                // rule, reading pins alone, drew nothing for.
                                 {move || {
                                     let list = parts.get();
                                     let all = wires.get();
-                                    let mut seen: Vec<(f64, f64)> = Vec::new();
-                                    let mut dots = Vec::new();
-                                    for (index, part) in list.iter().enumerate() {
-                                        for pin in part.pins() {
-                                            if edit::wires_at(&list, &all, index, &pin.number).len() >= 2 {
-                                                let point = pin_point(part, pin);
-                                                if !seen.contains(&point) {
-                                                    seen.push(point);
-                                                    dots.push(view! {
-                                                        <circle cx=point.0 cy=point.1 r="3.6" fill="#c9a227" style="pointer-events: none" />
-                                                    });
-                                                }
+                                    layout::junctions(&list, &all)
+                                        .into_iter()
+                                        .map(|(x, y)| {
+                                            view! {
+                                                <circle cx=x cy=y r="3.6" fill="#c9a227" style="pointer-events: none" />
                                             }
-                                        }
-                                    }
-                                    dots.collect_view()
+                                        })
+                                        .collect_view()
                                 }}
 
                                 // The armed part's ghost: the part itself,

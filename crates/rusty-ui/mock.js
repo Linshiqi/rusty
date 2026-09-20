@@ -36,6 +36,22 @@
         { kind: "rectangle", start: [-1.016, 2.54], end: [1.016, -2.54], width: 0.254, fill: "none" },
       ],
     },
+    // A lamp and a button, the two parts every first board has — and what
+    // the tangle below is made of.
+    {
+      library: "Device", name: "LED", reference: "D", value: "LED",
+      pins: [pin("1", "K", -3.81, 0), pin("2", "A", 3.81, 180)],
+      graphics: [
+        { kind: "polyline", points: [[-1.27, -1.27], [-1.27, 1.27]], width: 0.254, fill: "none" },
+      ],
+    },
+    {
+      library: "Device", name: "SW_Push", reference: "SW", value: "SW_Push",
+      pins: [pin("1", "1", -3.81, 0), pin("2", "2", 3.81, 180)],
+      graphics: [
+        { kind: "polyline", points: [[-1.27, 0], [1.27, 0]], width: 0.254, fill: "none" },
+      ],
+    },
     {
       library: "rusty", name: "GND", reference: "#PWR", value: "GND",
       pins: [pin("1", "GND", 0, 90)],
@@ -426,12 +442,24 @@
           },
           { reference: "D1", symbol: "rusty:Strip", value: "WS2812 x8", x: 640, y: 260 },
           { reference: "M1", symbol: "rusty:Servo", value: "SG90", x: 640, y: 360 },
+          // Four parts dropped in one square inch and wired to pins in the
+          // opposite order — the tangle the layout work is about, kept here
+          // so `Tidy` can be driven against something that needs it. It is
+          // what an import from another editor's canvas looks like.
+          { reference: "D2", symbol: "Device:LED", value: "red", x: 300, y: 150 },
+          { reference: "D3", symbol: "Device:LED", value: "green", x: 312, y: 158 },
+          { reference: "SW1", symbol: "Device:SW_Push", value: "", x: 324, y: 166 },
+          { reference: "SW2", symbol: "Device:SW_Push", value: "", x: 336, y: 174 },
         ],
         wires: [
           { from: { part: "DS1", pin: "SDA" }, to: { part: "U1", pin: "GPIO5" }, bends: [] },
           { from: { part: "DS1", pin: "SCL" }, to: { part: "U1", pin: "GPIO6" }, bends: [] },
           { from: { part: "D1", pin: "DIN" }, to: { part: "U1", pin: "GPIO8" }, bends: [] },
           { from: { part: "M1", pin: "SIG" }, to: { part: "U1", pin: "GPIO7" }, bends: [] },
+          { from: { part: "D2", pin: "K" }, to: { part: "U1", pin: "GPIO21" }, bends: [] },
+          { from: { part: "D3", pin: "K" }, to: { part: "U1", pin: "GPIO19" }, bends: [] },
+          { from: { part: "SW1", pin: "1" }, to: { part: "U1", pin: "GPIO18" }, bends: [] },
+          { from: { part: "SW2", pin: "1" }, to: { part: "U1", pin: "GPIO10" }, bends: [] },
           { from: { part: "PWR1", pin: "VCC" }, to: { part: "R1", pin: "1" }, bends: [] },
           { from: { part: "R1", pin: "2" }, to: { part: "R2", pin: "1" }, bends: [] },
           { from: { part: "R2", pin: "1" }, to: { part: "U1", pin: "GPIO4" }, bends: [] },

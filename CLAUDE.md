@@ -441,6 +441,26 @@ traffic: the SH1106's window sits two columns into its RAM, and a picture
 two pixels out is one nobody can check. Until it is named the part shows
 what the firmware prints to `[rusty:disp]`, as it always has.
 
+**A pad has a pull, and a key joins two pads.** `Input::new(pin,
+Pull::Up)` with `is_low()` is how nearly every button on every board is
+read, and the pull lives in IO_MUX — which upstream does not map, so an
+input nobody drives read whatever it last read and every such button read
+as *held down* from reset. rusty's QEMU answers IO_MUX on the C3 (the
+ESP32's registers are a table in pad-name order, so the same arithmetic
+would put one pin's pull on another's and it stays unmapped there). And
+`sw 4-6=1` **joins** two pads rather than driving either: which way the
+level flows is whichever of them the firmware is driving, which is the one
+thing a level cannot say and the whole of why a matrix keypad could not be
+simulated — during a scan the row is an output for a moment, so driving the
+column low instead would be holding down every key in that column. Both end
+in one place in the model (`esp32_gpio_settle`: a driver through a closed
+switch, then a level the host stated, then the pad's own pull, then what it
+was left at) and `[rusty:sw@<us>] 4-6=1` is its own account of the join.
+`rusty:Keypad` is the part, sixteen caps from one rule the drawing, the
+paint and the press all read; `nets::switch_tie` is the same thing for a
+plain switch wired between two GPIOs, and both travel as `sim_switch`
+rather than a level.
+
 **A strip's colours arrive as bytes, and the part says what they mean.**
 `[rusty:rmt]` carries what the wire carried, because the emulator reads a
 one-wire bit off the *shape* of a pulse code (a long high then a short low)
@@ -3774,6 +3794,44 @@ to one it does.
   runs; the cap sinks, the rules see it conducting, and the GPIO it
   reaches is driven through the same `B<pin>=1` the old buttons sent, so
   firmware written for the text protocol hears it too.
+
+## Laying the sheet out
+
+`view/panels/simulate/layout.rs` is pure and tested, and it exists because
+a board that is *correct* can still be unreadable. Three problems, each
+with a rule:
+
+- **Nothing is planted on top of anything.** `free_spot` searches outward
+  in rings on the grid from where the part was asked for, so a part dropped
+  into a crowd lands beside it rather than on it — and an import, whose
+  coordinates are another editor's canvas, is laid out on arrival rather
+  than piled into one square inch.
+- **A wire goes round what is in the way.** `route` is the candidate set a
+  schematic uses — two Ls and the Zs on the lanes between and beyond the
+  ends — scored so a crossing costs far more than a corner and a corner a
+  little more than length. It returns bends, so the author can still drag
+  every one of them.
+- **A dot marks a join and never a crossing.** `junctions` reads the drawn
+  paths, not the net model, because what a reader needs marked is what is
+  drawn: two ends at a pin is a dot (the pin is a conductor too — KiCad's
+  three-things rule) and so is an end landing on another wire's line, which
+  a branch makes and which the pin-only rule drew nothing for.
+
+**The layout is measured against what is *drawn*, not the body.**
+`part_box` is the drawing's bounds; the reference sits a row above it and
+the value a row below, so parts laid out a comfortable gap apart had their
+labels sitting on each other — six overlapping pairs on the first arranged
+sheet, measured in the browser off the rendered SVG. `drawn_box` grows the
+box by a row, and the same measurement then says zero.
+
+**`arrange` is a command, never a rule that runs.** A board somebody laid
+out by hand is theirs; tidying it unasked would move their work out from
+under them. It places every part beside the pin it reaches — sorted by that
+pin's y, in a column each side of the devkit, which is what leaves almost
+nothing to cross — and then re-routes every wire. The devkit does not move:
+it is what everything else is placed against. A part *dropped on* a wire is
+the one exception (`reroute_broken`), and even then only the wires whose
+path now crosses a part are touched, and only if the new route is better.
 
 ## Numbers on the sheet
 

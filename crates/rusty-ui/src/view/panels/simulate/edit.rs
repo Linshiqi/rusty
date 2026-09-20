@@ -12,7 +12,10 @@
 
 use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
 
-use super::geometry::{EditPart, GroupStart, Snapshot, branch_route, pin_key, turned_anchor};
+use super::geometry::{
+    EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, pin_key, turned_anchor,
+};
+use super::layout;
 
 /// How many steps of undo the editor keeps.
 ///
@@ -46,7 +49,26 @@ pub(super) fn next_reference(list: &[EditPart], prefix: &str) -> String {
 /// value starts as the symbol's own unless that is just the symbol's name
 /// — `LED` beside an LED says nothing, `10kΩ` beside an imported resistor
 /// says everything. Returns the new part's index.
+/// Place a part, **beside** whatever is already there rather than on it.
+///
+/// The point asked for when it is free, and the nearest free one when it is
+/// not: a click plants a part where the pointer is, and an import plants a
+/// dozen wherever another editor's canvas had them, which here is often the
+/// same square inch. Two bodies in one place is not a drawing anybody can
+/// read.
 pub(super) fn add(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
+    let index = place_raw(list, symbol, x, y);
+    // Its own box is known only once it is in the list — the drawing
+    // decides its size — so it is placed and then moved if it has to be.
+    let (x0, y0, x1, y1) = part_box(&list[index]);
+    let taken = layout::taken_boxes(list, Some(index));
+    let at = layout::free_spot(&taken, (x1 - x0, y1 - y0), (x, y), SNAP);
+    list[index].inst.x = at.0;
+    list[index].inst.y = at.1;
+    index
+}
+
+fn place_raw(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize {
     let reference = next_reference(list, &symbol.reference);
     let value = if symbol.value == symbol.name {
         String::new()
@@ -269,7 +291,15 @@ pub(super) fn connect(
         to: b,
         bends: Vec::new(),
     });
-    Some(wires.len() - 1)
+    // Round the parts rather than through them. A wire with no bends draws
+    // one elbow, which is right when the way is clear and a line through
+    // somebody's display when it is not — and the author can still drag
+    // every bend this leaves.
+    let last = wires.len() - 1;
+    let mut one = [wires[last].clone()];
+    layout::reroute(list, &mut one, false);
+    wires[last] = one.into_iter().next().expect("one wire");
+    Some(last)
 }
 
 /// A branch off an existing wire: the T-junction, made as a wire to one of
