@@ -264,6 +264,9 @@ pub(super) struct Around<'a> {
 struct Scored {
     cost: f64,
     faults: f64,
+    /// How far this one ran out of its first pin before turning, which is
+    /// where the second round's search starts from.
+    out: f64,
     path: Vec<(f64, f64)>,
 }
 
@@ -323,45 +326,57 @@ pub(super) fn route(
         candidates
     };
 
-    // What is wrong with a route, and what merely costs: a body crossed, a
-    // lane shared and a wire crossed are faults, and a route with none of
-    // them is finished being searched for.
-    let faults = |path: &Vec<(f64, f64)>| {
-        crossings(path, &clear) as f64 * 10_000.0
-            + shared(path, around.wires) * SHARED_LANE
-            + met(path, around.wires) as f64 * CROSSED_WIRE
-    };
-    let score = |path: &Vec<(f64, f64)>| {
-        let corners = path.len().saturating_sub(2) as f64;
-        faults(path) + length(path) + corners * ROW_PITCH * 0.5
-    };
-
     // How far the wire runs straight out of each pin before it turns.
     //
     // One row pitch is the schematic default, and it is what every wire
     // used to get. The longer ones are the lanes a *fan* needs: four wires
     // leaving one edge for four pins in a row turn at the same x if they
     // all turn after one pitch, and four lines down one lane are drawn as
-    // one. They are searched only when the short stub leaves a fault,
-    // because the search is the square of this list and most wires are the
-    // only wire in their corner.
+    // one.
+    //
+    // **The two ends are searched one at a time**, which is the difference
+    // between thirteen stub pairs and thirty-six: each end's lanes are
+    // decided by what is near *that* end, so the reach out of `a` is found
+    // against the short stub at `b`, and the reach back into `b` from the
+    // best of those. Measured on a sheet of twenty-four wires, where a
+    // Tidy is one command and a freeze is what it reads as: 554 ms for the
+    // square of the list, 46 ms for this and the pruning below.
     const REACHES: [f64; 6] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let mut best: Option<Scored> = None;
-    for widen in [false, true] {
-        let reaches: &[f64] = if widen { &REACHES } else { &REACHES[..1] };
-        for out in reaches {
-            for back in reaches {
-                let p1 = (a.0 + out_a.0 * step * out, a.1 + out_a.1 * step * out);
-                let p2 = (b.0 + out_b.0 * step * back, b.1 + out_b.1 * step * back);
-                for path in shapes(p1, p2) {
-                    let found = Scored {
-                        cost: score(&path),
-                        faults: faults(&path),
+    for round in 0..3 {
+        let pairs: Vec<(f64, f64)> = match round {
+            0 => vec![(1.0, 1.0)],
+            1 => REACHES.iter().map(|out| (*out, 1.0)).collect(),
+            _ => {
+                let out = best.as_ref().map_or(1.0, |found| found.out);
+                REACHES.iter().map(|back| (out, *back)).collect()
+            }
+        };
+        for (out, back) in pairs {
+            let p1 = (a.0 + out_a.0 * step * out, a.1 + out_a.1 * step * out);
+            let p2 = (b.0 + out_b.0 * step * back, b.1 + out_b.1 * step * back);
+            for path in shapes(p1, p2) {
+                // A body crossed is the worst thing a route can do, and it
+                // is the cheapest of the three to measure — so it is
+                // measured first, and a candidate that already costs more
+                // than the best without counting its wires is dropped
+                // before the two that walk every wire on the sheet.
+                let bodies = crossings(&path, &clear) as f64 * 10_000.0;
+                if best.as_ref().is_some_and(|had| bodies >= had.cost) {
+                    continue;
+                }
+                let faults = bodies
+                    + shared(&path, around.wires) * SHARED_LANE
+                    + met(&path, around.wires) as f64 * CROSSED_WIRE;
+                let corners = path.len().saturating_sub(2) as f64;
+                let cost = faults + length(&path) + corners * ROW_PITCH * 0.5;
+                if best.as_ref().is_none_or(|had| cost < had.cost) {
+                    best = Some(Scored {
+                        cost,
+                        faults,
+                        out,
                         path,
-                    };
-                    if best.as_ref().is_none_or(|had| found.cost < had.cost) {
-                        best = Some(found);
-                    }
+                    });
                 }
             }
         }
@@ -971,6 +986,33 @@ mod tests {
                 "wire {index} runs through a body: {one:?}"
             );
         }
+    }
+
+    /// Tidying a crowded sheet is one command, and a command that takes a
+    /// second reads as a freeze.
+    ///
+    /// Measured here at 46 ms for twenty-four wires, against 554 ms when
+    /// both ends' stubs were searched as a square. The bound is two
+    /// orders of magnitude above that because a runner is not this desk
+    /// and a flaky test is worse than none: it is there to catch a
+    /// *regression in kind*, not to pin a number.
+    #[test]
+    fn arranging_a_crowded_sheet_is_not_a_freeze() {
+        let mut parts = vec![kit()];
+        let mut wires = Vec::new();
+        for n in 0..24 {
+            let reference = format!("R{n}");
+            parts.push(fake(&reference, 0.0, 0.0));
+            let pin = ["P1", "P2", "P3", "P4"][n % 4];
+            wires.push(wire(&format!("{reference}.1"), &format!("U1.{pin}")));
+        }
+        let began = std::time::Instant::now();
+        arrange(&mut parts, &mut wires);
+        let took = began.elapsed();
+        assert!(
+            took.as_secs() < 5,
+            "arranging twenty-four wires took {took:?}"
+        );
     }
 
     /// Three wires meeting at a pin get a dot; two crossing wires do not.
