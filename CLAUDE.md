@@ -3304,6 +3304,23 @@ usty`) holds `location.toml`
   clippy --workspace --all-targets -- -D warnings` — or update. The job log
   needs a GitHub login, so the test job now also names what failed in
   annotations and the step summary, which the run page shows to anyone.
+  It caught `strip_colours` at 1.98 on exactly the same lint, one release
+  after this paragraph was written, which is what "or update" is for.
+- **A job that `needs:` a matrix waits on every leg of it, including the
+  legs it never uses.** `qemu.yml`'s thirteen gates run against the Linux
+  build and nothing else; `msys2/setup-msys2` then began exiting 1 on the
+  Windows leg, and all thirteen were *skipped* — the models went unproven
+  for a reason that had nothing to do with them, twice, with a perfectly
+  good binary sitting in an artifact. `if: always() && needs.build.result
+  != 'cancelled'` is the fix, and the artifact download is the honest
+  failure when it is the Linux leg that broke. Publishing keeps the strict
+  `needs:`, because a release missing one platform's asset is worse than no
+  release. The other half of that morning: **`update: true` is a full
+  `pacman -Syuu` before a single package is installed**, and an action's
+  cache rides the Actions cache service, which is being migrated. Both are
+  ways for a Windows build to fail for reasons that are not the build's;
+  neither is needed when the install list is explicit and a header check
+  follows it.
 - **A bare `tar` on a Windows PATH is often Git's GNU tar, and GNU tar reads
   `E:/…` as a remote host.** `where tar` on this machine answers `C:\Program
   Files\Git\usr\bin\tar.exe` before `C:\Windows\System32\tar.exe`, and the

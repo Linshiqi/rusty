@@ -216,7 +216,11 @@ symbol *does* on the sheet follows its reference prefix and pin names
 `SW` conducts while pressed, a `D` or `LED` with pins `A` and `K` lights
 when its anode is high and its cathode low; the built-in `rusty` library
 carries the parts with a behaviour of their own — a pot, an analog source,
-a text display, an RGB lens, a digit, a motor.
+a screen, an RGB lens, a digit, a motor, a servo, a sensor, a strip of
+addressable LEDs. Two of those read the *protocol* rather than a level: a
+screen whose `panel` prop names its controller (`ssd1306`, `sh1106`) draws
+the pixels its own driver wrote across the bus, and a strip is lit by the
+bytes RMT clocked out on the pin its `DIN` reaches.
 
 `.rusty/sim.toml` is the sheet: `[[part]]` entries placing a symbol by
 `library:name`, `[[wire]]` entries joining two pins (`U1.GPIO2` to `R1.1`;
