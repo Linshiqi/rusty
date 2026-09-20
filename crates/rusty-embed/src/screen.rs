@@ -23,7 +23,7 @@
 //! so that is what it draws.
 //!
 //! What is deliberately not modelled: the charge pump, the contrast, the
-//! pre-charge and VCOMH levels, the multiplex ratio and the hardware scroll.
+//! pre-charge and VCOMH levels, and the hardware scroll.
 //! The first four are analog facts about a panel nobody is looking at
 //! through a simulator, and the arguments are consumed so they cannot be
 //! read as commands. Scrolling is consumed the same way — the command sets
@@ -97,6 +97,10 @@ impl Panel {
     }
 }
 
+/// How many pages of memory the controller has. Eight, whatever the glass
+/// in front of it turns out to be.
+const PAGES: usize = 8;
+
 /// Where the pointer goes after a byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -127,6 +131,9 @@ enum Wait {
     /// `0x22`: the page window.
     PageStart,
     PageEnd,
+    /// `0xA8`: how many rows the glass has, which the driver knows and
+    /// this cannot.
+    Multiplex,
     /// A command whose arguments change nothing on the glass. Counted so
     /// they are consumed rather than read as commands of their own — a
     /// contrast of `0xAF` would otherwise switch the display on.
@@ -184,23 +191,28 @@ impl Screen {
         Screen::new(panel, 128, 64)
     }
 
-    /// A screen of a stated size. The height is rounded up to whole pages,
-    /// because the controller's memory is pages and a driver addressing the
-    /// last one would otherwise write past the end.
+    /// A screen of a stated size.
+    ///
+    /// **The memory is the controller's and the glass is the module's.**
+    /// An SSD1306 has eight pages of RAM whatever is in front of it, so
+    /// that is what is allocated; the height only says how much of it is
+    /// lit, and the driver corrects it with the multiplex ratio it sets —
+    /// a 128×32 module is `0xA8 0x1F`, which this reads rather than being
+    /// told. A height guessed at from the part number would draw the
+    /// common module's aspect for every panel.
     pub fn new(panel: Panel, width: usize, height: usize) -> Screen {
         let width = width.clamp(8, panel.columns());
         let height = height.clamp(8, 64);
-        let pages = height.div_ceil(8);
         Screen {
             panel,
             width,
             height,
-            ram: vec![0; pages * panel.columns()],
+            ram: vec![0; PAGES * panel.columns()],
             mode: panel.wakes_in(),
             column_start: 0,
             column_end: panel.columns() - 1,
             page_start: 0,
-            page_end: pages - 1,
+            page_end: PAGES - 1,
             column: 0,
             page: 0,
             waiting: Wait::None,
@@ -297,9 +309,11 @@ impl Screen {
         }
     }
 
-    /// How many pages of RAM this screen has.
+    /// How many pages of RAM this screen has. Always [`PAGES`] — the
+    /// method stays because every walk of the memory reads it, and a
+    /// controller with another shape would change it here.
     fn pages(&self) -> usize {
-        self.ram.len() / self.panel.columns()
+        PAGES
     }
 
     fn command(&mut self, byte: u8) {
@@ -339,6 +353,13 @@ impl Screen {
                 self.waiting = Wait::None;
                 return;
             }
+            Wait::Multiplex => {
+                // The glass, not the memory: a 128×32 module drives 32 COM
+                // lines and its RAM is still eight pages deep.
+                self.height = ((byte as usize & 0x3f) + 1).clamp(8, 64);
+                self.waiting = Wait::None;
+                return;
+            }
             Wait::Ignore(left) => {
                 self.waiting = if left > 1 {
                     Wait::Ignore(left - 1)
@@ -371,9 +392,10 @@ impl Screen {
             0xa5 => self.all_on = true,
             0xa6 => self.inverse = false,
             0xa7 => self.inverse = true,
-            // Multiplex ratio, display offset, clock, pre-charge, COM pins,
-            // VCOMH: an argument each, none of them visible here.
-            0xa8 | 0xd3 | 0xd5 | 0xd9 | 0xda | 0xdb => self.waiting = Wait::Ignore(1),
+            0xa8 => self.waiting = Wait::Multiplex,
+            // Display offset, clock, pre-charge, COM pins, VCOMH: an
+            // argument each, none of them visible here.
+            0xd3 | 0xd5 | 0xd9 | 0xda | 0xdb => self.waiting = Wait::Ignore(1),
             0xae => self.on = false,
             0xaf => self.on = true,
             0xb0..=0xb7 => self.page = (byte as usize & 0x07).min(pages.saturating_sub(1)),
@@ -571,6 +593,35 @@ mod tests {
             screen.lit(0, 0),
             "RAM column 2 is the left edge of the glass"
         );
+    }
+
+    /// A shorter module says so in its init, and the driver is the only
+    /// thing that knows: `0xA8 0x1F` is 32 rows. Drawn at 64 the picture
+    /// is half a screen with an empty half below it, which is the aspect
+    /// of a module nobody fitted.
+    #[test]
+    fn the_glass_is_as_tall_as_the_driver_says_and_the_memory_is_not() {
+        let mut screen = Screen::of(Panel::Ssd1306);
+        assert_eq!(screen.height(), 64);
+        screen.i2c(&[
+            0x00, 0xa8, 0x1f, 0x20, 0x00, 0x21, 0x00, 0x7f, 0x22, 0x00, 0x07, 0xaf,
+        ]);
+        assert_eq!(screen.height(), 32);
+        // The memory is still eight pages: a driver may address page 7 of a
+        // 128x32 module, and writing past the end would panic.
+        screen.i2c(&[0x40, 0x01]);
+        assert!(screen.lit(0, 0));
+        assert!(!screen.lit(0, 40), "past the glass");
+        for _ in 0..7 {
+            screen.i2c(
+                &[0x40]
+                    .iter()
+                    .chain([0x00u8; 128].iter())
+                    .copied()
+                    .collect::<Vec<u8>>(),
+            );
+        }
+        assert_eq!(screen.runs().len(), 1, "and nothing was drawn outside it");
     }
 
     #[test]
