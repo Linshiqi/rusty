@@ -436,16 +436,40 @@ pub(super) fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) 
 /// see the rest of the board: a wire drawn by hand could land exactly on
 /// top of one already there, which is two wires drawn as one line.
 pub(super) fn route_beside(parts: &[EditPart], wires: &[Wire], wire: &mut Wire) {
-    let Some(ends) = wire_ends(parts, wire) else {
+    lay(parts, &drawn_paths(parts, wires, None), wire);
+}
+
+/// Re-lay one wire of the sheet: its own bends dropped, and routed clear of
+/// every *other* wire — what "straighten" means once a bare elbow can run
+/// through a part.
+pub(super) fn relay(parts: &[EditPart], wires: &mut [Wire], index: usize) {
+    let Some(mut one) = wires.get(index).cloned() else {
         return;
     };
-    let drawn: Vec<Vec<(f64, f64)>> = wires
+    one.bends.clear();
+    let drawn = drawn_paths(parts, wires, Some(index));
+    lay(parts, &drawn, &mut one);
+    wires[index] = one;
+}
+
+/// Every wire's path as it is drawn, less one.
+fn drawn_paths(parts: &[EditPart], wires: &[Wire], except: Option<usize>) -> Vec<Vec<(f64, f64)>> {
+    wires
         .iter()
-        .filter_map(|other| {
+        .enumerate()
+        .filter(|(at, _)| Some(*at) != except)
+        .filter_map(|(_, other)| {
             let theirs = wire_ends(parts, other)?;
             Some(super::geometry::wire_path(&theirs, &other.bends))
         })
-        .collect();
+        .collect()
+}
+
+/// Route one wire round the parts and clear of these paths.
+fn lay(parts: &[EditPart], drawn: &[Vec<(f64, f64)>], wire: &mut Wire) {
+    let Some(ends) = wire_ends(parts, wire) else {
+        return;
+    };
     let (obstacles, own) = obstacles_for(&box_index(parts), wire);
     let [(a, out_a), (b, out_b)] = ends;
     wire.bends = route(
@@ -456,7 +480,7 @@ pub(super) fn route_beside(parts: &[EditPart], wires: &[Wire], wire: &mut Wire) 
         &Around {
             parts: &obstacles,
             own: &own,
-            wires: &drawn,
+            wires: drawn,
         },
     );
 }

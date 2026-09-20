@@ -806,7 +806,8 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
 
     let straighten_wire = move |index: usize| {
         checkpoint();
-        wires.update(|list| edit::straighten(list, index));
+        let list = parts.get_untracked();
+        wires.update(|all| edit::straighten(&list, all, index));
         dirty.set(true);
     };
     let remove_wire = move |index: usize| {

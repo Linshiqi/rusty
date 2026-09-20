@@ -374,10 +374,13 @@ pub(super) fn remove_wire(wires: &mut Vec<Wire>, index: usize) {
 }
 
 /// Forget a wire's bends, so it routes itself again.
-pub(super) fn straighten(wires: &mut [Wire], index: usize) {
-    if let Some(wire) = wires.get_mut(index) {
-        wire.bends.clear();
-    }
+pub(super) fn straighten(list: &[EditPart], wires: &mut [Wire], index: usize) {
+    // The author's bends go, and the wire is laid out afresh rather than
+    // left as the bare elbow: on a clear sheet those are the same line,
+    // and on a crowded one the bare elbow is a wire through somebody's
+    // display — which is the one way back into the mess this menu item
+    // exists to get out of.
+    layout::relay(list, wires, index);
 }
 
 #[cfg(test)]
