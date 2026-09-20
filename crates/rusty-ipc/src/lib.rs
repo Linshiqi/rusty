@@ -280,6 +280,8 @@ pub mod sim {
     /// One reading of a sensor on the sheet, moved while the simulation
     /// runs: the part, the channel, the value in the channel's unit.
     pub const SENSOR_SET: &str = "sim_sensor_set";
+    /// A key that joins two GPIOs — a matrix's, which is not a level.
+    pub const SWITCH: &str = "sim_switch";
     /// A Wokwi `diagram.json` read onto the sheet.
     pub const IMPORT_WOKWI: &str = "sim_import_wokwi";
 }

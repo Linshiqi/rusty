@@ -35,6 +35,10 @@ pub enum Behaviour {
     Switch,
     /// Three lamps with a common pin (`rusty:RGB_LED`).
     Rgb,
+    /// Sixteen keys on four rows and four columns (`rusty:Keypad`). A key
+    /// *joins* a row to a column rather than driving either, which is what
+    /// makes a matrix a matrix and what `switch_tie` reads for a switch.
+    Keypad,
     /// Addressable LEDs on one wire (`rusty:Strip`): a WS2812 chain, whose
     /// colours arrive as the bytes RMT clocked out rather than as levels on
     /// pins. Its pins carry no level of their own — the data wire is a
@@ -78,6 +82,7 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
         ("rusty", "Display") => return Behaviour::Display,
         ("rusty", "RGB_LED") => return Behaviour::Rgb,
         ("rusty", "Strip") => return Behaviour::Strip,
+        ("rusty", "Keypad") => return Behaviour::Keypad,
         ("rusty", "7SEG") => return Behaviour::Seven,
         ("rusty", "Motor") => return Behaviour::Motor,
         ("rusty", "GND" | "Supply") => return Behaviour::Power,
@@ -1803,6 +1808,68 @@ pub fn button_drives(sheet: &Sheet, rows: &[Row], part: &str) -> Option<(u8, boo
     Some((gpio_side.0?, rail_side.1? == Rail::Supply))
 }
 
+/// The GPIOs one key of a matrix keypad joins: its row's and its column's.
+///
+/// `row` and `column` are zero-based, as the drawing numbers its keys. The
+/// pins are named `R1`..`R4` and `C1`..`C4`, and either reaching no GPIO is
+/// `None` — a keypad with three wires on it can be pressed and the press
+/// reaches nothing, which the panel says rather than inventing a pin.
+pub fn keypad_tie(
+    sheet: &Sheet,
+    rows: &[Row],
+    part: &str,
+    row: usize,
+    column: usize,
+) -> Option<(u8, u8)> {
+    let a = gpio_of(sheet, rows, part, &format!("R{}", row + 1))?;
+    let b = gpio_of(sheet, rows, part, &format!("C{}", column + 1))?;
+    (a != b).then_some((a, b))
+}
+
+/// The two GPIOs a switch *joins*, when that is what it does.
+///
+/// A switch to a rail drives a level and `button_drives` says which; a
+/// switch between two GPIOs drives nothing at all — it connects them, and
+/// which way the level then flows is whichever of them the firmware is
+/// driving at that instant. That is a matrix keypad, and reading it as a
+/// drive is how a scanned row would look like every key in its column being
+/// held down.
+///
+/// Both sides must reach a GPIO and they must be different ones; anything
+/// else is `None` and the caller falls back to the rail reading.
+pub fn switch_tie(sheet: &Sheet, rows: &[Row], part: &str) -> Option<(u8, u8)> {
+    let mut graph = Graph::new(sheet, rows);
+    let wired = graph.wired();
+    let solid = graph.solid(&wired, &HashSet::new());
+    let mut dc = graph.conducting(&solid);
+    let symbol = sheet.symbol_of(part)?;
+    let mut sides: Vec<u8> = Vec::new();
+    let mut seen_roots: Vec<Node> = Vec::new();
+
+    for pin in &symbol.pins {
+        let Some(node) = graph.pin_node(part, &pin.number) else {
+            continue;
+        };
+        let root = dc.find(node);
+        if seen_roots.contains(&root) {
+            continue;
+        }
+        seen_roots.push(root);
+        for (other, other_pin) in graph.nodes.iter().enumerate() {
+            if other_pin.part != KIT_REFERENCE || dc.find(other) != root {
+                continue;
+            }
+            if let Some(gpio) = kit_pin(rows, &other_pin.pin).and_then(|row| rows[row].gpio) {
+                sides.push(gpio);
+                break;
+            }
+        }
+    }
+    sides.sort_unstable();
+    sides.dedup();
+    (sides.len() == 2).then(|| (sides[0], sides[1]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1886,6 +1953,21 @@ mod tests {
                 "Sensor",
                 "U",
                 &[("1", "SDA"), ("2", "SCL"), ("3", "VCC"), ("4", "GND")],
+            ),
+            symbol(
+                "rusty",
+                "Keypad",
+                "KP",
+                &[
+                    ("1", "R1"),
+                    ("2", "R2"),
+                    ("3", "R3"),
+                    ("4", "R4"),
+                    ("5", "C1"),
+                    ("6", "C2"),
+                    ("7", "C3"),
+                    ("8", "C4"),
+                ],
             ),
         ];
         sheet
@@ -2029,6 +2111,67 @@ mod tests {
         assert!(eval(&s, &[(8, false)], &[]).is_lit("D2"));
         assert!(!eval(&s, &[(8, true)], &[]).is_lit("D2"));
         assert_eq!(eval(&s, &[], &[]).warnings.len(), 1);
+    }
+
+    /// A key between two GPIOs joins them; it drives neither. That is the
+    /// difference a matrix rests on, and reading it as a drive is how a
+    /// scanned row would look like every key in its column held down.
+    #[test]
+    fn a_switch_between_two_gpios_is_a_tie_and_not_a_drive() {
+        let mut s = sheet();
+        place(&mut s, "SW1", "Device:SW_Push");
+        wire(&mut s, "U1.GPIO9", "SW1.1");
+        wire(&mut s, "SW1.2", "U1.GPIO4");
+        let rows = rows();
+        assert_eq!(
+            switch_tie(&s, &rows, "SW1"),
+            Some((4, 9)),
+            "lower pin first"
+        );
+        assert_eq!(
+            button_drives(&s, &rows, "SW1"),
+            None,
+            "there is no rail, so nothing is driven"
+        );
+
+        // A switch to a rail is the other thing, and must not read as a tie.
+        let mut s = sheet();
+        place(&mut s, "SW2", "Device:SW_Push");
+        wire(&mut s, "U1.GPIO9", "SW2.1");
+        wire(&mut s, "SW2.2", "U1.GND");
+        assert_eq!(switch_tie(&s, &rows, "SW2"), None);
+        assert_eq!(button_drives(&s, &rows, "SW2"), Some((9, false)));
+
+        // And one side unwired joins nothing at all.
+        let mut s = sheet();
+        place(&mut s, "SW3", "Device:SW_Push");
+        wire(&mut s, "U1.GPIO9", "SW3.1");
+        assert_eq!(switch_tie(&s, &rows, "SW3"), None);
+    }
+
+    /// A keypad's key is named by its row and column, and the pins it joins
+    /// are whatever those two reach. A row wired and a column not is
+    /// nothing — a press that reaches no pin is said rather than invented.
+    #[test]
+    fn a_keypads_key_joins_the_gpios_its_row_and_column_reach() {
+        let mut s = sheet();
+        place(&mut s, "KP1", "rusty:Keypad");
+        wire(&mut s, "KP1.R1", "U1.GPIO9");
+        wire(&mut s, "KP1.R3", "U1.GPIO4");
+        wire(&mut s, "KP1.C2", "U1.GPIO8");
+        let rows = rows();
+        assert_eq!(keypad_tie(&s, &rows, "KP1", 0, 1), Some((9, 8)));
+        assert_eq!(keypad_tie(&s, &rows, "KP1", 2, 1), Some((4, 8)));
+        assert_eq!(
+            keypad_tie(&s, &rows, "KP1", 1, 1),
+            None,
+            "row 2 is not wired"
+        );
+        assert_eq!(
+            keypad_tie(&s, &rows, "KP1", 0, 0),
+            None,
+            "column 1 is not wired"
+        );
     }
 
     /// A pull-up button: GPIO9 — SW1 — GND. Pressing it puts ground on the

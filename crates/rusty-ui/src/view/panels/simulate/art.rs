@@ -27,6 +27,43 @@ use super::geometry::local;
 /// is drawn this wide per pixel, so the part grows with the chain.
 const STRIP_PITCH: f64 = 14.0;
 
+/// How far apart a keypad's caps sit, and how big its board is. Four keys
+/// and a margin either side.
+const KEYPAD_PITCH: f64 = 15.0;
+const KEYPAD_HALF: f64 = KEYPAD_PITCH * 2.4;
+
+/// What is printed on a matrix keypad's keys, row by row — the arrangement
+/// every 4x4 pad on a desk has.
+pub(super) const KEYPAD_LABELS: [[char; 4]; 4] = [
+    ['1', '2', '3', 'A'],
+    ['4', '5', '6', 'B'],
+    ['7', '8', '9', 'C'],
+    ['*', '0', '#', 'D'],
+];
+
+/// Where each key sits, as `(label, x, y, half-width)`, from the row its
+/// layout reserved. One rule for the drawing, for the paint over it and for
+/// the press, so a key that lights is the key that was hit and the key the
+/// firmware reads.
+pub(super) fn keypad_keys(plan: &Layout) -> Vec<(char, f64, f64, f64)> {
+    let Some((fx, fy, fw, fh)) = plan.face else {
+        return Vec::new();
+    };
+    let step = (fw / 4.0).min(fh / 4.0);
+    let mut keys = Vec::new();
+    for (r, row) in KEYPAD_LABELS.iter().enumerate() {
+        for (c, label) in row.iter().enumerate() {
+            keys.push((
+                *label,
+                fx + step * (c as f64 + 0.5),
+                fy + step * (r as f64 + 0.5),
+                step * 0.38,
+            ));
+        }
+    }
+    keys
+}
+
 /// How many LEDs a strip's value says are on it.
 ///
 /// The value, because that is what is written beside a part and a strip's
@@ -111,6 +148,9 @@ enum Look {
     Rgb,
     /// Addressable LEDs in a row on one board.
     Strip,
+    /// A matrix keypad: sixteen caps on a board, rows down one side and
+    /// columns down the other.
+    Keypad,
     Seven,
     Resistor,
     Capacitor,
@@ -141,6 +181,7 @@ fn look(symbol: &Symbol) -> Look {
         Behaviour::Led => Look::Led,
         Behaviour::Rgb => Look::Rgb,
         Behaviour::Strip => Look::Strip,
+        Behaviour::Keypad => Look::Keypad,
         Behaviour::Seven => Look::Seven,
         Behaviour::Resistor => Look::Resistor,
         Behaviour::Capacitor => Look::Capacitor,
@@ -287,6 +328,41 @@ pub(super) fn layout(symbol: &Symbol, value: &str) -> Layout {
                 bounds: (-13.0, -22.0, 13.0, 26.0),
                 lens: Some((0.0, -9.0, 11.0)),
                 face: None,
+            }
+        }
+
+        // A keypad: the rows down the left, the columns down the right,
+        // and the sixteen caps between them as the face — the view paints
+        // which one is held, because that is what the firmware is reading.
+        Look::Keypad => {
+            let mut spots = Vec::new();
+            for pin in &pins {
+                let column = pin.name.starts_with('C');
+                let index = pin
+                    .name
+                    .trim_start_matches(['R', 'C'])
+                    .parse::<usize>()
+                    .unwrap_or(1)
+                    .clamp(1, 4)
+                    - 1;
+                let y = -KEYPAD_PITCH * 1.5 + KEYPAD_PITCH * index as f64;
+                spots.push(Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at: (if column { KEYPAD_HALF } else { -KEYPAD_HALF }, y),
+                    out: (if column { 1.0 } else { -1.0 }, 0.0),
+                });
+            }
+            Layout {
+                spots,
+                bounds: (-KEYPAD_HALF, -KEYPAD_HALF, KEYPAD_HALF, KEYPAD_HALF),
+                lens: None,
+                face: Some((
+                    -KEYPAD_PITCH * 2.0,
+                    -KEYPAD_PITCH * 2.0,
+                    KEYPAD_PITCH * 4.0,
+                    KEYPAD_PITCH * 4.0,
+                )),
             }
         }
 
@@ -646,6 +722,26 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
 <rect x="-10" y="1.5" width="20" height="4.5" rx="1.5" fill="#c6ccd5" stroke="{LEAD_DARK}" stroke-width="0.8"/>
 <rect x="-10" y="1.5" width="4.5" height="4.5" rx="1.5" fill="#8f97a3"/>"##
             ));
+        }
+
+        // The board and its caps. Which one is held is painted over
+        // this, because that is what the firmware is reading.
+        Look::Keypad => {
+            out.push_str(&format!(
+                    r##"<rect x="{x}" y="{x}" width="{w}" height="{w}" rx="3" fill="#20242b" stroke="#3a4049" stroke-width="1"/>"##,
+                    x = -KEYPAD_HALF,
+                    w = KEYPAD_HALF * 2.0,
+                ));
+            for (label, cx, cy, half) in keypad_keys(&plan) {
+                out.push_str(&format!(
+                        r##"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{w:.1}" rx="2" fill="#2d323a" stroke="#454c56" stroke-width="0.8"/>
+<text x="{cx:.1}" y="{ty:.1}" text-anchor="middle" font-family="ui-monospace" font-size="7" fill="#c6ccd5">{label}</text>"##,
+                        x = cx - half,
+                        y = cy - half,
+                        w = half * 2.0,
+                        ty = cy + 2.5,
+                    ));
+            }
         }
 
         // The board and the dark lenses. What is lit is painted over

@@ -223,6 +223,31 @@ pub fn sim_press(state: AppState, pin: u8, down: bool) {
     sim_send(state, format!("B{pin}={}", if down { 1 } else { 0 }));
 }
 
+/// A key that **joins two GPIOs** rather than driving one — a matrix's.
+///
+/// Not a level and not a console message: during a scan the row is an
+/// output for a moment and the column an input with a pull-up, so what the
+/// key does is connect them and let the row decide. Driving the column low
+/// instead would be holding down every key in that column, and rusty's text
+/// protocol has no way to say the true thing, so the console hears nothing.
+pub fn sim_switch(state: AppState, a: u8, b: u8, closed: bool) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        a: u8,
+        b: u8,
+        closed: bool,
+    }
+    if !state.app.session_running.get_untracked() {
+        return;
+    }
+    let args = Args { a, b, closed };
+    spawn_local(async move {
+        if let Err(error) = ipc::call::<_, ()>(cmd::sim::SWITCH, &args).await {
+            say(state, error.message);
+        }
+    });
+}
+
 /// A potentiometer moved: `P<pin>=<0..255>` into the firmware's UART.
 pub fn sim_pot(state: AppState, pin: u8, value: u8) {
     sim_send(state, format!("P{pin}={value}"));

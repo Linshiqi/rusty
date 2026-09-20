@@ -44,7 +44,7 @@ esac
 # Pinned, every one of them. A tool version that comes from `latest` is not a
 # version: the build that ships is then whatever the release page held that
 # morning, and a bug report names an installer rather than a binary.
-qemu_tag="${RUSTY_QEMU_TAG:-qemu-v5}"
+qemu_tag="${RUSTY_QEMU_TAG:-qemu-v6}"
 gdb_release=esp-gdb-v14.2_20240403
 gdb_version=14.2_20240403
 espflash_version=v4.0.1
@@ -180,7 +180,7 @@ find "$dest/qemu/share/qemu" -mindepth 1 -maxdepth 1 ! -name 'esp32*' -exec rm -
 # then hangs the firmware in `wait()`, or leaves a servo still, with nothing
 # on screen to say the installer is a generation behind.
 missing=""
-for marker in gpio adc i2c spi pwm rmt; do
+for marker in gpio adc i2c spi pwm rmt sw; do
   grep -q "\[rusty:$marker@" "$dest"/qemu/bin/qemu-system-riscv32* || missing="$missing $marker"
 done
 if [ -z "$missing" ]; then

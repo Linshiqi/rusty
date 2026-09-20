@@ -170,6 +170,12 @@ impl PinChannel {
         self.say(&protocol::wire_line(device.select, &device.miso));
     }
 
+    /// Join or part two pads, which is what a key in a matrix does. See
+    /// [`protocol::switch_line`] for why this is not a level.
+    pub fn tie(&self, a: u8, b: u8, closed: bool) {
+        self.say(&protocol::switch_line(a, b, closed));
+    }
+
     /// A line the simulation is sent on its console. The two console
     /// messages that are also about a pin reach the pin as well: `B14=1`
     /// for firmware reading rusty's text protocol and `14=1` for firmware

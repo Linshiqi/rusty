@@ -22,6 +22,7 @@ fn glyph(symbol: &Symbol) -> &'static str {
         Behaviour::Rgb => {
             "size-3.5 rounded-full bg-[conic-gradient(#ff5c5c,#3ddc84,#4aa8ff,#ff5c5c)]"
         }
+        Behaviour::Keypad => "grid size-3.5 grid-cols-2 gap-px rounded-[2px] bg-line-strong p-px",
         Behaviour::Strip => {
             "h-2 w-4 rounded-[2px] bg-[linear-gradient(90deg,#ff5c5c_0_33%,#3ddc84_33%_66%,#4aa8ff_66%)]"
         }

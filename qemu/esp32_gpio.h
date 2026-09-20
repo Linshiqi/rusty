@@ -578,6 +578,59 @@ typedef struct Esp32I2cDevice {
     uint8_t regs[256];
 } Esp32I2cDevice;
 
+/*
+ * IO_MUX, which this device also answers for — the seventh peripheral, and
+ * the smallest.
+ *
+ * A pad's pull-up and pull-down live here, not in the GPIO peripheral, and
+ * without them an input nobody drives reads whatever it last read. That is
+ * the quiet wrong answer behind every button: `Input::new(pin, Pull::Up)`
+ * and `is_low()` is how nearly every button on every board is read, and a
+ * model with no pull leaves the pin at zero — a button that reads as held
+ * down from the moment the firmware starts, until the host happens to drive
+ * it high. It is also the whole of what a matrix keypad rests on: the
+ * columns float to their pull-ups and a pressed key drags one down to the
+ * row driving it.
+ *
+ * Only the two bits are modelled. The drive strength, the function select
+ * and the input enable are stored and answered so a driver's
+ * read-modify-write keeps what it put there, and nothing here acts on them:
+ * a pad's function is the matrix's business (`FUNC_OUT_SEL_CFG`), which
+ * this device already reads.
+ *
+ * **Mapped on the C3 only.** The ESP32's IO_MUX registers are not in pin
+ * order — they are a table indexed by pad name — so the same arithmetic
+ * would put GPIO2's pull on another pin's register. With the region
+ * unmapped there, `io_mux` stays zero, no pin has a pull, and that machine
+ * behaves exactly as it did.
+ */
+#define ESP32_IOMUX_REGION 0x1000
+/* `IO_MUX_PIN_CTRL` is at 0, and the pads follow it one word each. */
+#define ESP32_IOMUX_PIN0 0x04
+#define ESP32_IOMUX_WPD (1u << 7)
+#define ESP32_IOMUX_WPU (1u << 8)
+
+/* How many pin-to-pin switches the host may declare.
+ *
+ * Sixteen is a 4x4 keypad, which is the case this exists for; a larger
+ * matrix declares more switches than this and the ones past the end are
+ * refused by name rather than silently dropped. */
+#define ESP32_GPIO_SWITCHES 24
+
+/* A switch between two pads, as the host declared it.
+ *
+ * Not a level and not a drive: a closed switch *joins* two pads, and which
+ * way the level then flows is whichever of them is driving. That is the
+ * difference between this and `<pin>=<level>`, and the reason a matrix
+ * needs it — a key ties a row to a column, and the row is an output only
+ * during the moment the firmware scans it. */
+typedef struct Esp32GpioSwitch {
+    bool present;
+    bool closed;
+    uint8_t a;
+    uint8_t b;
+} Esp32GpioSwitch;
+
 typedef struct Esp32GpioState {
     SysBusDevice parent_obj;
 
@@ -596,6 +649,15 @@ typedef struct Esp32GpioState {
     uint64_t out;
     uint64_t enable;
     uint64_t in;
+    /* Which pins the host has *said* a level for. A pull only answers for a
+     * pad nobody is driving, so "the host drove it low" and "the host has
+     * said nothing about it" have to be different states — `in` alone
+     * cannot tell them apart, and a pull-up would then never be believed. */
+    uint64_t host_driven;
+    /* What each pad is at once the switches and the pulls have been read:
+     * what an input reads, and what the pin channel reports. Recomputed by
+     * `esp32_gpio_settle`, which is the only writer. */
+    uint64_t resolved_in;
 
     /* The interrupt half: what has fired and is waiting to be read, how
      * each pin is configured to fire, and where this part keeps those
@@ -692,6 +754,13 @@ typedef struct Esp32GpioState {
     uint32_t rmt_int_raw;
     uint32_t rmt_int_ena;
     uint32_t rmt_sys_conf;
+
+    /* IO_MUX: one register per pad, of which two bits are modelled. */
+    MemoryRegion iomux_iomem;
+    uint32_t io_mux[ESP32_GPIO_PINS];
+
+    /* The switches the host has put between pads. */
+    Esp32GpioSwitch switches[ESP32_GPIO_SWITCHES];
 } Esp32GpioState;
 
 typedef struct Esp32GpioClass {

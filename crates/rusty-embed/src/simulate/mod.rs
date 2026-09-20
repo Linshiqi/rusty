@@ -549,18 +549,27 @@ const SPI_MODEL_MARKER: &[u8] = b"[rusty:spi@";
 /// proxy would wave through.
 const PWM_MODEL_MARKER: &[u8] = b"[rusty:pwm@";
 const RMT_MODEL_MARKER: &[u8] = b"[rusty:rmt@";
+/// And the pads themselves: a build that can *join* two of them, and that
+/// answers an input nobody is driving with the pad's own pull. One marker
+/// for the two because they are one replacement file built together —
+/// halves of the same model rather than a proxy for each other. Without
+/// them a keypad's key reaches an emulator that drops the line, and every
+/// `Pull::Up` button reads as held down from reset.
+const PAD_MODEL_MARKER: &[u8] = b"[rusty:sw@";
 
 /// Every model this rusty drives, in one list: what `has_peripherals`
 /// requires and what ranks one copy of the emulator against another.
-const PERIPHERAL_MARKERS: [&[u8]; 5] = [
+const PERIPHERAL_MARKERS: [&[u8]; 6] = [
     ADC_MODEL_MARKER,
     I2C_MODEL_MARKER,
     SPI_MODEL_MARKER,
     PWM_MODEL_MARKER,
     RMT_MODEL_MARKER,
+    PAD_MODEL_MARKER,
 ];
 
-/// Does this emulator model the converter, both buses, LEDC and RMT?
+/// Does this emulator model the converter, both buses, LEDC, RMT and the
+/// pads' own pulls and switches?
 pub fn has_peripherals(qemu: &Path) -> bool {
     PERIPHERAL_MARKERS
         .into_iter()
@@ -886,7 +895,7 @@ mod tests {
         );
         let current = write(
             &dir.path().join("bundle"),
-            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@",
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@               [rusty:sw@",
         );
         let both = Machine {
             tools: Some(dir.path().join("data")),

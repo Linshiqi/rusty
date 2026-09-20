@@ -285,6 +285,19 @@ pub fn parse_pwm_report(line: &str) -> Option<PwmReport> {
     (!pins.is_empty()).then_some(PwmReport { at_us, pins })
 }
 
+/// `sw 4-6=1` — the line that closes a switch between two pads.
+///
+/// A switch that reaches a rail *drives* its GPIO and goes as a level
+/// ([`pin_line`]); a switch between two GPIOs drives nothing, it joins
+/// them, and which way the level flows is whichever of the two the firmware
+/// is driving at that instant. That is a matrix keypad, and it is the one
+/// thing a level cannot say: during a scan the row is an output for a
+/// moment, so driving the column low instead would be holding down every
+/// key in that column.
+pub fn switch_line(a: u8, b: u8, closed: bool) -> String {
+    format!("sw {a}-{b}={}\n", u8::from(closed))
+}
+
 /// One `[rusty:rmt]` line: what a transmission put on a pin, as bytes.
 ///
 /// RMT sends pulse codes, and every one-wire LED protocol — WS2812, SK6812,

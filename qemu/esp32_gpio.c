@@ -59,8 +59,125 @@
  * reporting a number nothing can observe. */
 static inline int esp32_gpio_level(Esp32GpioState *s, uint64_t bit)
 {
-    uint64_t source = (s->enable & bit) ? s->out : s->in;
+    uint64_t source = (s->enable & bit) ? s->out : s->resolved_in;
     return (source & bit) ? 1 : 0;
+}
+
+/* The pad's own pull, or -1 where the guest has configured none. */
+static int esp32_gpio_pull(Esp32GpioState *s, int pin)
+{
+    uint32_t mux = s->io_mux[pin];
+
+    if (mux & ESP32_IOMUX_WPU) {
+        return 1;
+    }
+    if (mux & ESP32_IOMUX_WPD) {
+        return 0;
+    }
+    return -1;
+}
+
+/* What a closed switch puts on this pad, or -1 where none does.
+ *
+ * A switch joins two pads; the level comes from whichever of them is being
+ * *driven*, which is the pin the firmware has made an output. A matrix key
+ * is exactly that — the row is an output for the moment it is scanned, and
+ * the column is an input with a pull-up the rest of the time. Two closed
+ * switches driving one pad from two directions take the first declared,
+ * because on a real board that is a short between two outputs and there is
+ * no right answer to report. */
+static int esp32_gpio_tied(Esp32GpioState *s, int pin)
+{
+    for (unsigned i = 0; i < ESP32_GPIO_SWITCHES; i++) {
+        Esp32GpioSwitch *sw = &s->switches[i];
+        int peer;
+
+        if (!sw->present || !sw->closed) {
+            continue;
+        }
+        if (sw->a == pin) {
+            peer = sw->b;
+        } else if (sw->b == pin) {
+            peer = sw->a;
+        } else {
+            continue;
+        }
+        if (s->enable & (1ULL << peer)) {
+            return (s->out & (1ULL << peer)) ? 1 : 0;
+        }
+    }
+    return -1;
+}
+
+/*
+ * What every pad reads, in the order a pad is actually decided.
+ *
+ * A pin somebody is driving through a closed switch wins; then a level the
+ * host stated for the pad itself; then the pad's own pull; then what it was
+ * left at, which is zero from reset. The order is the physics: a driver
+ * beats a pull, and a pull only answers when nothing is driving.
+ *
+ * An output's own pad is whatever it is driving, so it is settled here too
+ * — a switch from an output to an input carries that level, and an output
+ * reading itself back is `esp32_gpio_level`'s business.
+ */
+static uint64_t esp32_gpio_resolve(Esp32GpioState *s)
+{
+    uint64_t level = 0;
+
+    for (int pin = 0; pin < ESP32_GPIO_PINS; pin++) {
+        uint64_t bit = 1ULL << pin;
+        int at;
+
+        if (s->enable & bit) {
+            at = (s->out & bit) ? 1 : 0;
+        } else if ((at = esp32_gpio_tied(s, pin)) >= 0) {
+            /* driven through a switch */
+        } else if (s->host_driven & bit) {
+            at = (s->in & bit) ? 1 : 0;
+        } else if ((at = esp32_gpio_pull(s, pin)) >= 0) {
+            /* pulled up or down by the pad itself */
+        } else {
+            at = (s->in & bit) ? 1 : 0;
+        }
+        if (at) {
+            level |= bit;
+        }
+    }
+    return level;
+}
+
+/* Defined below, with the rest of the channel's writers. */
+static void esp32_gpio_report(Esp32GpioState *s, uint64_t changed);
+static void esp32_gpio_int_update(Esp32GpioState *s, uint64_t edges);
+
+/*
+ * Work out what every pad is at, and tell whoever needs to know.
+ *
+ * Everything that can change a level without the guest writing `GPIO_OUT`
+ * ends here: a host line, a switch opening or closing, a pull being
+ * configured, an output changing under a closed switch. The report and the
+ * edges come from the difference, so a pin that did not move says nothing
+ * and a pin that did interrupts the firmware exactly once.
+ *
+ * `reported` is what the caller has already accounted for — the guest's own
+ * `GPIO_OUT` write reports itself, and reporting it twice would put a
+ * repeat on the channel.
+ */
+static void esp32_gpio_settle(Esp32GpioState *s, uint64_t reported)
+{
+    uint64_t before = s->resolved_in;
+    uint64_t changed;
+
+    s->resolved_in = esp32_gpio_resolve(s);
+    changed = (before ^ s->resolved_in) & ~reported;
+    if (changed == 0) {
+        return;
+    }
+    esp32_gpio_report(s, changed);
+    /* Only pads the guest is *reading* can interrupt it on this path: an
+     * output's own edge is raised where the guest wrote it. */
+    esp32_gpio_int_update(s, changed & ~s->enable);
 }
 
 /* Whether this pad is `GPIO_OUT`'s to drive, or a peripheral's.
@@ -342,6 +459,95 @@ static unsigned esp32_hex_bytes(const char *text, uint8_t *out, unsigned max)
 }
 
 /*
+ * What the model did with a switch, on the channel the pins travel.
+ *
+ * `[rusty:sw@<us>] 4-6=1`. Two accounts of one thing, as everywhere else
+ * here: the host says what it pressed and the device says what it joined,
+ * and a key that reached a build too old to know the line says nothing at
+ * all rather than looking like a key that does nothing.
+ *
+ * It is also **the marker this generation is recognised by**. A host
+ * scanning the binary for `[rusty:sw@` learns that this emulator ties pads
+ * *and* that it models the pads' pulls, because the two are in this one
+ * file and are built together — not a proxy for each other but two halves
+ * of the same replacement, which cannot be half present.
+ */
+static void esp32_gpio_say_switch(Esp32GpioState *s, const Esp32GpioSwitch *sw)
+{
+    char line[64];
+    int at;
+
+    if (!qemu_chr_fe_backend_connected(&s->pins)) {
+        return;
+    }
+    at = snprintf(line, sizeof(line), "[rusty:sw@%" PRId64 "] %u-%u=%u\n",
+                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), sw->a, sw->b,
+                  sw->closed ? 1u : 0u);
+    qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
+}
+
+/*
+ * A switch between two pads.
+ *
+ *   sw 4-5=1     the key joining GPIO4 and GPIO5 is held down
+ *   sw 4-5=0     it is released — the pads part again
+ *
+ * Declared by pressing it: the first `sw a-b=` for a pair makes the switch,
+ * and every later line for the same pair moves the one that is there. A
+ * matrix keypad is sixteen of these, and nothing about it is special — the
+ * rows are outputs while they are scanned and the columns are inputs with
+ * pull-ups, and a held key is what carries one to the other.
+ *
+ * **Not a level.** `4=0` says what the *host* is driving onto a pad; this
+ * says two pads are connected and lets whichever of them the firmware is
+ * driving decide. That difference is the whole of why a matrix could not be
+ * simulated before: during a scan the row is an output for a moment, and a
+ * host driving the column low instead would be pressing every key in that
+ * column at once.
+ *
+ * A pair past the table is refused by name rather than dropped, because a
+ * keypad that silently lost its last row would read as a broken model.
+ */
+static void esp32_gpio_host_switch(Esp32GpioState *s)
+{
+    unsigned a, b, closed;
+    Esp32GpioSwitch *free_slot = NULL;
+
+    if (sscanf(s->host_line, "sw %u-%u=%u", &a, &b, &closed) != 3
+        || a >= ESP32_GPIO_PINS || b >= ESP32_GPIO_PINS || a == b) {
+        return;
+    }
+    for (unsigned i = 0; i < ESP32_GPIO_SWITCHES; i++) {
+        Esp32GpioSwitch *sw = &s->switches[i];
+
+        if (!sw->present) {
+            free_slot = free_slot ? free_slot : sw;
+            continue;
+        }
+        if ((sw->a == a && sw->b == b) || (sw->a == b && sw->b == a)) {
+            sw->closed = closed != 0;
+            esp32_gpio_say_switch(s, sw);
+            esp32_gpio_settle(s, 0);
+            return;
+        }
+    }
+    if (free_slot == NULL) {
+        char line[64];
+        int at = snprintf(line, sizeof(line),
+                          "[rusty:pins] switches full, %u-%u refused\n", a, b);
+
+        qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
+        return;
+    }
+    free_slot->present = true;
+    free_slot->closed = closed != 0;
+    free_slot->a = (uint8_t)a;
+    free_slot->b = (uint8_t)b;
+    esp32_gpio_say_switch(s, free_slot);
+    esp32_gpio_settle(s, 0);
+}
+
+/*
  * What the host puts on the two buses.
  *
  *   i2c 68:75=68     device 0x68, register 0x75 onwards, one byte 0x68
@@ -424,7 +630,9 @@ static void esp32_gpio_host_read(void *opaque, const uint8_t *buf, int size)
             unsigned pin, level;
 
             s->host_line[s->host_at] = '\0';
-            if (s->host_line[0] == 'i' || s->host_line[0] == 's') {
+            if (strncmp(s->host_line, "sw ", 3) == 0) {
+                esp32_gpio_host_switch(s);
+            } else if (s->host_line[0] == 'i' || s->host_line[0] == 's') {
                 esp32_gpio_host_bus(s);
             } else if (sscanf(s->host_line, "A%u=%u", &pin, &level) == 2
                 && pin < ESP32_GPIO_PINS) {
@@ -439,14 +647,17 @@ static void esp32_gpio_host_read(void *opaque, const uint8_t *buf, int size)
                 uint64_t before = s->in;
 
                 s->in = level ? (s->in | bit) : (s->in & ~bit);
+                /* Said, so a pull no longer answers for this pad: the host
+                 * has taken it over. Without this a `4=0` against a
+                 * configured pull-up would be read back as the pull's 1. */
+                s->host_driven |= bit;
+                (void)before;
                 /* Only a real change is reported, so a host holding a button
-                 * down does not fill the channel with one repeated line. */
-                esp32_gpio_report(s, before ^ s->in);
-                /* And it is an edge on that pin, so firmware waiting on an
-                 * interrupt runs — a button that worked only when polled
-                 * was the gap this closes. Masked by `enable`, because a
-                 * pin the guest is driving does not hear the host. */
-                esp32_gpio_int_update(s, (before ^ s->in) & ~s->enable);
+                 * down does not fill the channel with one repeated line —
+                 * and it is an edge on that pin, so firmware waiting on an
+                 * interrupt runs. Both are `settle`'s, which is where every
+                 * other way a pad can move ends too. */
+                esp32_gpio_settle(s, 0);
             }
             s->host_at = 0;
         } else if (s->host_at < sizeof(s->host_line) - 1) {
@@ -491,13 +702,17 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
 
     /* An output pin reads back its own driven level, which is what the
      * silicon does and what firmware toggling a pin by read-modify-write
-     * depends on. */
+     * depends on. An input pin reads the *settled* pad — what a closed
+     * switch or the pad's own pull put there, not the raw `in` the host
+     * last wrote. Reading `in` here left every pull-up invisible to the
+     * firmware while the pin channel reported it correctly: a keypad whose
+     * columns rested high for the host and low for the guest. */
     case A_GPIO_IN:
-        r = (uint32_t)((s->in & ~s->enable) | (s->out & s->enable));
+        r = (uint32_t)((s->resolved_in & ~s->enable) | (s->out & s->enable));
         break;
 
     case A_GPIO_IN1:
-        r = (uint32_t)(((s->in & ~s->enable) | (s->out & s->enable)) >> 32);
+        r = (uint32_t)(((s->resolved_in & ~s->enable) | (s->out & s->enable)) >> 32);
         break;
 
     case A_GPIO_STATUS:
@@ -666,12 +881,56 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
 
     /* A direction change alters what a pin reports even when its level did
      * not move, so both registers decide what counts as changed. */
-    esp32_gpio_report(s, (before_out ^ s->out) | (before_enable ^ s->enable));
+    uint64_t reported = (before_out ^ s->out) | (before_enable ^ s->enable);
+
+    esp32_gpio_report(s, reported);
     /* A pin the guest drives is a pin that can interrupt the guest — the
      * loopback silicon has, and what firmware testing its own handler
      * depends on. The clear path lands here too, with no edges at all. */
     esp32_gpio_int_update(s, (before_out ^ s->out) & s->enable);
+    /* And the pads on the other side of a closed switch, which this write
+     * has just moved: a scanned row drags its column down with it, which is
+     * the whole of what a matrix key does. Told what has been reported
+     * already, so the row itself is not said twice. */
+    esp32_gpio_settle(s, reported);
 }
+
+static uint64_t esp32_iomux_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+
+    if (addr >= ESP32_IOMUX_PIN0
+        && addr < ESP32_IOMUX_PIN0 + 4 * ESP32_GPIO_PINS) {
+        return s->io_mux[(addr - ESP32_IOMUX_PIN0) / 4];
+    }
+    return 0;
+}
+
+static void esp32_iomux_write(void *opaque, hwaddr addr, uint64_t value,
+                              unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+
+    if (addr >= ESP32_IOMUX_PIN0
+        && addr < ESP32_IOMUX_PIN0 + 4 * ESP32_GPIO_PINS) {
+        int pin = (addr - ESP32_IOMUX_PIN0) / 4;
+
+        /* Stored whole, so a driver's read-modify-write of a field this
+         * has no opinion about keeps what it put there. */
+        s->io_mux[pin] = (uint32_t)value;
+        /* A pull configured is a pad that may have just moved — an input
+         * with `Pull::Up` reads high from that instant, which is what
+         * `Input::new(pin, Pull::Up)` means and what every button is read
+         * through. */
+        esp32_gpio_settle(s, 0);
+    }
+}
+
+static const MemoryRegionOps iomux_ops = {
+    .read = esp32_iomux_read,
+    .write = esp32_iomux_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
 
 static const MemoryRegionOps uart_ops = {
     .read =  esp32_gpio_read,
@@ -2053,6 +2312,10 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
     s->i2c_address = -1;
     s->i2c_expect_address = false;
     s->i2c_continues = false;
+    memset(s->io_mux, 0, sizeof(s->io_mux));
+    memset(s->switches, 0, sizeof(s->switches));
+    s->host_driven = 0;
+    s->resolved_in = 0;
     memset(s->i2c_last_report, 0, sizeof(s->i2c_last_report));
     memset(s->spi_reg, 0, sizeof(s->spi_reg));
     memset(s->spi_miso, 0, sizeof(s->spi_miso));
@@ -2142,6 +2405,11 @@ static void esp32_gpio_init(Object *obj)
     memory_region_init_io(&s->rmt_iomem, obj, &rmt_ops, s,
                           TYPE_ESP32_GPIO ".rmt", ESP32_RMT_REGION);
     sysbus_init_mmio(sbd, &s->rmt_iomem);
+
+    /* And IO_MUX, where a pad's pull-up and pull-down live. */
+    memory_region_init_io(&s->iomux_iomem, obj, &iomux_ops, s,
+                          TYPE_ESP32_GPIO ".iomux", ESP32_IOMUX_REGION);
+    sysbus_init_mmio(sbd, &s->iomux_iomem);
     sysbus_init_irq(sbd, &s->irq);
 }
 

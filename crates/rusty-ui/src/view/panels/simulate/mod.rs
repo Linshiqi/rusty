@@ -888,6 +888,36 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
     // while a session runs the GPIO it reaches is driven to the level its
     // other side holds — through the same message the old buttons sent, so
     // firmware written for `B<pin>=1` hears it too.
+    // Which key of which keypad the pointer is holding: one at a time,
+    // because a pointer is one finger. `(part index, row, column)`.
+    let key_down = RwSignal::new(None::<(usize, usize, usize)>);
+
+    // A key of a matrix keypad, pressed or released. It **joins** its row to
+    // its column rather than driving either — see `nets::keypad_tie` — so it
+    // goes as a switch and the console hears nothing.
+    let press_key = move |index: usize, row: usize, column: usize, down: bool| {
+        if down {
+            key_down.set(Some((index, row, column)));
+        } else if key_down.get_untracked() != Some((index, row, column)) {
+            return;
+        } else {
+            key_down.set(None);
+        }
+        if !running.get_untracked() {
+            return;
+        }
+        let Some(reference) =
+            parts.with_untracked(|l| l.get(index).map(|p| p.inst.reference.clone()))
+        else {
+            return;
+        };
+        if let Some((a, b)) =
+            nets::keypad_tie(&sheet_now(), &rows.get_untracked(), &reference, row, column)
+        {
+            controller::sim_switch(state, a, b, down);
+        }
+    };
+
     let press = move |index: usize, down: bool| {
         let Some(reference) =
             parts.with_untracked(|l| l.get(index).map(|p| p.inst.reference.clone()))
@@ -904,9 +934,15 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
         if !running.get_untracked() {
             return;
         }
-        if let Some((gpio, _)) =
-            nets::button_drives(&sheet_now(), &rows.get_untracked(), &reference)
-        {
+        // A key between two GPIOs joins them; a switch to a rail drives
+        // one. The sheet says which, and the two travel differently: a tie
+        // is the emulator's `sw a-b=`, a drive is the level every example's
+        // text protocol already reads.
+        let sheet = sheet_now();
+        let rows = rows.get_untracked();
+        if let Some((a, b)) = nets::switch_tie(&sheet, &rows, &reference) {
+            controller::sim_switch(state, a, b, down);
+        } else if let Some((gpio, _)) = nets::button_drives(&sheet, &rows, &reference) {
             controller::sim_press(state, gpio, down);
         }
     };
@@ -1953,6 +1989,66 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                             <rect x="6" y="19" width="14" height="4" rx="2" fill=seg("g") />
                                                         </g>
                                                     }
+                                                        .into_any()
+                                                }
+                                                // A matrix keypad: sixteen
+                                                // caps, each its own target,
+                                                // because a key is what is
+                                                // pressed and the part is
+                                                // only what carries them.
+                                                Some(Behaviour::Keypad) => {
+                                                    let keys = art::keypad_keys(&plan);
+                                                    let running_now = running.get();
+                                                    keys.into_iter()
+                                                        .enumerate()
+                                                        .map(|(at, (label, kx, ky, half))| {
+                                                            let (row, column) = (at / 4, at % 4);
+                                                            let (cx, cy) = turned((kx, ky));
+                                                            let held = key_down.get()
+                                                                == Some((index, row, column));
+                                                            // Pressed rather than
+                                                            // dragged while the
+                                                            // firmware runs, as a
+                                                            // switch is; with
+                                                            // nothing running the
+                                                            // press falls through
+                                                            // to the part, which
+                                                            // is what moves it.
+                                                            let down = move |event: ev::PointerEvent| {
+                                                                if event.button() != 0 || !running_now {
+                                                                    return;
+                                                                }
+                                                                event.prevent_default();
+                                                                event.stop_propagation();
+                                                                press_key(index, row, column, true);
+                                                            };
+                                                            let up = move |_: ev::PointerEvent| {
+                                                                press_key(index, row, column, false);
+                                                            };
+                                                            let fill = if held { "#4b5361" } else { "transparent" };
+                                                            let style = if running_now {
+                                                                "cursor: pointer"
+                                                            } else {
+                                                                "pointer-events: none"
+                                                            };
+                                                            view! {
+                                                                <rect
+                                                                    x=cx - half
+                                                                    y=cy - half
+                                                                    width=half * 2.0
+                                                                    height=half * 2.0
+                                                                    rx="2"
+                                                                    fill=fill
+                                                                    style=style
+                                                                    on:pointerdown=down
+                                                                    on:pointerup=up
+                                                                    on:pointerleave=up
+                                                                >
+                                                                    <title>{label.to_string()}</title>
+                                                                </rect>
+                                                            }
+                                                        })
+                                                        .collect_view()
                                                         .into_any()
                                                 }
                                                 // A chain of addressable LEDs,

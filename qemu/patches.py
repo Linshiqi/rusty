@@ -36,6 +36,16 @@ line is still wired on that machine, which is what ESP-IDF-style firmware
 dispatching on the CPU line needs. `qemu/README.md` says so rather than
 letting the release imply otherwise.
 
+## The pads' own pulls
+
+**Nothing is mapped at the C3's IO_MUX either**, and that is where a pad's
+pull-up and pull-down live. Without them an input nobody drives reads
+whatever it last read — zero, from reset — so `Input::new(pin, Pull::Up)`
+with `is_low()`, which is how nearly every button on every board is read,
+reads as *held down* from the moment the firmware starts. It is also what a
+matrix keypad rests on: the columns float to their pull-ups and a pressed
+key drags one down to the row being scanned.
+
 ## The analog one
 
 **Nothing is mapped at the C3's SAR ADC.** `esp32_gpio.c` answers for it —
@@ -93,7 +103,14 @@ EDITS = [
         "        /* And RMT, whose window holds its channels' RAM as well:\n"
         "         * the codes an addressable LED strip is sent as. */\n"
         "        memory_region_add_subregion_overlap(sys_mem, DR_REG_RMT_BASE,\n"
-        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 5), 0);\n",
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 5), 0);\n"
+        "        /* And IO_MUX, which is two bits per pad: the pull-up and the\n"
+        "         * pull-down every button is read through. Mapped on this\n"
+        "         * machine only — the ESP32's IO_MUX registers are a table in\n"
+        "         * pad-name order, not pin order, so the same arithmetic would\n"
+        "         * put one pin's pull on another's register. */\n"
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_IO_MUX_BASE,\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 6), 0);\n",
     ),
     (
         "hw/riscv/esp32c3_intmatrix.c",

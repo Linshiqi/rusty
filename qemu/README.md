@@ -237,6 +237,42 @@ and each is invisible until it is wrong.
   once per transaction; read as messages of their own, each step's first
   data byte is taken for one and the picture is nonsense.
 
+## And the pads themselves
+
+Two things a pad does that no register in the GPIO peripheral says, and
+each one is the difference between a board that reads right and one that
+reads plausibly wrong.
+
+**A pull.** `Input::new(pin, Pull::Up)` with `is_low()` is how nearly every
+button on every board is read, and the pull lives in IO_MUX, which upstream
+does not map. With no pull modelled an input reads whatever it last read —
+zero, from reset — so a button reads as *held down* from the moment the
+firmware starts, until something drives the pad high. The seventh region
+answers IO_MUX and two of its bits mean something: `FUN_WPU` and `FUN_WPD`.
+Everything else in the register is stored and given back, so a driver's
+read-modify-write keeps what it put there.
+
+Mapped **on the C3 only**: the ESP32's IO_MUX registers are a table in pad
+name order rather than pin order, so the same arithmetic would put one
+pin's pull on another's register. Unmapped there, `io_mux` stays zero, no
+pad has a pull, and that machine behaves exactly as it did.
+
+**A switch between two pads.** `sw 4-6=1` joins two of them and `sw 4-6=0`
+parts them again. That is not a level: `4=0` says the *host* is driving pad
+4, and a key says two pads are connected and lets whichever the firmware is
+driving decide. A matrix keypad is sixteen of these, and the difference is
+the whole of why one could not be simulated before — during a scan the row
+is an output for a moment, so driving the column low instead would be
+holding down every key in that column.
+
+Both end in one place. `esp32_gpio_settle` works out what every pad is at —
+a driver through a closed switch first, then a level the host stated, then
+the pad's own pull, then what it was left at — and reports and interrupts on
+the difference. `[rusty:sw@<us>] 4-6=1` is the model's own account of a
+switch, and the marker a host recognises this generation by: the pulls and
+the switches are in this one file and are built together, so a binary
+carrying that string carries both.
+
 ## Building it
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
@@ -250,7 +286,7 @@ platform as an artifact.
 
 ## What it is proven to do
 
-Thirteen gates, each able to fail:
+Fourteen gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -378,6 +414,15 @@ the two and reports the lead.
     write that crosses the FIFO to come back as a `w+` continuation, and
     two frames to arrive as the hundred and twenty-eight transactions they
     are. Suppressed repeats would leave three.
+
+14. A **matrix keypad** rests high and reads the key that is down.
+    `keypad-probe/` scans four rows against four columns the way firmware
+    does, and the gate asserts both halves: with nothing pressed it must
+    report **no key**, which is only true if the columns rest at their
+    pull-ups — without them every one of the sixteen reads as held down
+    before the firmware has done anything — and with `sw 3-6=1` it must
+    report the key where that row crosses that column, which a model
+    driving the column instead would spread across the whole column.
 
 
 ## What each desktop needed

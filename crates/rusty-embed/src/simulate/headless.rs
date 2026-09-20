@@ -453,6 +453,24 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
                                     "there is no board to find {part} on"
                                 ));
                             };
+                            // A key between two GPIOs joins them rather than
+                            // driving either, so it goes as a switch and the
+                            // console hears nothing: the text protocol has no
+                            // way to say "these two pads are connected".
+                            if let Some((a, b)) = crate::nets::switch_tie(sheet, &rows, part) {
+                                match &pins {
+                                    Some(pins) => {
+                                        pins.tie(a, b, *down);
+                                        continue;
+                                    }
+                                    None => {
+                                        break 'run Verdict::Failed(format!(
+                                            "{part} joins GPIO{a} and GPIO{b}, which only \
+                                             rusty's emulator can do"
+                                        ));
+                                    }
+                                }
+                            }
                             match crate::nets::button_drives(sheet, &rows, part) {
                                 Some((gpio, _)) => gpio,
                                 None => {

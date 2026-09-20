@@ -1819,6 +1819,132 @@ jobs:
           finally:
               qemu.kill()
 
+      - name: Build the keypad probe and make its image
+        working-directory: qemu/keypad-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/keypad-probe \
+            target/sim/flash.bin
+
+      # A matrix keypad, which is neither of the two things the pin channel
+      # could say before. A key does not drive a pad — it **joins** two of
+      # them, and which way the level flows is whichever the firmware is
+      # driving at that instant; and the columns rest high because the pads
+      # pull them there, which nothing modelled either.
+      #
+      # Both halves are asserted, and each fails on its own. **At rest the
+      # firmware must report no key**: with no pull-up an input reads zero
+      # and every one of the sixteen keys is held down before the firmware
+      # has done anything. **Then a closed switch must be the key that
+      # joins those two pins** — not a neighbour, which a model that drove
+      # the column instead would give, and not nothing, which is what a
+      # model with no switches gives.
+      - name: A matrix keypad rests high and reads the key that is down
+        shell: python
+        run: |
+          import socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/keypad-probe/target/sim/flash.bin"
+          SERIAL = "keypad-serial.log"
+          PORT = 5599
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[keypad]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("keypad-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          def latest():
+              said = [l.strip() for l in read().splitlines() if l.startswith("[keypad]")]
+              return said[-1] if said else ""
+
+          def settle_last(want, seconds, why):
+              # What the pad is saying *now*, not what it once said: a key
+              # released has to be the firmware's latest word, and `in` over
+              # the whole log would match the line before it was pressed.
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if latest() == want:
+                      return
+                  time.sleep(0.25)
+              stop(f"{why} (it is saying {latest()!r})")
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("keypad-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              settle("[keypad] scanning", 60, "the keypad probe never booted")
+              # Nothing is pressed, and nothing must read as pressed. This
+              # is the pull-ups' assertion: without them the columns read
+              # zero and the scan finds a key in every row.
+              settle("[keypad] none", 40,
+                     "the keypad read a key with nothing pressed — the columns "
+                     "are not resting at their pull-ups")
+
+              # The key where row GPIO3 crosses column GPIO6, which the pad
+              # prints as 8. A model that drove the column instead of joining
+              # it would report a key in every row of that column.
+              link.sendall(b"sw 3-6=1\n")
+              settle("[keypad] down 8", 30,
+                     "a key joining GPIO3 and GPIO6 was closed and the firmware "
+                     "did not read it as the 8")
+              link.sendall(b"sw 3-6=0\n")
+              settle_last("[keypad] none", 30,
+                          "the key was released and the firmware still reads it as down")
+              # A second key, on another row and column: a model that
+              # remembered one switch, or one pin, passes everything above.
+              link.sendall(b"sw 4-10=1\n")
+              settle_last("[keypad] down D", 30,
+                          "a second key on another row and column was never read")
+              print("the keypad rests high and reads the key that is down")
+          finally:
+              qemu.kill()
+
       # And the one that closes the loop. Every gate above proves one
       # direction of one peripheral: the host says something and the
       # firmware hears it, or the firmware does something and the model
@@ -1879,6 +2005,8 @@ jobs:
             rmt-qemu.out
             display-serial.log
             display-qemu.out
+            keypad-serial.log
+            keypad-qemu.out
             board-probe.log
             live-probe.log
           if-no-files-found: warn

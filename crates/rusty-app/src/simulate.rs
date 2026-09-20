@@ -290,6 +290,33 @@ pub async fn sim_send(text: String, state: State<'_, AppState>) -> Result<(), Co
     Ok(())
 }
 
+/// Press or release a switch that joins two GPIOs — a key in a matrix.
+///
+/// Its own command rather than another `sim_send`, because it is not a
+/// level: `B4=1` says the host is driving pad 4, and a key says two pads
+/// are connected. The console hears nothing, since rusty's text protocol
+/// has no way to say it and firmware that reads that protocol has no matrix
+/// to read.
+///
+/// Refused when nothing is running that has pins, rather than taken and
+/// dropped, for the reason a sensor slider is.
+#[tauri::command]
+pub async fn sim_switch(
+    a: u8,
+    b: u8,
+    closed: bool,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let Some(pins) = state.pins().await else {
+        return Err(CommandError::new(
+            "nothing is running that can join two pins — a key that ties two GPIOs needs \
+             rusty's emulator",
+        ));
+    };
+    pins.tie(a, b, closed);
+    Ok(())
+}
+
 /// Move one reading of a sensor on the sheet while the simulation runs: the
 /// part, the channel (`ax`, `temp`), and the value in the channel's unit.
 ///
