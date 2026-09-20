@@ -3798,8 +3798,8 @@ to one it does.
 ## Laying the sheet out
 
 `view/panels/simulate/layout.rs` is pure and tested, and it exists because
-a board that is *correct* can still be unreadable. Three problems, each
-with a rule:
+a board that is *correct* can still be unreadable. Every rule in it is one
+way a reader loses the thread:
 
 - **Nothing is planted on top of anything.** `free_spot` searches outward
   in rings on the grid from where the part was asked for, so a part dropped

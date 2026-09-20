@@ -1,7 +1,7 @@
 //! Where a part goes, where a wire runs, and where two wires meet.
 //!
-//! The sheet's three legibility problems, each of which makes a board that
-//! is *correct* read as a mess, and each pure and tested here rather than
+//! The sheet's legibility problems, each of which makes a board that is
+//! *correct* read as a mess, and each pure and tested here rather than
 //! discovered by dragging things around:
 //!
 //! - **Parts landing on top of each other.** A click plants a part where
@@ -13,6 +13,10 @@
 //!   and meets itself with one elbow, which is right when nothing is in
 //!   the way and draws a line straight through the display when something
 //!   is.
+//! - **Wires stacked in one lane.** Two wires down the same lane are drawn
+//!   as a single line, so the reader cannot see where either goes — worse
+//!   than the crossing that avoiding it costs, and the reason a route is
+//!   scored against the wires already laid down.
 //! - **Crossings that are not junctions.** Two wires that cross and two
 //!   wires that join look identical without a dot, and a schematic has
 //!   drawn that dot for a century.
