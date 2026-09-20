@@ -56,8 +56,9 @@ pub struct Sensor {
     pub device: sensor::Device,
 }
 
-/// What `sheet` declares, read the way the run will say it.
-pub fn start_of(sheet: &Sheet, rows: &[Row]) -> Start {
+/// What `sheet` declares, read the way the run will say it. `specs` is the
+/// part library the sheet's `model` props are resolved against.
+pub fn start_of(sheet: &Sheet, rows: &[Row], specs: &[sensor::Spec]) -> Start {
     let behaviour = |reference: &str| sheet.symbol_of(reference).map(nets::behaviour_of);
 
     let low_when_pressed = sheet
@@ -88,16 +89,16 @@ pub fn start_of(sheet: &Sheet, rows: &[Row]) -> Start {
     });
     let analog = sources.chain(pots).collect();
 
-    let bus = nets::bus_devices(sheet, rows).0;
+    let bus = nets::bus_devices(sheet, rows, specs).0;
     let sensors = bus
         .iter()
         .filter_map(|device| {
             let part = sheet.parts.iter().find(|p| p.reference == device.part)?;
-            let model = nets::sensor_model(part).ok().flatten()?;
+            let spec = nets::sensor_model(specs, part).ok().flatten()?;
             Some(Sensor {
                 part: device.part.clone(),
                 address: device.address,
-                device: sensor::Device::new(model, &part.props),
+                device: sensor::Device::new(spec.clone(), &part.props),
             })
         })
         .collect();
@@ -458,7 +459,12 @@ mod tests {
     fn a_sensor_is_declared_moved_and_rescaled_on_the_channel() {
         let mut props = std::collections::BTreeMap::new();
         props.insert("az".to_string(), "1".to_string());
-        let device = sensor::Device::new(sensor::Model::Mpu6050, &props);
+        let imu = crate::partfile::load(None)
+            .specs
+            .into_iter()
+            .find(|spec| spec.id == "mpu6050")
+            .expect("the built-in library carries an MPU-6050");
+        let device = sensor::Device::new(imu, &props);
         let start = Start {
             bus: vec![BusDevice {
                 part: "U2".into(),

@@ -682,12 +682,16 @@ fn parse_regs(text: &str) -> Option<Vec<(u8, Vec<u8>)>> {
     Some(runs)
 }
 
-/// The sensor a part says it is, from its `model` prop: `Ok(None)` when it
-/// names none, and the text it named when that is no model rusty knows.
-pub fn sensor_model(part: &Instance) -> Result<Option<crate::sensor::Model>, String> {
+/// The part a sheet says it is, from its `model` prop, among the parts the
+/// library carries: `Ok(None)` when it names none, and the text it named
+/// when that is no part anybody has declared.
+pub fn sensor_model<'a>(
+    specs: &'a [crate::sensor::Spec],
+    part: &Instance,
+) -> Result<Option<&'a crate::sensor::Spec>, String> {
     match part.props.get("model").map(|text| text.trim()) {
         None | Some("") => Ok(None),
-        Some(text) => crate::sensor::Model::from_id(text)
+        Some(text) => crate::sensor::Spec::find(specs, text)
             .map(Some)
             .ok_or_else(|| text.to_string()),
     }
@@ -701,7 +705,11 @@ pub fn sensor_model(part: &Instance) -> Result<Option<crate::sensor::Model>, Str
 /// there and be silent on the desk — the confident wrong answer this
 /// workbench exists to avoid. A part with an address whose `SDA` or `SCL`
 /// reaches no GPIO is named and left off.
-pub fn bus_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<BusDevice>, Vec<Warning>) {
+pub fn bus_devices(
+    sheet: &Sheet,
+    rows: &[Row],
+    specs: &[crate::sensor::Spec],
+) -> (Vec<BusDevice>, Vec<Warning>) {
     let mut devices = Vec::new();
     let mut warnings = Vec::new();
 
@@ -735,8 +743,8 @@ pub fn bus_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<BusDevice>, Vec<Warning>
         // is, how it is calibrated, what it reads — and anything the sheet
         // spells out in `regs` lands over them, so a hand-written register
         // still means what it says.
-        let mut regs = match sensor_model(part) {
-            Ok(Some(model)) => crate::sensor::Device::new(model, &part.props).registers(),
+        let mut regs = match sensor_model(specs, part) {
+            Ok(Some(spec)) => crate::sensor::Device::new(spec.clone(), &part.props).registers(),
             Ok(None) => Vec::new(),
             Err(value) => {
                 warnings.push(Warning::SensorModelUnknown {
@@ -1875,6 +1883,12 @@ mod tests {
     use super::*;
     use crate::model::{Fill, Graphic, Instance, Pin, PinKind, Wire};
 
+    /// The parts rusty ships, which is what a sheet with no project behind
+    /// it resolves its `model` props against.
+    fn specs() -> Vec<crate::sensor::Spec> {
+        crate::partfile::load(None).specs
+    }
+
     fn pin(number: &str, name: &str, x: f64) -> Pin {
         Pin {
             number: number.into(),
@@ -2772,7 +2786,7 @@ mod tests {
     fn a_part_with_an_address_and_wires_is_a_device_on_the_bus() {
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[("addr", "68"), ("regs", "75=68,3b=0102")]);
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].address, 0x68);
@@ -2785,7 +2799,7 @@ mod tests {
         // from it — a display.
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[("addr", "0x3C")]);
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(devices[0].address, 0x3c);
         assert!(devices[0].regs.is_empty());
@@ -2802,7 +2816,7 @@ mod tests {
             "U2",
             &[("addr", "68"), ("model", "MPU-6050"), ("regs", "75=70")],
         );
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert!(warnings.is_empty(), "{warnings:?}");
         let regs = &devices[0].regs;
         let who_am_i: Vec<u8> = regs
@@ -2818,7 +2832,7 @@ mod tests {
 
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[("addr", "68"), ("model", "mpu9250")]);
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert_eq!(devices.len(), 1, "still on the bus");
         assert!(devices[0].regs.is_empty());
         assert!(
@@ -2834,11 +2848,15 @@ mod tests {
     fn a_part_without_an_address_is_not_on_the_bus() {
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[]);
-        assert_eq!(bus_devices(&s, &rows()).0.len(), 0);
+        assert_eq!(bus_devices(&s, &rows(), &specs()).0.len(), 0);
 
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[("addr", "  ")]);
-        assert_eq!(bus_devices(&s, &rows()).0.len(), 0, "blank is absent");
+        assert_eq!(
+            bus_devices(&s, &rows(), &specs()).0.len(),
+            0,
+            "blank is absent"
+        );
     }
 
     /// Each refusal names the part, because the alternative is a device that
@@ -2849,7 +2867,7 @@ mod tests {
     fn a_bus_device_that_cannot_be_read_is_named_rather_than_dropped() {
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[("addr", "zz")]);
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert!(devices.is_empty());
         assert!(
             matches!(&warnings[..], [Warning::BusAddressUnreadable { part, value }]
@@ -2861,7 +2879,7 @@ mod tests {
         place_on_bus(&mut s, "U2", &[("addr", "90")]);
         assert!(
             matches!(
-                &bus_devices(&s, &rows()).1[..],
+                &bus_devices(&s, &rows(), &specs()).1[..],
                 [Warning::BusAddressUnreadable { .. }]
             ),
             "0x90 is an eight-bit address written where a seven-bit one goes"
@@ -2869,7 +2887,7 @@ mod tests {
 
         let mut s = sheet();
         place_on_bus(&mut s, "U2", &[("addr", "68"), ("regs", "75=6")]);
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert_eq!(devices.len(), 1, "it is still on the bus");
         assert!(devices[0].regs.is_empty(), "and answers zeros");
         assert!(
@@ -2883,7 +2901,7 @@ mod tests {
         if let Some(part) = s.parts.iter_mut().find(|p| p.reference == "U2") {
             part.props.insert("addr".into(), "68".into());
         }
-        let (devices, warnings) = bus_devices(&s, &rows());
+        let (devices, warnings) = bus_devices(&s, &rows(), &specs());
         assert!(devices.is_empty());
         assert!(
             matches!(&warnings[..], [Warning::BusNotWired { part }] if part == "U2"),
@@ -2900,7 +2918,7 @@ mod tests {
         }
         assert!(
             matches!(
-                &bus_devices(&s, &rows()).1[..],
+                &bus_devices(&s, &rows(), &specs()).1[..],
                 [Warning::BusNotWired { .. }]
             ),
             "SDA alone is not a bus"

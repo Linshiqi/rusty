@@ -196,6 +196,12 @@ pub struct SimPlan {
     /// imported from LCSC, and the project's own `.rusty/symbols/`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub library: Vec<Symbol>,
+    /// Every part a sheet may answer for on the bus: the ones rusty ships
+    /// and the ones the project declared in `.rusty/parts/`. The sliders
+    /// under a sensor are its channels, so a part nobody declared gets no
+    /// slider — the tunables' rule, for the same reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<crate::sensor::Spec>,
     /// Present when the right gdb is installed; the Debug button needs it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug: Option<SimDebug>,
@@ -230,6 +236,7 @@ impl SimPlan {
             steps: Vec::new(),
             board: None,
             library: Vec::new(),
+            parts: Vec::new(),
             debug: None,
             debug_tool: None,
             notes: Vec::new(),

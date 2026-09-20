@@ -75,6 +75,9 @@ pub mod memory;
 pub mod migrate;
 #[cfg(feature = "backend")]
 pub mod net;
+/// Reading a part's declaration — the file format behind [`sensor::Spec`].
+#[cfg(feature = "backend")]
+pub mod partfile;
 #[cfg(feature = "backend")]
 pub mod pins;
 #[cfg(feature = "backend")]

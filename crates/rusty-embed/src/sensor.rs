@@ -1,4 +1,5 @@
-//! Sensors that answer on the I2C bus the way the part does.
+//! Parts that answer on the I2C bus the way the part does — declared, not
+//! compiled in.
 //!
 //! A sheet's I2C part carries `regs`: bytes it answers with, fixed for the
 //! run. That is enough for a bus scan and a `WHO_AM_I`, and no use for the
@@ -9,37 +10,38 @@
 //! range the firmware chose, and calibrated the way the part's own memory
 //! says it is.
 //!
-//! This module is that arithmetic run backwards. A [`Model`] names the part,
-//! its [`Channel`]s are the quantities in the units a person thinks in (g,
-//! °/s, °C, hPa, %), and a [`Device`] turns values into register runs. Pure,
-//! so the backend encodes a run's first readings and every later slider move
-//! with the same code the tests hold to the datasheets' own formulas going
-//! forwards.
+//! A [`Spec`] is that description, and it is **data**: which addresses the
+//! part answers on, what it reads and in what units, where each reading
+//! sits, how many counts a unit is worth, which register changes that, and
+//! which bits the part clears once it has acted on them. `data/parts/*.toml`
+//! holds the ones rusty ships; `<project>/.rusty/parts/` holds anybody
+//! else's, and they are read the same way — the built-ins are not a
+//! privileged path, which is the only way to be sure the declared one works.
 //!
-//! What it does not model is left out rather than approximated: no FIFO, no
-//! DMP, no interrupts, no self-test and no timing. A measurement is always
-//! ready, which is the one thing every driver waits for.
+//! **What a declaration cannot express is named rather than approximated.**
+//! Bosch's compensation is a polynomial over a calibration blob in the
+//! part's own memory, and no `raw = (value - offset) * lsb` is going to be
+//! it; a [`Quirk`] names that arithmetic, `sensor::bosch` is it, and a part
+//! declared outside this crate may not name one, because a quirk is code.
+//! Refuse rather than guess, applied to a file format: a linear stand-in for
+//! a BME280 would read plausibly and be wrong by degrees.
+//!
+//! What no part here models is left out rather than approximated: no FIFO,
+//! no DMP, no interrupts, no self-test and no timing. A measurement is
+//! always ready, which is the one thing every driver waits for.
 
 use std::collections::BTreeMap;
 
-/// A part rusty can answer for, register by register.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Model {
-    /// InvenSense's six-axis IMU: accelerometer, gyroscope, temperature.
-    Mpu6050,
-    /// Bosch's barometer: temperature and pressure.
-    Bmp280,
-    /// The BMP280 with a humidity sensor beside it.
-    Bme280,
-}
+use serde::{Deserialize, Serialize};
 
-/// One quantity a model reports, in the unit people read it in.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// One quantity a part reports, in the unit people read it in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Channel {
     /// The prop the sheet stores it under, and the slider's name: `ax`,
     /// `temp`, `pressure`.
-    pub key: &'static str,
-    pub unit: &'static str,
+    pub key: String,
+    pub unit: String,
     pub min: f64,
     pub max: f64,
     /// Where a part placed on a sheet starts: level, still, a room at 24 °C
@@ -47,130 +49,210 @@ pub struct Channel {
     pub rest: f64,
 }
 
-const fn channel(key: &'static str, unit: &'static str, min: f64, max: f64, rest: f64) -> Channel {
-    Channel {
-        key,
-        unit,
-        min,
-        max,
-        rest,
-    }
+/// Which end of a multi-byte reading the part puts first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Order {
+    Big,
+    Little,
 }
 
-/// The slider ranges are wider than the part's power-on full scale on
-/// purpose: a reading past the range the firmware configured saturates, as
-/// the part does, and that is worth being able to show.
-const MPU6050_CHANNELS: &[Channel] = &[
-    channel("ax", "g", -4.0, 4.0, 0.0),
-    channel("ay", "g", -4.0, 4.0, 0.0),
-    channel("az", "g", -4.0, 4.0, 1.0),
-    channel("gx", "°/s", -500.0, 500.0, 0.0),
-    channel("gy", "°/s", -500.0, 500.0, 0.0),
-    channel("gz", "°/s", -500.0, 500.0, 0.0),
-    channel("temp", "°C", -40.0, 85.0, 24.0),
-];
+/// Where a reading sits in the register file and what a count is worth:
+/// `raw = round((value - offset) * lsb)`, held to what the width can hold,
+/// because a part's converter clips rather than wrapping.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reading {
+    pub key: String,
+    pub at: u8,
+    /// One to four bytes.
+    pub width: u8,
+    pub order: Order,
+    pub signed: bool,
+    /// Counts per unit — an MPU-6050 at ±2 g reads 16384 counts per g.
+    pub lsb: f64,
+    /// What a count of zero means, in the channel's unit. The MPU-6050's
+    /// temperature is `raw / 340 + 36.53`, so its offset is 36.53.
+    pub offset: f64,
+}
 
-const BMP280_CHANNELS: &[Channel] = &[
-    channel("temp", "°C", -40.0, 85.0, 24.0),
-    channel("pressure", "hPa", 300.0, 1100.0, 1013.25),
-];
+/// A configuration register that changes what a count is worth.
+///
+/// The firmware writes a full-scale selection and every reading it covers
+/// is encoded again — which is the whole reason a register file that only
+/// stores is not enough: a driver that chose ±8 g divides by 4096, and
+/// bytes encoded at ±2 g read as a quarter of the tilt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ranged {
+    pub at: u8,
+    /// `index = (byte >> shift) & mask`.
+    pub shift: u8,
+    pub mask: u8,
+    /// The channels this selection covers.
+    pub keys: Vec<String>,
+    /// One counts-per-unit per value of the field.
+    pub lsbs: Vec<f64>,
+}
 
-const BME280_CHANNELS: &[Channel] = &[
-    channel("temp", "°C", -40.0, 85.0, 24.0),
-    channel("pressure", "hPa", 300.0, 1100.0, 1013.25),
-    channel("humidity", "%", 0.0, 100.0, 50.0),
-];
+/// A bit the part clears once it has acted on it.
+///
+/// `CTR.TRANS_START` on a bus, `MEASURING` on a converter, forced mode on a
+/// Bosch part: the guest sets it, the hardware acts, and the driver reads it
+/// back to find out that it has. A register file that only stores leaves a
+/// driver polling a bit that can never fall.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfClearing {
+    pub at: u8,
+    pub mask: u8,
+    /// Only when the masked field holds one of these — empty means always.
+    /// A BME280's forced mode is `01` or `10` and clears itself; `11` is
+    /// normal mode and stays, and a mask alone could not tell them apart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only: Vec<u8>,
+}
 
-impl Model {
-    pub const ALL: [Model; 3] = [Model::Mpu6050, Model::Bmp280, Model::Bme280];
+/// A write that puts the part back the way it powered on.
+///
+/// Every range goes back to its first, because that is what a power-on
+/// default is, and the registers named here go back to the bytes named
+/// here — including the trigger's own, which is how a driver polling for
+/// the reset to finish finds out that it has.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reset {
+    pub at: u8,
+    /// Fires when any of these bits is written…
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<u8>,
+    /// …or when the byte is exactly this. Bosch's soft reset is the value
+    /// `0xb6` and nothing else, where an MPU-6050's is one bit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<u8>,
+    pub restores: Vec<Run>,
+}
 
-    /// How a sheet names it: the `model` prop.
-    pub fn id(self) -> &'static str {
-        match self {
-            Model::Mpu6050 => "mpu6050",
-            Model::Bmp280 => "bmp280",
-            Model::Bme280 => "bme280",
-        }
-    }
+/// Bytes at a register: what a part answers with from `at` onwards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub at: u8,
+    pub bytes: Vec<u8>,
+}
 
+/// Arithmetic no declaration can express, named so that a part needing it
+/// is refused rather than approximated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Quirk {
+    /// Bosch's compensation polynomials over the calibration in the part's
+    /// own memory, and their 20-bit packing — [`bosch`].
+    Bmp280,
+    /// The same with a humidity channel beside it.
+    Bme280,
+}
+
+/// A part rusty answers for, register by register.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Spec {
+    /// How a sheet names it: the `model` prop, and the file's own stem.
+    pub id: String,
     /// How its datasheet names it.
-    pub fn name(self) -> &'static str {
-        match self {
-            Model::Mpu6050 => "MPU-6050",
-            Model::Bmp280 => "BMP280",
-            Model::Bme280 => "BME280",
-        }
+    pub name: String,
+    /// The first is the one it answers on with its address pin low, which
+    /// is how a breakout ships.
+    pub addresses: Vec<u8>,
+    pub channels: Vec<Channel>,
+    /// Bytes fixed for the run: identity, and anything a driver checks
+    /// before it will talk to the part at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<Run>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub readings: Vec<Reading>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<Ranged>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clears: Vec<SelfClearing>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resets: Vec<Reset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quirk: Option<Quirk>,
+}
+
+impl Spec {
+    pub fn channel(&self, key: &str) -> Option<&Channel> {
+        self.channels.iter().find(|c| c.key == key)
     }
 
-    /// The model a sheet names: `mpu6050`, `MPU-6050`, `bme_280`. Case,
-    /// hyphens and underscores do not count, and nothing else is guessed at:
-    /// a name that is not one of these is not a model.
-    pub fn from_id(text: &str) -> Option<Model> {
-        let folded: String = text
-            .chars()
-            .filter(|c| !matches!(c, '-' | '_' | ' '))
-            .map(|c| c.to_ascii_lowercase())
-            .collect();
-        Model::ALL.into_iter().find(|model| model.id() == folded)
-    }
-
-    /// The addresses the part can answer on. The first is the one it answers
-    /// on with its address pin low, which is how a breakout ships.
-    pub fn addresses(self) -> &'static [u8] {
-        match self {
-            Model::Mpu6050 => &[0x68, 0x69],
-            Model::Bmp280 | Model::Bme280 => &[0x76, 0x77],
-        }
-    }
-
-    pub fn channels(self) -> &'static [Channel] {
-        match self {
-            Model::Mpu6050 => MPU6050_CHANNELS,
-            Model::Bmp280 => BMP280_CHANNELS,
-            Model::Bme280 => BME280_CHANNELS,
-        }
+    /// The spec a sheet's `model` prop names. Case, hyphens, underscores
+    /// and spaces do not count — `MPU-6050` and `mpu6050` are one part —
+    /// and nothing else is guessed at: a name that matches no id and no
+    /// datasheet name is not a part.
+    pub fn find<'a>(specs: &'a [Spec], text: &str) -> Option<&'a Spec> {
+        let wanted = fold(text);
+        specs
+            .iter()
+            .find(|spec| fold(&spec.id) == wanted || fold(&spec.name) == wanted)
     }
 }
 
-/// One sensor on the bus: what it is reading, and what the firmware has
+/// A name with its punctuation and case taken out, which is how two
+/// spellings of one part are recognised as one part.
+fn fold(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+impl Reset {
+    /// Whether this write is the one that resets the part.
+    fn fires(&self, value: u8) -> bool {
+        self.mask.is_some_and(|mask| value & mask != 0)
+            || self.equals.is_some_and(|want| value == want)
+    }
+}
+
+/// One part on the bus: what it is reading, and what the firmware has
 /// configured that changes how the reading is encoded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Device {
-    model: Model,
-    /// One per channel, in the model's channel order.
+    spec: Spec,
+    /// One per channel, in the spec's channel order.
     values: Vec<f64>,
-    /// The MPU-6050's full-scale selections as the firmware last wrote them:
-    /// `AFS_SEL` and `FS_SEL`, 0 to 3. The same tilt is a different number
-    /// at ±2 g than at ±8 g, and a driver that set ±8 g divides by 4096.
-    accel_range: u8,
-    gyro_range: u8,
+    /// One per range register, as the firmware last wrote it. The same tilt
+    /// is a different number at ±2 g than at ±8 g, and a driver that set
+    /// ±8 g divides by 4096.
+    ranges: Vec<u8>,
 }
 
 impl Device {
-    /// A sensor reading what the sheet's props say, and resting where a prop
+    /// A part reading what the sheet's props say, and resting where a prop
     /// is absent or is not a number. Values are held to the channel's range.
-    pub fn new(model: Model, props: &BTreeMap<String, String>) -> Self {
-        let values = model
-            .channels()
+    pub fn new(spec: Spec, props: &BTreeMap<String, String>) -> Self {
+        let values = spec
+            .channels
             .iter()
             .map(|channel| {
                 props
-                    .get(channel.key)
+                    .get(&channel.key)
                     .and_then(|text| text.trim().parse::<f64>().ok())
                     .filter(|value| value.is_finite())
                     .map_or(channel.rest, |value| value.clamp(channel.min, channel.max))
             })
             .collect();
+        let ranges = vec![0u8; spec.ranges.len()];
         Device {
-            model,
+            spec,
             values,
-            accel_range: 0,
-            gyro_range: 0,
+            ranges,
         }
     }
 
-    pub fn model(&self) -> Model {
-        self.model
+    pub fn spec(&self) -> &Spec {
+        &self.spec
     }
 
     pub fn value(&self, key: &str) -> Option<f64> {
@@ -178,7 +260,7 @@ impl Device {
         self.values.get(index).copied()
     }
 
-    /// Move one reading. False when the key is not one of this model's, the
+    /// Move one reading. False when the key is not one of this part's, the
     /// value is not a number, or nothing changed, so a caller writes
     /// registers only when there is something new in them.
     pub fn set(&mut self, key: &str, value: f64) -> bool {
@@ -188,7 +270,7 @@ impl Device {
         if !value.is_finite() {
             return false;
         }
-        let channel = self.model.channels()[index];
+        let channel = &self.spec.channels[index];
         let value = value.clamp(channel.min, channel.max);
         if self.values[index] == value {
             return false;
@@ -198,7 +280,7 @@ impl Device {
     }
 
     fn index_of(&self, key: &str) -> Option<usize> {
-        self.model.channels().iter().position(|c| c.key == key)
+        self.spec.channels.iter().position(|c| c.key == key)
     }
 
     fn get(&self, key: &str) -> f64 {
@@ -209,36 +291,95 @@ impl Device {
     /// register: who it is, how it is calibrated, and what it reads. What a
     /// run declares before the firmware's first transaction.
     pub fn registers(&self) -> Vec<(u8, Vec<u8>)> {
-        let mut runs = match self.model {
-            // PWR_MGMT_1 powers on asleep, and WHO_AM_I is what every driver
-            // checks first.
-            Model::Mpu6050 => vec![(0x6b, vec![0x40]), (0x75, vec![0x68])],
-            Model::Bmp280 | Model::Bme280 => {
-                let bme = self.model == Model::Bme280;
-                let mut runs = vec![
-                    (0x88, bosch::calibration()),
-                    (0xd0, vec![if bme { 0x60 } else { 0x58 }]),
-                    // STATUS: not measuring, nothing being copied from NVM.
-                    (0xf3, vec![0x00]),
-                ];
-                if bme {
-                    runs.push((0xa1, vec![bosch::H1]));
-                    runs.push((0xe1, bosch::humidity_calibration()));
-                }
-                runs
-            }
-        };
+        let mut runs: Vec<(u8, Vec<u8>)> = self
+            .spec
+            .fixed
+            .iter()
+            .map(|run| (run.at, run.bytes.clone()))
+            .collect();
+        runs.extend(self.calibration());
         runs.extend(self.data());
         runs
+    }
+
+    /// The bytes a [`Quirk`] supplies that no declaration could. Bosch's
+    /// compensation is meaningless without the calibration it reads, and a
+    /// driver cannot tell that memory from any other chip's — so the two
+    /// travel together rather than the numbers being copied into a file
+    /// where nobody could check them against the arithmetic.
+    fn calibration(&self) -> Vec<(u8, Vec<u8>)> {
+        match self.spec.quirk {
+            None => Vec::new(),
+            Some(Quirk::Bmp280) => vec![(0x88, bosch::calibration())],
+            Some(Quirk::Bme280) => vec![
+                (0x88, bosch::calibration()),
+                (0xa1, vec![bosch::H1]),
+                (0xe1, bosch::humidity_calibration()),
+            ],
+        }
     }
 
     /// Only the registers that change when a reading does: what a slider
     /// moving in a running simulation writes.
     pub fn data(&self) -> Vec<(u8, Vec<u8>)> {
-        match self.model {
-            Model::Mpu6050 => vec![(0x3b, self.imu_data())],
-            Model::Bmp280 | Model::Bme280 => vec![(0xf7, self.climate_data())],
+        match self.spec.quirk {
+            Some(quirk) => self.climate_data(quirk),
+            None => self.declared_data(),
         }
+    }
+
+    /// Every declared reading, encoded — with readings that sit next to
+    /// each other merged into one run, because a part's data registers are
+    /// read in one burst and so they are declared in one.
+    fn declared_data(&self) -> Vec<(u8, Vec<u8>)> {
+        let mut runs: Vec<(u8, Vec<u8>)> = Vec::new();
+        for reading in &self.spec.readings {
+            let bytes = self.encode(reading);
+            match runs.last_mut() {
+                Some((at, held)) if usize::from(*at) + held.len() == usize::from(reading.at) => {
+                    held.extend(bytes);
+                }
+                _ => runs.push((reading.at, bytes)),
+            }
+        }
+        runs
+    }
+
+    /// One reading as the part's own register holds it, clipped where the
+    /// part's converter clips: a value past the configured range saturates
+    /// rather than wrapping round to the opposite sign.
+    fn encode(&self, reading: &Reading) -> Vec<u8> {
+        let width = usize::from(reading.width).clamp(1, 4);
+        let lsb = self.lsb_of(&reading.key, reading.lsb);
+        let raw = ((self.get(&reading.key) - reading.offset) * lsb).round();
+        let bits = (width * 8) as i32;
+        let (low, high) = if reading.signed {
+            (-(2f64.powi(bits - 1)), 2f64.powi(bits - 1) - 1.0)
+        } else {
+            (0.0, 2f64.powi(bits) - 1.0)
+        };
+        let raw = raw.clamp(low, high) as i64;
+        let all = (raw as u64).to_be_bytes();
+        let mut bytes = all[8 - width..].to_vec();
+        if reading.order == Order::Little {
+            bytes.reverse();
+        }
+        bytes
+    }
+
+    /// What a count of this channel is worth, after whatever full scale the
+    /// firmware selected.
+    fn lsb_of(&self, key: &str, declared: f64) -> f64 {
+        for (index, ranged) in self.spec.ranges.iter().enumerate() {
+            if !ranged.keys.iter().any(|k| k == key) {
+                continue;
+            }
+            let choice = usize::from(self.ranges.get(index).copied().unwrap_or(0));
+            if let Some(lsb) = ranged.lsbs.get(choice) {
+                return *lsb;
+            }
+        }
+        declared
     }
 
     /// A write the firmware made, as the bus reported it: the register
@@ -253,50 +394,41 @@ impl Device {
         let Some((&start, stored)) = bytes.split_first() else {
             return Vec::new();
         };
+        let spec = self.spec.clone();
         let mut back = Vec::new();
         let mut rescaled = false;
         for (offset, &value) in stored.iter().enumerate() {
             let register = start.wrapping_add(offset as u8);
-            match (self.model, register) {
-                (Model::Mpu6050, 0x1b) => {
-                    let range = (value >> 3) & 0x03;
-                    rescaled |= range != self.gyro_range;
-                    self.gyro_range = range;
+            // A reset first, so a range register written after it in the
+            // same burst still takes: a driver that resets and configures
+            // in one transaction means the configuration.
+            for reset in spec.resets.iter().filter(|r| r.at == register) {
+                if !reset.fires(value) {
+                    continue;
                 }
-                (Model::Mpu6050, 0x1c) => {
-                    let range = (value >> 3) & 0x03;
-                    rescaled |= range != self.accel_range;
-                    self.accel_range = range;
+                self.ranges.fill(0);
+                back.extend(reset.restores.iter().map(|r| (r.at, r.bytes.clone())));
+                rescaled = true;
+            }
+            for (index, ranged) in spec.ranges.iter().enumerate() {
+                if ranged.at != register {
+                    continue;
                 }
-                // DEVICE_RESET: the configuration returns to its power-on
-                // values, the part goes back to sleep and the bit clears
-                // itself. A driver polling for that clear would otherwise
-                // wait for ever on a register that only stores.
-                (Model::Mpu6050, 0x6b) if value & 0x80 != 0 => {
-                    self.accel_range = 0;
-                    self.gyro_range = 0;
-                    back.push((0x1b, vec![0x00]));
-                    back.push((0x1c, vec![0x00]));
-                    back.push((0x6b, vec![0x40]));
+                let choice = (value >> ranged.shift) & ranged.mask;
+                if self.ranges[index] != choice {
+                    self.ranges[index] = choice;
                     rescaled = true;
                 }
-                // Soft reset: the control registers return to zero and the
-                // reset register reads as zero, as the part's do.
-                (Model::Bmp280 | Model::Bme280, 0xe0) if value == 0xb6 => {
-                    back.push((0xe0, vec![0x00]));
-                    if self.model == Model::Bme280 {
-                        back.push((0xf2, vec![0x00]));
-                    }
-                    back.push((0xf4, vec![0x00]));
-                    back.push((0xf5, vec![0x00]));
+            }
+            for clear in spec.clears.iter().filter(|c| c.at == register) {
+                if value & clear.mask == 0 {
+                    continue;
                 }
-                // Forced mode: one measurement, then back to sleep. The
-                // measurement is already there, so the part is asleep again
-                // as soon as anybody looks.
-                (Model::Bmp280 | Model::Bme280, 0xf4) if matches!(value & 0x03, 0x01 | 0x02) => {
-                    back.push((0xf4, vec![value & !0x03]));
+                let field = (value & clear.mask) >> clear.mask.trailing_zeros();
+                if !clear.only.is_empty() && !clear.only.contains(&field) {
+                    continue;
                 }
-                _ => {}
+                back.push((register, vec![value & !clear.mask]));
             }
         }
         if rescaled {
@@ -305,49 +437,22 @@ impl Device {
         back
     }
 
-    /// `ACCEL_XOUT_H` through `GYRO_ZOUT_L`: fourteen bytes, big-endian,
-    /// scaled for the ranges the firmware selected.
-    fn imu_data(&self) -> Vec<u8> {
-        const ACCEL_LSB_PER_G: [f64; 4] = [16384.0, 8192.0, 4096.0, 2048.0];
-        const GYRO_LSB_PER_DPS: [f64; 4] = [131.0, 65.5, 32.8, 16.4];
-        let accel = ACCEL_LSB_PER_G[usize::from(self.accel_range & 0x03)];
-        let gyro = GYRO_LSB_PER_DPS[usize::from(self.gyro_range & 0x03)];
-        let mut out = Vec::with_capacity(14);
-        for key in ["ax", "ay", "az"] {
-            out.extend(saturate(self.get(key) * accel).to_be_bytes());
-        }
-        // Temperature in °C is TEMP_OUT / 340 + 36.53, from the register map.
-        out.extend(saturate((self.get("temp") - 36.53) * 340.0).to_be_bytes());
-        for key in ["gx", "gy", "gz"] {
-            out.extend(saturate(self.get(key) * gyro).to_be_bytes());
-        }
-        out
-    }
-
     /// `press_msb` through `temp_xlsb`, and `hum_msb`/`hum_lsb` on a BME280:
     /// the raw converter outputs that the calibration in [`bosch`] turns back
     /// into the readings.
-    fn climate_data(&self) -> Vec<u8> {
+    fn climate_data(&self, quirk: Quirk) -> Vec<(u8, Vec<u8>)> {
         let raw_t = bosch::raw_temperature(self.get("temp"));
         let fine = bosch::t_fine(raw_t);
         let raw_p = bosch::raw_pressure(self.get("pressure") * 100.0, fine);
         let mut out = Vec::with_capacity(8);
         out.extend(twenty_bits(raw_p));
         out.extend(twenty_bits(raw_t));
-        if self.model == Model::Bme280 {
+        if quirk == Quirk::Bme280 {
             let raw_h = bosch::raw_humidity(self.get("humidity"), fine);
             out.extend((raw_h as u16).to_be_bytes());
         }
-        out
+        vec![(0xf7, out)]
     }
-}
-
-/// A reading as the part's signed 16-bit register holds it, clipped where
-/// the part's converter clips.
-fn saturate(value: f64) -> i16 {
-    value
-        .round()
-        .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
 }
 
 /// A 20-bit converter output as Bosch lays it out: `msb`, `lsb`, and the low
@@ -515,9 +620,22 @@ pub(crate) mod bosch {
     }
 }
 
-#[cfg(test)]
+// The declarations these hold to are the files rusty ships, read by the
+// reader every other part goes through — so a fixture cannot drift from
+// what a user's own part would get. That reader touches the disk, hence the
+// feature gate; the arithmetic below is wasm-safe and has no other door.
+#[cfg(all(test, feature = "backend"))]
 mod tests {
     use super::*;
+
+    /// One of the parts rusty ships.
+    fn built_in(id: &str) -> Spec {
+        crate::partfile::load(None)
+            .specs
+            .into_iter()
+            .find(|spec| spec.id == id)
+            .unwrap_or_else(|| panic!("data/parts/{id}.toml"))
+    }
 
     fn props(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -543,17 +661,19 @@ mod tests {
     }
 
     #[test]
-    fn a_model_is_read_by_its_name_and_nothing_else() {
-        assert_eq!(Model::from_id("mpu6050"), Some(Model::Mpu6050));
-        assert_eq!(Model::from_id("MPU-6050"), Some(Model::Mpu6050));
-        assert_eq!(Model::from_id(" bme_280 "), Some(Model::Bme280));
-        assert_eq!(Model::from_id("bmp280"), Some(Model::Bmp280));
-        assert_eq!(Model::from_id("mpu6500"), None, "a cousin is not the part");
-        assert_eq!(Model::from_id(""), None);
-        for model in Model::ALL {
-            assert_eq!(Model::from_id(model.id()), Some(model));
-            assert_eq!(Model::from_id(model.name()), Some(model));
-            assert!(!model.addresses().is_empty());
+    fn a_part_is_found_by_its_name_and_nothing_else() {
+        let specs = crate::partfile::load(None).specs;
+        let id = |text: &str| Spec::find(&specs, text).map(|spec| spec.id.as_str());
+        assert_eq!(id("mpu6050"), Some("mpu6050"));
+        assert_eq!(id("MPU-6050"), Some("mpu6050"), "its datasheet name");
+        assert_eq!(id("bme_280"), Some("bme280"));
+        assert_eq!(id("bmp280"), Some("bmp280"));
+        assert_eq!(id("mpu6500"), None, "a cousin is not the part");
+        assert_eq!(id(""), None);
+        for spec in &specs {
+            assert_eq!(id(&spec.id), Some(spec.id.as_str()));
+            assert_eq!(id(&spec.name), Some(spec.id.as_str()));
+            assert!(!spec.addresses.is_empty());
         }
     }
 
@@ -561,7 +681,7 @@ mod tests {
     /// board reads 1 g down and nothing else, at the power-on ranges.
     #[test]
     fn an_imu_at_rest_reads_one_g_down_and_the_room_temperature() {
-        let device = Device::new(Model::Mpu6050, &BTreeMap::new());
+        let device = Device::new(built_in("mpu6050"), &BTreeMap::new());
         let regs = file(&device.registers());
         assert_eq!(regs[0x75], 0x68, "WHO_AM_I");
         assert_eq!(regs[0x6b], 0x40, "powers on asleep");
@@ -578,7 +698,10 @@ mod tests {
     /// write that sets the range is answered with the readings re-encoded.
     #[test]
     fn a_range_the_firmware_chooses_rescales_what_it_reads() {
-        let mut device = Device::new(Model::Mpu6050, &props(&[("ax", "0.5"), ("gz", "-100")]));
+        let mut device = Device::new(
+            built_in("mpu6050"),
+            &props(&[("ax", "0.5"), ("gz", "-100")]),
+        );
         let regs = file(&device.registers());
         assert_eq!(be(&regs, 0x3b), 8192, "0.5 g at ±2 g");
         assert_eq!(be(&regs, 0x47), -13100, "-100 °/s at ±250 °/s");
@@ -599,7 +722,7 @@ mod tests {
     /// Past the configured range a reading clips, as the part's does.
     #[test]
     fn a_reading_past_the_range_saturates() {
-        let device = Device::new(Model::Mpu6050, &props(&[("ax", "3"), ("gx", "-400")]));
+        let device = Device::new(built_in("mpu6050"), &props(&[("ax", "3"), ("gx", "-400")]));
         let regs = file(&device.registers());
         assert_eq!(be(&regs, 0x3b), i16::MAX, "3 g at ±2 g");
         assert_eq!(be(&regs, 0x43), i16::MIN, "-400 °/s at ±250 °/s");
@@ -609,7 +732,7 @@ mod tests {
     /// The register file only stores, so the clear has to be written back.
     #[test]
     fn a_reset_clears_its_own_bit_and_the_ranges() {
-        let mut device = Device::new(Model::Mpu6050, &props(&[("az", "1")]));
+        let mut device = Device::new(built_in("mpu6050"), &props(&[("az", "1")]));
         device.wrote(&[0x1c, 0x18]);
         let back = file(&device.wrote(&[0x6b, 0x80]));
         assert_eq!(back[0x6b], 0x40, "reset done, asleep");
@@ -619,7 +742,7 @@ mod tests {
 
     #[test]
     fn a_slider_moves_only_what_it_names() {
-        let mut device = Device::new(Model::Mpu6050, &BTreeMap::new());
+        let mut device = Device::new(built_in("mpu6050"), &BTreeMap::new());
         assert!(device.set("ay", -0.25));
         assert!(!device.set("ay", -0.25), "unchanged is not a change");
         assert!(!device.set("pressure", 1000.0), "not this model's channel");
@@ -648,7 +771,7 @@ mod tests {
     #[test]
     fn a_climate_sensor_reads_back_what_it_was_set_to() {
         let device = Device::new(
-            Model::Bme280,
+            built_in("bme280"),
             &props(&[
                 ("temp", "31.5"),
                 ("pressure", "987.6"),
@@ -685,7 +808,7 @@ mod tests {
     #[test]
     fn a_floating_point_driver_reads_the_same_values() {
         let device = Device::new(
-            Model::Bmp280,
+            built_in("bmp280"),
             &props(&[("temp", "-12.3"), ("pressure", "850")]),
         );
         let regs = file(&device.registers());
@@ -729,7 +852,7 @@ mod tests {
     /// get wrong.
     #[test]
     fn a_forced_measurement_returns_the_part_to_sleep() {
-        let mut device = Device::new(Model::Bme280, &BTreeMap::new());
+        let mut device = Device::new(built_in("bme280"), &BTreeMap::new());
         assert_eq!(device.wrote(&[0xf4, 0x25]), vec![(0xf4, vec![0x24])]);
         assert!(device.wrote(&[0xf4, 0x27]).is_empty(), "normal mode stays");
         let reset = file(&device.wrote(&[0xe0, 0xb6]));

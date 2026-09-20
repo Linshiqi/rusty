@@ -283,6 +283,7 @@ pub fn Simulate() -> impl IntoView {
                         empty_sheet(&chip)
                     })
                     library=plan.library.clone()
+                    sensors=plan.parts.clone()
                 />
             </div>
         }
@@ -412,13 +413,24 @@ fn unsolved_text(why: &circuit::Unsolved) -> String {
 /// The editor: library, sheet, corner controls, properties. Local state
 /// until Save writes it into `.rusty/sim.toml` and the plan reloads.
 #[component]
-fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
+fn BoardEditor(
+    board: Sheet,
+    library: Vec<Symbol>,
+    /// The parts a sensor's `model` prop may name — rusty's own and the
+    /// project's, as the plan read them. A sheet naming one nobody declared
+    /// gets no sliders, which is the tunables' rule: a range this panel
+    /// invented is how somebody feeds 2000 °/s to a loop written for 250.
+    sensors: Vec<rusty_embed::sensor::Spec>,
+) -> impl IntoView {
     let state = AppState::expect();
     let running = state.app.session_running;
     let chip = board.chip.clone();
     // Copy handles to the chip's name, so the closures the parts' views
     // share can be `Copy` themselves — a `String` captured by move is what
     // stops a closure being used twice.
+    // A `Copy` handle, so every closure that needs to look a sensor up can
+    // hold one rather than a clone of the list.
+    let sensors = StoredValue::new(sensors);
     let chip_id = StoredValue::new(chip.clone());
     let chip_label = StoredValue::new(board.chip.to_uppercase());
     // The board around the pins — module, buttons, connector — by family.
@@ -2645,43 +2657,51 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                             if this.with(|p| {
                                                 p.as_ref()
                                                     .and_then(|p| p.inst.props.get("model"))
-                                                    .and_then(|id| rusty_embed::sensor::Model::from_id(id))
-                                                    .is_some()
+                                                    .is_some_and(|id| {
+                                                        sensors.with_value(|all| {
+                                                            rusty_embed::sensor::Spec::find(all, id).is_some()
+                                                        })
+                                                    })
                                             }) =>
                                         {
                                             let (model, props) = this.with(|p| {
                                                 let inst = &p.as_ref()?.inst;
-                                                let model = rusty_embed::sensor::Model::from_id(inst.props.get("model")?)?;
+                                                let model = sensors.with_value(|all| {
+                                                    rusty_embed::sensor::Spec::find(all, inst.props.get("model")?).cloned()
+                                                })?;
                                                 Some((model, inst.props.clone()))
                                             })?;
                                             let part_ref = reference.get_untracked();
                                             Some(view! {
                                                 <div class="pointer-events-none absolute flex flex-col gap-0.5" style=style>
-                                                    <span class="font-mono text-caption text-label-3">{model.name()}</span>
+                                                    <span class="font-mono text-caption text-label-3">{model.name.clone()}</span>
                                                     {model
-                                                        .channels()
+                                                        .channels
                                                         .iter()
                                                         .map(|channel| {
-                                                            let key = channel.key;
-                                                            let (min, max, unit) = (channel.min, channel.max, channel.unit);
+                                                            let key = channel.key.clone();
+                                                            let (min, max, unit) = (channel.min, channel.max, channel.unit.clone());
                                                             let start = props
-                                                                .get(key)
+                                                                .get(&key)
                                                                 .and_then(|text| text.trim().parse::<f64>().ok())
                                                                 .unwrap_or(channel.rest);
                                                             let shown = {
                                                                 let part_ref = part_ref.clone();
+                                                                let key = key.clone();
                                                                 Memo::new(move |_| {
                                                                     state.sim.readings.with(|held| {
-                                                                        held.get(&(part_ref.clone(), key.to_string())).copied()
+                                                                        held.get(&(part_ref.clone(), key.clone())).copied()
                                                                     })
                                                                     .unwrap_or(start)
                                                                 })
                                                             };
                                                             let moved = part_ref.clone();
+                                                            let typed = key.clone();
+                                                            let written = key.clone();
                                                             view! {
                                                                 <span class="flex items-center gap-1.5">
                                                                     <span class="w-[11ch] truncate text-caption text-label-3">
-                                                                        {reading_label(key)}
+                                                                        {reading_label(&key)}
                                                                     </span>
                                                                     // Any value, not a grid: a stepped slider shows
                                                                     // 0.5 g as 0.52 and moves the reading the moment
@@ -2697,7 +2717,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                                         }
                                                                         on:input=move |event: ev::Event| {
                                                                             if let Ok(value) = event_target_value(&event).parse::<f64>() {
-                                                                                controller::sim_reading(state, moved.clone(), key.to_string(), value);
+                                                                                controller::sim_reading(state, moved.clone(), typed.clone(), value);
                                                                             }
                                                                         }
                                                                         on:change=move |event: ev::Event| {
@@ -2707,7 +2727,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                                             if let Ok(value) = event_target_value(&event).parse::<f64>() {
                                                                                 checkpoint();
                                                                                 parts.update(|list| {
-                                                                                    edit::set_prop(list, index, key, &reading_text(value))
+                                                                                    edit::set_prop(list, index, &written, &reading_text(value))
                                                                                 });
                                                                                 dirty.set(true);
                                                                             }
@@ -3986,7 +4006,9 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                 // channel the firmware declared.
                                 {(behaviour == Some(Behaviour::Sensor)).then(|| {
                                     let current = part.inst.props.get("model").cloned().unwrap_or_default();
-                                    let current_model = rusty_embed::sensor::Model::from_id(&current);
+                                    let known = sensors.with_value(|all| {
+                                        rusty_embed::sensor::Spec::find(all, &current).map(|spec| spec.id.clone())
+                                    });
                                     let has_address = part
                                         .inst
                                         .props
@@ -4002,15 +4024,18 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 on:change=move |event| {
                                                     checkpoint();
                                                     let id = event_target_value(&event);
-                                                    let model = rusty_embed::sensor::Model::from_id(&id);
+                                                    let first = sensors.with_value(|all| {
+                                                        rusty_embed::sensor::Spec::find(all, &id)
+                                                            .and_then(|spec| spec.addresses.first().copied())
+                                                    });
                                                     parts.update(|list| {
                                                         edit::set_prop(list, index, "model", &id);
                                                         // The address the breakout ships with,
                                                         // unless the sheet already said one.
-                                                        if let Some(model) = model
+                                                        if let Some(address) = first
                                                             && !has_address
                                                         {
-                                                            let address = format!("{:02x}", model.addresses()[0]);
+                                                            let address = format!("{address:02x}");
                                                             edit::set_prop(list, index, "addr", &address);
                                                         }
                                                     });
@@ -4018,16 +4043,17 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                 }
                                                 class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-1.5 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
                                             >
-                                                <option value="" selected=current_model.is_none()>
+                                                <option value="" selected=known.is_none()>
                                                     {t!("simulate.sensor-model-declared")}
                                                 </option>
-                                                {rusty_embed::sensor::Model::ALL
+                                                {sensors
+                                                    .get_value()
                                                     .into_iter()
-                                                    .map(|model| {
-                                                        let chosen = current_model == Some(model);
+                                                    .map(|spec| {
+                                                        let chosen = known.as_deref() == Some(spec.id.as_str());
                                                         view! {
-                                                            <option value=model.id() selected=chosen>
-                                                                {model.name()}
+                                                            <option value=spec.id selected=chosen>
+                                                                {spec.name}
                                                             </option>
                                                         }
                                                     })

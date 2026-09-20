@@ -378,10 +378,18 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         .as_ref()
         .map(|sheet| kit_rows_for(root, &sheet.chip))
         .unwrap_or_default();
+    // The parts the sheet's `model` props name, read from the same three
+    // layers the symbols are.
+    let parts = crate::partfile::load(Some(root));
+    for warning in &parts.warnings {
+        on(Event::Note(warning));
+        outcome.notes.push(warning.clone());
+    }
+    let specs = parts.specs;
     let pins = pins_port.map(|port| {
         let start = sheet
             .as_ref()
-            .map(|sheet| super::start_of(sheet, &rows))
+            .map(|sheet| super::start_of(sheet, &rows, &specs))
             .unwrap_or_default();
         let live = sheet.as_ref().and_then(|sheet| {
             match crate::live::Live::at_rest(sheet.clone(), rows.clone(), Default::default(), Default::default()) {

@@ -903,7 +903,8 @@ mod tests {
             // And what each sheet puts on the two buses, since a device
             // that is declared but not wired is exactly the mistake these
             // examples exist to be a correct answer to.
-            let (bus, bus_said) = crate::nets::bus_devices(&sheet, &rows);
+            let specs = crate::partfile::load(Some(&root)).specs;
+            let (bus, bus_said) = crate::nets::bus_devices(&sheet, &rows, &specs);
             let (wire, wire_said) = crate::nets::wire_devices(&sheet, &rows);
             assert!(
                 bus_said.is_empty() && wire_said.is_empty(),

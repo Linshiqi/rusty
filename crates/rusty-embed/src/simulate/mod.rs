@@ -335,6 +335,11 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
     // that needed it.
     let library = crate::schematic::load(Some(root));
     let mut notes: Vec<String> = library.warnings.clone();
+    // And the parts those symbols may answer as, from the same three
+    // layers. A declaration that would not read is a note beside the
+    // library's, not a refusal: the board is still a board without it.
+    let parts = crate::partfile::load(Some(root));
+    notes.extend(parts.warnings);
     let board = board_file::load(root, chip).map(|loaded| {
         notes.extend(loaded.note);
         let mut sheet = loaded.sheet;
@@ -351,6 +356,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         steps: vec![build, image_step, run],
         board,
         library: library.symbols,
+        parts: parts.specs,
         debug,
         debug_tool,
         notes,

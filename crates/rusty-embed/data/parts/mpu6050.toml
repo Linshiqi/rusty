@@ -1,0 +1,143 @@
+# InvenSense's six-axis IMU, declared rather than compiled in.
+#
+# This file is the format's own worked example: everything an MPU-6050 does
+# on the bus is linear, so nothing here is a quirk, and a part you declare in
+# `<project>/.rusty/parts/` gets exactly these tables and no less.
+#
+# The id is the file's stem, so the name a sheet writes in its `model` prop
+# is one fact in one place.
+
+name = "MPU-6050"
+# AD0 low, then AD0 high.
+addresses = [0x68, 0x69]
+
+# PWR_MGMT_1 powers on asleep — a driver that does not clear the sleep bit
+# reads nothing, which is a real mistake and worth reproducing.
+[[fixed]]
+at = 0x6b
+bytes = [0x40]
+
+# WHO_AM_I, which is what every driver checks first and refuses on.
+[[fixed]]
+at = 0x75
+bytes = [0x68]
+
+# The slider ranges are wider than the part's power-on full scale on
+# purpose: a reading past the range the firmware configured saturates, as
+# the part does, and that is worth being able to show.
+
+[[channel]]
+key = "ax"
+unit = "g"
+min = -4.0
+max = 4.0
+rest = 0.0
+at = 0x3b
+width = 2
+order = "big"
+signed = true
+lsb = 16384.0
+
+[[channel]]
+key = "ay"
+unit = "g"
+min = -4.0
+max = 4.0
+rest = 0.0
+at = 0x3d
+width = 2
+order = "big"
+signed = true
+lsb = 16384.0
+
+# A board lying still reads one g downwards, not nothing.
+[[channel]]
+key = "az"
+unit = "g"
+min = -4.0
+max = 4.0
+rest = 1.0
+at = 0x3f
+width = 2
+order = "big"
+signed = true
+lsb = 16384.0
+
+# The register map's own formula is `TEMP_OUT / 340 + 36.53`, which is
+# `raw = (celsius - 36.53) * 340` the other way round.
+[[channel]]
+key = "temp"
+unit = "°C"
+min = -40.0
+max = 85.0
+rest = 24.0
+at = 0x41
+width = 2
+order = "big"
+signed = true
+lsb = 340.0
+offset = 36.53
+
+[[channel]]
+key = "gx"
+unit = "°/s"
+min = -500.0
+max = 500.0
+rest = 0.0
+at = 0x43
+width = 2
+order = "big"
+signed = true
+lsb = 131.0
+
+[[channel]]
+key = "gy"
+unit = "°/s"
+min = -500.0
+max = 500.0
+rest = 0.0
+at = 0x45
+width = 2
+order = "big"
+signed = true
+lsb = 131.0
+
+[[channel]]
+key = "gz"
+unit = "°/s"
+min = -500.0
+max = 500.0
+rest = 0.0
+at = 0x47
+width = 2
+order = "big"
+signed = true
+lsb = 131.0
+
+# GYRO_CONFIG's FS_SEL: ±250, ±500, ±1000, ±2000 °/s.
+[[range]]
+at = 0x1b
+shift = 3
+mask = 0x03
+keys = ["gx", "gy", "gz"]
+lsbs = [131.0, 65.5, 32.8, 16.4]
+
+# ACCEL_CONFIG's AFS_SEL: ±2, ±4, ±8, ±16 g.
+[[range]]
+at = 0x1c
+shift = 3
+mask = 0x03
+keys = ["ax", "ay", "az"]
+lsbs = [16384.0, 8192.0, 4096.0, 2048.0]
+
+# DEVICE_RESET: the configuration returns to its power-on values, the part
+# goes back to sleep, and the bit clears itself. A driver polling for that
+# clear would otherwise wait for ever on a register that only stores.
+[[reset]]
+at = 0x6b
+mask = 0x80
+restores = [
+    { at = 0x1b, bytes = [0x00] },
+    { at = 0x1c, bytes = [0x00] },
+    { at = 0x6b, bytes = [0x40] },
+]

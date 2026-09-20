@@ -1,0 +1,52 @@
+# The BMP280 with a humidity sensor beside it — a different chip id, a
+# third channel, one more control register, and the same compensation.
+
+name = "BME280"
+addresses = [0x76, 0x77]
+quirk = "bme280"
+
+[[fixed]]
+at = 0xd0
+bytes = [0x60]
+
+[[fixed]]
+at = 0xf3
+bytes = [0x00]
+
+[[channel]]
+key = "temp"
+unit = "°C"
+min = -40.0
+max = 85.0
+rest = 24.0
+
+[[channel]]
+key = "pressure"
+unit = "hPa"
+min = 300.0
+max = 1100.0
+rest = 1013.25
+
+[[channel]]
+key = "humidity"
+unit = "%"
+min = 0.0
+max = 100.0
+rest = 50.0
+
+[[clear]]
+at = 0xf4
+mask = 0x03
+only = [1, 2]
+
+# `ctrl_hum` is the register the BMP280 does not have, and it goes back to
+# zero with the rest.
+[[reset]]
+at = 0xe0
+equals = 0xb6
+restores = [
+    { at = 0xe0, bytes = [0x00] },
+    { at = 0xf2, bytes = [0x00] },
+    { at = 0xf4, bytes = [0x00] },
+    { at = 0xf5, bytes = [0x00] },
+]

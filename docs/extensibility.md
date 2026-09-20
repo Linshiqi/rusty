@@ -222,6 +222,63 @@ screen whose `panel` prop names its controller (`ssd1306`, `sh1106`) draws
 the pixels its own driver wrote across the bus, and a strip is lit by the
 bytes RMT clocked out on the pin its `DIN` reaches.
 
+**A symbol is a drawing; what a part *answers with on the bus* is its own
+declaration.** `<project>/.rusty/parts/<id>.toml` says which addresses a
+part replies on, what it reads and in what units, where each reading sits
+in its register file, how many counts one unit is worth, which register
+changes that, and which bits it clears once it has acted on them — and the
+`model` prop on a sheet's sensor names the file's stem. The parts rusty
+ships (`mpu6050`, `bmp280`, `bme280`) are three such files read by the same
+reader, so the declared path cannot rot without taking them with it. A
+worked one:
+
+```toml
+name = "ADXL345"
+addresses = [0x53, 0x1d]
+
+[[fixed]]                    # bytes fixed for the run: identity, and
+at = 0x00                    # anything a driver checks before it will talk
+bytes = [0xe5]
+
+[[channel]]                  # one quantity, in the unit a person reads,
+key = "x"                    # and where the part keeps it
+unit = "g"
+min = -16.0
+max = 16.0
+rest = 0.0
+at = 0x32
+width = 2
+order = "little"
+signed = true
+lsb = 256.0                  # counts per g; `offset` shifts the zero
+
+[[range]]                    # a register that changes what a count is worth
+at = 0x31
+shift = 0
+mask = 0x03
+keys = ["x", "y", "z"]
+lsbs = [256.0, 128.0, 64.0, 32.0]
+
+[[clear]]                    # a bit the part clears once it has acted
+at = 0x2d
+mask = 0x08
+
+[[reset]]                    # and a write that puts it back as it powered on
+at = 0x2d
+mask = 0x80
+restores = [{ at = 0x31, bytes = [0x00] }]
+```
+
+The encoding it can express is `raw = (value - offset) * lsb`, held to what
+the width holds, because a converter clips rather than wrapping. **What it
+cannot express is refused by name rather than approximated**: Bosch's
+compensation is a polynomial over a calibration blob in the part's own
+memory, so `bmp280.toml` carries `quirk = "bmp280"` and the arithmetic
+lives in `rusty_embed::sensor::bosch` — and a part declared in a project
+may *not* name a quirk, because a quirk is code that is not there. A
+linear stand-in for a BME280 would read plausibly and be wrong by degrees,
+which is the confident wrong answer this whole file exists to avoid.
+
 `.rusty/sim.toml` is the sheet: `[[part]]` entries placing a symbol by
 `library:name`, `[[wire]]` entries joining two pins (`U1.GPIO2` to `R1.1`;
 the devkit is `U1`, its pins named by GPIO and rail). There is no

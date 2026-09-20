@@ -452,7 +452,13 @@ pub async fn run_simulation(
     let start = plan
         .board
         .as_ref()
-        .map(|sheet| simulate::start_of(sheet, &simulate::kit_rows_for(&root, &sheet.chip)))
+        .map(|sheet| {
+            simulate::start_of(
+                sheet,
+                &simulate::kit_rows_for(&root, &sheet.chip),
+                &plan.parts,
+            )
+        })
         .unwrap_or_default();
 
     // A debug run freezes the CPU at reset so breakpoints can be placed before

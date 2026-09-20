@@ -492,15 +492,36 @@ device with no wires would answer there and be dead on the desk, which is the
 confident wrong answer in miniature. No address is not an address of zero:
 absence refuses.
 
+**A part is a declaration, not a `match` arm.** `<project>/.rusty/parts/
+<id>.toml` says which addresses a part answers on, what it reads and in
+what units, where each reading sits, how many counts a unit is worth, which
+register changes that (`[[range]]`), which bits it clears once it has acted
+(`[[clear]]`) and what a reset puts back (`[[reset]]`). `partfile.rs` is
+the reader, `sensor::Spec` the wire type the sliders are drawn from, and
+`SimPlan.parts` how the frontend gets them — the symbol libraries' three
+layers, applied to behaviour. **The three parts rusty ships are three such
+files** (`data/parts/*.toml`, compiled in and read by the same reader): a
+privileged path for the built-ins is how a declared path rots without
+anybody noticing, and the MPU-6050's whole register file — identity, two
+full-scale selections, seven readings, a reset — turned out to be
+expressible, so it is expressed rather than compiled. **What a declaration
+cannot express is named rather than approximated**: `Quirk` is arithmetic
+in this crate, Bosch's compensation polynomial over the calibration in the
+part's own memory is the only one, and a project's file may not name one
+because a quirk is code that is not there. A linear stand-in for a BME280
+reads plausibly and is wrong by degrees.
+
 **A sensor rusty answers for moves.** `regs` are bytes fixed for the run —
 enough for a bus scan and a `WHO_AM_I`, and no use for a reading. A part with
 a `model` prop (`mpu6050`, `bmp280`, `bme280`; `rusty_embed::sensor`) starts
 from its own registers — identity, the calibration a Bosch part carries,
-readings encoded the way the part's datasheet decodes them — and the sliders
+readings encoded the way its declaration says — and the sliders
 under it on the sheet move those readings while the firmware runs, so an
 ordinary driver crate reads a tilted board or a warmer room. The encodings
 are the datasheets' formulas run backwards, and the tests hold them to the
-formulas run forwards, the BMP280's worked example first. **The part answers
+formulas run forwards — against the shipped files rather than a fixture, so
+what is proven is what a user's own part would get — the BMP280's worked
+example first. **The part answers
 the firmware's writes as well**: the pin channel reads every `[rusty:i2c]` write
 on its way past (`PinChannel::answer`) — a range the firmware chose
 re-encodes every reading, a reset bit clears itself, a forced measurement
@@ -2270,7 +2291,8 @@ usty`) holds `location.toml`
   synced directory must never sync a key.
 - Per-project, team-shared things live in the project's `.rusty/`, where they
   are diffed and reviewed: board overlays, the simulated board (`sim.toml`,
-  which is what the canvas editor writes) and user-defined parts (`parts/`).
+  which is what the canvas editor writes) and user-defined parts
+  (`parts/`, one TOML per part — see *A part is a declaration* below).
 - Theme, divider positions, the editor's text zoom, the Markdown page's
   zoom (its own factor: prose and a listing are read at different sizes),
   the interface scale, the
