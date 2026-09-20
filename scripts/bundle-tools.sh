@@ -174,10 +174,20 @@ rm -f "$dest/$qemu_asset"
 # firmware nothing here can boot.
 find "$dest/qemu/share/qemu" -mindepth 1 -maxdepth 1 ! -name 'esp32*' -exec rm -rf {} +
 
-if grep -q '\[rusty:gpio@' "$dest"/qemu/bin/qemu-system-riscv32*; then
-  echo "bundle-tools: qemu ready ($qemu_tag) — this is rusty's build"
+# Every model the app drives, asked for by name — the same list
+# `simulate::has_peripherals` checks at run time, for the same reason: a
+# bundle carrying four of the six answers every question about the four and
+# then hangs the firmware in `wait()`, or leaves a servo still, with nothing
+# on screen to say the installer is a generation behind.
+missing=""
+for marker in gpio adc i2c spi pwm rmt; do
+  grep -q "\[rusty:$marker@" "$dest"/qemu/bin/qemu-system-riscv32* || missing="$missing $marker"
+done
+if [ -z "$missing" ]; then
+  echo "bundle-tools: qemu ready ($qemu_tag) — rusty's build, with every model"
 else
-  echo "bundle-tools: the archive is not rusty's build — no GPIO model marker" >&2
+  echo "bundle-tools: $qemu_tag is not the build this app drives —"\
+       "no model for:$missing" >&2
   exit 1
 fi
 
