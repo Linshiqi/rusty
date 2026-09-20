@@ -208,7 +208,11 @@ pub struct Outcome {
     /// the emulator's own stamp when there is one, the host's since boot
     /// when there is not.
     pub events: Vec<(u64, u8, bool)>,
-    /// Every bus transaction the emulator reported, as it reported it.
+    /// Every bus transaction the emulator reported, as it reported it —
+    /// and what crossed the other peripherals it answers for: a duty with
+    /// its frequency, a strip's bytes. One list, because what a headless
+    /// run is read for is *what the board did*, and splitting it by
+    /// peripheral would hide the order the four of them happened in.
     pub bus: Vec<String>,
     /// Whether the levels came from the GPIO registers (rusty's QEMU) or
     /// only from what the firmware printed about them.
@@ -569,7 +573,10 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
                         levels.insert(*pin, *level);
                         outcome.events.push((micros(report.at_us), *pin, *level));
                     }
-                } else if text.starts_with("[rusty:i2c") || text.starts_with("[rusty:spi") {
+                } else if ["[rusty:i2c", "[rusty:spi", "[rusty:pwm", "[rusty:rmt"]
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix))
+                {
                     outcome.bus.push(text);
                 }
             }

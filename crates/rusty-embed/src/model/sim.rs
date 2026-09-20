@@ -44,9 +44,10 @@ impl SimLimit {
                 ),
                 SimLimit::new(
                     "esp32-peripherals",
-                    "rusty's models of the ADC, the I2C master and SPI2 are the ESP32-C3's. On \
-                     an ESP32 a read_oneshot() or a bus transaction waits for ever, and GPIO \
-                     interrupts through esp-hal are unproven. The pins themselves are modelled.",
+                    "rusty's models of the ADC, the I2C master, SPI2, LEDC and RMT are the \
+                     ESP32-C3's. On an ESP32 a read_oneshot(), a bus transaction or a strip's \
+                     transmission waits for ever, a duty reaches no pin, and GPIO interrupts \
+                     through esp-hal are unproven. The pins themselves are modelled.",
                 ),
             ],
             "esp32s3" => vec![SimLimit::new(

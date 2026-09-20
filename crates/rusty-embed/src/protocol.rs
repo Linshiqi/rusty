@@ -343,8 +343,10 @@ pub fn parse_rmt_report(line: &str) -> Option<RmtReport> {
 /// bytes is a transmission caught mid-flight, not a colour.
 pub fn strip_colours(bytes: &[u8]) -> Vec<(u8, u8, u8)> {
     bytes
-        .chunks_exact(3)
-        .map(|pixel| (pixel[1], pixel[0], pixel[2]))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|[green, red, blue]| (*red, *green, *blue))
         .collect()
 }
 

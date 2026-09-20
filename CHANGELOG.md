@@ -25,6 +25,10 @@ WS2812 strip is driven by. Before, the codes went nowhere and the driver's
 `write`. There is a strip part on the sheet — as long as its value says —
 lit by the bytes that actually reached the pin.
 
+**A Wokwi diagram's LED strips come across too**, as strips of the length
+the diagram gave them — a canvas of rows and columns, a ring or a single
+pixel.
+
 **A duty reaches its pin, at the frequency its timer sets.** The emulator
 models LEDC, so a servo, a dimmed lamp or a motor driven the ordinary way
 now moves in the simulator instead of standing still. A servo's horn follows

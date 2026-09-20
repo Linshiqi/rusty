@@ -161,6 +161,28 @@ fn counterpart(part: &Part) -> Result<Counterpart, String> {
             "2" => Some("+"),
             _ => None,
         }),
+        // Addressable LEDs, however many of them Wokwi's part carries: a
+        // single pixel, a ring, a stick, or a canvas of rows and columns —
+        // all one chain on one wire, which is what rusty's strip is. The
+        // count travels in the value, because that is what draws.
+        "wokwi-neopixel" | "wokwi-neopixel-canvas" | "wokwi-led-ring" => {
+            let number = |name: &str| part.attr(name).and_then(|a| a.trim().parse::<usize>().ok());
+            let pixels = number("pixels")
+                .or_else(|| Some(number("rows")? * number("cols")?))
+                .unwrap_or(1);
+            with(
+                "rusty:Strip",
+                "D",
+                format!("WS2812 x{pixels}"),
+                |pin| match pin {
+                    "DIN" | "IN" => Some("DIN"),
+                    "DOUT" | "OUT" => Some("DOUT"),
+                    "VDD" | "VCC" => Some("VCC"),
+                    "VSS" | "GND" => Some("GND"),
+                    _ => None,
+                },
+            )
+        }
         "wokwi-servo" => with("rusty:Servo", "M", String::new(), |pin| match pin {
             "PWM" => Some("SIG"),
             "V+" => Some("VCC"),
@@ -568,6 +590,41 @@ mod tests {
                 .iter()
                 .any(|w| w.to.part == supply.reference || w.from.part == supply.reference)
         );
+    }
+
+    /// A chain of addressable LEDs, however Wokwi spells it: a canvas of
+    /// rows and columns and a stick of a stated length are one strip on one
+    /// wire here, and the count has to survive, because that is what draws
+    /// and what the bytes are read against.
+    #[test]
+    fn a_neopixel_chain_comes_across_as_a_strip_of_its_own_length() {
+        const STRIPS: &str = r#"{
+          "version": 1, "author": "somebody", "editor": "wokwi",
+          "parts": [
+            { "type": "board-esp32-c3-devkitm-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+            { "type": "wokwi-neopixel-canvas", "id": "np1", "top": 0, "left": 200,
+              "attrs": { "rows": "4", "cols": "8" } },
+            { "type": "wokwi-neopixel", "id": "np2", "top": 200, "left": 200, "attrs": {} }
+          ],
+          "connections": [
+            [ "esp:8", "np1:DIN", "green", [] ],
+            [ "np1:DOUT", "np2:DIN", "green", [] ],
+            [ "np1:VSS", "esp:GND.1", "black", [] ]
+          ]
+        }"#;
+
+        let sheet = read(STRIPS, "esp32c3", &c3_rows()).unwrap();
+        let strips: Vec<&Instance> = sheet
+            .parts
+            .iter()
+            .filter(|p| p.symbol == "rusty:Strip")
+            .collect();
+        assert_eq!(strips.len(), 2);
+        assert_eq!(strips[0].value, "WS2812 x32", "four rows of eight");
+        assert_eq!(strips[1].value, "WS2812 x1", "one pixel is one pixel");
+        assert!(wired(&sheet, "U1.GPIO8", "D1.DIN"), "{:?}", sheet.wires);
+        assert!(wired(&sheet, "D1.DOUT", "D2.DIN"));
+        assert!(wired(&sheet, "D1.GND", "U1.GND"));
     }
 
     /// What did not come across is named, with the connections it took

@@ -63,11 +63,26 @@ jobs:
 
       # Before any `run` step: the shell default above applies to all of them,
       # so on Windows there is no shell to run in until this has set one up.
+      #
+      # **No `update`, and no cache.** Both are ways for this step to fail
+      # for reasons that have nothing to do with what is being built, and it
+      # did: two runs in a row ended here in 55 seconds with `cmd.exe`
+      # exiting 1, taking the whole emulator release with them, after
+      # eighteen releases that had passed. `update: true` is a full
+      # `pacman -Syuu` before anything is installed — an upgrade of the
+      # runtime under the shell doing the upgrading, and the step that
+      # breaks when a mirror is half-synced; the packages named below are
+      # fetched at their current versions either way. The cache is the
+      # action's own, and the Actions cache service is being migrated under
+      # it. Nothing here is trusted on faith: the header check immediately
+      # after this fails loudly if the install did not produce what the
+      # build needs.
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
           msystem: MINGW64
-          update: true
+          update: false
+          cache: false
           install: >-
             base-devel git binutils
             mingw-w64-x86_64-toolchain
@@ -507,6 +522,14 @@ jobs:
   # be checked against each other rather than either taken on trust.
   prove:
     needs: build
+    # The gates run against the Linux build and nothing else, so a Windows
+    # or macOS job that failed for its own reasons must not take them with
+    # it. It did: an MSYS2 install that exited 1 skipped thirteen gates with
+    # a perfectly good binary sitting in an artifact, and the models went
+    # unproven for a reason that had nothing to do with them. When it is the
+    # Linux leg that failed there is no artifact, and the download below
+    # says so by name — which is the clearer failure anyway.
+    if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

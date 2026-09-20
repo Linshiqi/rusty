@@ -39,10 +39,12 @@ impl Tool for Simulate {
         ToolDef {
             name: "simulate".to_string(),
             description: "Build the open project's firmware, boot it in rusty's emulator \
-                (Espressif's QEMU with rusty's pin, ADC, I2C and SPI models), and report \
-                what it did: every line it printed, the level of every GPIO that moved, and \
-                every I2C and SPI transaction. The board drawn in the project's \
-                .rusty/sim.toml is on the pins and buses — its buttons, knobs and sensors. \
+                (Espressif's QEMU with rusty's pin, ADC, I2C, SPI, LEDC and RMT models), \
+                and report what it did: every line it printed, the level of every GPIO \
+                that moved, and everything that crossed a peripheral — I2C and SPI \
+                transactions, a duty with the frequency its timer sets, the bytes a LED \
+                strip was sent. The board drawn in the project's .rusty/sim.toml is on \
+                the pins and buses — its buttons, knobs, sensors and screen. \
                 \
                 Call this instead of reasoning about what firmware will print or whether a \
                 pin toggles: code that reads correctly and a board that behaves are two \
