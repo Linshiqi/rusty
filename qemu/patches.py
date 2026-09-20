@@ -85,7 +85,15 @@ EDITS = [
         "        /* And SPI2, the one a project puts a display on. SPI1 is the\n"
         "         * flash controller and stays upstream's. */\n"
         "        memory_region_add_subregion_overlap(sys_mem, DR_REG_SPI2_BASE,\n"
-        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 3), 0);\n",
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 3), 0);\n"
+        "        /* And LEDC, which reaches its pad through the GPIO matrix:\n"
+        "         * the duty behind every servo, motor and dimmed lamp. */\n"
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_LEDC_BASE,\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 4), 0);\n"
+        "        /* And RMT, whose window holds its channels' RAM as well:\n"
+        "         * the codes an addressable LED strip is sent as. */\n"
+        "        memory_region_add_subregion_overlap(sys_mem, DR_REG_RMT_BASE,\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 5), 0);\n",
     ),
     (
         "hw/riscv/esp32c3_intmatrix.c",

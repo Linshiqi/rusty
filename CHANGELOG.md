@@ -9,6 +9,37 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.47
+
+**The screen on the board shows what your driver drew.** A display part that
+names its controller — SSD1306 or SH1106, in the part's properties — now
+draws the actual pixels the firmware sent it. Nothing is read back from one
+of these panels, so every dot on the glass crossed the I2C bus, and rusty
+reads that stream the way the panel does: the `ssd1306` crate, ESP-IDF's
+driver and a hand-written init sequence all arrive as the picture they drew.
+A panel the driver has not switched on is drawn faintly and says so.
+
+**Addressable LEDs light up.** The emulator now models RMT, the peripheral a
+WS2812 strip is driven by. Before, the codes went nowhere and the driver's
+`wait()` never returned, which reads as the firmware hanging inside your own
+`write`. There is a strip part on the sheet — as long as its value says —
+lit by the bytes that actually reached the pin.
+
+**A duty reaches its pin, at the frequency its timer sets.** The emulator
+models LEDC, so a servo, a dimmed lamp or a motor driven the ordinary way
+now moves in the simulator instead of standing still. A servo's horn follows
+the width of the pulse rather than the bare fraction — 1.5 ms is the middle
+of its travel whatever the period — and the two pulse widths its ends answer
+to can be set on the part, since 500..2500 µs and 1000..2000 µs are both in
+use and reading one as the other is forty degrees out at each end.
+
+**An ESP32-C3 project now simulates six peripherals**: pins with their
+interrupts, the ADC, I2C, SPI2, LEDC and RMT. Each of the last two used to
+be a firmware that hung in a driver call with nothing on screen to say why.
+
+Requires rusty's emulator `qemu-v5`, which the installer carries; an older
+copy is offered an upgrade from the Simulate panel.
+
 ## v0.6.46
 
 **Sensors that move.** A sensor module on the board sheet can now be an

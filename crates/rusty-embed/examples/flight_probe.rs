@@ -155,7 +155,12 @@ fn main() {
                 {
                     let mut pins = report.pins.clone();
                     pins.sort_by_key(|(pin, _)| *pin);
-                    duties = Some([pins[0].1, pins[1].1, pins[2].1, pins[3].1]);
+                    duties = Some([
+                        pins[0].1.duty,
+                        pins[1].1.duty,
+                        pins[2].1.duty,
+                        pins[3].1.duty,
+                    ]);
                 }
             }
             let Some(duties) = duties else { continue };

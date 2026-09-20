@@ -158,7 +158,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json` |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner. Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json` |
 | `rusty-ai` | Bring-your-own-LLM providers, the tool registry, the agent loop, and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -284,7 +284,17 @@ unknown name changed nothing and said nothing.
 numbers.** `[rusty:pwm] 5=0.75` is how hard a pin is driven rather than
 whether it is high — reported per *change*, because timing the `[rusty:gpio]`
 edges would be the more honest measurement and is unavailable: 1–20 kHz is
-thousands of edges a second on the line the console shares.
+thousands of edges a second on the line the console shares. **The carrier
+comes after an `@` when whoever reported it knew** (`5=0.0750@50.0`): a servo
+answers to the *width* of the high part, 1.5 ms is its middle whatever the
+period, and a fraction alone cannot be read as an angle at all — the panel
+drew every LEDC-driven servo three quarters of the way round its travel
+until the emulator said how often. rusty's QEMU models the timer, so it
+says; firmware narrating its own line cannot, and `Duty::servo_angle` reads
+the fraction straight when there is no carrier rather than inventing one.
+The two pulse widths the horn's ends answer to are the *part's*
+(`min`/`max`, 500 and 2500 µs by default): 1000..2000 is the other ordinary
+pair, and reading one as the other is forty degrees at each end.
 `[rusty:sensor] gyro=3 rad/s -35..35` declares a sensor the firmware wants
 fed and `Igyro=1.25,-0.5,0.02` feeds it; `A34=2900` puts raw ADC counts on a
 pin. Counts and not volts, because rusty does not know anybody's divider and
@@ -398,18 +408,47 @@ uses — rule 5 above, one `absorb`. A button press goes both ways when both
 exist: `B14=1` on the console for firmware reading rusty's text protocol, and
 `14=1` on the pin channel for firmware reading `Input::is_high()`.
 
-**That one channel now carries four peripherals**, because all four are the
+**That one channel now carries six peripherals**, because all six are the
 host's view of one board. `A<pin>=<counts>` puts an analog value on a pin and
 `adc.read_oneshot()` returns it; `i2c 68:75=68` puts a byte behind an I2C
 address, `i2c 3c=+` declares a device with nothing to read and `i2c 3c=-`
 takes one off; `spi 0=1a68` is what a chip select answers with. Back the other
 way, `[rusty:adc@<us>] <pin>=<counts>` says what the converter handed over,
-`[rusty:i2c@<us>] 3c w 00ae` what crossed the bus and `[rusty:spi@<us>] 0 w
-aea501` what crossed the wire. All are reported per *change* — a driver
+`[rusty:i2c@<us>] 3c w 00ae` what crossed the bus, `[rusty:spi@<us>] 0 w
+aea501` what crossed the wire, `[rusty:pwm@<us>] 5=0.2500@24002.4` how hard a
+pin is driven and how often, and `[rusty:rmt@<us>] 8 100000002000000030` the
+bytes a strip's codes carried. All are reported per *change* — a driver
 polling a sensor converts thousands of times a second — and all go through the
 same `absorb`. The buses remember their last report **per verb**: a
 `write_read` alternates a write and a read, so one shared slot suppresses
 nothing.
+
+**A device with no registers is a display, and every write to it is said.**
+The repeat rule is right for a sensor being polled and fatal for a
+framebuffer: clearing a screen is the same sixteen zero bytes sixty-four
+times over, each landing somewhere else in its memory, so suppressed it
+arrives as a screen with one line on it. The declaration decides — an
+address the host gave registers is a sensor, one declared bare (`i2c 3c=+`)
+is a display. And a write longer than the 32-byte FIFO crosses it in steps,
+so `w+` is **more of the message before it**: the control byte that says
+what every byte after it means comes once per transaction, and each step
+read as a message of its own has its first data byte taken for one.
+`rusty_embed::screen` is the reading of that stream — the SSD1306 and SH1106
+command sets, the addressing window, the RAM the data lands in — and the
+sheet's display part draws it as pixels. **Which controller is behind the
+glass is the sheet's to say** (`panel`), not something taken from the
+traffic: the SH1106's window sits two columns into its RAM, and a picture
+two pixels out is one nobody can check. Until it is named the part shows
+what the firmware prints to `[rusty:disp]`, as it always has.
+
+**A strip's colours arrive as bytes, and the part says what they mean.**
+`[rusty:rmt]` carries what the wire carried, because the emulator reads a
+one-wire bit off the *shape* of a pulse code (a long high then a short low)
+and not off anybody's timings — so WS2812, SK6812 and WS2811 all report the
+same way. `strip_colours` is the WS2812 family's order, green first, which
+is the one thing about those bytes that is not obvious; `rusty:Strip` is the
+part, as long as its value says (`30`, or `WS2812 x30` — a part number alone
+is a name, not a count of two thousand eight hundred and twelve).
 
 The potentiometer's `P34=128` stays console-only, deliberately: what a wiper
 converts to depends on what its two ends are wired to, and turning 128 into

@@ -262,7 +262,7 @@ fn DockCount(tab: DockTab) -> impl IntoView {
                 state
                     .sim
                     .pwm
-                    .with(|p| p.values().filter(|d| **d > 0.01).count()),
+                    .with(|p| p.values().filter(|d| d.duty > 0.01).count()),
                 Tone::Rust,
             ),
             // The frame count while stopped: a badge that says how deep

@@ -163,6 +163,80 @@ row is said once: a driver reading an accelerometer at a kilohertz is the
 ordinary case, and a line each would put twenty kilobytes a second down the
 channel the console and the board share.
 
+## And how hard
+
+LEDC is the timer behind every servo, dimmed lamp and motor on a hobby
+board, and nothing is mapped at it either: the driver writes a duty into a
+hole and the pin never moves. A servo stands still, a lamp stays dark, and
+there is no error anywhere to say why.
+
+The fifth region answers for it, and reports **what the pin is driven at**
+rather than what a channel was set to: `[rusty:pwm@<us>] 5=0.2500@24002.4`
+is a quarter drive at 24 kHz on GPIO5. Both halves matter and each is a
+different mistake to make.
+
+- **The pin is the matrix's**, not the channel's number. A model reporting
+  channels would put a servo's duty on a lamp's pin and look plausible doing
+  it, so `FUNC_OUT_SEL_CFG` is read and a channel the matrix routes nowhere
+  is not reported at all.
+- **The frequency is the timer's**, and a channel points at one of four. Two
+  channels on two timers must come back at two frequencies; a model that
+  kept one would report a servo at 24 kHz, which is a duty nobody can read
+  as an angle. The divider is Q10.8 over the clock the `CONF` register
+  selects — 80 MHz APB, 40 MHz crystal or the 17.5 MHz RC oscillator.
+
+The fade hardware is stored and not animated: `DUTY_R` answers with the
+target and the fade-end interrupt is raised at once. A driver that waits for
+a fade therefore continues, which is the thing that matters; what it does
+not get is the middle of the ramp, and the report says where the duty
+arrived rather than pretending to a sweep.
+
+## And the strip
+
+RMT clocks out pulse codes, and one-wire LEDs are what a hobby board uses it
+for. With nothing mapped, the codes go into a hole, the transmission never
+ends and `wait()` never returns — a strip that stays dark and a firmware
+apparently stuck in the user's own `write`.
+
+The sixth region is the channels' registers *and* their RAM. What is
+modelled is the transmission: the read pointer, the threshold that asks for
+a refill, and the end marker that finishes it.
+
+**The bit is read from the shape of the code, not from a clock.** Every
+one-wire LED protocol — WS2812, SK6812, WS2811 — sends a one as a long high
+then a short low and a zero the other way round, so a code whose high half
+is longer than its low half is a one. That is what makes this a model of
+RMT rather than of one LED: a driver sending something else is reported by
+the same rule and the host can say it does not recognise the bytes.
+`[rusty:rmt@<us>] 8 100000002000000030` is three pixels on GPIO8.
+
+**It advances when the firmware refills, not on a clock.** A strip longer
+than the 48 codes of a channel's RAM is sent in halves: the hardware raises
+the threshold, the driver writes the next half over the half already sent
+and clears it, and round again. This consumes a chunk, raises the threshold
+and waits to be *asked* for the next — the driver's own poll of the
+interrupt register is what asks — so it can never outrun the firmware, which
+a timer-paced model could.
+
+## And a screen
+
+A display is the bus read the other way round: nothing is ever read from it,
+so its writes are the whole of the picture. Two rules make that readable,
+and each is invisible until it is wrong.
+
+- **Every write to a device with no registers is reported.** The repeat
+  suppression above is right for a driver polling a sensor and fatal for a
+  framebuffer: clearing a screen is the same sixteen zero bytes sixty-four
+  times over, each landing somewhere else in its memory. Suppressed,
+  sixty-three of them vanish and the host draws a screen with one line on
+  it. The rule is the declaration's — an address the host gave registers to
+  is a sensor, one it declared bare is a display.
+- **A continued transaction says so.** A write longer than the thirty-two
+  byte FIFO crosses it in steps, and `w+` is "more of the message before
+  this". The control byte that says what every byte after it means comes
+  once per transaction; read as messages of their own, each step's first
+  data byte is taken for one and the picture is nonsense.
+
 ## Building it
 
 `.github/workflows/qemu.yml` clones `espressif/qemu` at the tag rusty pins
@@ -176,7 +250,7 @@ platform as an artifact.
 
 ## What it is proven to do
 
-Ten gates, each able to fail:
+Thirteen gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -282,6 +356,28 @@ the two and reports the lead.
     The second of those is the one a driver reads: it sends a command byte
     and takes the answer out of the same transfer, which is what full duplex
     means and why the buffer is read from its start.
+
+11. A **duty** reaches the pin at the frequency its timer sets.
+    `ledc-probe/` drives GPIO5 at a quarter and then three quarters of 24
+    kHz, and GPIO6 at eight percent of 50 Hz from a second timer. The second
+    pin is the assertion the first cannot make twice over: a model keeping
+    one frequency for every channel, or reporting channel numbers instead of
+    the pins the matrix routes them to, passes everything about GPIO5 and
+    fails here.
+
+12. A **strip's codes** reach the pin as the bytes they carry.
+    `rmt-probe/` sends three pixels, which is 72 codes through 48 of RAM —
+    so the driver refills once and a model that sent its RAM and stopped
+    fails. Both accounts are required: the firmware saying its `wait()`
+    returned, which with nothing mapped it never does, and the model saying
+    which bytes went out on which pin.
+
+13. A **display's whole frame** reaches the host. `display-probe/` drives a
+    panel with the `ssd1306` crate and `embedded-graphics` — somebody else's
+    stream, not one written beside the model — and the gate requires the
+    write that crosses the FIFO to come back as a `w+` continuation, and
+    two frames to arrive as the hundred and twenty-eight transactions they
+    are. Suppressed repeats would leave three.
 
 
 ## What each desktop needed

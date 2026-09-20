@@ -41,12 +41,14 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// `qemu/`. Where Espressif's emulator discards every GPIO write, this one
 /// keeps the registers, so the board view can show what a pin *is* rather
 /// than what the firmware said it set — and a pin edge interrupts the
-/// firmware, and `adc.read_oneshot()` returns what the sheet says is on the
-/// pin instead of never returning at all.
+/// firmware, `adc.read_oneshot()` returns what the sheet says is on the
+/// pin instead of never returning at all, a duty reaches its pin at the
+/// frequency its timer sets, and a strip's codes come back as the bytes
+/// they carry.
 ///
 /// The tag is pinned for the reason in this module's header; the repository
 /// it hangs off is [`REPO`], named once for the whole crate.
-const RUSTY_QEMU_TAG: &str = "qemu-v4";
+const RUSTY_QEMU_TAG: &str = "qemu-v5";
 
 /// An archive to fetch: where to put it, the URLs to try in order, and the
 /// extraction step. One shape for QEMU, the debuggers and the C toolchain —

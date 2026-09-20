@@ -23,6 +23,54 @@ use rusty_embed::{Pin, Symbol};
 
 use super::geometry::local;
 
+/// How far apart an addressable strip's LEDs sit, in sheet pixels. A board
+/// is drawn this wide per pixel, so the part grows with the chain.
+const STRIP_PITCH: f64 = 14.0;
+
+/// How many LEDs a strip's value says are on it.
+///
+/// The value, because that is what is written beside a part and a strip's
+/// length is the thing about it anybody needs to see. `30` is thirty and so
+/// is `WS2812 x30`, which is how people write it; a part number on its own
+/// is **not** a count, or the default value `WS2812` would draw a strip of
+/// two thousand eight hundred and twelve — a number nobody typed, read out
+/// of a name. Anything that is not a count is eight, the commonest stick: a
+/// part drawn with no lenses reads as a broken symbol where eight reads as
+/// a strip somebody has not measured. Capped, because a sheet is a drawing
+/// and a reel of a hundred and forty-four is wider than any screen.
+pub(super) fn strip_count(value: &str) -> usize {
+    let text = value.trim();
+    let digits = match text.rsplit_once(['x', 'X', '\u{d7}']) {
+        Some((_, tail)) => tail.trim(),
+        None => text,
+    };
+    digits
+        .parse::<usize>()
+        .ok()
+        .filter(|count| *count > 0)
+        .unwrap_or(8)
+        .min(64)
+}
+
+/// Where each of a strip's LEDs sits, as `(x, y, half-width)`, from the row
+/// its layout reserved. One rule for the drawing and for the paint over it,
+/// so a lit pixel cannot land beside the lens it is meant to be in.
+pub(super) fn strip_lenses(plan: &Layout) -> Vec<(f64, f64, f64)> {
+    let Some((fx, fy, fw, fh)) = plan.face else {
+        return Vec::new();
+    };
+    let count = (fw / STRIP_PITCH).round().max(1.0) as usize;
+    (0..count)
+        .map(|index| {
+            (
+                fx + STRIP_PITCH * (index as f64 + 0.5),
+                fy + fh / 2.0,
+                STRIP_PITCH * 0.36,
+            )
+        })
+        .collect()
+}
+
 /// One pin of the drawn part: which pin it is, what it is called, where its
 /// wire attaches, and the direction the lead runs away from the body.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +109,8 @@ enum Look {
     Kit,
     Led,
     Rgb,
+    /// Addressable LEDs in a row on one board.
+    Strip,
     Seven,
     Resistor,
     Capacitor,
@@ -90,6 +140,7 @@ fn look(symbol: &Symbol) -> Look {
     match behaviour_of(symbol) {
         Behaviour::Led => Look::Led,
         Behaviour::Rgb => Look::Rgb,
+        Behaviour::Strip => Look::Strip,
         Behaviour::Seven => Look::Seven,
         Behaviour::Resistor => Look::Resistor,
         Behaviour::Capacitor => Look::Capacitor,
@@ -170,7 +221,7 @@ fn anode_first<'a>(pins: &[&'a Pin]) -> Vec<&'a Pin> {
 
 /// The drawing's geometry: where every pin's wire lands, how big the part
 /// is, and where its light and its screen are.
-pub(super) fn layout(symbol: &Symbol) -> Layout {
+pub(super) fn layout(symbol: &Symbol, value: &str) -> Layout {
     let pins = visible(symbol);
     let none = Layout {
         spots: Vec::new(),
@@ -236,6 +287,37 @@ pub(super) fn layout(symbol: &Symbol) -> Layout {
                 bounds: (-13.0, -22.0, 13.0, 26.0),
                 lens: Some((0.0, -9.0, 11.0)),
                 face: None,
+            }
+        }
+
+        // A stick of addressable LEDs: data in at one end, on to the next
+        // board at the other, power above and below. The face is the row of
+        // lenses — the view paints them, because their colours are what the
+        // firmware clocked out.
+        Look::Strip => {
+            let count = strip_count(value);
+            let width = STRIP_PITCH * count as f64;
+            let half = width / 2.0;
+            let mut spots = Vec::new();
+            for pin in &pins {
+                let (at, out) = match pin.name.as_str() {
+                    "DIN" => ((-half - 8.0, 0.0), (-1.0, 0.0)),
+                    "DOUT" => ((half + 8.0, 0.0), (1.0, 0.0)),
+                    "VCC" => ((0.0, -20.0), (0.0, -1.0)),
+                    _ => ((0.0, 20.0), (0.0, 1.0)),
+                };
+                spots.push(Spot {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    at,
+                    out,
+                });
+            }
+            Layout {
+                spots,
+                bounds: (-half - 8.0, -20.0, half + 8.0, 20.0),
+                lens: None,
+                face: Some((-half, -STRIP_PITCH / 2.0, width, STRIP_PITCH)),
             }
         }
 
@@ -531,7 +613,7 @@ fn out_of(pin: &Pin) -> (f64, f64) {
 /// not change while the firmware runs. What does — a lit lens, a sunk cap,
 /// a digit's segments, a screen's text — the view paints over it.
 pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
-    let plan = layout(symbol);
+    let plan = layout(symbol, value);
     let mut out = String::new();
     let look = look(symbol);
 
@@ -564,6 +646,23 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
 <rect x="-10" y="1.5" width="20" height="4.5" rx="1.5" fill="#c6ccd5" stroke="{LEAD_DARK}" stroke-width="0.8"/>
 <rect x="-10" y="1.5" width="4.5" height="4.5" rx="1.5" fill="#8f97a3"/>"##
             ));
+        }
+
+        // The board and the dark lenses. What is lit is painted over
+        // this, from the bytes the wire carried.
+        Look::Strip => {
+            let (fx, fy, fw, fh) = plan.face.unwrap_or((0.0, 0.0, 0.0, 0.0));
+            out.push_str(&format!(
+                    r##"<rect x="{fx}" y="{fy}" width="{fw}" height="{fh}" rx="2" fill="#1b1f26" stroke="#2f353e" stroke-width="1"/>"##
+                ));
+            for (cx, cy, r) in strip_lenses(&plan) {
+                out.push_str(&format!(
+                        r##"<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{w:.1}" rx="1.5" fill="#171a20" stroke="#4a515c" stroke-width="0.8"/>"##,
+                        x = cx - r,
+                        y = cy - r,
+                        w = r * 2.0,
+                    ));
+            }
         }
 
         Look::Rgb => {
@@ -808,6 +907,52 @@ mod tests {
     use super::*;
     use rusty_embed::PinKind;
 
+    /// A strip's length is its value, and the part grows with it: the
+    /// lenses the drawing puts on the board and the ones the view paints
+    /// come from one rule, so a lit pixel cannot land beside its lens.
+    #[test]
+    fn a_strip_is_as_long_as_its_value_says() {
+        let strip = sym(
+            "rusty",
+            "Strip",
+            "D",
+            &[("1", "DIN"), ("2", "VCC"), ("3", "GND"), ("4", "DOUT")],
+        );
+        let eight = layout(&strip, "8");
+        assert_eq!(strip_lenses(&eight).len(), 8);
+        let thirty = layout(&strip, "30");
+        assert_eq!(strip_lenses(&thirty).len(), 30);
+        assert!(
+            thirty.bounds.2 - thirty.bounds.0 > eight.bounds.2 - eight.bounds.0,
+            "a longer strip takes more of the sheet"
+        );
+        // Data in at the left edge, on at the right, whatever the length.
+        let left = eight.spot("1").expect("DIN").at.0;
+        let right = eight.spot("4").expect("DOUT").at.0;
+        assert!(left < eight.bounds.0 + 0.001 && right > eight.bounds.2 - 0.001);
+        // Every lens is on the board it is drawn on.
+        for (x, _, r) in strip_lenses(&eight) {
+            assert!(x - r > eight.bounds.0 && x + r < eight.bounds.2);
+        }
+    }
+
+    /// A value that is not a count still draws a strip, because a part with
+    /// no lenses reads as a broken symbol rather than as an unmeasured one.
+    #[test]
+    fn a_strip_with_nothing_to_measure_is_the_common_stick() {
+        assert_eq!(strip_count("8"), 8);
+        assert_eq!(strip_count("WS2812"), 8);
+        assert_eq!(strip_count(""), 8);
+        assert_eq!(strip_count("WS2812 x30"), 30, "what people write");
+        assert_eq!(
+            strip_count("WS2812"),
+            8,
+            "a part number is a name, not a count of two thousand eight hundred"
+        );
+        assert_eq!(strip_count("0"), 8, "a strip of none is nobody's strip");
+        assert_eq!(strip_count("300"), 64, "and a sheet is still a drawing");
+    }
+
     /// The library's own symbols cannot be loaded here — `schematic` is
     /// backend-only and this crate compiles to wasm — so the fixtures are
     /// the shapes of them the drawing actually reads: the library, the
@@ -909,7 +1054,7 @@ mod tests {
     #[test]
     fn every_pin_of_every_part_has_a_lead_inside_the_box() {
         for symbol in every_part() {
-            let plan = layout(&symbol);
+            let plan = layout(&symbol, "");
             let shown = visible(&symbol);
             assert_eq!(
                 plan.spots.len(),
@@ -962,7 +1107,7 @@ mod tests {
     /// the thing it is.
     #[test]
     fn an_imported_lamp_is_drawn_as_a_lamp() {
-        let plan = layout(&named("C2286"));
+        let plan = layout(&named("C2286"), "");
         assert!(plan.lens.is_some());
         assert_eq!(plan.spots.len(), 2);
         assert!(
@@ -987,7 +1132,7 @@ mod tests {
         for (index, symbol) in every_part().into_iter().enumerate() {
             let x = 70.0 + (index % 6) as f64 * 185.0;
             let y = 90.0 + (index / 6) as f64 * 160.0;
-            let plan = layout(&symbol);
+            let plan = layout(&symbol, "");
             svg.push_str(&format!(
                 r##"<g transform="translate({x} {y})">{}"##,
                 markup(&symbol, "220")
@@ -1019,7 +1164,7 @@ mod tests {
     #[test]
     fn the_lamps_anode_is_the_long_leg_and_both_point_down() {
         let led = named("LED");
-        let plan = layout(&led);
+        let plan = layout(&led, "");
         let anode = plan.spots.iter().find(|s| s.name == "A").expect("an anode");
         let cathode = plan
             .spots
@@ -1036,7 +1181,7 @@ mod tests {
         let mut plain = led.clone();
         plain.pins[0].name = "~".into();
         plain.pins[1].name = "~".into();
-        let plan = layout(&plain);
+        let plan = layout(&plain, "");
         let one = plan.spot("1").expect("pin 1");
         let two = plan.spot("2").expect("pin 2");
         assert!(two.at.1 > one.at.1, "pin 2 is the anode, so the long leg");
@@ -1044,7 +1189,7 @@ mod tests {
 
     #[test]
     fn a_resistor_lies_across_the_sheet_and_wears_the_bands_of_its_value() {
-        let plan = layout(&named("R"));
+        let plan = layout(&named("R"), "");
         assert_eq!(plan.spots[0].out, (-1.0, 0.0));
         assert_eq!(plan.spots[1].out, (1.0, 0.0));
         assert_eq!(
@@ -1092,7 +1237,7 @@ mod tests {
                 hidden: false,
             })
             .collect();
-        let plan = layout(&chip);
+        let plan = layout(&chip, "");
         let left = plan.spots.iter().filter(|s| s.out.0 < 0.0).count();
         assert_eq!(left, 4, "half the pins down each side");
         assert_eq!(
@@ -1113,7 +1258,7 @@ mod tests {
         // Two pins and nothing known: an axial body, not a chip.
         let mut two = chip.clone();
         two.pins.truncate(2);
-        let plan = layout(&two);
+        let plan = layout(&two, "");
         assert_eq!(plan.spots[0].out, (-1.0, 0.0));
         assert_eq!(plan.spots[1].out, (1.0, 0.0));
     }
@@ -1124,7 +1269,7 @@ mod tests {
     fn the_devkit_keeps_its_row_geometry() {
         let rows = rusty_embed::nets::kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
         let kit = kit_symbol("esp32c3", &rows);
-        let plan = layout(&kit);
+        let plan = layout(&kit, "");
         assert_eq!(plan.spots.len(), rows.len());
         let first = &plan.spots[0];
         assert_eq!(first.at, local(kit.pins[0].at));

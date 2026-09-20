@@ -35,6 +35,11 @@ pub enum Behaviour {
     Switch,
     /// Three lamps with a common pin (`rusty:RGB_LED`).
     Rgb,
+    /// Addressable LEDs on one wire (`rusty:Strip`): a WS2812 chain, whose
+    /// colours arrive as the bytes RMT clocked out rather than as levels on
+    /// pins. Its pins carry no level of their own — the data wire is a
+    /// stream and the emulator reads it as one.
+    Strip,
     /// Seven lamps with a common pin (`rusty:7SEG`).
     Seven,
     /// Shows the `[rusty:disp]` channel; its pins carry no level.
@@ -72,6 +77,7 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
         ("rusty", "Analog") => return Behaviour::Analog,
         ("rusty", "Display") => return Behaviour::Display,
         ("rusty", "RGB_LED") => return Behaviour::Rgb,
+        ("rusty", "Strip") => return Behaviour::Strip,
         ("rusty", "7SEG") => return Behaviour::Seven,
         ("rusty", "Motor") => return Behaviour::Motor,
         ("rusty", "GND" | "Supply") => return Behaviour::Power,

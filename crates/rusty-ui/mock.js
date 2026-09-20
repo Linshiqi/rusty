@@ -50,6 +50,34 @@
         { kind: "polyline", points: [[-1.27, 2.54], [0, 3.81], [1.27, 2.54]], width: 0.254, fill: "none" },
       ],
     },
+    // The three parts whose face is drawn from the protocol rather than
+    // from a level on a pin: bytes on the bus, bytes on a wire, and a duty
+    // with a frequency beside it. Without them the only way to exercise any
+    // of that here is to guess at the app.
+    {
+      library: "rusty", name: "Display", reference: "DS", value: "Display",
+      pins: [pin("1", "SDA", -7.62, 0), pin("2", "SCL", -7.62, 0),
+             pin("3", "VCC", 0, 270), pin("4", "GND", 0, 90)],
+      graphics: [
+        { kind: "rectangle", start: [-5.08, 3.81], end: [5.08, -3.81], width: 0.254, fill: "background" },
+      ],
+    },
+    {
+      library: "rusty", name: "Strip", reference: "D", value: "WS2812",
+      pins: [pin("1", "DIN", -10.16, 0), pin("2", "VCC", 0, 270),
+             pin("3", "GND", 0, 90), pin("4", "DOUT", 10.16, 180)],
+      graphics: [
+        { kind: "rectangle", start: [-7.62, 2.54], end: [7.62, -2.54], width: 0.254, fill: "background" },
+      ],
+    },
+    {
+      library: "rusty", name: "Servo", reference: "M", value: "SG90",
+      pins: [pin("1", "SIG", -7.62, 0), pin("2", "VCC", 0, 270),
+             pin("3", "GND", 0, 90)],
+      graphics: [
+        { kind: "rectangle", start: [-5.08, 3.81], end: [5.08, -3.81], width: 0.254, fill: "background" },
+      ],
+    },
   ];
 
   const RS = [
@@ -389,8 +417,21 @@
           { reference: "R2", symbol: "Device:R", value: "10k", x: 200, y: 240 },
           { reference: "PWR1", symbol: "rusty:Supply", value: "3V3", x: 200, y: 40 },
           { reference: "GND1", symbol: "rusty:GND", value: "GND", x: 200, y: 330 },
+          // A screen that says which controller is behind its glass, which
+          // is what makes its writes readable as a picture; a strip on the
+          // pin RMT reports; and a servo on the pin LEDC does.
+          {
+            reference: "DS1", symbol: "rusty:Display", value: "Display",
+            x: 640, y: 120, props: { addr: "3c", panel: "ssd1306" },
+          },
+          { reference: "D1", symbol: "rusty:Strip", value: "WS2812 x8", x: 640, y: 260 },
+          { reference: "M1", symbol: "rusty:Servo", value: "SG90", x: 640, y: 360 },
         ],
         wires: [
+          { from: { part: "DS1", pin: "SDA" }, to: { part: "U1", pin: "GPIO5" }, bends: [] },
+          { from: { part: "DS1", pin: "SCL" }, to: { part: "U1", pin: "GPIO6" }, bends: [] },
+          { from: { part: "D1", pin: "DIN" }, to: { part: "U1", pin: "GPIO8" }, bends: [] },
+          { from: { part: "M1", pin: "SIG" }, to: { part: "U1", pin: "GPIO7" }, bends: [] },
           { from: { part: "PWR1", pin: "VCC" }, to: { part: "R1", pin: "1" }, bends: [] },
           { from: { part: "R1", pin: "2" }, to: { part: "R2", pin: "1" }, bends: [] },
           { from: { part: "R2", pin: "1" }, to: { part: "U1", pin: "GPIO4" }, bends: [] },

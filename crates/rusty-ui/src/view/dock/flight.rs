@@ -127,7 +127,7 @@ pub(super) fn FlightTab() -> impl IntoView {
         let mut motors: Vec<(u8, f32)> = state
             .sim
             .pwm
-            .with(|pwm| pwm.iter().map(|(p, d)| (*p, *d)).collect());
+            .with(|pwm| pwm.iter().map(|(p, d)| (*p, d.duty)).collect());
         motors.sort_by_key(|(pin, _)| *pin);
 
         let nothing = roll.is_none() && pitch.is_none() && yaw.is_none() && motors.is_empty();

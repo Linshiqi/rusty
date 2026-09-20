@@ -20,6 +20,10 @@ pub mod protocol;
 // a run's first readings and every later move with it, and the frontend
 // reads its channels to draw the sliders.
 pub mod sensor;
+// What a monochrome OLED was told to draw, from the bytes the emulator
+// reports crossing the bus. Wasm-safe with the rest: the frontend reads the
+// stream as it passes and draws the screen from it.
+pub mod screen;
 // What a fresh machine is missing, derived from the toolchain report. Pure,
 // and unconditional so the setup screen can reason about a report it already
 // holds rather than asking the backend what it just told it.
@@ -38,10 +42,11 @@ pub use plant::{Plant, PlantConfig};
 // only under `protocol::`, which is how the same file ended up importing the
 // two halves two ways.
 pub use protocol::{
-    AdcReport, GpioReport, I2cReport, Param, PinSource, PwmReport, SensorDef, SpiReport, Telemetry,
-    analog_line, parse_adc_report, parse_display_report, parse_gpio_report, parse_i2c_report,
-    parse_param, parse_pin_source, parse_pwm_report, parse_sensor_def, parse_spi_report,
-    parse_telemetry, sensor_line, set_param_line, to_vcd,
+    AdcReport, Duty, GpioReport, I2cReport, Param, PinSource, PwmReport, RmtReport, SensorDef,
+    SpiReport, Telemetry, analog_line, parse_adc_report, parse_display_report, parse_gpio_report,
+    parse_i2c_report, parse_param, parse_pin_source, parse_pwm_report, parse_rmt_report,
+    parse_sensor_def, parse_spi_report, parse_telemetry, sensor_line, set_param_line,
+    strip_colours, to_vcd,
 };
 
 #[cfg(feature = "backend")]

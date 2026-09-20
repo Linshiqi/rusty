@@ -104,7 +104,7 @@ fn main() {
     wait_for(
         "the loop arm and spin all four motors",
         Box::new(|line| {
-            parse_pwm_report(line).is_some_and(|r| r.pins.iter().all(|(_, duty)| *duty > 0.1))
+            parse_pwm_report(line).is_some_and(|r| r.pins.iter().all(|(_, drive)| drive.duty > 0.1))
         }),
     );
 
@@ -119,7 +119,7 @@ fn main() {
                 .pins
                 .iter()
                 .find(|(p, _)| *p == pin)
-                .map(|(_, d)| *d)
+                .map(|(_, drive)| drive.duty)
                 .unwrap_or(0.0)
         };
         // Motors 0 and 3 are the left pair, 1 and 2 the right. Rolling right

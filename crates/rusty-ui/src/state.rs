@@ -1983,7 +1983,7 @@ pub struct Sim {
     /// and a motor on it says so rather than showing a commanded stop; a pin
     /// mapped to `0.0` was told to stop. The two look the same on a dial and
     /// mean opposite things when a motor will not start.
-    pub pwm: RwSignal<HashMap<u8, f32>>,
+    pub pwm: RwSignal<HashMap<u8, rusty_embed::Duty>>,
     /// Sensors the firmware has declared it wants fed, newest wins by name.
     ///
     /// Declared rather than guessed, for the reason the tunables are: a panel
@@ -2011,6 +2011,29 @@ pub struct Sim {
     /// build of QEMU fills it, so empty means either an idle bus or an
     /// emulator that has none.
     pub i2c: RwSignal<Vec<rusty_embed::I2cReport>>,
+    /// The screens on that bus, by address: what the firmware's own display
+    /// driver has drawn on each.
+    ///
+    /// **An entry is a declaration, not a discovery.** The sheet puts one
+    /// here for every display part that names its controller, and traffic to
+    /// an address with no entry is left as traffic. Which controller it is
+    /// decides how the bytes are read — the SH1106's window sits two columns
+    /// into its RAM — and a decoder that picked one for an address it had
+    /// merely seen bytes on would draw a picture nobody could check. So the
+    /// part says, and until it does the screen shows what the firmware
+    /// prints to `[rusty:disp]`, as it always has.
+    ///
+    /// Rebuilt by the panel when the sheet's displays change and fed by
+    /// `absorb`, which is the one place the protocol is read.
+    pub screens: RwSignal<HashMap<u8, rusty_embed::screen::Screen>>,
+    /// The last transmission RMT clocked out on each pin, from
+    /// `[rusty:rmt]` — the bytes, not the colours, because what they mean
+    /// is the part's business and a WS2812's order is not a WS2811's.
+    ///
+    /// The whole transmission and not the last pixel: one write sets every
+    /// LED in a chain, so anything less would show a strip lighting one
+    /// pixel at a time.
+    pub rmt: RwSignal<HashMap<u8, Vec<u8>>>,
     /// The same for SPI2, from `[rusty:spi]`: what went out on each chip
     /// select and what came back.
     pub spi: RwSignal<Vec<rusty_embed::SpiReport>>,
@@ -2444,6 +2467,8 @@ impl AppState {
                 readings: RwSignal::new(std::collections::HashMap::new()),
                 adc: RwSignal::new(std::collections::HashMap::new()),
                 i2c: RwSignal::new(Vec::new()),
+                screens: RwSignal::new(HashMap::new()),
+                rmt: RwSignal::new(HashMap::new()),
                 spi: RwSignal::new(Vec::new()),
                 plant: RwSignal::new(rusty_embed::Plant::default()),
                 plant_closed: RwSignal::new(false),

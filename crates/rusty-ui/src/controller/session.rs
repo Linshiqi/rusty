@@ -118,6 +118,16 @@ pub(super) fn clear_capture(state: AppState) {
     state.sim.adc.set(std::collections::HashMap::new());
     state.sim.i2c.set(Vec::new());
     state.sim.spi.set(Vec::new());
+    state.sim.rmt.set(std::collections::HashMap::new());
+    // The screens go blank rather than away: the sheet still declares them,
+    // and the panel puts a fresh one back for each. A picture left over
+    // from the last boot on a board that has not drawn yet is the plot's
+    // two-boots problem on a surface that looks like the truth.
+    state.sim.screens.update(|screens| {
+        for screen in screens.values_mut() {
+            *screen = rusty_embed::screen::Screen::of(screen.panel());
+        }
+    });
     // The declarations go too: they belong to the run that made them, and
     // offering a sensor the next firmware never asked for is the invented
     // range in another costume.
@@ -200,9 +210,17 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
         // a duty are different facts about a pin, and a motor asked to hold
         // 40% is not the same as a pin that happens to be high right now.
         state.sim.pwm.update(|pwm| {
-            for (pin, duty) in &report.pins {
-                pwm.insert(*pin, *duty);
+            for (pin, drive) in &report.pins {
+                pwm.insert(*pin, *drive);
             }
+        });
+    } else if let Some(report) = rusty_embed::parse_rmt_report(&line.text) {
+        // What a chain of addressable LEDs was sent, whole: one transmission
+        // sets every pixel, so keeping anything less would light a strip one
+        // LED at a time. Reveals no tab — a strip is drawn on the board, and
+        // the dock has nothing to say about it that the board does not.
+        state.sim.rmt.update(|rmt| {
+            rmt.insert(report.pin, report.bytes);
         });
     } else if let Some(report) = rusty_embed::parse_adc_report(&line.text) {
         // What the firmware's converter took, which is the return half of the
@@ -215,6 +233,30 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
             adc.insert(report.pin, report.counts);
         });
     } else if let Some(report) = rusty_embed::parse_i2c_report(&line.text) {
+        // A screen the sheet declared at that address is drawn as well as
+        // listed. Only one the sheet declared: which controller it is
+        // decides how the bytes read, and rusty does not guess that from
+        // traffic. `w+` is more of the message before it — a driver sending
+        // a framebuffer crosses the FIFO, and each step after the first
+        // carries no control byte of its own.
+        // Asked before it is written, because `update` wakes everything
+        // that reads the map whether or not it changed anything — and a bus
+        // with no screen on it carries a thousand transactions a frame.
+        if state
+            .sim
+            .screens
+            .with_untracked(|screens| screens.contains_key(&report.address))
+        {
+            state.sim.screens.update(|screens| {
+                if let Some(screen) = screens.get_mut(&report.address) {
+                    match report.verb.as_str() {
+                        "w" => screen.i2c(&report.bytes),
+                        "w+" => screen.i2c_more(&report.bytes),
+                        _ => {}
+                    }
+                }
+            });
+        }
         // Traffic, kept in order and capped. The cap is what stops a display
         // refreshing for an hour from eating the tab, and dropping the
         // *oldest* is right for a stream: what a bus just did is what

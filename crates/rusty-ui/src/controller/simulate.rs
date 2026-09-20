@@ -280,7 +280,7 @@ fn plant_step(state: AppState, generation: u64) {
     let mut motors: Vec<(u8, f32)> = state
         .sim
         .pwm
-        .with_untracked(|pwm| pwm.iter().map(|(p, d)| (*p, *d)).collect());
+        .with_untracked(|pwm| pwm.iter().map(|(p, d)| (*p, d.duty)).collect());
     motors.sort_by_key(|(pin, _)| *pin);
 
     // Fewer than four driven pins is not an aircraft. Waiting rather than

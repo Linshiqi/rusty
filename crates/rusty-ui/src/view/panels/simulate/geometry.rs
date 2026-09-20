@@ -20,6 +20,13 @@ use super::art;
 use rusty_embed::{Fill, Graphic, Instance, KIT_REFERENCE, Pin, PinRef, Sheet, Symbol, Wire};
 
 pub(super) const SNAP: f64 = 8.0;
+/// The pulse widths a hobby servo's two ends answer to, in microseconds,
+/// when the sheet has not said otherwise. The commonest pair, and the part
+/// carries `min` and `max` for the other one — the difference between them
+/// is forty degrees at each end, which is a horn against its stop rather
+/// than where the firmware asked.
+pub(super) const SERVO_MIN_US: f32 = 500.0;
+pub(super) const SERVO_MAX_US: f32 = 2500.0;
 pub(super) const KIT_W: f64 = 150.0;
 /// Pin-row pitch on the kit. A multiple of the base grid on purpose —
 /// KiCad's oldest rule is that pins live on the grid, because a snapped
@@ -486,7 +493,11 @@ pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
 /// The part's drawing, in its own frame — `None` for a part whose symbol
 /// no library has, which is drawn as a labelled box instead.
 pub(super) fn part_layout(part: &EditPart) -> Option<art::Layout> {
-    part.symbol.as_ref().map(art::layout)
+    // The value as well as the symbol: a strip's shape is how many LEDs
+    // are on it, and that is what is written beside the part.
+    part.symbol
+        .as_ref()
+        .map(|symbol| art::layout(symbol, &part.inst.value))
 }
 
 /// One of the drawing's leads on the sheet: where the wire attaches, and
@@ -526,6 +537,36 @@ pub(super) fn pin_key(symbol: &Symbol, pin: &Pin) -> String {
     } else {
         pin.number.clone()
     }
+}
+
+/// The bus address of a display part that has said which controller is
+/// behind its glass, and nothing for one that has not.
+///
+/// Both halves are the sheet's to state and neither is guessed. Without the
+/// address there is no traffic to read; without the panel the same bytes
+/// mean two pictures two columns apart, so a screen is drawn only where
+/// both are there.
+pub(super) fn display_address(part: &EditPart) -> Option<u8> {
+    rusty_embed::screen::Panel::from_id(part.inst.props.get("panel")?)?;
+    let address = part.inst.props.get("addr")?.trim();
+    u8::from_str_radix(address.trim_start_matches("0x"), 16).ok()
+}
+
+/// A screen's lit pixels as one path, in the screen's own pixel units.
+///
+/// One path and not a rectangle per pixel: a 128×64 screen is eight
+/// thousand of them and a page of text is a few hundred runs, so this is
+/// one attribute of one element where the obvious drawing is an element
+/// per dot. Each run is a horizontal line down the middle of its row,
+/// stroked one unit wide, which fills the row exactly.
+pub(super) fn pixel_path(screen: &rusty_embed::screen::Screen) -> String {
+    let mut path = String::new();
+    for (x, y, len) in screen.runs() {
+        use std::fmt::Write;
+
+        let _ = write!(path, "M{x} {}.5h{len}", y);
+    }
+    path
 }
 
 /// The box a part occupies on the sheet, `(x0, y0, x1, y1)`: the drawing's
@@ -959,6 +1000,47 @@ pub(super) fn pin_labels(part: &EditPart) -> Vec<Label> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One pixel is one unit of the path, and the run is a line through the
+    /// middle of its row — so a stroke one unit wide covers the row and
+    /// nothing of the rows either side. Off by half and every screen is
+    /// drawn between its own rows.
+    #[test]
+    fn a_lit_run_is_one_line_down_the_middle_of_its_row() {
+        let mut screen = rusty_embed::screen::Screen::of(rusty_embed::screen::Panel::Ssd1306);
+        // Page addressing at the origin, then a column of the lowest three
+        // pixels: three rows of one pixel each.
+        screen.i2c(&[0x00, 0xaf, 0xb0, 0x00, 0x10]);
+        screen.i2c(&[0x40, 0x07]);
+        assert_eq!(pixel_path(&screen), "M0 0.5h1M0 1.5h1M0 2.5h1");
+    }
+
+    /// A part that names one and not the other is a part rusty cannot read
+    /// a picture for, and says so by drawing none.
+    #[test]
+    fn a_screen_is_addressed_only_when_the_sheet_says_both_things() {
+        let mut part = EditPart {
+            inst: Instance {
+                reference: "DS1".into(),
+                symbol: "rusty:Display".into(),
+                value: "Display".into(),
+                x: 0.0,
+                y: 0.0,
+                rot: 0,
+                mirror: false,
+                props: Default::default(),
+            },
+            symbol: None,
+        };
+        assert_eq!(display_address(&part), None);
+        part.inst.props.insert("addr".into(), "3c".into());
+        assert_eq!(display_address(&part), None, "no panel named");
+        part.inst.props.insert("panel".into(), "ssd1306".into());
+        assert_eq!(display_address(&part), Some(0x3c));
+        part.inst.props.insert("panel".into(), "ssd1309".into());
+        assert_eq!(display_address(&part), None, "a panel rusty cannot read");
+    }
+
     use rusty_embed::nets::kit_rows;
     use rusty_embed::{Fill, PinKind};
 

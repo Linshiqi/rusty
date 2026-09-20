@@ -1367,6 +1367,426 @@ jobs:
           finally:
               qemu.kill()
 
+      - name: Build the duty probe and make its image
+        working-directory: qemu/ledc-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/ledc-probe \
+            target/sim/flash.bin
+
+      # The fifth peripheral, and the first that is about *how hard* rather
+      # than whether. LEDC is the timer behind every servo, dimmed lamp and
+      # motor on a hobby board, and upstream maps nothing at it: the driver
+      # writes a duty into a hole and the pin never moves, so a servo stands
+      # still and a lamp stays dark with no error anywhere.
+      #
+      # Three assertions, and the second and third are what make it a model
+      # of LEDC rather than a duty echo. A channel's **frequency** comes from
+      # the timer it points at, so a second channel on a second timer must be
+      # reported at 50 Hz while the first is at 24 kHz — a model that stored
+      # one frequency reports both the same. And it must be on the **pin the
+      # matrix routes it to**: a model reporting channel numbers would put
+      # the servo's duty on the lamp's pin and look perfectly plausible.
+      - name: A duty reaches the pin at the frequency its timer sets
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/ledc-probe/target/sim/flash.bin"
+          SERIAL = "ledc-serial.log"
+          PORT = 5569
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[ledc]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::duty: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("ledc-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("ledc-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:pwm"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[ledc] set 25 at 24000", 60, "the duty probe never booted")
+              settle("[ledc] set 75 at 24000", 30,
+                     "the firmware never got as far as changing the duty")
+              settle("[ledc] set 8 at 50", 30,
+                     "the firmware never got as far as the second timer")
+              # A moment for the last report to cross the channel: the line
+              # above is printed by the firmware and the one below is the
+              # model's, and they travel on different pipes.
+              time.sleep(1.0)
+
+              seen = []
+              for line in traffic:
+                  for pin, duty, hz in re.findall(
+                      r"(\d+)=([\d.]+)@([\d.]+)", line
+                  ):
+                      seen.append((int(pin), float(duty), float(hz)))
+              if not seen:
+                  stop("the firmware set three duties and the model reported "
+                       "none — either nothing is mapped at LEDC or nothing "
+                       "reaches the matrix")
+
+              def want(pin, duty, hz, why):
+                  for at, d, f in seen:
+                      if at == pin and abs(d - duty) < 0.01 and abs(f - hz) < hz * 0.05:
+                          return
+                  stop(f"{why}: the model reported {seen[-6:]}")
+
+              want(5, 0.25, 24000.0, "a quarter at 24 kHz on GPIO5 was never reported")
+              want(5, 0.75, 24000.0, "three quarters at 24 kHz on GPIO5 was never reported")
+              # Eight percent at twelve bits is 327/4096, which is what the
+              # register holds and therefore what the model must report —
+              # not the eight percent the driver was asked for.
+              want(6, 327 / 4096, 50.0,
+                   "the servo channel's duty at 50 Hz on GPIO6 was never "
+                   "reported — a model that keeps one frequency for every "
+                   "channel, or reports channels rather than pins, fails here")
+              print(f"the duty reaches the pin; the model reported {len(seen)} changes")
+          finally:
+              qemu.kill()
+
+      - name: Build the strip probe and make its image
+        working-directory: qemu/rmt-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/rmt-probe \
+            target/sim/flash.bin
+
+      # The sixth, and the one whose absence is a hang rather than a wrong
+      # answer: with nothing mapped at RMT the transmission never ends, so
+      # `wait()` never returns and a strip's driver stops the firmware in the
+      # user's own `write`.
+      #
+      # Three LEDs on purpose. A channel holds 48 codes and three LEDs are
+      # 72, so the driver sends half, waits for the threshold, writes the
+      # next half over the first and goes round — the refill loop a model
+      # that sent its RAM once and stopped would fail. Both accounts are
+      # asserted: the firmware says its `wait()` returned, and the model says
+      # which bytes went out on which pin.
+      - name: A strip's codes reach the pin as the bytes they carry
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/rmt-probe/target/sim/flash.bin"
+          SERIAL = "rmt-serial.log"
+          PORT = 5579
+          WANT = "100000002000000030"
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[rmt]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::strip: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("rmt-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("rmt-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:rmt"):
+                              traffic.append(text)
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[rmt] sending", 60, "the strip probe never booted")
+              # `holding` is printed by the loop after the transmission, so
+              # reaching it is the firmware saying `wait()` returned rather
+              # than waiting for ever — which is what happens with nothing
+              # mapped at RMT.
+              settle("[rmt] holding", 40,
+                     "the transmission never finished: the driver is still "
+                     "waiting, which is the hang this model exists to fix")
+              if f"[rmt] sent {WANT}" not in read():
+                  stop("the transmission finished with an error rather than "
+                       "sending the codes")
+              time.sleep(1.0)
+
+              if not any(re.search(rf"\] 8 {WANT}\b", line) for line in traffic):
+                  stop("the firmware clocked out three pixels and the model "
+                       "never said which bytes reached GPIO8 — one of the two "
+                       "accounts is wrong")
+              print(f"the strip's bytes reach the pin; the model reported "
+                    f"{len(traffic)} transmissions")
+          finally:
+              qemu.kill()
+
+      - name: Build the screen probe and make its image
+        working-directory: qemu/display-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/display-probe \
+            target/sim/flash.bin
+
+      # A display is the bus read the other way round: nothing is ever read
+      # from it, so the writes *are* the picture. Two rules make that
+      # readable, and each is invisible until it is wrong.
+      #
+      # **Every write is reported.** The bus says a transaction only when it
+      # differs from the one before it — right for a driver polling a sensor
+      # at a kilohertz, and fatal for a framebuffer, where clearing the
+      # screen is the same sixteen zero bytes sixty-four times, each landing
+      # somewhere else. Suppressed, a frame's sixty-four transactions
+      # collapse to three and the picture loses everything but its first
+      # line. So the gate counts them.
+      #
+      # **A continued transaction says so.** A write longer than the
+      # thirty-two byte FIFO is reported in steps, and the steps after the
+      # first carry no control byte of their own; read as messages, their
+      # first data byte is taken for one.
+      #
+      # The driver is the `ssd1306` crate and the drawing is
+      # `embedded-graphics`, so what passes here is somebody else's stream
+      # rather than one written beside the model.
+      - name: A display's whole frame reaches the host
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/display-probe/target/sim/flash.bin"
+          SERIAL = "display-serial.log"
+          PORT = 5589
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          traffic = []
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[disp]")]
+              print(f"::error::{why}")
+              for line in said[-8:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-8:]:
+                  print(f"::error::screen: {line.replace('%', '%25')[:900]}")
+              try:
+                  ours = open("display-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  ours = ""
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              tail = log[-4000:].replace("%", "%25").replace("\r", "")
+              print("::error::the serial log's tail:%0A" + tail.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-riscv32", "-M", "esp32c3", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("display-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          text = one.decode("utf-8", "replace").strip()
+                          if text.startswith("[rusty:i2c"):
+                              traffic.append(text)
+
+              # The panel is declared with no registers, which is what a
+              # display is: an address that acknowledges and has nothing to
+              # be read from. The same declaration a sheet's display part
+              # produces.
+              link.sendall(b"i2c 3c=+\n")
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[disp] wrote 48 bytes in one go", 60,
+                     "the write that crosses the FIFO never completed")
+              settle("[disp] the panel is up", 40,
+                     "the driver never finished its init sequence")
+              settle("[disp] drew frame 2", 40,
+                     "the driver never drew a second frame")
+              time.sleep(1.0)
+
+              if not any(" w+ " in line for line in traffic):
+                  stop("a write longer than the FIFO was reported as separate "
+                       "messages: every step after the first would have its "
+                       "data read as a control byte")
+              writes = [l for l in traffic if re.search(r"\] 3c w\+? 40", l)]
+              if len(writes) < 100:
+                  stop(f"two frames are 128 framebuffer writes and the model "
+                       f"reported {len(writes)}: identical writes are being "
+                       f"suppressed, which loses all but the first line of "
+                       f"every picture")
+              # The near corner of the drawing: eight columns of eight lit
+              # pixels, which is the first sixteen bytes of the first page.
+              if not any("40ffffffffffffffff0000000000000000" in l for l in traffic):
+                  stop("the frame reached the host without the square the "
+                       "firmware drew in its near corner")
+              print(f"the screen's writes reach the host; the model reported "
+                    f"{len(traffic)} transactions, {len(writes)} of them "
+                    f"framebuffer")
+          finally:
+              qemu.kill()
+
       # And the one that closes the loop. Every gate above proves one
       # direction of one peripheral: the host says something and the
       # firmware hears it, or the firmware does something and the model
@@ -1421,6 +1841,12 @@ jobs:
             i2c-qemu.out
             spi-serial.log
             spi-qemu.out
+            ledc-serial.log
+            ledc-qemu.out
+            rmt-serial.log
+            rmt-qemu.out
+            display-serial.log
+            display-qemu.out
             board-probe.log
             live-probe.log
           if-no-files-found: warn

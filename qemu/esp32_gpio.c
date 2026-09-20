@@ -63,6 +63,21 @@ static inline int esp32_gpio_level(Esp32GpioState *s, uint64_t bit)
     return (source & bit) ? 1 : 0;
 }
 
+/* Whether this pad is `GPIO_OUT`'s to drive, or a peripheral's.
+ *
+ * The matrix sends one signal to each pad, and `GPIO` (128) is the one that
+ * means "whatever the guest put in GPIO_OUT". A pad pointed at LEDC or RMT
+ * is driven by that peripheral, and reporting `GPIO_OUT`'s bit for it is
+ * how a lamp on a dimmed pin reads as dark while the firmware fades it —
+ * the peripheral speaks for its own pad. Zero is the reset value, which
+ * every pad the firmware has not configured still holds. */
+static inline bool esp32_gpio_is_plain(Esp32GpioState *s, int pin)
+{
+    unsigned signal = s->func_out[pin] & ESP32_GPIO_OUT_SEL_MASK;
+
+    return signal == ESP32_GPIO_OUT_SEL_GPIO || signal == 0;
+}
+
 /*
  * Which pins are asking the CPU for an interrupt right now.
  *
@@ -91,6 +106,7 @@ static void esp32_gpio_say_irq(Esp32GpioState *s, bool raised);
 static void esp32_gpio_say_i2c(Esp32GpioState *s, int address, const char *verb,
                                const uint8_t *bytes, unsigned count);
 static Esp32I2cDevice *esp32_i2c_declare(Esp32GpioState *s, int address);
+static void esp32_ledc_say_all(Esp32GpioState *s);
 static Esp32I2cDevice *esp32_i2c_device(Esp32GpioState *s, int address);
 
 /*
@@ -226,11 +242,20 @@ static void esp32_gpio_report(Esp32GpioState *s, uint64_t changed)
         if (at > (int)sizeof(line) - 10) {
             break;
         }
+        /* A pad a peripheral drives belongs to that peripheral's report. */
+        if (!esp32_gpio_is_plain(s, pin)) {
+            continue;
+        }
         at += snprintf(line + at, sizeof(line) - at, "%s%d=%d",
                        first ? "" : ",", pin, esp32_gpio_level(s, bit));
         first = false;
     }
 
+    /* Every pin that changed belonged to a peripheral, so this report has
+     * nothing to say. */
+    if (first) {
+        return;
+    }
     at += snprintf(line + at, sizeof(line) - at, "\n");
     qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
 }
@@ -352,6 +377,7 @@ static void esp32_gpio_host_bus(Esp32GpioState *s)
         }
         for (unsigned i = 0; i < count; i++) {
             device->regs[(uint8_t)(reg + i)] = bytes[i];
+            device->has_regs = true;
         }
         return;
     }
@@ -499,6 +525,9 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
         } else if (addr >= s->pin0_reg
                    && addr < s->pin0_reg + 4 * ESP32_GPIO_PINS) {
             r = s->pin_cfg[(addr - s->pin0_reg) / 4];
+        } else if (addr >= s->func_out_reg
+                   && addr < s->func_out_reg + 4 * ESP32_GPIO_PINS) {
+            r = s->func_out[(addr - s->func_out_reg) / 4];
         }
         break;
     }
@@ -600,6 +629,20 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
         if (addr >= s->pin0_reg && addr < s->pin0_reg + 4 * ESP32_GPIO_PINS) {
             s->pin_cfg[(addr - s->pin0_reg) / 4] = word;
             esp32_gpio_int_update(s, 0);
+        } else if (addr >= s->func_out_reg
+                   && addr < s->func_out_reg + 4 * ESP32_GPIO_PINS) {
+            /* The matrix: which signal this pad carries. Kept because it is
+             * the only way to follow a peripheral's output to a pin, and
+             * because a pad sent to a peripheral is one GPIO must stop
+             * speaking for. */
+            int pin = (addr - s->func_out_reg) / 4;
+            uint32_t before = s->func_out[pin];
+
+            s->func_out[pin] = word;
+            if (before != word) {
+                esp32_gpio_report(s, 1ULL << pin);
+                esp32_ledc_say_all(s);
+            }
         }
         return;
     }
@@ -883,7 +926,26 @@ static Esp32I2cDevice *esp32_i2c_declare(Esp32GpioState *s, int address)
  * One deep and no deeper, because interleaved traffic is a driver doing
  * different things and all of it is worth seeing; only the repetition is
  * noise.
+ *
+ * **A device with no registers is written to rather than read from, and
+ * every one of its writes is said.** That is what a display is, and its
+ * writes repeat by their nature: clearing a screen is the same sixteen
+ * zero bytes sixty-four times over, each landing somewhere else in its
+ * memory. Suppressed, sixty-three of them vanish and whatever reads the
+ * stream draws a screen with one line on it. The rule is the declaration's:
+ * an address the host gave registers is a sensor, an address it declared
+ * bare is a display.
  */
+/* Whether this address has registers behind it, which is the difference
+ * between a sensor and a display: the host declares the first with
+ * `i2c 68:75=68` and the second with a bare `i2c 3c=+`. */
+static bool esp32_i2c_talks_back(Esp32GpioState *s, int address)
+{
+    Esp32I2cDevice *device = esp32_i2c_device(s, address);
+
+    return device != NULL && device->has_regs;
+}
+
 static void esp32_gpio_say_i2c(Esp32GpioState *s, int address, const char *verb,
                                const uint8_t *bytes, unsigned count)
 {
@@ -901,14 +963,18 @@ static void esp32_gpio_say_i2c(Esp32GpioState *s, int address, const char *verb,
     for (unsigned i = 0; i < count && at < (int)sizeof(body) - 4; i++) {
         at += snprintf(body + at, sizeof(body) - at, "%02x", bytes[i]);
     }
-    if (strcmp(body, s->i2c_last_report[esp32_bus_verb(verb)]) == 0) {
+    if (!esp32_i2c_talks_back(s, address) && esp32_bus_verb(verb) == 0) {
+        /* A display: say every write, and remember none of them. */
+        s->i2c_last_report[esp32_bus_verb(verb)][0] = '\0';
+    } else if (strcmp(body, s->i2c_last_report[esp32_bus_verb(verb)]) == 0) {
         return;
-    }
+    } else {
     /* `snprintf` rather than a copy: `pstrcpy` lives in `qemu/cutils.h`,
      * which `osdep.h` does not pull in, and `strcpy` into a fixed field is
      * the wrong habit to reach for even when the source is known short. */
-    snprintf(s->i2c_last_report[esp32_bus_verb(verb)],
-             sizeof(s->i2c_last_report[0]), "%s", body);
+        snprintf(s->i2c_last_report[esp32_bus_verb(verb)],
+                 sizeof(s->i2c_last_report[0]), "%s", body);
+    }
 
     at = snprintf(line, sizeof(line), "[rusty:i2c@%" PRId64 "] %s\n",
                   qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), body);
@@ -986,7 +1052,16 @@ static bool esp32_i2c_write_step(Esp32GpioState *s, unsigned bytes)
         }
     }
     if (taken) {
-        esp32_gpio_say_i2c(s, s->i2c_address, "w", data, taken);
+        /* `w+` is more of the transaction already going: a driver sending a
+         * framebuffer writes a thousand bytes through a thirty-two byte
+         * FIFO, so one transaction is a run of steps, and whatever reads
+         * the stream has to know that the first byte of the second step is
+         * *not* the first byte of a message. A display's control byte comes
+         * once per transaction and decides what every byte after it means;
+         * read as though each step began one, the picture is nonsense. */
+        esp32_gpio_say_i2c(s, s->i2c_address, s->i2c_continues ? "w+" : "w",
+                           data, taken);
+        s->i2c_continues = true;
     }
     return true;
 }
@@ -1011,7 +1086,9 @@ static bool esp32_i2c_read_step(Esp32GpioState *s, unsigned bytes)
         given++;
     }
     s->i2c_reg[R_RUSTY_I2C_SR] |= ESP32_I2C_SR_RESP_REC;
-    esp32_gpio_say_i2c(s, s->i2c_address, "r", data, given);
+    esp32_gpio_say_i2c(s, s->i2c_address, s->i2c_continues ? "r+" : "r",
+                       data, given);
+    s->i2c_continues = true;
     return true;
 }
 
@@ -1047,6 +1124,7 @@ static void esp32_i2c_run(Esp32GpioState *s)
         switch (op) {
         case ESP32_I2C_OP_RSTART:
             s->i2c_expect_address = true;
+            s->i2c_continues = false;
             break;
 
         case ESP32_I2C_OP_WRITE:
@@ -1064,6 +1142,7 @@ static void esp32_i2c_run(Esp32GpioState *s)
         case ESP32_I2C_OP_STOP:
             s->i2c_reg[R_RUSTY_I2C_INT_RAW] |= ESP32_I2C_INT_TRANS_COMPLETE;
             s->i2c_expect_address = false;
+            s->i2c_continues = false;
             s->i2c_address = -1;
             return;
 
@@ -1268,11 +1347,17 @@ static void esp32_gpio_say_spi(Esp32GpioState *s, unsigned cs, const char *verb,
     for (unsigned i = 0; i < count && at < (int)sizeof(body) - 4; i++) {
         at += snprintf(body + at, sizeof(body) - at, "%02x", bytes[i]);
     }
-    if (strcmp(body, s->spi_last_report[esp32_bus_verb(verb)]) == 0) {
+    if (s->spi_miso_len[cs] == 0 && strcmp(verb, "w") == 0) {
+        /* A device that says nothing back is one that is written to — a
+         * display — and every transfer to it is a different part of its
+         * screen. See the I2C report above for why none is suppressed. */
+        s->spi_last_report[esp32_bus_verb(verb)][0] = '\0';
+    } else if (strcmp(body, s->spi_last_report[esp32_bus_verb(verb)]) == 0) {
         return;
+    } else {
+        snprintf(s->spi_last_report[esp32_bus_verb(verb)],
+                 sizeof(s->spi_last_report[0]), "%s", body);
     }
-    snprintf(s->spi_last_report[esp32_bus_verb(verb)],
-             sizeof(s->spi_last_report[0]), "%s", body);
 
     at = snprintf(line, sizeof(line), "[rusty:spi@%" PRId64 "] %s\n",
                   qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), body);
@@ -1362,6 +1447,559 @@ static const MemoryRegionOps spi_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
+/*
+ * ============================== the dimmer ==============================
+ *
+ * LEDC. What a driver does to it is short and exact: set the clock source,
+ * give a timer a divider and a resolution and latch it, point a channel at
+ * that timer and enable its output, write a duty, start it, latch it. This
+ * models that, and reports the result as a duty and a frequency on the pin
+ * the GPIO matrix sends the channel to.
+ *
+ * Everything the model has no opinion about is shadowed, so a driver's
+ * read-modify-write keeps what it put there.
+ */
+
+/* Which pad a peripheral signal reaches, or -1 when the matrix sends it
+ * nowhere. The first pad wins: the same signal on two pads is a board
+ * nobody builds, and a rule that answered with the last would depend on
+ * the order a driver happened to configure them in. */
+static int esp32_gpio_signal_pin(Esp32GpioState *s, unsigned signal)
+{
+    for (int pin = 0; pin < ESP32_GPIO_PINS; pin++) {
+        if ((s->func_out[pin] & ESP32_GPIO_OUT_SEL_MASK) == signal
+            && (s->enable & (1ULL << pin))) {
+            return pin;
+        }
+    }
+    return -1;
+}
+
+/* What a channel's timer counts to, and how fast.
+ *
+ * `res` is the resolution in bits and `div` the divider in Q10.8, both as
+ * the timer last latched them. A timer nobody has configured counts to
+ * nothing, and a channel following it has no duty to report — said as
+ * "not driving" rather than as zero, because a servo commanded to its
+ * lowest angle and a servo nobody has configured are different boards.
+ */
+static bool esp32_ledc_shape(Esp32GpioState *s, unsigned channel,
+                             double *duty, double *hz)
+{
+    Esp32LedcChannel *ch = &s->ledc_ch[channel];
+    unsigned which = ch->conf0 & ESP32_LEDC_CONF0_TIMER_MASK;
+    Esp32LedcTimer *timer = &s->ledc_timer[which];
+    double source;
+    double full;
+
+    if (!(ch->conf0 & ESP32_LEDC_CONF0_SIG_OUT_EN)) {
+        return false;
+    }
+    if (timer->res == 0 || timer->div == 0
+        || (timer->conf & (ESP32_LEDC_TIMER_PAUSE | ESP32_LEDC_TIMER_RST))) {
+        return false;
+    }
+
+    switch (s->ledc_conf & ESP32_LEDC_CLK_SEL_MASK) {
+    case 2:
+        source = ESP32_LEDC_CLK_RC_FAST;
+        break;
+    case 3:
+        source = ESP32_LEDC_CLK_XTAL;
+        break;
+    default:
+        /* Zero is "no clock chosen", which every driver leaves behind the
+         * moment it configures a timer; treating it as the APB clock keeps
+         * a frequency reportable for firmware that never wrote CONF. */
+        source = ESP32_LEDC_CLK_APB;
+        break;
+    }
+
+    full = (double)(1u << timer->res);
+    *duty = (double)ch->live / full;
+    if (*duty > 1.0) {
+        *duty = 1.0;
+    }
+    /* The divider is Q10.8 against the source, and the timer counts `full`
+     * ticks per period. */
+    *hz = source / ((double)timer->div / 256.0) / full;
+    return true;
+}
+
+/*
+ * Say what a channel is doing, once per change.
+ *
+ * `[rusty:pwm@<us>] <pin>=<duty>@<hz>` — the line rusty already reads, with
+ * the frequency after it, because a duty alone cannot say what a servo
+ * does: 7.5% is the middle of its travel at 50 Hz and nothing at all at
+ * 1 kHz. A firmware narrating its own duty still sends the shorter form,
+ * and both are the same reading of the same pin.
+ *
+ * A channel that stops driving says so on the pin it was driving, at the
+ * level it idles to, so a board does not keep showing a duty nothing is
+ * still producing.
+ */
+static void esp32_ledc_say(Esp32GpioState *s, unsigned channel)
+{
+    char line[ESP32_I2C_REPORT];
+    double duty = 0.0;
+    double hz = 0.0;
+    int pin = esp32_gpio_signal_pin(s, ESP32_LEDC_SIG0 + channel);
+    bool driving = pin >= 0 && esp32_ledc_shape(s, channel, &duty, &hz);
+    int at;
+
+    if (!driving) {
+        /* Nothing to say unless this channel had been driving a pin: the
+         * pad is GPIO's again, and GPIO reports its own levels. */
+        if (s->ledc_said_pin[channel] < 0) {
+            return;
+        }
+        at = snprintf(line, sizeof(line), "[rusty:pwm@%" PRId64 "] %d=%.4f\n",
+                      qemu_clock_get_us(QEMU_CLOCK_VIRTUAL),
+                      s->ledc_said_pin[channel],
+                      (s->ledc_ch[channel].conf0 & ESP32_LEDC_CONF0_IDLE_LV)
+                          ? 1.0 : 0.0);
+        s->ledc_said_pin[channel] = -1;
+        s->ledc_said[channel][0] = '\0';
+        if (at > 0) {
+            qemu_chr_fe_write_all(&s->pins, (uint8_t *)line, at);
+        }
+        return;
+    }
+
+    at = snprintf(line, sizeof(line), "%d=%.4f@%.1f", pin, duty, hz);
+    if (at <= 0) {
+        return;
+    }
+    /* Per change, like every other report on this channel: a driver that
+     * writes the same duty every time round its loop would otherwise put a
+     * line on the wire for each. */
+    if (pin == s->ledc_said_pin[channel]
+        && strncmp(line, s->ledc_said[channel], sizeof(line)) == 0) {
+        return;
+    }
+    /* `snprintf` rather than a copy, for the reason the bus reports give
+     * above: `pstrcpy` is in a header `osdep.h` does not pull in. */
+    snprintf(s->ledc_said[channel], sizeof(s->ledc_said[channel]), "%s", line);
+    s->ledc_said_pin[channel] = pin;
+
+    at = snprintf(line, sizeof(line), "[rusty:pwm@%" PRId64 "] %s\n",
+                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL),
+                  s->ledc_said[channel]);
+    if (at > 0) {
+        qemu_chr_fe_write_all(&s->pins, (uint8_t *)line, at);
+    }
+}
+
+/* Every channel, after something that could have changed any of them: a
+ * timer latched, the clock source chosen, the matrix repointed. */
+static void esp32_ledc_say_all(Esp32GpioState *s)
+{
+    for (unsigned channel = 0; channel < ESP32_LEDC_CHANNELS; channel++) {
+        esp32_ledc_say(s, channel);
+    }
+}
+
+/* The duty a fade ends on.
+ *
+ * The silicon walks there over `num` steps of `scale`, one every `cycle`
+ * periods, and raises the fade-done interrupt when it arrives. This model
+ * arrives at once and raises it, which is the same decision the converter's
+ * instant conversion makes: the waiting is what a driver polls for, and the
+ * end value is what anybody watching the board can act on. A fade that took
+ * its time would need a timer per channel and would report a line per step
+ * on the channel the console shares.
+ */
+static uint32_t esp32_ledc_faded(Esp32LedcChannel *ch, unsigned res)
+{
+    uint32_t start = ch->duty >> ESP32_LEDC_DUTY_FRACTION;
+    uint32_t steps = (ch->conf1 >> ESP32_LEDC_CONF1_NUM_SHIFT)
+                     & ESP32_LEDC_CONF1_NUM_MASK;
+    uint32_t scale = ch->conf1 & ESP32_LEDC_CONF1_SCALE_MASK;
+    uint64_t travel = (uint64_t)steps * scale;
+    uint64_t full = 1ULL << res;
+
+    if (ch->conf1 & ESP32_LEDC_CONF1_INC) {
+        uint64_t end = (uint64_t)start + travel;
+        return (uint32_t)(end > full ? full : end);
+    }
+    return (uint32_t)(travel > start ? 0 : start - travel);
+}
+
+static uint64_t esp32_ledc_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+
+    if (addr < ESP32_LEDC_CH0 + ESP32_LEDC_CH_STRIDE * ESP32_LEDC_CHANNELS) {
+        unsigned channel = (addr - ESP32_LEDC_CH0) / ESP32_LEDC_CH_STRIDE;
+        Esp32LedcChannel *ch = &s->ledc_ch[channel];
+        switch ((addr - ESP32_LEDC_CH0) % ESP32_LEDC_CH_STRIDE) {
+        case ESP32_LEDC_CH_CONF0:
+            /* `PARA_UP` is write-triggered and reads back clear. */
+            return ch->conf0 & ~ESP32_LEDC_CONF0_PARA_UP;
+        case ESP32_LEDC_CH_HPOINT:
+            return ch->hpoint;
+        case ESP32_LEDC_CH_DUTY:
+            return ch->duty;
+        case ESP32_LEDC_CH_CONF1:
+            /* And so is `DUTY_START`: the fade is over by the time anybody
+             * can look, and a driver polling this bit is asking exactly
+             * that. */
+            return ch->conf1 & ~ESP32_LEDC_CONF1_START;
+        case ESP32_LEDC_CH_DUTY_R:
+            return ch->live << ESP32_LEDC_DUTY_FRACTION;
+        default:
+            return 0;
+        }
+    }
+    if (addr >= ESP32_LEDC_TIMER0
+        && addr < ESP32_LEDC_TIMER0
+                      + ESP32_LEDC_TIMER_STRIDE * ESP32_LEDC_TIMERS) {
+        unsigned which = (addr - ESP32_LEDC_TIMER0) / ESP32_LEDC_TIMER_STRIDE;
+        if ((addr - ESP32_LEDC_TIMER0) % ESP32_LEDC_TIMER_STRIDE == 0) {
+            return s->ledc_timer[which].conf & ~ESP32_LEDC_TIMER_PARA_UP;
+        }
+        /* The timer's own count, which nothing here keeps: a counter is the
+         * one part of this peripheral the model deliberately does not have. */
+        return 0;
+    }
+    switch (addr) {
+    case A_RUSTY_LEDC_INT_RAW:
+        return s->ledc_int_raw;
+    case A_RUSTY_LEDC_INT_ST:
+        return s->ledc_int_raw & s->ledc_int_ena;
+    case A_RUSTY_LEDC_INT_ENA:
+        return s->ledc_int_ena;
+    case A_RUSTY_LEDC_CONF:
+        return s->ledc_conf;
+    default:
+        return 0;
+    }
+}
+
+static void esp32_ledc_write(void *opaque, hwaddr addr, uint64_t value,
+                             unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+    uint32_t word = (uint32_t)value;
+
+    if (addr < ESP32_LEDC_CH0 + ESP32_LEDC_CH_STRIDE * ESP32_LEDC_CHANNELS) {
+        unsigned channel = (addr - ESP32_LEDC_CH0) / ESP32_LEDC_CH_STRIDE;
+        Esp32LedcChannel *ch = &s->ledc_ch[channel];
+        unsigned res = s->ledc_timer[ch->conf0 & ESP32_LEDC_CONF0_TIMER_MASK].res;
+
+        switch ((addr - ESP32_LEDC_CH0) % ESP32_LEDC_CH_STRIDE) {
+        case ESP32_LEDC_CH_CONF0:
+            ch->conf0 = word;
+            /* The latch: what the guest has written to this channel takes
+             * effect. esp-hal writes the duty, starts it and then latches,
+             * so this is where an ordinary `set_duty` lands. */
+            if (word & ESP32_LEDC_CONF0_PARA_UP) {
+                ch->live = ch->duty >> ESP32_LEDC_DUTY_FRACTION;
+            }
+            esp32_ledc_say(s, channel);
+            break;
+
+        case ESP32_LEDC_CH_HPOINT:
+            ch->hpoint = word;
+            break;
+
+        case ESP32_LEDC_CH_DUTY:
+            ch->duty = word;
+            break;
+
+        case ESP32_LEDC_CH_CONF1:
+            ch->conf1 = word;
+            if (word & ESP32_LEDC_CONF1_START) {
+                ch->live = esp32_ledc_faded(ch, res ? res : 1);
+                s->ledc_int_raw |= 1u << (ESP32_LEDC_INT_FADE_SHIFT + channel);
+                esp32_ledc_say(s, channel);
+            }
+            break;
+
+        default:
+            /* `DUTY_R` is read-only; a write to it is a driver's mistake
+             * and not this model's to invent behaviour for. */
+            break;
+        }
+        return;
+    }
+
+    if (addr >= ESP32_LEDC_TIMER0
+        && addr < ESP32_LEDC_TIMER0
+                      + ESP32_LEDC_TIMER_STRIDE * ESP32_LEDC_TIMERS) {
+        unsigned which = (addr - ESP32_LEDC_TIMER0) / ESP32_LEDC_TIMER_STRIDE;
+        Esp32LedcTimer *timer = &s->ledc_timer[which];
+
+        if ((addr - ESP32_LEDC_TIMER0) % ESP32_LEDC_TIMER_STRIDE != 0) {
+            return;
+        }
+        timer->conf = word;
+        if (word & ESP32_LEDC_TIMER_PARA_UP) {
+            timer->res = word & ESP32_LEDC_TIMER_RES_MASK;
+            timer->div = (word >> ESP32_LEDC_TIMER_DIV_SHIFT)
+                         & ESP32_LEDC_TIMER_DIV_MASK;
+        }
+        /* Every channel, because a timer is shared and its resolution is
+         * the denominator of each of their duties. */
+        esp32_ledc_say_all(s);
+        return;
+    }
+
+    switch (addr) {
+    case A_RUSTY_LEDC_INT_ENA:
+        s->ledc_int_ena = word;
+        break;
+    case A_RUSTY_LEDC_INT_CLR:
+        s->ledc_int_raw &= ~word;
+        break;
+    case A_RUSTY_LEDC_CONF:
+        s->ledc_conf = word;
+        esp32_ledc_say_all(s);
+        break;
+    default:
+        break;
+    }
+}
+
+static const MemoryRegionOps ledc_ops = {
+    .read = esp32_ledc_read,
+    .write = esp32_ledc_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+/*
+ * ============================== the strip ===============================
+ *
+ * RMT's transmitting half. See the header for what is modelled and what is
+ * deliberately not.
+ */
+
+/* The bit one pulse code carries: a one is the long half high, a zero the
+ * short one. Which half is high is the driver's choice and both are seen in
+ * the wild, so the rule is written in terms of the high time rather than of
+ * the first half. */
+static bool esp32_rmt_bit(uint32_t code)
+{
+    unsigned first = code & ESP32_RMT_DURATION_MASK;
+    unsigned second = (code >> ESP32_RMT_SECOND_SHIFT) & ESP32_RMT_DURATION_MASK;
+    bool first_high = (code & ESP32_RMT_LEVEL0) != 0;
+    unsigned high = first_high ? first : second;
+    unsigned low = first_high ? second : first;
+
+    return high > low;
+}
+
+/* A code with a half of no length at all is the end of the transmission:
+ * that is what `PulseCode::end_marker()` writes, and what every driver
+ * finishes its buffer with. */
+static bool esp32_rmt_is_end(uint32_t code)
+{
+    return (code & ESP32_RMT_DURATION_MASK) == 0
+           || ((code >> ESP32_RMT_SECOND_SHIFT) & ESP32_RMT_DURATION_MASK) == 0;
+}
+
+/* Say what went out, once a transmission has finished.
+ *
+ * `[rusty:rmt@<us>] <pin> <hex>` — the bytes, in the order the wire carried
+ * them, on the pin the matrix sends the channel to. A transmission the
+ * matrix sends nowhere is not reported: the codes went into a pad no part
+ * of the board is on.
+ */
+static void esp32_rmt_say(Esp32GpioState *s, unsigned channel)
+{
+    Esp32RmtChannel *ch = &s->rmt_ch[channel];
+    char line[2 * ESP32_RMT_BYTES + 64];
+    int pin = esp32_gpio_signal_pin(s, ESP32_RMT_SIG0 + channel);
+    int at;
+
+    if (pin < 0 || ch->byte_count == 0) {
+        return;
+    }
+    at = snprintf(line, sizeof(line), "[rusty:rmt@%" PRId64 "] %d ",
+                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), pin);
+    for (unsigned i = 0; i < ch->byte_count && at < (int)sizeof(line) - 8; i++) {
+        at += snprintf(line + at, sizeof(line) - at, "%02x", ch->bytes[i]);
+    }
+    if (ch->dropped) {
+        /* Said rather than silently cut: a strip longer than this buffer
+         * would otherwise look like a shorter one. */
+        at += snprintf(line + at, sizeof(line) - at, " +%u", ch->dropped);
+    }
+    at += snprintf(line + at, sizeof(line) - at, "\n");
+    qemu_chr_fe_write_all(&s->pins, (uint8_t *)line, at);
+}
+
+/* One bit onto the end of what this transmission has carried. */
+static void esp32_rmt_push(Esp32RmtChannel *ch, bool bit)
+{
+    unsigned index = ch->bit_count / 8;
+
+    if (index >= ESP32_RMT_BYTES) {
+        ch->dropped++;
+        ch->bit_count++;
+        return;
+    }
+    if (ch->bit_count % 8 == 0) {
+        ch->bytes[index] = 0;
+    }
+    ch->bytes[index] = (ch->bytes[index] << 1) | (bit ? 1 : 0);
+    ch->bit_count++;
+    ch->byte_count = (ch->bit_count + 7) / 8;
+}
+
+/*
+ * Send the next run of codes: up to the threshold, or to the end marker.
+ *
+ * The threshold is what the driver refills against — it is set to half the
+ * channel's RAM, so one chunk here is one half there — and a channel with
+ * no threshold set sends its whole RAM at once, which is what a
+ * transmission that fits does anyway.
+ */
+static void esp32_rmt_send(Esp32GpioState *s, unsigned channel)
+{
+    Esp32RmtChannel *ch = &s->rmt_ch[channel];
+    unsigned limit = ch->tx_lim & ESP32_RMT_TX_LIM_MASK;
+
+    if (!ch->sending) {
+        return;
+    }
+    if (limit == 0 || limit > ESP32_RMT_CODES) {
+        limit = ESP32_RMT_CODES;
+    }
+    for (unsigned i = 0; i < limit; i++) {
+        uint32_t code = s->rmt_ram[channel][ch->read_at];
+
+        ch->read_at = (ch->read_at + 1) % ESP32_RMT_CODES;
+        if (esp32_rmt_is_end(code)) {
+            ch->sending = false;
+            esp32_rmt_say(s, channel);
+            s->rmt_int_raw |= 1u << (ESP32_RMT_INT_END + channel);
+            return;
+        }
+        esp32_rmt_push(ch, esp32_rmt_bit(code));
+    }
+    /* Out of codes for now: ask for the next half. */
+    s->rmt_int_raw |= 1u << (ESP32_RMT_INT_THR + channel);
+    ch->hungry = false;
+}
+
+/* The driver has refilled and is looking again, so take the next chunk of
+ * every channel that asked for one. Called from the read of the interrupt
+ * registers, which is the only thing a blocking driver does between
+ * refilling and waiting. */
+static void esp32_rmt_feed(Esp32GpioState *s)
+{
+    for (unsigned channel = 0; channel < ESP32_RMT_TX_CHANNELS; channel++) {
+        if (s->rmt_ch[channel].hungry) {
+            s->rmt_ch[channel].hungry = false;
+            esp32_rmt_send(s, channel);
+        }
+    }
+}
+
+static uint64_t esp32_rmt_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+
+    if (addr >= ESP32_RMT_RAM
+        && addr < ESP32_RMT_RAM + 4 * ESP32_RMT_CODES * ESP32_RMT_CHANNELS) {
+        unsigned word = (addr - ESP32_RMT_RAM) / 4;
+        return s->rmt_ram[word / ESP32_RMT_CODES][word % ESP32_RMT_CODES];
+    }
+    if (addr >= ESP32_RMT_CONF0
+        && addr < ESP32_RMT_CONF0 + 4 * ESP32_RMT_TX_CHANNELS) {
+        /* `TX_START` and the two resets are write-triggered and read back
+         * clear, as every other trigger in this file does. */
+        unsigned channel = (addr - ESP32_RMT_CONF0) / 4;
+        return s->rmt_ch[channel].conf0
+               & ~(ESP32_RMT_TX_START | ESP32_RMT_MEM_RD_RST
+                   | ESP32_RMT_APB_MEM_RST | ESP32_RMT_TX_STOP);
+    }
+    if (addr >= ESP32_RMT_TX_LIM
+        && addr < ESP32_RMT_TX_LIM + 4 * ESP32_RMT_TX_CHANNELS) {
+        return s->rmt_ch[(addr - ESP32_RMT_TX_LIM) / 4].tx_lim;
+    }
+    switch (addr) {
+    case A_RUSTY_RMT_INT_RAW:
+        esp32_rmt_feed(s);
+        return s->rmt_int_raw;
+    case A_RUSTY_RMT_INT_ST:
+        esp32_rmt_feed(s);
+        return s->rmt_int_raw & s->rmt_int_ena;
+    case A_RUSTY_RMT_INT_ENA:
+        return s->rmt_int_ena;
+    default:
+        return 0;
+    }
+}
+
+static void esp32_rmt_write(void *opaque, hwaddr addr, uint64_t value,
+                            unsigned int size)
+{
+    Esp32GpioState *s = ESP32_GPIO(opaque);
+    uint32_t word32 = (uint32_t)value;
+
+    if (addr >= ESP32_RMT_RAM
+        && addr < ESP32_RMT_RAM + 4 * ESP32_RMT_CODES * ESP32_RMT_CHANNELS) {
+        unsigned word = (addr - ESP32_RMT_RAM) / 4;
+        s->rmt_ram[word / ESP32_RMT_CODES][word % ESP32_RMT_CODES] = word32;
+        return;
+    }
+    if (addr >= ESP32_RMT_CONF0
+        && addr < ESP32_RMT_CONF0 + 4 * ESP32_RMT_TX_CHANNELS) {
+        unsigned channel = (addr - ESP32_RMT_CONF0) / 4;
+        Esp32RmtChannel *ch = &s->rmt_ch[channel];
+
+        ch->conf0 = word32;
+        if (word32 & (ESP32_RMT_MEM_RD_RST | ESP32_RMT_APB_MEM_RST)) {
+            ch->read_at = 0;
+        }
+        if (word32 & ESP32_RMT_TX_STOP) {
+            ch->sending = false;
+        }
+        if (word32 & ESP32_RMT_TX_START) {
+            ch->sending = true;
+            ch->read_at = 0;
+            ch->bit_count = 0;
+            ch->byte_count = 0;
+            ch->dropped = 0;
+            ch->hungry = false;
+            esp32_rmt_send(s, channel);
+        }
+        return;
+    }
+    if (addr >= ESP32_RMT_TX_LIM
+        && addr < ESP32_RMT_TX_LIM + 4 * ESP32_RMT_TX_CHANNELS) {
+        s->rmt_ch[(addr - ESP32_RMT_TX_LIM) / 4].tx_lim = word32;
+        return;
+    }
+    switch (addr) {
+    case A_RUSTY_RMT_INT_ENA:
+        s->rmt_int_ena = word32;
+        break;
+    case A_RUSTY_RMT_INT_CLR:
+        s->rmt_int_raw &= ~word32;
+        /* A cleared threshold is the driver saying it is about to refill;
+         * the codes it writes are taken when it next looks at the
+         * interrupts, which is after the write. */
+        for (unsigned channel = 0; channel < ESP32_RMT_TX_CHANNELS; channel++) {
+            if (word32 & (1u << (ESP32_RMT_INT_THR + channel))) {
+                s->rmt_ch[channel].hungry = true;
+            }
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static const MemoryRegionOps rmt_ops = {
+    .read = esp32_rmt_read,
+    .write = esp32_rmt_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
 static void esp32_gpio_reset_hold(Object *obj, ResetType type)
 {
     Esp32GpioState *s = ESP32_GPIO(obj);
@@ -1397,11 +2035,27 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
     s->i2c_rx_at = 0;
     s->i2c_address = -1;
     s->i2c_expect_address = false;
+    s->i2c_continues = false;
     memset(s->i2c_last_report, 0, sizeof(s->i2c_last_report));
     memset(s->spi_reg, 0, sizeof(s->spi_reg));
     memset(s->spi_miso, 0, sizeof(s->spi_miso));
     memset(s->spi_miso_len, 0, sizeof(s->spi_miso_len));
     memset(s->spi_last_report, 0, sizeof(s->spi_last_report));
+    memset(s->ledc_ch, 0, sizeof(s->ledc_ch));
+    memset(s->ledc_timer, 0, sizeof(s->ledc_timer));
+    memset(s->ledc_said, 0, sizeof(s->ledc_said));
+    s->ledc_conf = 0;
+    s->ledc_int_raw = 0;
+    s->ledc_int_ena = 0;
+    for (unsigned channel = 0; channel < ESP32_LEDC_CHANNELS; channel++) {
+        s->ledc_said_pin[channel] = -1;
+    }
+    memset(s->func_out, 0, sizeof(s->func_out));
+    memset(s->rmt_ch, 0, sizeof(s->rmt_ch));
+    memset(s->rmt_ram, 0, sizeof(s->rmt_ram));
+    s->rmt_int_raw = 0;
+    s->rmt_int_ena = 0;
+    s->rmt_sys_conf = 0;
     if (s->irq_level) {
         s->irq_level = false;
         qemu_set_irq(s->irq, false);
@@ -1422,6 +2076,8 @@ static void esp32_gpio_realize(DeviceState *dev, Error **errp)
     s->pin0_reg = base ? ESP32_GPIO_PIN0_ESP32 : ESP32_GPIO_PIN0_MODERN;
     s->pcpu_int_reg = base ? ESP32_GPIO_PCPU_INT_ESP32
                            : ESP32_GPIO_PCPU_INT_MODERN;
+    s->func_out_reg = base ? ESP32_GPIO_FUNC_OUT_ESP32
+                           : ESP32_GPIO_FUNC_OUT_MODERN;
 
     /* With no chardev attached this does nothing and the device behaves as
      * it did before — the model is still correct, it simply has nobody to
@@ -1458,6 +2114,17 @@ static void esp32_gpio_init(Object *obj)
     memory_region_init_io(&s->spi_iomem, obj, &spi_ops, s,
                           TYPE_ESP32_GPIO ".spi", ESP32_SPI_REGION);
     sysbus_init_mmio(sbd, &s->spi_iomem);
+    /* Region 4 is LEDC, which drives a pad through the matrix rather than
+     * through GPIO_OUT — the peripheral behind every servo, every motor and
+     * every dimmed lamp. */
+    memory_region_init_io(&s->ledc_iomem, obj, &ledc_ops, s,
+                          TYPE_ESP32_GPIO ".ledc", ESP32_LEDC_REGION);
+    sysbus_init_mmio(sbd, &s->ledc_iomem);
+    /* Region 5 is RMT's transmitting half — an addressable LED strip, and
+     * the codes that carry its colours. */
+    memory_region_init_io(&s->rmt_iomem, obj, &rmt_ops, s,
+                          TYPE_ESP32_GPIO ".rmt", ESP32_RMT_REGION);
+    sysbus_init_mmio(sbd, &s->rmt_iomem);
     sysbus_init_irq(sbd, &s->irq);
 }
 

@@ -180,8 +180,54 @@ pub struct PwmReport {
     /// Microseconds on the firmware's systimer, from `[rusty:pwm@1234]`, on
     /// the same terms as [`GpioReport::at_us`].
     pub at_us: Option<u64>,
-    /// Pin, and the fraction of full drive on it — `0.0` to `1.0`.
-    pub pins: Vec<(u8, f32)>,
+    /// Pin, and what is on it.
+    pub pins: Vec<(u8, Duty)>,
+}
+
+/// How hard a pin is being driven, and how fast it is being switched.
+///
+/// The fraction alone is what firmware narrating its own line can say, and
+/// it is enough for a lamp and a motor: both answer to *how hard*. A servo
+/// does not. Its horn follows the width of the high part of each cycle —
+/// 1.5 ms is the middle whatever the period is — so a fraction without the
+/// frequency beside it cannot be read as an angle at all. rusty's emulator
+/// knows the carrier, because the timer that sets it is the one it models,
+/// so it says it; `None` is the honest answer everywhere else.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Duty {
+    /// The fraction of full drive — `0.0` to `1.0`.
+    pub duty: f32,
+    /// The carrier in hertz, when whoever reported it knew.
+    pub hz: Option<f32>,
+}
+
+impl Duty {
+    /// How long the pin is high in each cycle, in microseconds.
+    pub fn pulse_us(&self) -> Option<f32> {
+        let hz = self.hz?;
+        (hz > 0.0).then(|| self.duty / hz * 1_000_000.0)
+    }
+
+    /// Where a hobby servo's horn stands, in degrees from 0 to 180, given
+    /// the two pulse widths the part answers to.
+    ///
+    /// **The ends are the part's, not a constant here.** 500 and 2500
+    /// microseconds are what most hobby servos take and 1000 to 2000 is the
+    /// other common pair; the difference is forty degrees at each end,
+    /// which is a horn against its stop rather than where the firmware
+    /// asked. So the sheet says, and this is handed what it said.
+    ///
+    /// With no carrier the fraction is read straight, as it always was:
+    /// firmware that prints its own `[rusty:pwm]` line is saying how hard,
+    /// not how often, and reading that as a pulse width would put every
+    /// hand-narrated servo hard against one end.
+    pub fn servo_angle(&self, min_us: f32, max_us: f32) -> f32 {
+        let span = max_us - min_us;
+        match self.pulse_us() {
+            Some(us) if span > 0.0 => ((us - min_us) / span).clamp(0.0, 1.0) * 180.0,
+            _ => self.duty.clamp(0.0, 1.0) * 180.0,
+        }
+    }
 }
 
 /// Parse `[rusty:pwm] 5=0.75,6=0` — the duty the firmware set on each pin.
@@ -201,6 +247,12 @@ pub struct PwmReport {
 /// a `set_duty` that overshot its maximum is a real bug worth *seeing* as
 /// full drive rather than as silence.
 ///
+/// **The carrier comes after an `@`, and only from something that knows
+/// it.** `5=0.075@50` is a servo at the middle of its travel; `5=0.075` is
+/// a pin driven at seven and a half percent and nothing about how often.
+/// The emulator models the timer, so it can say; firmware narrating its own
+/// line cannot, and must not be read as though it had.
+///
 /// What this does not carry is a shaft speed. Nothing here measures a motor;
 /// it reports what the firmware said it commanded, which is the same footing
 /// the board view stands on everywhere else, and the panel says so.
@@ -211,13 +263,89 @@ pub fn parse_pwm_report(line: &str) -> Option<PwmReport> {
     for pair in rest.trim().split(',') {
         let (pin, duty) = pair.trim().split_once('=')?;
         let pin: u8 = pin.trim().parse().ok()?;
+        let (duty, hz) = match duty.trim().split_once('@') {
+            Some((duty, hz)) => (
+                duty,
+                hz.trim().parse::<f32>().ok().filter(|h| h.is_finite()),
+            ),
+            None => (duty.trim(), None),
+        };
         let duty: f32 = duty.trim().parse().ok()?;
         if !duty.is_finite() {
             continue;
         }
-        pins.push((pin, duty.clamp(0.0, 1.0)));
+        pins.push((
+            pin,
+            Duty {
+                duty: duty.clamp(0.0, 1.0),
+                hz,
+            },
+        ));
     }
     (!pins.is_empty()).then_some(PwmReport { at_us, pins })
+}
+
+/// One `[rusty:rmt]` line: what a transmission put on a pin, as bytes.
+///
+/// RMT sends pulse codes, and every one-wire LED protocol — WS2812, SK6812,
+/// WS2811 — carries a bit as the shape of one: a long high then a short low
+/// is a one, and the other way round a zero. The emulator reads that shape
+/// and hands over the bytes, so a host reading this does not have to know
+/// anybody's timings. What it *does* have to know is what the bytes mean,
+/// which is the part's business: three bytes a pixel, green first, for the
+/// family above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RmtReport {
+    pub at_us: Option<u64>,
+    /// The pin the matrix sends the channel to. A transmission the matrix
+    /// sends nowhere is never reported.
+    pub pin: u8,
+    pub bytes: Vec<u8>,
+    /// Bits beyond what one report carries. A strip longer than the
+    /// emulator's buffer is said rather than silently cut, because a
+    /// shortened strip and a short one look the same on a board.
+    pub dropped: u32,
+}
+
+/// Parse `[rusty:rmt@63834] 8 100000002000000030`, and the `+12` a
+/// transmission too long to carry whole ends with.
+pub fn parse_rmt_report(line: &str) -> Option<RmtReport> {
+    let rest = line.trim().strip_prefix("[rusty:rmt")?;
+    let (at_us, rest) = split_stamp(rest)?;
+    let mut parts = rest.split_whitespace();
+    let pin: u8 = parts.next()?.parse().ok()?;
+    let hex = parts.next()?;
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks(2) {
+        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+    }
+    let dropped = parts
+        .next()
+        .and_then(|more| more.strip_prefix('+'))
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(0);
+    Some(RmtReport {
+        at_us,
+        pin,
+        bytes,
+        dropped,
+    })
+}
+
+/// The colours a run of `[rusty:rmt]` bytes drives, as `(r, g, b)`.
+///
+/// Green, red, blue is the order the wire carries for the WS2812 family,
+/// which is the one thing about these bytes that is not obvious and the one
+/// thing everybody gets wrong first. A trailing part-pixel is dropped: two
+/// bytes is a transmission caught mid-flight, not a colour.
+pub fn strip_colours(bytes: &[u8]) -> Vec<(u8, u8, u8)> {
+    bytes
+        .chunks_exact(3)
+        .map(|pixel| (pixel[1], pixel[0], pixel[2]))
+        .collect()
 }
 
 /// A captured trace as a Value Change Dump, the format every waveform tool
@@ -813,13 +941,17 @@ mod tests {
         assert_eq!(parse_gpio_report("[rusty:gpio] nonsense"), None);
     }
 
+    fn duty(duty: f32) -> Duty {
+        Duty { duty, hz: None }
+    }
+
     #[test]
     fn a_duty_report_carries_a_fraction_per_pin() {
         assert_eq!(
             parse_pwm_report("[rusty:pwm] 5=0.75,6=0"),
             Some(PwmReport {
                 at_us: None,
-                pins: vec![(5, 0.75), (6, 0.0)],
+                pins: vec![(5, duty(0.75)), (6, duty(0.0))],
             }),
         );
         assert_eq!(
@@ -828,15 +960,101 @@ mod tests {
         );
     }
 
+    /// The emulator knows the carrier because it models the timer that sets
+    /// it, and firmware narrating its own line does not. Both spellings
+    /// have to read, and the second must not be given a frequency it never
+    /// claimed — a servo would then be drawn hard against one end.
+    #[test]
+    fn a_carrier_is_carried_when_it_is_there_and_absent_when_it_is_not() {
+        let with = parse_pwm_report("[rusty:pwm@58311] 5=0.0750@50.0").expect("kept");
+        assert_eq!(
+            with.pins,
+            vec![(
+                5,
+                Duty {
+                    duty: 0.075,
+                    hz: Some(50.0)
+                }
+            )]
+        );
+        assert_eq!(with.pins[0].1.pulse_us(), Some(1500.0));
+        let without = parse_pwm_report("[rusty:pwm] 5=0.075").expect("kept");
+        assert_eq!(without.pins[0].1.hz, None);
+        assert_eq!(without.pins[0].1.pulse_us(), None);
+    }
+
+    /// A servo's middle is 1.5 ms whatever the period, and the ends are the
+    /// part's to state. The reading with no carrier is the fraction, which
+    /// is what the panel has always drawn for hand-narrated firmware.
+    #[test]
+    fn a_servos_angle_comes_from_the_pulse_width_when_there_is_one() {
+        let middle = Duty {
+            duty: 0.075,
+            hz: Some(50.0),
+        };
+        assert!((middle.servo_angle(500.0, 2500.0) - 90.0).abs() < 0.01);
+        // The same pulse against the other common pair of ends is another
+        // fifty degrees along, which is why the ends are not a constant.
+        assert!((middle.servo_angle(1000.0, 2000.0) - 90.0).abs() < 0.01);
+        let low = Duty {
+            duty: 0.05,
+            hz: Some(50.0),
+        };
+        assert!((low.servo_angle(1000.0, 2000.0) - 0.0).abs() < 0.01);
+        assert!((low.servo_angle(500.0, 2500.0) - 45.0).abs() < 0.01);
+        // Past the ends is a horn against its stop, not an angle beyond it.
+        let over = Duty {
+            duty: 0.2,
+            hz: Some(50.0),
+        };
+        assert!((over.servo_angle(500.0, 2500.0) - 180.0).abs() < 0.01);
+        // And with nothing said about the carrier, the fraction reads as it
+        // always did.
+        assert!((duty(0.5).servo_angle(500.0, 2500.0) - 90.0).abs() < 0.01);
+    }
+
+    /// The bytes a strip's driver clocked out, and the pin they went to.
+    /// The `+N` is a transmission longer than one report carries — said,
+    /// because a strip shortened in silence looks like a shorter strip.
+    #[test]
+    fn a_strip_transmission_carries_its_pin_and_its_bytes() {
+        assert_eq!(
+            parse_rmt_report("[rusty:rmt@63834] 8 100000002000000030"),
+            Some(RmtReport {
+                at_us: Some(63834),
+                pin: 8,
+                bytes: vec![0x10, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x30],
+                dropped: 0,
+            }),
+        );
+        let long = parse_rmt_report("[rusty:rmt@10] 2 0102030405060708090a0b0c +24").expect("kept");
+        assert_eq!(long.dropped, 24);
+        assert_eq!(parse_rmt_report("[rusty:rmt@10] 2 010"), None);
+        assert_eq!(parse_rmt_report("[rusty:gpio@10] 2=1"), None);
+    }
+
+    /// Green first. Reading the bytes in the order they look like — red,
+    /// green, blue — swaps two channels of every pixel, which is a picture
+    /// that is plainly wrong and plainly working at the same time.
+    #[test]
+    fn a_strips_bytes_are_green_red_blue() {
+        assert_eq!(
+            strip_colours(&[0x10, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x30]),
+            vec![(0x00, 0x10, 0x00), (0x20, 0x00, 0x00), (0x00, 0x00, 0x30)],
+        );
+        // A part-pixel is not a colour.
+        assert_eq!(strip_colours(&[0x10, 0x20]), vec![]);
+    }
+
     /// A `set_duty` that overshot its timer's maximum is a real bug, and one
     /// worth seeing as full drive rather than as silence — the motor really
     /// is pinned. Same for a negative, which is a wrapped subtraction.
     #[test]
     fn a_duty_outside_the_range_is_clamped_rather_than_dropped() {
         let over = parse_pwm_report("[rusty:pwm] 5=1.4").expect("kept");
-        assert_eq!(over.pins, vec![(5, 1.0)]);
+        assert_eq!(over.pins, vec![(5, duty(1.0))]);
         let under = parse_pwm_report("[rusty:pwm] 5=-0.2").expect("kept");
-        assert_eq!(under.pins, vec![(5, 0.0)]);
+        assert_eq!(under.pins, vec![(5, duty(0.0))]);
     }
 
     /// The two channels must not read each other's lines: a boolean pin

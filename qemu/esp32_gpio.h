@@ -342,6 +342,225 @@ REG32(RUSTY_SPI_W0, 0x0098)
 /* Sixteen 32-bit words, which is the whole of a CPU-driven transfer. */
 #define ESP32_SPI_BUFFER 64
 
+/*
+ * LEDC, which this device also answers for.
+ *
+ * The fifth peripheral in this file, and the one every servo, every motor
+ * and every dimmed lamp on an ESP32 is driven through. Nothing is mapped at
+ * it upstream, so a firmware that configures a timer and a channel writes
+ * into a hole: the pin it chose stays wherever GPIO left it, the board
+ * shows a servo asleep while the firmware sweeps it, and a `[rusty:pwm]`
+ * line exists only when the firmware narrates its own duty.
+ *
+ * What is modelled is what a duty *is*: each timer's resolution and
+ * divider, each channel's duty, which timer it follows, whether its output
+ * is enabled, and the two `para_up` latches that make any of it take
+ * effect. What is deliberately not modelled is the counter. A host can act
+ * on a duty and a frequency — an angle, a speed, a brightness — and cannot
+ * act on twenty thousand edges a second, which is the measurement the
+ * `[rusty:pwm]` line exists to avoid putting on a channel the console
+ * shares.
+ *
+ * Offsets from esp-idf's soc/esp32c3/ledc_reg.h, and the sequence a driver
+ * writes them in from esp-hal's `ledc::low_level`.
+ */
+#define ESP32_LEDC_REGION 0x1000
+#define ESP32_LEDC_WORDS (ESP32_LEDC_REGION / 4)
+
+/* Six channels and four timers on the C3, each a small cluster. */
+#define ESP32_LEDC_CHANNELS 6
+#define ESP32_LEDC_TIMERS 4
+#define ESP32_LEDC_CH0 0x0000
+#define ESP32_LEDC_CH_STRIDE 0x14
+#define ESP32_LEDC_TIMER0 0x00a0
+#define ESP32_LEDC_TIMER_STRIDE 0x8
+
+REG32(RUSTY_LEDC_INT_RAW, 0x00c0)
+REG32(RUSTY_LEDC_INT_ST, 0x00c4)
+REG32(RUSTY_LEDC_INT_ENA, 0x00c8)
+REG32(RUSTY_LEDC_INT_CLR, 0x00cc)
+REG32(RUSTY_LEDC_CONF, 0x00d0)
+
+/* A channel's cluster: `CONF0`, `HPOINT`, `DUTY`, `CONF1`, `DUTY_R`. */
+#define ESP32_LEDC_CH_CONF0  0x0
+#define ESP32_LEDC_CH_HPOINT 0x4
+#define ESP32_LEDC_CH_DUTY   0x8
+#define ESP32_LEDC_CH_CONF1  0xc
+#define ESP32_LEDC_CH_DUTY_R 0x10
+
+/* `CONF0`: which timer, whether the output reaches the matrix, the level a
+ * stopped channel idles at, and the latch. `PARA_UP` is write-triggered —
+ * the silicon acts on it and it reads back clear. */
+#define ESP32_LEDC_CONF0_TIMER_MASK 0x3
+#define ESP32_LEDC_CONF0_SIG_OUT_EN (1u << 2)
+#define ESP32_LEDC_CONF0_IDLE_LV    (1u << 3)
+#define ESP32_LEDC_CONF0_PARA_UP    (1u << 4)
+
+/* `CONF1`: the fade, and `DUTY_START` which begins it. Also
+ * write-triggered: a driver asking `is_duty_fade_running` reads this bit,
+ * and a model that stored it would answer "still fading" for ever. */
+#define ESP32_LEDC_CONF1_SCALE_MASK 0x3ff
+#define ESP32_LEDC_CONF1_CYCLE_SHIFT 10
+#define ESP32_LEDC_CONF1_NUM_SHIFT 20
+#define ESP32_LEDC_CONF1_NUM_MASK 0x3ff
+#define ESP32_LEDC_CONF1_INC (1u << 30)
+#define ESP32_LEDC_CONF1_START (1u << 31)
+
+/* `DUTY` carries four fractional bits: the duty a driver means is the
+ * register shifted right by four. */
+#define ESP32_LEDC_DUTY_FRACTION 4
+
+/* A timer's `CONF`: the resolution in bits, the divider in Q10.8, the two
+ * stop bits, and its own latch. */
+#define ESP32_LEDC_TIMER_RES_MASK 0xf
+#define ESP32_LEDC_TIMER_DIV_SHIFT 4
+#define ESP32_LEDC_TIMER_DIV_MASK 0x3ffff
+#define ESP32_LEDC_TIMER_PAUSE (1u << 22)
+#define ESP32_LEDC_TIMER_RST (1u << 23)
+#define ESP32_LEDC_TIMER_PARA_UP (1u << 25)
+
+/* `INT_RAW` bit 4 + n: channel n's fade has finished. A driver waits on
+ * this one, so a fade that is applied at once still has to raise it. */
+#define ESP32_LEDC_INT_FADE_SHIFT 4
+
+/* `CONF`'s clock select, and what each source runs at. The C3's LEDC is fed
+ * by one of three; the divider and the resolution are counted against
+ * whichever the firmware chose, so a frequency reported from the wrong one
+ * would be wrong by a factor of two or five. */
+#define ESP32_LEDC_CLK_SEL_MASK 0x3
+#define ESP32_LEDC_CLK_APB 80000000.0
+#define ESP32_LEDC_CLK_RC_FAST 17500000.0
+#define ESP32_LEDC_CLK_XTAL 40000000.0
+
+/* The GPIO matrix's output selection: `FUNC_OUT_SEL_CFG` per pin, and the
+ * signal number that means "this pad is a plain GPIO output" rather than a
+ * peripheral's. A pad pointed at a peripheral is not driven by `GPIO_OUT`,
+ * and reporting it as though it were is how a lamp on a PWM pin reads as
+ * dark while the firmware dims it.
+ */
+#define ESP32_GPIO_FUNC_OUT_ESP32  0x0530
+#define ESP32_GPIO_FUNC_OUT_MODERN 0x0554
+#define ESP32_GPIO_OUT_SEL_MASK 0xff
+#define ESP32_GPIO_OUT_SEL_GPIO 128
+
+/* Which signal each LEDC channel puts on the matrix, on the C3. */
+#define ESP32_LEDC_SIG0 45
+
+/* One channel, as the model keeps it: the registers the guest wrote, and
+ * the duty that is actually driving the pad — the two differ until a
+ * `PARA_UP` or a `DUTY_START` latches the one into the other. */
+typedef struct Esp32LedcChannel {
+    uint32_t conf0;
+    uint32_t hpoint;
+    uint32_t duty;
+    uint32_t conf1;
+    uint32_t live;
+} Esp32LedcChannel;
+
+/* One timer: what the guest wrote, and the resolution and divider in force. */
+typedef struct Esp32LedcTimer {
+    uint32_t conf;
+    unsigned res;
+    unsigned div;
+} Esp32LedcTimer;
+
+/*
+ * RMT, which this device also answers for.
+ *
+ * The sixth peripheral in this file, and the one an addressable LED strip is
+ * driven by: `smart-leds` over `esp-hal-smartled` writes a pulse code per
+ * bit into the channel's RAM and lets RMT clock them out. Nothing is mapped
+ * at it upstream, so that write lands in a hole, the transmission never
+ * ends, and a firmware waiting for it waits for ever — the strip dark, the
+ * board silent, and the fault apparently in the user's own `write`.
+ *
+ * What is modelled is the transmission: the RAM, the read pointer, the
+ * threshold that asks for a refill, and the end marker that finishes it. The
+ * codes are turned into the bits they carry and reported as bytes.
+ *
+ * **The bit is read from the shape of the code, not from a clock.** Every
+ * one-wire LED protocol — WS2812, SK6812, WS2811 — sends a one as a long
+ * high followed by a short low and a zero the other way round, so a code
+ * whose high half is longer than its low half is a one. That rule is what
+ * makes this a *model of RMT* rather than a model of one LED: a driver
+ * sending some other protocol is reported by the same rule and the host can
+ * say it does not recognise the bytes. Timing is not modelled at all — the
+ * divider and the clock source are stored and ignored, since nothing here
+ * has to meet a deadline.
+ *
+ * **The transmission advances when the firmware refills, not on a clock.**
+ * A strip longer than the channel's RAM is sent in halves: the hardware
+ * raises the threshold interrupt, the driver writes the next half over the
+ * half already sent and clears it, and round again. This model consumes a
+ * chunk, raises the threshold, and waits to be asked for the next — the
+ * driver's own poll of the interrupt register is what asks. So it can
+ * never outrun the firmware, which a timer-paced model could.
+ */
+#define ESP32_RMT_REGION 0x1000
+#define ESP32_RMT_WORDS (ESP32_RMT_REGION / 4)
+
+/* Two transmitting channels on the C3, each with 48 codes of RAM at
+ * `0x400`, and the two others (which receive) beside them. */
+#define ESP32_RMT_TX_CHANNELS 2
+#define ESP32_RMT_CHANNELS 4
+#define ESP32_RMT_RAM 0x400
+#define ESP32_RMT_CODES 48
+
+REG32(RUSTY_RMT_INT_RAW, 0x0038)
+REG32(RUSTY_RMT_INT_ST, 0x003c)
+REG32(RUSTY_RMT_INT_ENA, 0x0040)
+REG32(RUSTY_RMT_INT_CLR, 0x0044)
+#define ESP32_RMT_CONF0 0x0010
+#define ESP32_RMT_TX_LIM 0x0058
+
+/* `CHnCONF0`: start, the two resets, wrap, and the stop. */
+#define ESP32_RMT_TX_START (1u << 0)
+#define ESP32_RMT_MEM_RD_RST (1u << 1)
+#define ESP32_RMT_APB_MEM_RST (1u << 2)
+#define ESP32_RMT_TX_CONTI (1u << 3)
+#define ESP32_RMT_TX_WRAP (1u << 4)
+#define ESP32_RMT_TX_STOP (1u << 7)
+
+/* `INT_RAW`: end at bit 0 + channel, error at 4 + channel, the threshold
+ * that asks for a refill at 8 + channel. */
+#define ESP32_RMT_INT_END 0
+#define ESP32_RMT_INT_THR 8
+
+/* `CHn_TX_LIM`: how many codes go out before the threshold fires. */
+#define ESP32_RMT_TX_LIM_MASK 0x1ff
+
+/* A pulse code is two halves: fifteen bits of duration and a level each. */
+#define ESP32_RMT_DURATION_MASK 0x7fff
+#define ESP32_RMT_LEVEL0 (1u << 15)
+#define ESP32_RMT_SECOND_SHIFT 16
+#define ESP32_RMT_LEVEL1 (1u << 31)
+
+/* Which signal each transmitting channel puts on the matrix, on the C3. */
+#define ESP32_RMT_SIG0 51
+
+/* The longest run of bytes one transmission reports. A strip of sixty is
+ * 180 bytes, which is 360 characters of hex — beyond this the report says
+ * how much it dropped rather than growing without limit. */
+#define ESP32_RMT_BYTES 256
+
+/* One transmitting channel, as the model keeps it. */
+typedef struct Esp32RmtChannel {
+    uint32_t conf0;
+    uint32_t tx_lim;
+    /* Where the next code comes from, and whether a transmission is going. */
+    unsigned read_at;
+    bool sending;
+    /* Asked for the next chunk: set when the driver clears the threshold,
+     * acted on when it next reads the interrupt register — which is after
+     * it has refilled, because that is the order its loop writes them in. */
+    bool hungry;
+    /* The bits this transmission has carried, packed as they complete. */
+    uint8_t bytes[ESP32_RMT_BYTES];
+    unsigned byte_count;
+    unsigned bit_count;
+    unsigned dropped;
+} Esp32RmtChannel;
+
 /* One device: an address and the 256 registers behind it.
  *
  * A pointer, because that is what an I2C sensor is: a write of one byte
@@ -350,6 +569,10 @@ REG32(RUSTY_SPI_W0, 0x0098)
  * model gives for free. */
 typedef struct Esp32I2cDevice {
     bool present;
+    /* Whether the host has given it anything to be read from: a sensor has
+     * registers and a display does not, which is what decides whether its
+     * writes are worth repeating on the channel. */
+    bool has_regs;
     uint8_t address;
     uint8_t pointer;
     uint8_t regs[256];
@@ -430,6 +653,9 @@ typedef struct Esp32GpioState {
      * already says. */
     int i2c_address;
     bool i2c_expect_address;
+    /* Whether anything has been reported since the transaction began, which
+     * is what tells a continuation from a message of its own. */
+    bool i2c_continues;
     /* The last transaction reported, without its timestamp, so the same one
      * repeated is said once. */
     char i2c_last_report[ESP32_BUS_VERBS][ESP32_I2C_REPORT];
@@ -440,6 +666,32 @@ typedef struct Esp32GpioState {
     uint8_t spi_miso[ESP32_SPI_SELECTS][ESP32_SPI_BUFFER];
     unsigned spi_miso_len[ESP32_SPI_SELECTS];
     char spi_last_report[ESP32_BUS_VERBS][ESP32_I2C_REPORT];
+
+    /* LEDC: the timers, the channels, and what was last said about each
+     * channel's pin, so a duty that has not moved is not said twice. */
+    MemoryRegion ledc_iomem;
+    Esp32LedcChannel ledc_ch[ESP32_LEDC_CHANNELS];
+    Esp32LedcTimer ledc_timer[ESP32_LEDC_TIMERS];
+    uint32_t ledc_conf;
+    uint32_t ledc_int_raw;
+    uint32_t ledc_int_ena;
+    int ledc_said_pin[ESP32_LEDC_CHANNELS];
+    char ledc_said[ESP32_LEDC_CHANNELS][ESP32_I2C_REPORT];
+
+    /* The GPIO matrix's output selection per pad, which is how a
+     * peripheral's signal is followed to the pin it reaches — and how a pad
+     * a peripheral drives is told from one `GPIO_OUT` drives. */
+    uint32_t func_out[ESP32_GPIO_PINS];
+    hwaddr func_out_reg;
+
+    /* RMT: the transmitting channels, the RAM they read their codes from,
+     * and the interrupts a driver's refill loop polls. */
+    MemoryRegion rmt_iomem;
+    Esp32RmtChannel rmt_ch[ESP32_RMT_TX_CHANNELS];
+    uint32_t rmt_ram[ESP32_RMT_CHANNELS][ESP32_RMT_CODES];
+    uint32_t rmt_int_raw;
+    uint32_t rmt_int_ena;
+    uint32_t rmt_sys_conf;
 } Esp32GpioState;
 
 typedef struct Esp32GpioClass {

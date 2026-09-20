@@ -458,6 +458,40 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
             });
         });
     }
+    // The screens the sheet declares, kept in step with it.
+    //
+    // `absorb` draws on a screen and never creates one: which controller is
+    // behind the glass decides how the bytes read, and that is the sheet's
+    // to say. Here is where it says it — an entry per display part that
+    // names its panel, rebuilt when the choice changes and dropped when the
+    // part or its address goes. A part merely moved keeps its picture,
+    // which is why this compares before it writes.
+    Effect::new(move |_| {
+        let declared: Vec<(u8, rusty_embed::screen::Panel)> = parts
+            .get()
+            .iter()
+            .filter(|part| part.symbol.as_ref().map(behaviour_of) == Some(Behaviour::Display))
+            .filter_map(|part| {
+                let panel = rusty_embed::screen::Panel::from_id(part.inst.props.get("panel")?)?;
+                let address = part.inst.props.get("addr")?.trim();
+                let address = u8::from_str_radix(address.trim_start_matches("0x"), 16).ok()?;
+                Some((address, panel))
+            })
+            .collect();
+        state.sim.screens.update(|screens| {
+            screens.retain(|address, screen| {
+                declared
+                    .iter()
+                    .any(|(at, panel)| at == address && *panel == screen.panel())
+            });
+            for (address, panel) in declared {
+                screens
+                    .entry(address)
+                    .or_insert_with(|| rusty_embed::screen::Screen::of(panel));
+            }
+        });
+    });
+
     // Symbols imported during this session join the plan's library at once,
     // so the part can be placed without waiting for a re-plan.
     let extra: RwSignal<Vec<Symbol>> = RwSignal::new(Vec::new());
@@ -1558,7 +1592,8 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         // Where the drawing puts the leads,
                                         // the light and the screen.
                                         let plan = Memo::new(move |_| {
-                                            symbol.with(|s| s.as_ref().map(art::layout))
+                                            let value = value.get();
+                                            symbol.with(|s| s.as_ref().map(|s| art::layout(s, &value)))
                                         });
                                         let bbox = Memo::new(move |_| {
                                             this.with(|p| p.as_ref().map(part_box).unwrap_or((0.0, 0.0, 0.0, 0.0)))
@@ -1907,35 +1942,150 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     }
                                                         .into_any()
                                                 }
-                                                // What the firmware prints,
-                                                // on the screen it prints it
-                                                // to — upright, whichever way
-                                                // the module is turned.
+                                                // A chain of addressable LEDs,
+                                                // lit by the bytes the wire
+                                                // carried rather than by a
+                                                // level on a pin: one
+                                                // transmission sets all of
+                                                // them, and the order on the
+                                                // wire is the chain's own.
+                                                Some(Behaviour::Strip) => {
+                                                    let reference = reference.get();
+                                                    let colours = gpio_for(&reference, "DIN")
+                                                        .map(|gpio| {
+                                                            state.sim.rmt.with(|rmt| {
+                                                                rmt.get(&gpio)
+                                                                    .map(|bytes| {
+                                                                        rusty_embed::strip_colours(bytes)
+                                                                    })
+                                                                    .unwrap_or_default()
+                                                            })
+                                                        })
+                                                        .unwrap_or_default();
+                                                    let lenses = art::strip_lenses(&plan);
+                                                    lenses
+                                                        .into_iter()
+                                                        .enumerate()
+                                                        .map(|(index, (lx, ly, r))| {
+                                                            // Dark is dark: an LED told
+                                                            // to be black and one the
+                                                            // firmware has not reached
+                                                            // are the same on the desk.
+                                                            let (red, green, blue) = colours
+                                                                .get(index)
+                                                                .copied()
+                                                                .unwrap_or((0, 0, 0));
+                                                            let lit = red as u16 + green as u16 + blue as u16 > 0;
+                                                            let (cx, cy) = turned((lx, ly));
+                                                            let fill = format!("rgb({red} {green} {blue})");
+                                                            let style = if lit {
+                                                                format!(
+                                                                    "pointer-events: none; filter: drop-shadow(0 0 {:.1}px rgb({red} {green} {blue}))",
+                                                                    r * 0.9,
+                                                                )
+                                                            } else {
+                                                                "pointer-events: none".to_string()
+                                                            };
+                                                            view! {
+                                                                <rect
+                                                                    x=cx - r * 0.72
+                                                                    y=cy - r * 0.72
+                                                                    width=r * 1.44
+                                                                    height=r * 1.44
+                                                                    rx="1"
+                                                                    fill=fill
+                                                                    style=style
+                                                                />
+                                                            }
+                                                        })
+                                                        .collect_view()
+                                                        .into_any()
+                                                }
+                                                // What the firmware prints, on
+                                                // the screen it prints it to —
+                                                // upright, whichever way the
+                                                // module is turned. Or, where the
+                                                // sheet says which controller is
+                                                // behind the glass, what the
+                                                // firmware's own display driver
+                                                // drew: an SSD1306 has no state a
+                                                // driver reads back, so the bus
+                                                // carries the whole picture.
                                                 Some(Behaviour::Display) => {
                                                     let Some((fx, fy, fw, fh)) = plan.face else {
                                                         return ().into_any();
                                                     };
                                                     let (cx, cy) =
                                                         turned((fx + fw / 2.0, fy + fh / 2.0));
+                                                    let drawn = Memo::new(move |_| {
+                                                        let address = this
+                                                            .with(|p| p.as_ref().and_then(display_address))?;
+                                                        state.sim.screens.with(|screens| {
+                                                            let screen = screens.get(&address)?;
+                                                            Some((
+                                                                pixel_path(screen),
+                                                                (fw / screen.width() as f64)
+                                                                    .min(fh / screen.height() as f64),
+                                                                (screen.width() as f64, screen.height() as f64),
+                                                                screen.is_on(),
+                                                            ))
+                                                        })
+                                                    });
                                                     view! {
-                                                        <text
-                                                            x=cx
-                                                            y=cy + 3.0
-                                                            text-anchor="middle"
-                                                            font-family="ui-monospace"
-                                                            font-size="8.5"
-                                                            fill="#3ddc84"
-                                                            style="pointer-events: none"
-                                                        >
-                                                            {move || {
-                                                                let text = state.sim.display.get();
-                                                                if text.is_empty() {
-                                                                    "········".to_string()
-                                                                } else {
-                                                                    text
+                                                        {move || {
+                                                            let Some((path, scale, (w, h), on)) = drawn.get() else {
+                                                                return view! {
+                                                                    <text
+                                                                        x=cx
+                                                                        y=cy + 3.0
+                                                                        text-anchor="middle"
+                                                                        font-family="ui-monospace"
+                                                                        font-size="8.5"
+                                                                        fill="#3ddc84"
+                                                                        style="pointer-events: none"
+                                                                    >
+                                                                        {move || {
+                                                                            let text = state.sim.display.get();
+                                                                            if text.is_empty() {
+                                                                                "········".to_string()
+                                                                            } else {
+                                                                                text
+                                                                            }
+                                                                        }}
+                                                                    </text>
                                                                 }
-                                                            }}
-                                                        </text>
+                                                                    .into_any();
+                                                            };
+                                                            // In the screen's own pixels, scaled onto
+                                                            // the glass: the path is the decoder's
+                                                            // answer and nothing here does arithmetic
+                                                            // on it. A panel the driver has not
+                                                            // switched on is dimmed rather than
+                                                            // blanked — dark glass and a firmware that
+                                                            // drew nothing look the same on the desk
+                                                            // and are different faults.
+                                                            let transform = format!(
+                                                                "translate({} {}) scale({scale})",
+                                                                cx - w * scale / 2.0,
+                                                                cy - h * scale / 2.0,
+                                                            );
+                                                            view! {
+                                                                <g
+                                                                    transform=transform
+                                                                    opacity=if on { "1" } else { "0.15" }
+                                                                    style="pointer-events: none"
+                                                                >
+                                                                    <path
+                                                                        d=path
+                                                                        stroke="#3ddc84"
+                                                                        stroke-width="1"
+                                                                        fill="none"
+                                                                        shape-rendering="crispEdges"
+                                                                    />
+                                                                </g>
+                                                            }
+                                                                .into_any()
+                                                        }}
                                                     }
                                                         .into_any()
                                                 }
@@ -1986,10 +2136,26 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     let (cx, cy) =
                                                         turned((fx + fw / 2.0 + 18.0, fy + fh / 2.0));
                                                     let reference = reference.get();
-                                                    let duty = gpio_for(&reference, "SIG").and_then(|gpio| {
+                                                    let drive = gpio_for(&reference, "SIG").and_then(|gpio| {
                                                         state.sim.pwm.with(|pwm| pwm.get(&gpio).copied())
                                                     });
-                                                    let angle = duty.map(|d| -90.0 + f64::from(d) * 180.0);
+                                                    // Where the horn stands, from the
+                                                    // width of the pulse when the
+                                                    // emulator said how often — a servo
+                                                    // answers to that and not to how
+                                                    // hard. The ends are the part's,
+                                                    // because 500..2500 and 1000..2000
+                                                    // are forty degrees apart at each
+                                                    // end and both are ordinary.
+                                                    let (min_us, max_us) = this.with(|p| {
+                                                        let props = p.as_ref().map(|p| &p.inst);
+                                                        (
+                                                            props.and_then(|i| i.prop("min")).unwrap_or(SERVO_MIN_US),
+                                                            props.and_then(|i| i.prop("max")).unwrap_or(SERVO_MAX_US),
+                                                        )
+                                                    });
+                                                    let angle = drive
+                                                        .map(|d| f64::from(d.servo_angle(min_us, max_us)) - 90.0);
                                                     let transform = format!(
                                                         "translate({cx} {cy}) rotate({:.1})",
                                                         angle.unwrap_or(0.0)
@@ -2637,7 +2803,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                                     (a, b) => rusty_embed::Drive::from_inputs(a.unwrap_or(false), b.unwrap_or(false)),
                                                 }
                                             };
-                                            let spin = move || match duty() {
+                                            let spin = move || match duty().map(|d| d.duty) {
                                                 Some(d) if d > 0.01 && drive().turns() => {
                                                     let seconds = (0.25 / d).clamp(0.25, 4.0);
                                                     let way = match drive() {
@@ -2650,7 +2816,9 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                             };
                                             let readout = move || match duty() {
                                                 None => t!("simulate.no-duty"),
-                                                Some(d) => format!("{:.0}% {}", d * 100.0, drive().label()),
+                                                Some(d) => {
+                                                    format!("{:.0}% {}", d.duty * 100.0, drive().label())
+                                                }
                                             };
                                             let tone = move || match duty() {
                                                 None => "text-label-3",
@@ -2899,7 +3067,7 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                 {move || {
                                     let symbol = placing.get()?;
                                     let (x, y) = place_at.get()?;
-                                    let plan = art::layout(&symbol);
+                                    let plan = art::layout(&symbol, "");
                                     let (x0, y0, x1, y1) = plan.bounds;
                                     let drawn = art::markup(&symbol, "");
                                     Some(view! {
@@ -3593,6 +3761,46 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         </label>
                                     }
                                 })}
+                                // The two pulse widths this servo answers
+                                // to. Stated rather than assumed: 500..2500
+                                // and 1000..2000 are both ordinary, and
+                                // reading one as the other puts the horn
+                                // forty degrees from where the firmware asked
+                                // at each end. Empty is the first pair.
+                                {(behaviour == Some(Behaviour::Servo)).then(|| {
+                                    let low = part.inst.props.get("min").cloned().unwrap_or_default();
+                                    let high = part.inst.props.get("max").cloned().unwrap_or_default();
+                                    let set = move |key: &'static str| {
+                                        move |event: web_sys::Event| {
+                                            checkpoint();
+                                            let text = event_target_value(&event);
+                                            parts.update(|list| edit::set_prop(list, index, key, &text));
+                                            dirty.set(true);
+                                        }
+                                    };
+                                    view! {
+                                        <label
+                                            class="flex items-center gap-2 text-footnote text-label-2"
+                                            title=t!("simulate.servo-pulse-hint")
+                                        >
+                                            <span class="shrink-0">{t!("simulate.servo-pulse")}</span>
+                                            <input
+                                                type="text"
+                                                placeholder="500"
+                                                prop:value=low
+                                                on:change=set("min")
+                                                class="h-[26px] w-0 min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            />
+                                            <input
+                                                type="text"
+                                                placeholder="2500"
+                                                prop:value=high
+                                                on:change=set("max")
+                                                class="h-[26px] w-0 min-w-0 flex-1 rounded-[6px] bg-sunken px-2 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            />
+                                        </label>
+                                    }
+                                })}
                                 // Which part a sensor module is: one rusty
                                 // answers for register by register, or the
                                 // channel the firmware declared.
@@ -3648,6 +3856,84 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                         </label>
                                     }
                                 })}
+                                // Which controller is behind the glass, so
+                                // the bytes on the bus can be read as a
+                                // picture. Named by the sheet rather than
+                                // taken from the traffic: the SH1106's window
+                                // sits two columns into its RAM, and a
+                                // decoder that chose for itself would draw
+                                // something nobody could check. Until it is
+                                // named the screen shows what the firmware
+                                // prints to `[rusty:disp]`, as it always has.
+                                {(behaviour == Some(Behaviour::Display)).then(|| {
+                                    let current = part.inst.props.get("panel").cloned().unwrap_or_default();
+                                    let current_panel = rusty_embed::screen::Panel::from_id(&current);
+                                    let has_address = part
+                                        .inst
+                                        .props
+                                        .get("addr")
+                                        .is_some_and(|address| !address.trim().is_empty());
+                                    view! {
+                                        <label
+                                            class="flex items-center gap-2 text-footnote text-label-2"
+                                            title=t!("simulate.screen-panel-hint")
+                                        >
+                                            <span class="shrink-0">{t!("simulate.screen-panel")}</span>
+                                            <select
+                                                on:change=move |event| {
+                                                    checkpoint();
+                                                    let id = event_target_value(&event);
+                                                    let named = rusty_embed::screen::Panel::from_id(&id).is_some();
+                                                    parts.update(|list| {
+                                                        edit::set_prop(list, index, "panel", &id);
+                                                        // The address these modules ship
+                                                        // with, unless the sheet said one.
+                                                        if named && !has_address {
+                                                            edit::set_prop(list, index, "addr", "3c");
+                                                        }
+                                                    });
+                                                    dirty.set(true);
+                                                }
+                                                class="h-[26px] min-w-0 flex-1 rounded-[6px] bg-sunken px-1.5 font-mono text-footnote text-label outline-none ring-1 ring-line focus:ring-rust"
+                                            >
+                                                <option value="" selected=current_panel.is_none()>
+                                                    {t!("simulate.screen-panel-text")}
+                                                </option>
+                                                {rusty_embed::screen::Panel::ALL
+                                                    .into_iter()
+                                                    .map(|panel| {
+                                                        let chosen = current_panel == Some(panel);
+                                                        view! {
+                                                            <option value=panel.id() selected=chosen>
+                                                                {panel.name()}
+                                                            </option>
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                            </select>
+                                        </label>
+                                    }
+                                })}
+                                // A panel nobody has switched on is drawn
+                                // faintly, and here is where it says why: a
+                                // dark screen and a driver that never sent
+                                // `0xAF` look identical on the desk.
+                                {move || {
+                                    let address = parts
+                                        .with(|list| list.get(index).and_then(display_address))?;
+                                    let dark = state.sim.screens.with(|screens| {
+                                        screens.get(&address).is_some_and(|screen| {
+                                            screen.written() && !screen.is_on()
+                                        })
+                                    });
+                                    dark.then(|| {
+                                        view! {
+                                            <p class="text-footnote text-label-3">
+                                                {t!("simulate.screen-off")}
+                                            </p>
+                                        }
+                                    })
+                                }}
                                 {on_a_bus.then(|| {
                                     view! {
                                         <label class="flex items-center gap-2 text-footnote text-label-2">

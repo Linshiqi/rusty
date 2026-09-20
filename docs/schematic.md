@@ -156,10 +156,26 @@ GPIO levels; the rails are fixed; everything else follows:
   joins nothing.
 - **A buzzer** is on by the lamp's rule — its `+` high and its `-` low —
   and is not asked for a series resistor, because a sounder does not want
-  one. **A servo's** horn follows the duty on its signal pin. **A sensor**
-  (`rusty:Sensor`) names, in its value, the channel the firmware declared
-  with `[rusty:sensor]`; the sheet feeds that channel and refuses to invent
-  one the firmware never asked for.
+  one. **A servo's** horn follows the *width* of the pulse on its signal
+  pin when the emulator said how often (`[rusty:pwm] 5=0.075@50`), and the
+  bare fraction when nobody did; `min` and `max` are the pulse widths its
+  ends answer to, 500 and 2500 µs unless the part says otherwise. **A
+  sensor** (`rusty:Sensor`) names, in its value, the channel the firmware
+  declared with `[rusty:sensor]`; the sheet feeds that channel and refuses
+  to invent one the firmware never asked for.
+- **A screen** (`rusty:Display`) shows what its own driver drew, when the
+  part says which controller is behind the glass (`panel`: `ssd1306`,
+  `sh1106`). Nothing is ever read from one of those, so the writes on the
+  bus are the whole of the picture and `rusty_embed::screen` decodes them —
+  the command set, the addressing window, the RAM. The panel is stated
+  rather than taken from the traffic: the SH1106's window sits two columns
+  into its RAM, and a picture two pixels out is one nobody can check.
+  Without it the part shows what the firmware prints to `[rusty:disp]`.
+- **A strip** (`rusty:Strip`) is addressable LEDs on one wire, lit by the
+  bytes RMT clocked out on the GPIO its `DIN` reaches — three bytes a
+  pixel, green first, the WS2812 family's order. Its value is how many are
+  on it (`30`, or `WS2812 x30`); a part number alone is a name and draws
+  the common stick of eight.
 - **A knob, a source, a motor** are *on* whatever GPIO their pin reaches
   through the wires and the resistors (`gpio_of`): the pot's wiper sends
   `P<gpio>=`, the analog source `A<gpio>=`, the motor reads its duty from

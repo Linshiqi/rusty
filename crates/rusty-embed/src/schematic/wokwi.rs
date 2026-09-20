@@ -180,6 +180,12 @@ fn counterpart(part: &Part) -> Result<Counterpart, String> {
                 _ => None,
             })?;
             counterpart.props.insert("addr".into(), address);
+            // And which controller it is, so the bytes the firmware writes
+            // are read as the picture they are. Wokwi's part is an SSD1306
+            // by name, which is the one thing about it rusty need not guess.
+            counterpart
+                .props
+                .insert("panel".into(), crate::screen::Panel::Ssd1306.id().into());
             Ok(counterpart)
         }
         // A sensor rusty answers for register by register, starting where
