@@ -9,6 +9,14 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.52
+
+**Tidy is twelve times faster.** Laying out a crowded sheet took over half
+a second, which for a button with nothing on screen while it works reads
+as a freeze — and a crowded sheet is exactly when you press it. Measured
+on twenty-four wires: 554 ms before, 46 ms now, with the same layout at
+the end of it.
+
 ## v0.6.51
 
 **Re-route one wire.** The wire's right-click menu used to offer
