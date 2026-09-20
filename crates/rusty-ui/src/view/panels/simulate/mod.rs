@@ -478,18 +478,31 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                 Some((address, panel))
             })
             .collect();
-        state.sim.screens.update(|screens| {
-            screens.retain(|address, screen| {
-                declared
-                    .iter()
-                    .any(|(at, panel)| at == address && *panel == screen.panel())
-            });
-            for (address, panel) in declared {
-                screens
-                    .entry(address)
-                    .or_insert_with(|| rusty_embed::screen::Screen::of(panel));
-            }
+        // Asked before it is written: this runs on every change to the
+        // parts, which during a drag is every frame, and `update` wakes
+        // what reads the map whether or not anything changed. What is read
+        // is a screen's pixels, so waking it costs a walk of eight thousand
+        // of them per frame for a part nobody has touched.
+        let changed = state.sim.screens.with_untracked(|screens| {
+            screens.len() != declared.len()
+                || declared.iter().any(|(address, panel)| {
+                    screens.get(address).map(|screen| screen.panel()) != Some(*panel)
+                })
         });
+        if changed {
+            state.sim.screens.update(|screens| {
+                screens.retain(|address, screen| {
+                    declared
+                        .iter()
+                        .any(|(at, panel)| at == address && *panel == screen.panel())
+                });
+                for (address, panel) in declared {
+                    screens
+                        .entry(address)
+                        .or_insert_with(|| rusty_embed::screen::Screen::of(panel));
+                }
+            });
+        }
     });
 
     // Symbols imported during this session join the plan's library at once,
