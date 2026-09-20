@@ -1412,6 +1412,15 @@ jobs:
       # one frequency reports both the same. And it must be on the **pin the
       # matrix routes it to**: a model reporting channel numbers would put
       # the servo's duty on the lamp's pin and look perfectly plausible.
+      #
+      # **`wait=on`, unlike the gates above.** The channel reports only to
+      # somebody who is on it, and this firmware sets its first duty sixty
+      # milliseconds into the guest's life — which is sooner than a Python
+      # process can start QEMU and connect to it. The first run said so
+      # exactly: `[(5, 0.75, …), (6, 0.0798, …)]`, the quarter that comes
+      # first missing entirely. With `wait=on` the machine does not execute
+      # an instruction until the listener is there, which is what the app
+      # itself does and for the same reason.
       - name: A duty reaches the pin at the frequency its timer sets
         shell: python
         run: |
@@ -1462,7 +1471,7 @@ jobs:
                   "-drive", f"file={IMAGE},if=mtd,format=raw",
                   "-serial", f"file:{SERIAL}",
                   "-chardev",
-                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
                   "-global", "driver=esp32.gpio,property=pins,value=pins",
               ],
               stdout=open("ledc-qemu.out", "w"), stderr=subprocess.STDOUT,
@@ -1607,7 +1616,7 @@ jobs:
                   "-drive", f"file={IMAGE},if=mtd,format=raw",
                   "-serial", f"file:{SERIAL}",
                   "-chardev",
-                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
                   "-global", "driver=esp32.gpio,property=pins,value=pins",
               ],
               stdout=open("rmt-qemu.out", "w"), stderr=subprocess.STDOUT,
@@ -1742,7 +1751,7 @@ jobs:
                   "-drive", f"file={IMAGE},if=mtd,format=raw",
                   "-serial", f"file:{SERIAL}",
                   "-chardev",
-                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=off",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
                   "-global", "driver=esp32.gpio,property=pins,value=pins",
               ],
               stdout=open("display-qemu.out", "w"), stderr=subprocess.STDOUT,
