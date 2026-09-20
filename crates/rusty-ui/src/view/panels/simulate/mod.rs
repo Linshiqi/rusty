@@ -3246,22 +3246,62 @@ fn BoardEditor(board: Sheet, library: Vec<Symbol>) -> impl IntoView {
                                 }}
 
                                 // ── the ghost while pulling a new wire ──────
+                                //
+                                // The route the wire will actually take
+                                // once it lands on a pin, computed by the
+                                // same `connection` that will make it — a
+                                // preview that showed a diagonal and then
+                                // drew an orthogonal route somewhere else
+                                // is a preview of nothing. With no pin in
+                                // reach it is the elbow out of the pin,
+                                // which is the shape a schematic wire has
+                                // whatever it ends on.
                                 {move || {
                                     let target = ghost.get()?;
                                     let Some(Drag::Wire { from }) = drag.get() else {
                                         return None;
                                     };
-                                    let start = parts.with(|list| {
+                                    let landing = hover_pin.get();
+                                    let points = parts.with(|list| {
                                         let part = list.get(from.0)?;
                                         let pin = part.pin(&from.1)?;
-                                        Some(pin_point(part, pin))
+                                        let start = pin_point(part, pin);
+                                        let out = pin_out(part, pin);
+                                        if let Some(to) = landing.as_ref() {
+                                            let wire = wires.with(|all| {
+                                                edit::connection(
+                                                    list,
+                                                    all,
+                                                    (from.0, &from.1),
+                                                    (to.0, &to.1),
+                                                )
+                                            });
+                                            if let Some(wire) = wire
+                                                && let Some(ends) = wire_ends(list, &wire)
+                                            {
+                                                return Some(wire_path(&ends, &wire.bends));
+                                            }
+                                        }
+                                        // Out along the pin, then one turn
+                                        // towards the pointer.
+                                        let step = ROW_PITCH;
+                                        let stub = (start.0 + out.0 * step, start.1 + out.1 * step);
+                                        let corner = if out.0.abs() > out.1.abs() {
+                                            (target.0, stub.1)
+                                        } else {
+                                            (stub.0, target.1)
+                                        };
+                                        Some(vec![start, stub, corner, target])
                                     })?;
+                                    let path = points
+                                        .iter()
+                                        .map(|(x, y)| format!("{x},{y}"))
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
                                     Some(view! {
-                                        <line
-                                            x1=start.0
-                                            y1=start.1
-                                            x2=target.0
-                                            y2=target.1
+                                        <polyline
+                                            points=path
+                                            fill="none"
                                             stroke="#e0a838"
                                             stroke-width="1.8"
                                             stroke-dasharray="5 4"

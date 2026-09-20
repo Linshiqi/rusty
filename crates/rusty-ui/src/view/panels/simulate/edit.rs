@@ -266,15 +266,18 @@ pub(super) fn wires_at(
         .collect()
 }
 
-/// Join two pins. Refused — `None` — for a pin to itself, and for a pair
-/// already joined; both are wires that mean nothing. Returns the index of
-/// the wire made.
-pub(super) fn connect(
+/// The wire joining two pins, routed as it will be drawn — or `None` where
+/// joining them means nothing: a pin to itself, and a pair already joined.
+///
+/// This is what the ghost under the pointer shows while the wire is being
+/// pulled, and it is `connect` less the push, so a preview cannot promise
+/// a shape the connection does not deliver.
+pub(super) fn connection(
     list: &[EditPart],
-    wires: &mut Vec<Wire>,
+    wires: &[Wire],
     from: (usize, &str),
     to: (usize, &str),
-) -> Option<usize> {
+) -> Option<Wire> {
     if from == to {
         return None;
     }
@@ -286,20 +289,31 @@ pub(super) fn connect(
     {
         return None;
     }
-    wires.push(Wire {
+    let mut wire = Wire {
         from: a,
         to: b,
         bends: Vec::new(),
-    });
-    // Round the parts rather than through them. A wire with no bends draws
-    // one elbow, which is right when the way is clear and a line through
-    // somebody's display when it is not — and the author can still drag
-    // every bend this leaves.
-    let last = wires.len() - 1;
-    let mut one = [wires[last].clone()];
-    layout::reroute(list, &mut one, false);
-    wires[last] = one.into_iter().next().expect("one wire");
-    Some(last)
+    };
+    // Round the parts rather than through them, and clear of the wires
+    // already there. A wire with no bends draws one elbow, which is right
+    // when the way is clear, a line through somebody's display when it is
+    // not, and a line drawn on top of another wire when that is what the
+    // elbow lands on — and the author can still drag every bend this
+    // leaves.
+    layout::route_beside(list, wires, &mut wire);
+    Some(wire)
+}
+
+/// Join two pins, and answer with the index of the wire made.
+pub(super) fn connect(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    to: (usize, &str),
+) -> Option<usize> {
+    let wire = connection(list, wires, from, to)?;
+    wires.push(wire);
+    Some(wires.len() - 1)
 }
 
 /// A branch off an existing wire: the T-junction, made as a wire to one of

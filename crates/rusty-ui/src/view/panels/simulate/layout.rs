@@ -428,6 +428,39 @@ pub(super) fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) 
     }
 }
 
+/// Route one wire clear of the parts *and* of every wire already on the
+/// sheet — a wire the author has just drawn, and the ghost that shows them
+/// what they are about to get.
+///
+/// `reroute` over a one-wire slice was what this was, and it had no way to
+/// see the rest of the board: a wire drawn by hand could land exactly on
+/// top of one already there, which is two wires drawn as one line.
+pub(super) fn route_beside(parts: &[EditPart], wires: &[Wire], wire: &mut Wire) {
+    let Some(ends) = wire_ends(parts, wire) else {
+        return;
+    };
+    let drawn: Vec<Vec<(f64, f64)>> = wires
+        .iter()
+        .filter_map(|other| {
+            let theirs = wire_ends(parts, other)?;
+            Some(super::geometry::wire_path(&theirs, &other.bends))
+        })
+        .collect();
+    let (obstacles, own) = obstacles_for(&box_index(parts), wire);
+    let [(a, out_a), (b, out_b)] = ends;
+    wire.bends = route(
+        a,
+        out_a,
+        b,
+        out_b,
+        &Around {
+            parts: &obstacles,
+            own: &own,
+            wires: &drawn,
+        },
+    );
+}
+
 /// Every part's two boxes: what it draws, and the body a wire of its own
 /// has to get round.
 fn box_index(parts: &[EditPart]) -> Vec<(String, Rect, Rect)> {

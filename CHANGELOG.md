@@ -9,6 +9,15 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.50
+
+**Pulling a wire shows you the wire.** The dashed line that follows the
+pointer is now the route the wire will actually take, drawn by the same
+code that will make it, with the pin it will land on lit up. It used to be
+a straight diagonal, and what you got on release was an orthogonal route
+somewhere else. A wire you draw also keeps clear of the wires already
+there, instead of occasionally landing exactly on top of one.
+
 ## v0.6.49
 
 **Wires stop being drawn over their own part, and stop stacking on each

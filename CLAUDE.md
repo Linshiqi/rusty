@@ -3836,6 +3836,16 @@ with a rule:
   drawn: two ends at a pin is a dot (the pin is a conductor too — KiCad's
   three-things rule) and so is an end landing on another wire's line, which
   a branch makes and which the pin-only rule drew nothing for.
+- **The ghost under the pointer is the route, computed by the code that
+  will make it.** `edit::connection` is `connect` less the push, so the
+  preview cannot promise a shape the connection does not deliver — a
+  straight diagonal that became an orthogonal route somewhere else on
+  release was a preview of nothing. With no pin in reach it is the elbow
+  out of the pin, which is the shape a schematic wire has whatever it ends
+  on. A new wire is routed by `route_beside`, against the parts *and*
+  every wire already there; `reroute` over a one-wire slice was what it
+  used to be, which could not see the rest of the board and put a hand-drawn
+  wire exactly on top of one that was there.
 
 **The layout is measured against what is *drawn*, not the body.**
 `part_box` is the drawing's bounds; the reference sits a row above it and
