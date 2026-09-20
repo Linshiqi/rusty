@@ -9,6 +9,15 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.51
+
+**Re-route one wire.** The wire's right-click menu used to offer
+*Straighten*, which dropped your bends and left the plain elbow — the
+right line on an empty sheet and a line through somebody's display on a
+full one. It is *Re-route* now: the wire is laid out again round the parts
+and clear of the other wires, which on an empty sheet is the same straight
+line it always was.
+
 ## v0.6.50
 
 **Pulling a wire shows you the wire.** The dashed line that follows the
