@@ -3811,6 +3811,26 @@ with a rule:
   ends — scored so a crossing costs far more than a corner and a corner a
   little more than length. It returns bends, so the author can still drag
   every one of them.
+- **Including its own part.** A wire's own two bodies were left out of the
+  obstacles altogether, on the argument that a wire always starts inside
+  one — so a pin on the far side of its own part routed straight back
+  across it, which on a keypad wired to a header on its right is four
+  lines drawn over its own keys. They are obstacles now, as the *body*
+  (`part_box`) rather than the drawing: the stub already stands a whole row
+  pitch beyond the body, and growing the box to meet it would make the
+  first segment of every wire a crossing.
+- **Four wires out of one edge take four lanes.** Two wires down the same
+  lane are drawn as one line, and a reader cannot see where either goes —
+  which is worse than the crossing that avoiding it costs, and is most of
+  what makes a correct board look like a mess. So a route is scored
+  against the wires already laid down as well: a pixel of *shared* lane
+  costs far more than a crossing, and a crossing is worth a detour of
+  about a hundred pixels and no more. The freedom that pays for it is how
+  far the wire runs straight out of its pin before it turns — one row
+  pitch is the schematic default and gives every wire off one edge the
+  same turning line, so the longer stubs are searched too. Only when the
+  short one leaves a fault, because the search is the square of that list
+  and most wires are the only wire in their corner.
 - **A dot marks a join and never a crossing.** `junctions` reads the drawn
   paths, not the net model, because what a reader needs marked is what is
   drawn: two ends at a pin is a dot (the pin is a conductor too — KiCad's

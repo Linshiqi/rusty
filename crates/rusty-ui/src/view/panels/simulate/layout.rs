@@ -92,6 +92,88 @@ fn length(path: &[(f64, f64)]) -> f64 {
         .sum()
 }
 
+/// What a pixel of lane shared with another wire costs, and what one
+/// crossing of another wire costs.
+///
+/// Sharing is the expensive one, and it is the one nobody thinks of: two
+/// wires down the same lane are drawn as a single line, so a board with
+/// four of them looks like a board with one and the reader cannot see
+/// where any of them goes. A crossing is merely a crossing — every
+/// schematic ever drawn has them — so it is worth a detour of about a
+/// hundred pixels and no more.
+const SHARED_LANE: f64 = 50.0;
+const CROSSED_WIRE: f64 = 120.0;
+
+/// How much of this path runs *along* another wire rather than across it.
+fn shared(path: &[(f64, f64)], others: &[Vec<(f64, f64)>]) -> f64 {
+    let near = 1.0;
+    let mut along = 0.0;
+    for pair in path.windows(2) {
+        let vertical = (pair[0].0 - pair[1].0).abs() < near;
+        if !vertical && (pair[0].1 - pair[1].1).abs() >= near {
+            continue;
+        }
+        // The segment as (lane, from..to) along its own axis.
+        let lane = if vertical { pair[0].0 } else { pair[0].1 };
+        let (from, to) = if vertical {
+            (pair[0].1.min(pair[1].1), pair[0].1.max(pair[1].1))
+        } else {
+            (pair[0].0.min(pair[1].0), pair[0].0.max(pair[1].0))
+        };
+        for theirs in others {
+            for other in theirs.windows(2) {
+                let theirs_vertical = (other[0].0 - other[1].0).abs() < near;
+                if theirs_vertical != vertical {
+                    continue;
+                }
+                let their_lane = if vertical { other[0].0 } else { other[0].1 };
+                if (their_lane - lane).abs() >= near {
+                    continue;
+                }
+                let (a, b) = if vertical {
+                    (other[0].1.min(other[1].1), other[0].1.max(other[1].1))
+                } else {
+                    (other[0].0.min(other[1].0), other[0].0.max(other[1].0))
+                };
+                along += (to.min(b) - from.max(a)).max(0.0);
+            }
+        }
+    }
+    along
+}
+
+/// How many other wires this path crosses — perpendicular segments that
+/// meet away from either one's ends, which is the crossing a reader sees.
+fn met(path: &[(f64, f64)], others: &[Vec<(f64, f64)>]) -> usize {
+    let near = 1.0;
+    let mut count = 0;
+    for pair in path.windows(2) {
+        for theirs in others {
+            for other in theirs.windows(2) {
+                let mine_vertical = (pair[0].0 - pair[1].0).abs() < near;
+                let theirs_vertical = (other[0].0 - other[1].0).abs() < near;
+                if mine_vertical == theirs_vertical {
+                    continue;
+                }
+                let (v, h) = if mine_vertical {
+                    (pair, other)
+                } else {
+                    (other, pair)
+                };
+                let x = v[0].0;
+                let y = h[0].1;
+                let within = |from: f64, to: f64, at: f64| {
+                    at > from.min(to) + near && at < from.max(to) - near
+                };
+                if within(v[0].1, v[1].1, y) && within(h[0].0, h[1].0, x) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
 /// The free point nearest `wanted` where a part of this size fits.
 ///
 /// Searched outward in rings on the grid rather than pushed in one
@@ -154,14 +236,48 @@ pub(super) fn taken_boxes(parts: &[EditPart], except: Option<usize>) -> Vec<Rect
         .collect()
 }
 
+/// What a route has to get past.
+///
+/// Three kinds of thing, because they cost different amounts to hit: a
+/// body is a wall, a wire shared lane-for-lane is two lines drawn as one,
+/// and a wire merely crossed is what every schematic has some of.
+pub(super) struct Around<'a> {
+    /// Every *other* part's drawn box.
+    pub parts: &'a [Rect],
+    /// The bodies of the wire's own two parts, without the label margin.
+    ///
+    /// A wire whose pin is on the far side of its own part has to go round
+    /// it like anything else — a keypad wired to a header on its right
+    /// through pins on its left drew four lines straight across its own
+    /// keys otherwise. Excluded entirely, which is what this was, every
+    /// such route reads as clear. The margin is left off because the stub
+    /// already stands a whole row pitch beyond the body, and growing the
+    /// box to meet it would make the first segment of every wire a
+    /// crossing.
+    pub own: &'a [Rect],
+    /// The wires already laid down, as drawn.
+    pub wires: &'a [Vec<(f64, f64)>],
+}
+
+/// One candidate route: what it costs, and how much of that cost is a
+/// fault rather than a preference. A route with no faults ends the search.
+struct Scored {
+    cost: f64,
+    faults: f64,
+    path: Vec<(f64, f64)>,
+}
+
 /// An orthogonal route between two pins that goes **round** what is in the
 /// way, as the interior bends a wire carries.
 ///
 /// The shape is a schematic's: out of each pin along the pin's own
 /// direction, then at most two turns. Every candidate is scored the same
-/// way — a crossing costs far more than a corner, and a corner a little
-/// more than length — so a clear L beats a clear Z, and a Z that misses the
-/// display beats an L that goes through it.
+/// way — a body crossed costs far more than a wire shared, a wire shared
+/// more than a wire crossed, a crossing more than a corner, and a corner a
+/// little more than length — so a clear L beats a clear Z, a Z that misses
+/// the display beats an L that goes through it, and four wires leaving one
+/// part for four pins in a row fan out into four lanes instead of stacking
+/// into one line.
 ///
 /// The ends themselves are not returned: a wire's ends are its pins, and
 /// the caller already has them.
@@ -170,48 +286,98 @@ pub(super) fn route(
     out_a: (f64, f64),
     b: (f64, f64),
     out_b: (f64, f64),
-    obstacles: &[Rect],
+    around: &Around,
 ) -> Vec<(f64, f64)> {
     let step = ROW_PITCH;
-    let p1 = (a.0 + out_a.0 * step, a.1 + out_a.1 * step);
-    let p2 = (b.0 + out_b.0 * step, b.1 + out_b.1 * step);
-    let clear: Vec<Rect> = obstacles
+    let clear: Vec<Rect> = around
+        .parts
         .iter()
         .map(|r| grown(*r, WIRE_CLEARANCE))
+        .chain(around.own.iter().copied())
         .collect();
 
-    let mut candidates: Vec<Vec<(f64, f64)>> = Vec::new();
-    // The two Ls.
-    candidates.push(vec![p1, (p2.0, p1.1), p2]);
-    candidates.push(vec![p1, (p1.0, p2.1), p2]);
-    // And the Zs, on lanes between and a little beyond the two ends: a
-    // channel the parts leave free is usually one of these.
-    let lanes = |from: f64, to: f64| {
-        let mut out = vec![(from + to) / 2.0];
-        for k in 1..=6 {
-            let reach = ROW_PITCH * f64::from(k);
-            out.push(from.min(to) - reach);
-            out.push(from.max(to) + reach);
-            out.push((from + to) / 2.0 + reach);
-            out.push((from + to) / 2.0 - reach);
+    // The shapes between two stubs: the two Ls, and the Zs on lanes
+    // between and a little beyond the two ends — a channel the parts leave
+    // free is usually one of these.
+    let shapes = |p1: (f64, f64), p2: (f64, f64)| {
+        let mut candidates: Vec<Vec<(f64, f64)>> = Vec::new();
+        candidates.push(vec![p1, (p2.0, p1.1), p2]);
+        candidates.push(vec![p1, (p1.0, p2.1), p2]);
+        let lanes = |from: f64, to: f64| {
+            let mut out = vec![(from + to) / 2.0];
+            for k in 1..=6 {
+                let reach = ROW_PITCH * f64::from(k);
+                out.push(from.min(to) - reach);
+                out.push(from.max(to) + reach);
+                out.push((from + to) / 2.0 + reach);
+                out.push((from + to) / 2.0 - reach);
+            }
+            out
+        };
+        for x in lanes(p1.0, p2.0) {
+            candidates.push(vec![p1, (x, p1.1), (x, p2.1), p2]);
         }
-        out
+        for y in lanes(p1.1, p2.1) {
+            candidates.push(vec![p1, (p1.0, y), (p2.0, y), p2]);
+        }
+        candidates
     };
-    for x in lanes(p1.0, p2.0) {
-        candidates.push(vec![p1, (x, p1.1), (x, p2.1), p2]);
-    }
-    for y in lanes(p1.1, p2.1) {
-        candidates.push(vec![p1, (p1.0, y), (p2.0, y), p2]);
-    }
 
+    // What is wrong with a route, and what merely costs: a body crossed, a
+    // lane shared and a wire crossed are faults, and a route with none of
+    // them is finished being searched for.
+    let faults = |path: &Vec<(f64, f64)>| {
+        crossings(path, &clear) as f64 * 10_000.0
+            + shared(path, around.wires) * SHARED_LANE
+            + met(path, around.wires) as f64 * CROSSED_WIRE
+    };
     let score = |path: &Vec<(f64, f64)>| {
         let corners = path.len().saturating_sub(2) as f64;
-        crossings(path, &clear) as f64 * 10_000.0 + length(path) + corners * ROW_PITCH * 0.5
+        faults(path) + length(path) + corners * ROW_PITCH * 0.5
     };
-    let best = candidates
-        .into_iter()
-        .min_by(|x, y| score(x).total_cmp(&score(y)))
-        .unwrap_or_else(|| vec![p1, p2]);
+
+    // How far the wire runs straight out of each pin before it turns.
+    //
+    // One row pitch is the schematic default, and it is what every wire
+    // used to get. The longer ones are the lanes a *fan* needs: four wires
+    // leaving one edge for four pins in a row turn at the same x if they
+    // all turn after one pitch, and four lines down one lane are drawn as
+    // one. They are searched only when the short stub leaves a fault,
+    // because the search is the square of this list and most wires are the
+    // only wire in their corner.
+    const REACHES: [f64; 6] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let mut best: Option<Scored> = None;
+    for widen in [false, true] {
+        let reaches: &[f64] = if widen { &REACHES } else { &REACHES[..1] };
+        for out in reaches {
+            for back in reaches {
+                let p1 = (a.0 + out_a.0 * step * out, a.1 + out_a.1 * step * out);
+                let p2 = (b.0 + out_b.0 * step * back, b.1 + out_b.1 * step * back);
+                for path in shapes(p1, p2) {
+                    let found = Scored {
+                        cost: score(&path),
+                        faults: faults(&path),
+                        path,
+                    };
+                    if best.as_ref().is_none_or(|had| found.cost < had.cost) {
+                        best = Some(found);
+                    }
+                }
+            }
+        }
+        if best.as_ref().is_some_and(|found| found.faults == 0.0) {
+            break;
+        }
+    }
+    let best = best.map_or_else(
+        || {
+            vec![
+                (a.0 + out_a.0 * step, a.1 + out_a.1 * step),
+                (b.0 + out_b.0 * step, b.1 + out_b.1 * step),
+            ]
+        },
+        |found| found.path,
+    );
     // Duplicate points are what an L with a shared coordinate produces, and
     // a bend on top of another is a grab handle nobody can pick apart.
     let mut bends: Vec<(f64, f64)> = Vec::new();
@@ -232,28 +398,59 @@ pub(super) fn route(
 /// has an opinion about, and rerouting it would throw that away. `arrange`
 /// is the command that clears them all first.
 pub(super) fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) {
-    let boxes: Vec<(String, Rect)> = parts
-        .iter()
-        .map(|p| (p.inst.reference.clone(), drawn_box(p)))
-        .collect();
+    let boxes = box_index(parts);
+    // What is already on the sheet, so the next wire can keep off it.
+    // Grown one wire at a time in the order they are stored, which is why
+    // the answer is the same every time this runs.
+    let mut drawn: Vec<Vec<(f64, f64)>> = Vec::new();
     for wire in wires.iter_mut() {
-        if only_empty && !wire.bends.is_empty() {
-            continue;
-        }
         let Some(ends) = wire_ends(parts, wire) else {
             continue;
         };
-        // Its own two parts are not obstacles: a wire always starts and
-        // ends inside one, and treating those as walls would make every
-        // route look blocked.
-        let obstacles: Vec<Rect> = boxes
-            .iter()
-            .filter(|(reference, _)| *reference != wire.from.part && *reference != wire.to.part)
-            .map(|(_, r)| *r)
-            .collect();
+        if only_empty && !wire.bends.is_empty() {
+            drawn.push(super::geometry::wire_path(&ends, &wire.bends));
+            continue;
+        }
+        let (obstacles, own) = obstacles_for(&boxes, wire);
         let [(a, out_a), (b, out_b)] = ends;
-        wire.bends = route(a, out_a, b, out_b, &obstacles);
+        wire.bends = route(
+            a,
+            out_a,
+            b,
+            out_b,
+            &Around {
+                parts: &obstacles,
+                own: &own,
+                wires: &drawn,
+            },
+        );
+        drawn.push(super::geometry::wire_path(&ends, &wire.bends));
     }
+}
+
+/// Every part's two boxes: what it draws, and the body a wire of its own
+/// has to get round.
+fn box_index(parts: &[EditPart]) -> Vec<(String, Rect, Rect)> {
+    parts
+        .iter()
+        .map(|p| (p.inst.reference.clone(), drawn_box(p), part_box(p)))
+        .collect()
+}
+
+/// This wire's walls: everybody else's drawing, and its own two bodies.
+fn obstacles_for(boxes: &[(String, Rect, Rect)], wire: &Wire) -> (Vec<Rect>, Vec<Rect>) {
+    let mine = |reference: &str| reference == wire.from.part || reference == wire.to.part;
+    let others = boxes
+        .iter()
+        .filter(|(reference, _, _)| !mine(reference))
+        .map(|(_, drawn, _)| *drawn)
+        .collect();
+    let own = boxes
+        .iter()
+        .filter(|(reference, _, _)| mine(reference))
+        .map(|(_, _, body)| *body)
+        .collect();
+    (others, own)
 }
 
 /// Re-route the wires a move has *broken* — the ones whose path now runs
@@ -266,33 +463,37 @@ pub(super) fn reroute(parts: &[EditPart], wires: &mut [Wire], only_empty: bool) 
 /// this whole module is about. So the test is the drawing, not who drew it:
 /// a route that crosses nothing is never touched.
 pub(super) fn reroute_broken(parts: &[EditPart], wires: &mut [Wire]) -> usize {
-    let boxes: Vec<(String, Rect)> = parts
-        .iter()
-        .map(|p| (p.inst.reference.clone(), drawn_box(p)))
-        .collect();
+    let boxes = box_index(parts);
     let mut fixed = 0;
     for wire in wires.iter_mut() {
         let Some(ends) = wire_ends(parts, wire) else {
             continue;
         };
-        let obstacles: Vec<Rect> = boxes
-            .iter()
-            .filter(|(reference, _)| *reference != wire.from.part && *reference != wire.to.part)
-            .map(|(_, r)| *r)
-            .collect();
+        let (obstacles, own) = obstacles_for(&boxes, wire);
+        let walls: Vec<Rect> = obstacles.iter().chain(own.iter()).copied().collect();
         let drawn = super::geometry::wire_path(&ends, &wire.bends);
-        if crossings(&drawn, &obstacles) == 0 {
+        if crossings(&drawn, &walls) == 0 {
             continue;
         }
         let [(a, out_a), (b, out_b)] = ends;
-        let around = route(a, out_a, b, out_b, &obstacles);
+        let around = route(
+            a,
+            out_a,
+            b,
+            out_b,
+            &Around {
+                parts: &obstacles,
+                own: &own,
+                wires: &[],
+            },
+        );
         let mut path = vec![a];
         path.extend(around.iter().copied());
         path.push(b);
         // Only if the new one is actually better: a wire between two parts
         // with something unavoidably in the way keeps the author's own
         // route rather than being shuffled into another bad one.
-        if crossings(&path, &obstacles) < crossings(&drawn, &obstacles) {
+        if crossings(&path, &walls) < crossings(&drawn, &walls) {
             wire.bends = around;
             fixed += 1;
         }
@@ -532,6 +733,15 @@ mod tests {
         (x, y, x + w, y + h)
     }
 
+    /// An empty sheet with these bodies on it: the first wire's view.
+    fn clear_sheet(parts: &[Rect]) -> Around<'_> {
+        Around {
+            parts,
+            own: &[],
+            wires: &[],
+        }
+    }
+
     /// A part dropped where another one is goes *beside* it, on the grid,
     /// and as near as it can be — not into the distance and not on top.
     #[test]
@@ -571,13 +781,13 @@ mod tests {
         let a = (0.0, 0.0);
         let b = (200.0, 0.0);
         let wall = rect(80.0, -60.0, 40.0, 120.0);
-        let straight = route(a, (1.0, 0.0), b, (-1.0, 0.0), &[]);
+        let straight = route(a, (1.0, 0.0), b, (-1.0, 0.0), &clear_sheet(&[]));
         let mut path = vec![a];
         path.extend(straight.iter().copied());
         path.push(b);
         assert_eq!(crossings(&path, &[wall]), 1, "the clear route is straight");
 
-        let around = route(a, (1.0, 0.0), b, (-1.0, 0.0), &[wall]);
+        let around = route(a, (1.0, 0.0), b, (-1.0, 0.0), &clear_sheet(&[wall]));
         let mut path = vec![a];
         path.extend(around.iter().copied());
         path.push(b);
@@ -593,6 +803,115 @@ mod tests {
             assert!(
                 (pair[0].0 - pair[1].0).abs() < 0.01 || (pair[0].1 - pair[1].1).abs() < 0.01,
                 "{pair:?} is a diagonal"
+            );
+        }
+    }
+
+    /// A pin on the far side of its own part is wired *round* the part.
+    ///
+    /// The cheapest elbow goes straight back across the body it just left,
+    /// which on a keypad is four lines drawn over its own keys. Its own
+    /// two parts used to be left out of the obstacles altogether, so every
+    /// such route scored as clear.
+    #[test]
+    fn a_wire_goes_round_its_own_part_as_well() {
+        let body = rect(-60.0, -40.0, 120.0, 80.0);
+        // The pin is on the body's left edge and the target is far to the
+        // right, so the L with no corners runs the length of the body.
+        let a = (-60.0, 0.0);
+        let b = (400.0, 0.0);
+        let path_of = |bends: Vec<(f64, f64)>| {
+            let mut path = vec![a];
+            path.extend(bends);
+            path.push(b);
+            path
+        };
+        let through = path_of(route(a, (-1.0, 0.0), b, (-1.0, 0.0), &clear_sheet(&[])));
+        assert!(
+            crossings(&through, &[body]) > 0,
+            "the fixture is wrong: {through:?} misses the body it should cut through"
+        );
+
+        let around = path_of(route(
+            a,
+            (-1.0, 0.0),
+            b,
+            (-1.0, 0.0),
+            &Around {
+                parts: &[],
+                own: &[body],
+                wires: &[],
+            },
+        ));
+        assert_eq!(
+            crossings(&around, &[body]),
+            0,
+            "{around:?} still runs across its own part"
+        );
+    }
+
+    /// Four wires from one part to four pins in a row take four lanes.
+    ///
+    /// Down one lane they are drawn as a single line, and a reader cannot
+    /// see where any of the four goes — which is worse than the crossing
+    /// that avoiding it sometimes costs, and is the thing that makes a
+    /// correct board look like a mess.
+    #[test]
+    fn wires_leaving_one_part_fan_out_instead_of_stacking() {
+        let parts = vec![dip("KP1", 0.0, 0.0), dip("J1", 420.0, 0.0)];
+        // The drawing decides which side a pin is on, so the fixture asks
+        // it rather than assuming a numbering.
+        let left_pins = |part: &EditPart| {
+            let middle = {
+                let b = part_box(part);
+                (b.0 + b.2) / 2.0
+            };
+            let mut names: Vec<(String, f64)> = part
+                .symbol
+                .as_ref()
+                .unwrap()
+                .pins
+                .iter()
+                .filter_map(|pin| {
+                    let at = pin_point(part, pin);
+                    (at.0 < middle).then(|| (pin.number.clone(), at.1))
+                })
+                .collect();
+            names.sort_by(|a, b| a.1.total_cmp(&b.1));
+            names
+        };
+        let (from, to) = (left_pins(&parts[0]), left_pins(&parts[1]));
+        assert_eq!(from.len(), 4, "the fixture should draw four pins a side");
+        let mut wires: Vec<Wire> = from
+            .iter()
+            .zip(to.iter())
+            .map(|((one, _), (two, _))| wire(&format!("KP1.{one}"), &format!("J1.{two}")))
+            .collect();
+        reroute(&parts, &mut wires, false);
+
+        let paths: Vec<Vec<(f64, f64)>> = wires
+            .iter()
+            .map(|w| {
+                let ends = wire_ends(&parts, w).unwrap();
+                super::super::geometry::wire_path(&ends, &w.bends)
+            })
+            .collect();
+        for (index, one) in paths.iter().enumerate() {
+            for (other, two) in paths.iter().enumerate() {
+                if index >= other {
+                    continue;
+                }
+                let along = shared(one, std::slice::from_ref(two));
+                assert!(
+                    along < 1.0,
+                    "wires {index} and {other} run {along} pixels down the same lane\
+                     \n  {one:?}\n  {two:?}"
+                );
+            }
+            assert_eq!(
+                crossings(one, &[part_box(&parts[0]), part_box(&parts[1])]),
+                0,
+                "wire {index} runs through a body: {one:?}"
             );
         }
     }
@@ -730,6 +1049,28 @@ mod tests {
         EditPart {
             inst: instance(reference, x, y),
             symbol: Some(symbol("R", &[("1", -3.81, 0.0), ("2", 3.81, 0.0)])),
+        }
+    }
+
+    /// Eight pins, which a part nobody has heard of is drawn with four down
+    /// each side — a keypad's shape, and the one that puts a pin on the far
+    /// side of its own body from where its wire has to go.
+    fn dip(reference: &str, x: f64, y: f64) -> EditPart {
+        EditPart {
+            inst: instance(reference, x, y),
+            symbol: Some(symbol(
+                "U",
+                &[
+                    ("1", -10.0, 7.62),
+                    ("2", -10.0, 2.54),
+                    ("3", -10.0, -2.54),
+                    ("4", -10.0, -7.62),
+                    ("5", 10.0, -7.62),
+                    ("6", 10.0, -2.54),
+                    ("7", 10.0, 2.54),
+                    ("8", 10.0, 7.62),
+                ],
+            )),
         }
     }
 

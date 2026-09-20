@@ -9,6 +9,17 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.49
+
+**Wires stop being drawn over their own part, and stop stacking on each
+other.** A pin on the far side of its own part — a keypad's rows, wired to
+a header on its right — was routed straight back across the part, so four
+wires ran over its own keys. And wires leaving one edge for a row of pins
+all turned at the same place, which draws four lines as one line and
+leaves no way to see where any of them goes. Both are gone: Tidy, a new
+wire and a part dropped on a wire all route round the part they leave and
+fan into a lane each.
+
 ## v0.6.48
 
 **A matrix keypad works.** There is a keypad part on the board sheet —
