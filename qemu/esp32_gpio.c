@@ -636,11 +636,28 @@ static void esp32_gpio_write(void *opaque, hwaddr addr,
              * because a pad sent to a peripheral is one GPIO must stop
              * speaking for. */
             int pin = (addr - s->func_out_reg) / 4;
-            uint32_t before = s->func_out[pin];
+            bool was_plain = esp32_gpio_is_plain(s, pin);
 
             s->func_out[pin] = word;
-            if (before != word) {
-                esp32_gpio_report(s, 1ULL << pin);
+            /*
+             * **Who speaks for the pad changed, not what the pad is doing.**
+             * A routing write is not a level change, and reporting one as
+             * though it were puts a repeat in the pin's account: esp-hal
+             * writes this register while configuring an ordinary output, so
+             * every `Output::new` said the pin's level a second time and
+             * blinky's GPIO0 came back as 0, 0, 1, 0, 1 … — which is what
+             * gate 4 rejects, and rightly, since a model that repeats a
+             * level is one that could be missing an edge.
+             *
+             * So the report is for the one transition that needs it: a pad
+             * coming *back* to GPIO after a peripheral had it, where GPIO
+             * has said nothing about it in the meantime. The other way
+             * round needs no line here — the peripheral says its own.
+             */
+            if (was_plain != esp32_gpio_is_plain(s, pin)) {
+                if (!was_plain) {
+                    esp32_gpio_report(s, 1ULL << pin);
+                }
                 esp32_ledc_say_all(s);
             }
         }
