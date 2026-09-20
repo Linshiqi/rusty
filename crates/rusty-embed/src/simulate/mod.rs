@@ -525,12 +525,26 @@ const ADC_MODEL_MARKER: &[u8] = b"[rusty:adc@";
 /// for three models is the proxy check again.
 const I2C_MODEL_MARKER: &[u8] = b"[rusty:i2c@";
 const SPI_MODEL_MARKER: &[u8] = b"[rusty:spi@";
+/// And the duty timer's and the strip channel's, which arrived a
+/// generation later. **Every model this version drives is asked for by
+/// name**, one marker each: a build that has four of the six answers every
+/// question about the four and hangs the firmware inside `wait()` or
+/// leaves a servo still, which is the failure an "it has the peripherals"
+/// proxy would wave through.
+const PWM_MODEL_MARKER: &[u8] = b"[rusty:pwm@";
+const RMT_MODEL_MARKER: &[u8] = b"[rusty:rmt@";
 
-/// Does this emulator model the converter and both buses?
+/// Does this emulator model the converter, both buses, LEDC and RMT?
 pub fn has_peripherals(qemu: &Path) -> bool {
-    [ADC_MODEL_MARKER, I2C_MODEL_MARKER, SPI_MODEL_MARKER]
-        .into_iter()
-        .all(|marker| carries(qemu, marker))
+    [
+        ADC_MODEL_MARKER,
+        I2C_MODEL_MARKER,
+        SPI_MODEL_MARKER,
+        PWM_MODEL_MARKER,
+        RMT_MODEL_MARKER,
+    ]
+    .into_iter()
+    .all(|marker| carries(qemu, marker))
 }
 
 /// Is this rusty's current build — every model this version of rusty
@@ -797,10 +811,16 @@ mod tests {
             std::fs::write(&path, contents).unwrap();
             path
         };
-        let early = write(&dir.path().join("data"), b"....[rusty:gpio@....");
+        // Pins and the converter and the buses, and *not* the duty timer
+        // or the strip channel: an emulator a generation behind this
+        // rusty, which is what a data directory holds after an upgrade.
+        let early = write(
+            &dir.path().join("data"),
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@",
+        );
         let current = write(
             &dir.path().join("bundle"),
-            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@",
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@",
         );
         let both = Machine {
             tools: Some(dir.path().join("data")),

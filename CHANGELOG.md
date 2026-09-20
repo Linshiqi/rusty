@@ -41,8 +41,10 @@ use and reading one as the other is forty degrees out at each end.
 interrupts, the ADC, I2C, SPI2, LEDC and RMT. Each of the last two used to
 be a firmware that hung in a driver call with nothing on screen to say why.
 
-Requires rusty's emulator `qemu-v5`, which the installer carries; an older
-copy is offered an upgrade from the Simulate panel.
+Requires rusty's emulator `qemu-v5`, which the installer carries. An older
+copy — one that models the pins and the buses but not these two — is
+recognised as older and offered an upgrade from the Simulate panel, rather
+than quietly leaving a servo still and a strip dark.
 
 ## v0.6.46
 
