@@ -52,6 +52,17 @@
 //!   where the silicon does not. Either alone is an edge the pin reports
 //!   and no handler hears. `say_state` prints every link of that chain, so
 //!   a run that counts no edges says which one was open.
+//! - **The clock.** An Embassy application's time on this part is a
+//!   one-shot TIMG alarm whose handler wakes a task by raising `FROM_CPU0`,
+//!   and the task sets the next alarm — a chain in which every link waits
+//!   on the one before. Upstream's timer model gated its line on
+//!   `INT_ENA`, which on the ESP32 does nothing and esp-hal never writes,
+//!   so the first alarm never fired; and its interrupt matrix drove a CPU
+//!   line from whichever source changed last, so the alarm clearing itself
+//!   lowered the line under the switch it had just raised — both sources
+//!   sit on one line, since esp-hal maps them by priority — and the next
+//!   alarm was never set. The probe is that chain, so either fault stops
+//!   both counts where they stand.
 //!
 //! The pins avoid what this part has already spent: 6..11 are the flash,
 //! 1 and 3 the console, 34..39 input-only. GPIO4, 13, 32, 27 and 23 are
@@ -73,16 +84,19 @@ use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{AnyPin, Event, Input, InputConfig, Io, Level, Pull};
+use esp_hal::handler;
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
+use esp_hal::interrupt::software::{SoftwareInterrupt, SoftwareInterruptControl};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
 use esp_hal::ledc::{HighSpeed, LSGlobalClkSource, Ledc, LowSpeed};
-use esp_hal::handler;
 use esp_hal::main;
 use esp_hal::rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator};
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::{Duration, Rate};
+use esp_hal::timer::OneShotTimer;
+use esp_hal::timer::timg::TimerGroup;
 use esp_println::println;
 
 /// How many times to ask whether a conversion has finished before calling
@@ -122,6 +136,52 @@ fn on_edge() {
         }
         EDGES.store(EDGES.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
     });
+}
+
+/// The alarm and the software interrupt it raises — what an Embassy
+/// application's clock is made of on this part: a one-shot TIMG alarm, and
+/// `FROM_CPU0` to run the task it woke. Held so each handler can reach the
+/// other's source as well as its own.
+static TIMER: Mutex<RefCell<Option<OneShotTimer<'static, esp_hal::Blocking>>>> =
+    Mutex::new(RefCell::new(None));
+static SWITCH: Mutex<RefCell<Option<SoftwareInterrupt<'static, 0>>>> =
+    Mutex::new(RefCell::new(None));
+static TICKS: AtomicU32 = AtomicU32::new(0);
+static SWITCHES: AtomicU32 = AtomicU32::new(0);
+
+/// The alarm wakes the task and *then* clears itself, in that order: for
+/// the moment between the two both sources are high on one CPU line, and
+/// the line has to stay up when the alarm's half of it goes down. A matrix
+/// that drove the line from the last source to change lowers it there, the
+/// switch is never taken, and nothing sets the next alarm.
+#[handler]
+fn on_tick() {
+    critical_section::with(|cs| {
+        if let Some(switch) = SWITCH.borrow_ref_mut(cs).as_mut() {
+            switch.raise();
+        }
+        if let Some(timer) = TIMER.borrow_ref_mut(cs).as_mut() {
+            timer.clear_interrupt();
+        }
+    });
+    TICKS.store(TICKS.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+}
+
+/// The task: put the switch away and set the next alarm, as an executor
+/// does once the task it ran says when it next wants to wake.
+#[handler]
+fn on_switch() {
+    critical_section::with(|cs| {
+        if let Some(switch) = SWITCH.borrow_ref_mut(cs).as_mut() {
+            switch.reset();
+        }
+        if let Some(timer) = TIMER.borrow_ref_mut(cs).as_mut() {
+            timer
+                .schedule(Duration::from_millis(10))
+                .expect("a 10 ms alarm");
+        }
+    });
+    SWITCHES.store(SWITCHES.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
 }
 
 /// Every link of the chain a GPIO interrupt crosses on this part, in one
@@ -220,6 +280,26 @@ fn main() -> ! {
     critical_section::with(|cs| {
         listening.listen(Event::AnyEdge);
         LISTENING.borrow_ref_mut(cs).replace(listening);
+    });
+
+    // The clock: the first alarm of the chain. On this part esp-hal enables
+    // the alarm's interrupt through the timer's own LEVEL_INT_EN and never
+    // writes INT_ENA, which upstream's model gated on. Set inside the
+    // critical section, so the alarm cannot fire before its handler can
+    // reach it to clear it.
+    let control = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    let mut switch = control.software_interrupt0;
+    switch.set_interrupt_handler(on_switch);
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let mut timer = OneShotTimer::new(timg0.timer0);
+    timer.set_interrupt_handler(on_tick);
+    timer.listen();
+    critical_section::with(|cs| {
+        SWITCH.borrow_ref_mut(cs).replace(switch);
+        timer
+            .schedule(Duration::from_millis(10))
+            .expect("a 10 ms alarm");
+        TIMER.borrow_ref_mut(cs).replace(timer);
     });
 
     // Up, down, up, down, up. Alternating on purpose: a model that answered
@@ -379,6 +459,13 @@ fn main() -> ! {
             println!("[esp32] edges on 17: {edges}");
             edges_said = edges;
         }
+        // Every round: a count that stopped is the finding, and a line
+        // printed only on change would say nothing when it did.
+        println!(
+            "[esp32] timer {} switch {}",
+            TICKS.load(Ordering::Relaxed),
+            SWITCHES.load(Ordering::Relaxed)
+        );
         let latch = peek(reg::STATUS);
         if latch != latch_said {
             say_state("latched");
@@ -394,7 +481,10 @@ fn main() -> ! {
             Ok(()) => {
                 let mut out = [0u8; 16];
                 let n = hex(&who, &mut out);
-                println!("[esp32] i2c 68:75 -> {}", core::str::from_utf8(&out[..n]).unwrap());
+                println!(
+                    "[esp32] i2c 68:75 -> {}",
+                    core::str::from_utf8(&out[..n]).unwrap()
+                );
             }
             Err(error) => println!("[esp32] the bus refused: {error:?}"),
         }
@@ -404,7 +494,10 @@ fn main() -> ! {
             Ok(()) => {
                 let mut out = [0u8; 16];
                 let n = hex(&answer, &mut out);
-                println!("[esp32] spi read {}", core::str::from_utf8(&out[..n]).unwrap());
+                println!(
+                    "[esp32] spi read {}",
+                    core::str::from_utf8(&out[..n]).unwrap()
+                );
             }
             Err(error) => println!("[esp32] the wire refused: {error:?}"),
         }
@@ -412,9 +505,10 @@ fn main() -> ! {
         // Twenty-four bits, one LED's worth, green first as the WS2812
         // family sends it.
         let mut codes = [PulseCode::end_marker(); 25];
-        for (slot, bit) in codes.iter_mut().zip(
-            (0..24).map(|i| (0x10_00_20u32 >> (23 - i)) & 1 == 1),
-        ) {
+        for (slot, bit) in codes
+            .iter_mut()
+            .zip((0..24).map(|i| (0x10_00_20u32 >> (23 - i)) & 1 == 1))
+        {
             *slot = code(bit);
         }
         codes[24] = PulseCode::end_marker();

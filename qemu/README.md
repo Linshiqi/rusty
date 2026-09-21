@@ -76,15 +76,33 @@ ones.
   firmware's side, identical to a line that was never raised. That is what
   gate 6 caught, with the model's own witness insisting it had raised it.
 
-**The ESP32 had both holes and a third, and all three are filled.** Its
-status words are DPORT's — three at 0xec, which upstream reads as zero — and
-`hw/xtensa/esp32_intc.c` keeps no level state to answer them from. So the
-eighth region of this device answers them for the one source it raises, its
-own, which the machine tells it (`ETS_GPIO_INTR_SOURCE`) rather than this
-file writing the number down; every other bit reads zero, which is what it
-read before, so no source that worked stops working.
+**The ESP32 had both holes and three more, and all five are filled.** Its
+status words are DPORT's — three per core at 0xec, which upstream reads as
+zero — and `hw/xtensa/esp32_intc.c` kept no level state to answer them
+from. It keeps every source's level now (`rusty_levels`), and a second
+region of the matrix, mapped over DPORT's window at 0xec, answers the words
+for both cores and for every source. The first answer to this was narrower
+— a region of *this* device answering for GPIO's source alone — and it made
+an edge reach its handler while a timer on the same part never did.
 
-The third hole was not an interrupt model at all. With the status words
+The matrix also drove each CPU line from whichever source had changed last.
+Right under ESP-IDF, which gives every source a line of its own; wrong under
+esp-hal, which maps sources onto a line by priority, so a TIMG alarm and
+`FROM_CPU0` share one. A timer handler that wakes a task by raising the
+software interrupt and *then* clears its own source lowered the line under
+the switch it had just raised; the switch was never taken, nothing set the
+next alarm, and an Embassy application's clock stopped at its first tick.
+A line is the OR of every source mapped to it now, recomputed on every
+change of a level and every write to the map.
+
+And the ESP32's timer group enables a timer's level interrupt through that
+timer's own `LEVEL_INT_EN` — `INT_ENA` does nothing for it on this part,
+and esp-hal never writes it there — while upstream's model gated the line on
+`INT_ENA`: `INT_RAW` set, the line down, the alarm silent. The model raises
+the line on `LEVEL_INT_EN` and reports the raw bit in `INT_ST` the same way
+(`hw/timer/esp32_timg.c`).
+
+The last hole was not an interrupt model at all. With the status words
 answered, a GPIO edge on an ESP32 reached esp-hal's dispatcher and its
 handler still never ran — and the handler's own context save turned out to
 be writing the CPU's registers through the GPIO window. Read back from the
@@ -487,7 +505,15 @@ the two and reports the lead.
     knobs, presses a button and drives an edge, and the gate requires the
     converter to follow, the pulled-up pad to fall, and **the firmware's own
     handler** to count the edge — the chain that needs the dispatcher's
-    status words answered and the FPU on from reset.
+    status words answered and the FPU on from reset. Before the host touches
+    anything, **the clock has to run**: a one-shot TIMG alarm whose handler
+    raises `FROM_CPU0` and then clears itself, and a switch handler that
+    sets the next alarm — Embassy's chain on this part, in which every link
+    waits on the one before. Run against a matrix that drives a line from
+    the last source to change, it stops at `timer 1 switch 0`; and it is
+    checked before the host's edge, because that edge shares the line and
+    picks up a dropped switch, which turns a stopped chain into one that
+    limps.
 
 ## What each desktop needed
 

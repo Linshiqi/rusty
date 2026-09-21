@@ -479,7 +479,14 @@ jobs:
             ls libs/ | head -40
           fi
 
-      # The proof the binary is ours and not the stub it replaced.
+      # The proof the binary is ours and not the stub it replaced — and that
+      # it carries every marker rusty asks of it (`PERIPHERAL_MARKERS` and
+      # `ESP32_MODEL_MARKER` in rusty-embed's `simulate/mod.rs`). A marker
+      # no published build carries makes every copy look a generation
+      # behind to every rusty that asks for it, so the list is checked here,
+      # where a build that lacks one never becomes a release. The ESP32's is
+      # asked of the Xtensa binary alone: its interrupt matrix is compiled
+      # into no other.
       #
       # `grep -a` rather than `strings`: macOS's strings reads only the text
       # section by default and the marker lives in __cstring, so it reported
@@ -491,12 +498,19 @@ jobs:
           for arch in riscv32 xtensa; do
             bin="qemu-system-$arch"
             if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
-            if LC_ALL=C grep -aq '\[rusty:gpio@' "$bin"; then
-              echo "the GPIO model is compiled into $bin"
-            else
-              echo "::error::$bin does not contain the replacement model.%0Asize=$(wc -c < "$bin")"
-              exit 1
+            markers=('[rusty:gpio@' '[rusty:adc@' '[rusty:i2c@' '[rusty:spi@'
+                     '[rusty:pwm@' '[rusty:rmt@' '[rusty:sw@')
+            if [ "$arch" = xtensa ]; then
+              markers+=('misc.esp32.intmatrix.status')
             fi
+            for marker in "${markers[@]}"; do
+              if LC_ALL=C grep -aqF "$marker" "$bin"; then
+                echo "$bin carries $marker"
+              else
+                echo "::error::$bin does not carry $marker, which rusty asks of it.%0Asize=$(wc -c < "$bin")"
+                exit 1
+              fi
+            done
           done
 
       - name: Name and compress it
@@ -2118,6 +2132,11 @@ jobs:
       # - **the strip's bytes** come out of RMT on the right pin;
       # - **a GPIO edge reaches the firmware's own handler**, which needs
       #   the dispatcher's status words answered and the FPU on from reset;
+      # - **the clock runs**: a one-shot TIMG alarm whose handler raises
+      #   FROM_CPU0 and then clears itself, and a switch handler that sets
+      #   the next alarm — Embassy's chain on this part, which stops at the
+      #   first link if the timer's line waits on INT_ENA or if the matrix
+      #   lowers a shared CPU line under a source still high on it;
       # - and the emulator says nothing about the CPU.
       - name: An ESP32 gets the board the C3 gets
         shell: python
@@ -2239,6 +2258,33 @@ jobs:
                     "the strip's three bytes never came out of RMT on GPIO26")
               print("booted: pulls, the converter at rest, the bus, the wire, "
                     "both halves of LEDC and the strip all answer")
+
+              # The clock, before the host touches anything: a GPIO edge
+              # shares the CPU line and would pick up a switch the matrix
+              # dropped, which is how a broken chain limps rather than
+              # stops once the host starts moving pins.
+              clock = []
+              deadline = time.time() + 30
+              while time.time() < deadline:
+                  clock = re.findall(r"\[esp32\] timer (\d+) switch (\d+)", read())
+                  if clock and int(clock[-1][0]) >= 20:
+                      break
+                  time.sleep(0.25)
+              ticks, switches = (int(n) for n in clock[-1]) if clock else (0, 0)
+              if ticks == 0:
+                  stop("the TIMG alarm never fired — a timer model gating its "
+                       "line on INT_ENA, which this part ignores and esp-hal "
+                       "never writes")
+              if switches == 0:
+                  stop("the alarm fired and the software interrupt it raised "
+                       "was never taken — the matrix lowered the CPU line "
+                       "both share when the alarm cleared itself, and nothing "
+                       "set the next alarm")
+              if ticks < 20 or abs(ticks - switches) > 2:
+                  stop(f"the clock stalled at {ticks} alarms and {switches} "
+                       f"switches — a link of the chain is being dropped")
+              print(f"the clock runs: {ticks} alarms, each followed by its "
+                    f"switch")
 
               # Now the host acts on the board: a knob on each ADC pin, the
               # button on GPIO4 pressed, and an edge on GPIO17.
