@@ -44,7 +44,7 @@ esac
 # Pinned, every one of them. A tool version that comes from `latest` is not a
 # version: the build that ships is then whatever the release page held that
 # morning, and a bug report names an installer rather than a binary.
-qemu_tag="${RUSTY_QEMU_TAG:-qemu-v6}"
+qemu_tag="${RUSTY_QEMU_TAG:-qemu-v7}"
 gdb_release=esp-gdb-v14.2_20240403
 gdb_version=14.2_20240403
 espflash_version=v4.0.1

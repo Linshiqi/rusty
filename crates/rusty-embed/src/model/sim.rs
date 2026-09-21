@@ -13,7 +13,8 @@ use super::{CommandPlan, Sheet, Symbol};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimLimit {
-    /// `esp32-float`, `esp32-peripherals`, `s3-unproven`.
+    /// `esp32-outdated`, `s3-unproven`, and the one diagnosis a run can
+    /// end on, `cpu-fpu-off`.
     pub kind: String,
     pub text: String,
 }
@@ -26,36 +27,28 @@ impl SimLimit {
         }
     }
 
-    /// What rusty's emulator is known not to do on `chip`.
+    /// What the emulator this plan will boot is known not to do on `chip`.
     ///
-    /// The C3 is the chip every model was written and proven against, so it
-    /// has none. The others are listed by what they cost in the user's own
-    /// code, because that is where each one shows: a run that ends
-    /// mid-boot, a `read` that never returns, a board that stays dark.
-    pub fn for_chip(chip: &str) -> Vec<SimLimit> {
+    /// The C3 is the chip every model was written and proven against, and
+    /// the ESP32 now has every one of them in its own layout — the pads'
+    /// pulls in IO_MUX's pad-name order, the converter at `SENS`, the
+    /// buses, LEDC's two halves, RMT's eight channels, a GPIO edge reaching
+    /// the firmware's handler, and the FPU on from reset as the silicon has
+    /// it. So neither has a limit **with rusty's current emulator**, and
+    /// the ESP32 has one with an older copy of it (`outdated_emulator`):
+    /// there, each of those fails in a way of its own, and the panel's
+    /// Upgrade is the fix.
+    pub fn for_chip(chip: &str, outdated_emulator: bool) -> Vec<SimLimit> {
         match chip {
-            "esp32" => vec![
-                SimLimit::new(
-                    "esp32-float",
-                    "An ESP32 application that touches a float goes quiet, and the emulator is \
-                     not the reason: CPENABLE resets to zero, nothing in esp-hal, xtensa-lx or \
-                     xtensa-lx-rt writes it, so the first floating-point instruction takes a \
-                     coprocessor-disabled exception — and the handler saves the floating-point \
-                     registers, so it faults too and the CPU spins in the double-exception \
-                     vector. Enable coprocessor 0 before the first float: \
-                     `unsafe { core::arch::asm!(\"wsr.cpenable {0}\", \"rsync\", in(reg) 1u32) }` \
-                     under `#![feature(asm_experimental_arch)]`. With it the same firmware runs \
-                     here to the end.",
-                ),
-                SimLimit::new(
-                    "esp32-peripherals",
-                    "rusty's models of the ADC, the I2C master, SPI2, LEDC, RMT and the pads' \
-                     pulls are the ESP32-C3's. On an ESP32 a read_oneshot(), a bus transaction \
-                     or a strip's transmission waits for ever, a duty reaches no pin, an input \
-                     nobody drives reads zero rather than its pull, and GPIO interrupts through \
-                     esp-hal are unproven. The pins themselves are modelled.",
-                ),
-            ],
+            "esp32" if outdated_emulator => vec![SimLimit::new(
+                "esp32-outdated",
+                "This emulator predates rusty's ESP32 models. On an ESP32 it leaves the FPU \
+                 switched off at reset, where the silicon has it on, so the first interrupt an \
+                 esp-hal application takes faults inside its own context save and the run goes \
+                 quiet — and its converter, buses, LEDC, RMT and pad pulls are the C3's, so a \
+                 read_oneshot() or a bus transaction waits for ever and every Pull::Up button \
+                 reads as held down. Upgrade the emulator from this panel.",
+            )],
             "esp32s3" => vec![SimLimit::new(
                 "s3-unproven",
                 "Nothing in rusty's emulator has been checked on the ESP32-S3: its pins, \
@@ -66,24 +59,35 @@ impl SimLimit {
         }
     }
 
-    /// A line the emulator printed that one of these limits explains, so
-    /// the explanation lands where the run stopped rather than only on a
-    /// panel somebody may not be looking at.
+    /// A line the emulator printed that explains where a run stopped, so
+    /// the explanation lands there rather than only on a panel somebody may
+    /// not be looking at.
+    ///
     /// `[rusty:cpu] coprocessor 0 is disabled …` is the emulator's own
-    /// account of it, printed at the exception rather than inferred from
-    /// what came after. `divide by zero` stays recognised because it is
-    /// what a spinning guest eventually produces, and somebody running an
-    /// older emulator still gets the explanation.
+    /// account, printed at the exception: something switched the FPU off —
+    /// xtensa-lx-rt does inside every interrupt when esp-hal's
+    /// `float-save-restore` is off — and a float followed. It is the CPU's,
+    /// so it is not chip-specific. `divide by zero` on an ESP32 is what a
+    /// guest spinning in the double-exception vector eventually produced on
+    /// an emulator from before the FPU was on at reset, so it names the
+    /// outdated emulator rather than anybody's code.
     pub fn explaining(chip: &str, line: &str) -> Option<SimLimit> {
-        let cp0 = line.contains("[rusty:cpu] coprocessor 0 is disabled");
-        let spun = chip == "esp32" && line.contains("divide by zero");
-        (cp0 || spun)
-            .then(|| {
-                SimLimit::for_chip("esp32")
-                    .into_iter()
-                    .find(|limit| limit.kind == "esp32-float")
-            })
-            .flatten()
+        if line.contains("[rusty:cpu] coprocessor 0 is disabled") {
+            return Some(SimLimit::new(
+                "cpu-fpu-off",
+                "The application switched the FPU off and then used it. CPENABLE bit 0 was \
+                 cleared — xtensa-lx-rt clears it inside every interrupt unless esp-hal's \
+                 float-save-restore feature is on, and firmware can clear it itself — so the \
+                 floating-point instruction faulted, the exception handler that saves the \
+                 floating-point registers faulted too, and the CPU is spinning in the \
+                 double-exception vector. Keep float-save-restore on (it is esp-hal's default) \
+                 or keep floats out of interrupt handlers.",
+            ));
+        }
+        if chip == "esp32" && line.contains("divide by zero") {
+            return SimLimit::for_chip("esp32", true).into_iter().next();
+        }
+        None
     }
 }
 
@@ -270,36 +274,48 @@ mod tests {
     /// recognised in the emulator's own last words.
     #[test]
     fn each_chip_names_what_the_emulator_cannot_do_on_it() {
-        assert!(SimLimit::for_chip("esp32c3").is_empty());
-        let esp32: Vec<String> = SimLimit::for_chip("esp32")
+        // With rusty's current emulator neither the C3 nor the ESP32 has a
+        // limit left; the S3 has never been checked, whatever the build.
+        for outdated in [false, true] {
+            assert!(SimLimit::for_chip("esp32c3", outdated).is_empty());
+            assert_eq!(
+                SimLimit::for_chip("esp32s3", outdated)[0].kind,
+                "s3-unproven"
+            );
+        }
+        assert!(SimLimit::for_chip("esp32", false).is_empty());
+        // An older copy is the one case the ESP32 still has, because every
+        // model it needs arrived after that copy was built.
+        let outdated: Vec<String> = SimLimit::for_chip("esp32", true)
             .into_iter()
             .map(|l| l.kind)
             .collect();
-        assert_eq!(esp32, ["esp32-float", "esp32-peripherals"]);
-        assert_eq!(SimLimit::for_chip("esp32s3")[0].kind, "s3-unproven");
+        assert_eq!(outdated, ["esp32-outdated"]);
 
         // The emulator's own account, which names the cause at the
         // exception rather than leaving it to be inferred from what the
         // guest did afterwards. It is not chip-specific: CPENABLE is the
         // CPU's, and an S3 firmware hits the same wall the same way.
         let said = "[rusty:cpu] coprocessor 0 is disabled and the application used it at \
-                    pc=0x400d1472: CPENABLE is 0, its reset value, and nothing has set it.";
+                    pc=0x400d14ad: something wrote CPENABLE with bit 0 clear, and the FPU is \
+                    on from reset.";
         assert_eq!(
             SimLimit::explaining("esp32", said).map(|l| l.kind),
-            Some("esp32-float".to_string())
+            Some("cpu-fpu-off".to_string())
         );
         assert_eq!(
             SimLimit::explaining("esp32s3", said).map(|l| l.kind),
-            Some("esp32-float".to_string()),
+            Some("cpu-fpu-off".to_string()),
             "the register is the CPU's, not the machine's"
         );
 
-        // And what a guest that spun on it eventually produced, so somebody
-        // on an emulator from before that line existed is still told why.
+        // And what a guest spinning in the double-exception vector
+        // eventually produced on an emulator that left the FPU off at reset
+        // — which is an outdated emulator, not anybody's code.
         let fatal = "qemu-system-xtensa: Fatal error: divide by zero";
         assert_eq!(
             SimLimit::explaining("esp32", fatal).map(|l| l.kind),
-            Some("esp32-float".to_string())
+            Some("esp32-outdated".to_string())
         );
         assert_eq!(
             SimLimit::explaining("esp32c3", fatal),

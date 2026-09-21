@@ -348,6 +348,14 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         sheet
     });
 
+    // Whether the copy it will boot is older than every model this rusty
+    // drives — the one thing that still limits an ESP32. Only a copy that
+    // was found: no emulator at all is already in `missing`, and saying it
+    // is out of date as well would be two answers to one question.
+    let outdated = found_emulator
+        .as_ref()
+        .is_some_and(|e| !(e.gpio_model && e.peripherals));
+
     SimPlan {
         supported: true,
         reason: None,
@@ -360,7 +368,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         debug,
         debug_tool,
         notes,
-        limits: crate::model::SimLimit::for_chip(chip),
+        limits: crate::model::SimLimit::for_chip(chip, outdated),
     }
 }
 
@@ -562,16 +570,25 @@ const RMT_MODEL_MARKER: &[u8] = b"[rusty:rmt@";
 /// them a keypad's key reaches an emulator that drops the line, and every
 /// `Pull::Up` button reads as held down from reset.
 const PAD_MODEL_MARKER: &[u8] = b"[rusty:sw@";
+/// And the ESP32's: every peripheral above in that part's own layout, the
+/// dispatcher's status words answered, and the FPU on from reset. There is
+/// no new line on the channel to recognise it by — the ESP32 speaks the
+/// protocol the C3 already does — so the marker is the name of the region
+/// that arrived with it, which only this generation's file declares and
+/// every binary built from it carries. A copy without it boots an ESP32
+/// whose first interrupt faults and whose buses are the C3's.
+const ESP32_MODEL_MARKER: &[u8] = b"esp32.gpio.intr-status";
 
 /// Every model this rusty drives, in one list: what `has_peripherals`
 /// requires and what ranks one copy of the emulator against another.
-const PERIPHERAL_MARKERS: [&[u8]; 6] = [
+const PERIPHERAL_MARKERS: [&[u8]; 7] = [
     ADC_MODEL_MARKER,
     I2C_MODEL_MARKER,
     SPI_MODEL_MARKER,
     PWM_MODEL_MARKER,
     RMT_MODEL_MARKER,
     PAD_MODEL_MARKER,
+    ESP32_MODEL_MARKER,
 ];
 
 /// Does this emulator model the converter, both buses, LEDC, RMT and the
@@ -901,7 +918,8 @@ mod tests {
         );
         let current = write(
             &dir.path().join("bundle"),
-            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@               [rusty:sw@",
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@ \
+              [rusty:sw@ esp32.gpio.intr-status",
         );
         let both = Machine {
             tools: Some(dir.path().join("data")),

@@ -9,6 +9,38 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.53
+
+**An ESP32 gets the whole board.** Until now the simulator's knobs, buses,
+PWM, LED strips and button pull-ups worked on the ESP32-C3 only, and the
+Simulate panel said so in a banner. On an original ESP32 they all work now:
+`Pull::Up` buttons rest high and fall when pressed, `adc.read_oneshot()`
+reads the knob on the sheet, an I2C sensor answers, an SPI device answers,
+a servo or dimmed lamp shows its duty on either of the ESP32's two LEDC
+halves, a WS2812 strip shows its colours, and a GPIO interrupt reaches your
+handler. The banner is gone.
+
+**ESP32 firmware that takes an interrupt or uses a float runs as it does
+on the board.** Before, the first interrupt an ESP32 application took —
+every Embassy timer, every `listen()` — and its first floating-point
+instruction both left the run silent. The emulator was starting the CPU
+with its FPU switched off; the chip starts with it on. You do not need to
+change your firmware for this.
+
+**Your own I2C sensors, as a file.** A project can describe a sensor part
+in `.rusty/parts/<name>.toml` — its address, what it reads and in what
+units, where each reading sits in its registers — and the sheet draws
+sliders for it that drive the firmware's reads. See
+`docs/extensibility.md` for a worked example. The MPU-6050, BMP280 and
+BME280 rusty ships are now three such files.
+
+**A character LCD.** A display part can be set to an HD44780 behind a
+PCF8574 I2C backpack, the usual 16x2 module, and shows the characters the
+firmware writes.
+
+rusty offers the new emulator from the Simulate panel's **Upgrade** button
+if the copy you have is older; a fresh install already carries it.
+
 ## v0.6.52
 
 **Tidy is twelve times faster.** Laying out a crowded sheet took over half

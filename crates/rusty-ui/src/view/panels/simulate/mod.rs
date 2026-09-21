@@ -355,8 +355,8 @@ fn reading_text(value: f64) -> String {
 /// frontend has no words for yet.
 fn limit_text(limit: &rusty_embed::SimLimit) -> String {
     match limit.kind.as_str() {
-        "esp32-float" => t!("simulate.limit-esp32-float"),
-        "esp32-peripherals" => t!("simulate.limit-esp32-peripherals"),
+        "esp32-outdated" => t!("simulate.limit-esp32-outdated"),
+        "cpu-fpu-off" => t!("simulate.limit-cpu-fpu-off"),
         "s3-unproven" => t!("simulate.limit-s3-unproven"),
         _ => limit.text.clone(),
     }
