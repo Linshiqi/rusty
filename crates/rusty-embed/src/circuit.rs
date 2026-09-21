@@ -266,8 +266,14 @@ pub fn of(
 ) -> Result<Bridged, Unstated> {
     let solid = nets::solid_nets(sheet, rows, pressed);
 
-    // ── which solid net is ground ───────────────────────────────────────
-    let mut ground: Option<usize> = None;
+    // ── which solid nets are ground ─────────────────────────────────────
+    //
+    // *Every* one a ground rail is on. A devkit's GND pins are one piece of
+    // copper — the C3's has one on each side — and a `rusty:GND` drawn twice
+    // is two symbols for one net; the rules have always read each of them
+    // as low. Taking one of them for ground left a lamp wired to any other
+    // floating here while the rules called it lit.
+    let mut grounds: Vec<usize> = Vec::new();
     let mut rail_at: BTreeMap<usize, f64> = BTreeMap::new();
     for part in &sheet.parts {
         let Some(symbol) = sheet.symbol_of(&part.reference) else {
@@ -283,7 +289,7 @@ pub fn of(
             continue;
         };
         match rail {
-            Rail::Ground => ground = Some(*net),
+            Rail::Ground => grounds.push(*net),
             Rail::Supply => {
                 let value = if part.value.trim().is_empty() {
                     symbol.name.clone()
@@ -306,19 +312,11 @@ pub fn of(
     let mut supply_volts: Option<f64> = None;
     for (row, spec) in rows.iter().enumerate() {
         let Some(rail) = spec.rail else { continue };
-        let Some(net) = solid
-            .get(&PinRef::new(crate::model::KIT_REFERENCE, &spec.name))
-            .or_else(|| {
-                solid.get(&PinRef::new(
-                    crate::model::KIT_REFERENCE,
-                    (row + 1).to_string(),
-                ))
-            })
-        else {
+        let Some(net) = kit_net(&solid, row, spec) else {
             continue;
         };
         match rail {
-            Rail::Ground => ground = ground.or(Some(*net)),
+            Rail::Ground => grounds.push(*net),
             Rail::Supply => {
                 if let Some(v) = volts(&spec.name) {
                     rail_at.insert(*net, v);
@@ -330,7 +328,7 @@ pub fn of(
     for v in rail_at.values() {
         supply_volts = Some(supply_volts.map_or(*v, |had: f64| had.max(*v)));
     }
-    let Some(ground) = ground else {
+    let Some(&ground) = grounds.first() else {
         return Err(Unstated::NoGround);
     };
 
@@ -356,6 +354,14 @@ pub fn of(
             minus: 0,
             volts: *at,
         });
+    }
+    // The other grounds, joined to the first.
+    let mut joined: BTreeSet<usize> = BTreeSet::new();
+    for net in &grounds {
+        let at = number[net];
+        if at != 0 && joined.insert(at) {
+            elements.push(Element::Short { a: at, b: 0 });
+        }
     }
 
     // ── and the parts between them ──────────────────────────────────────
@@ -444,15 +450,7 @@ pub fn of(
         let Some(level) = levels.get(&gpio) else {
             continue;
         };
-        let Some(at) = solid
-            .get(&PinRef::new(crate::model::KIT_REFERENCE, &spec.name))
-            .or_else(|| {
-                solid.get(&PinRef::new(
-                    crate::model::KIT_REFERENCE,
-                    (row + 1).to_string(),
-                ))
-            })
-        else {
+        let Some(at) = kit_net(&solid, row, spec) else {
             continue;
         };
         let plus = number[at];
@@ -512,6 +510,19 @@ pub fn of(
             .collect(),
         element_of,
     })
+}
+
+/// The solid net a devkit row is on: by its number, which is the row's
+/// own, and by its name only where the number is not in the map. A name
+/// two rows share — the C3's `GND`, one on each side — keys just one of
+/// them, so asked first it answered for the other row as well.
+fn kit_net<'a>(solid: &'a BTreeMap<PinRef, usize>, row: usize, spec: &Row) -> Option<&'a usize> {
+    solid
+        .get(&PinRef::new(
+            crate::model::KIT_REFERENCE,
+            (row + 1).to_string(),
+        ))
+        .or_else(|| solid.get(&PinRef::new(crate::model::KIT_REFERENCE, &spec.name)))
 }
 
 /// The nodes an element is attached to.
@@ -830,6 +841,61 @@ mod tests {
             (3.0e-3..4.5e-3).contains(&current),
             "about four milliamps: {current} A at {across} V"
         );
+    }
+
+    /// Every ground on the sheet is the one ground: each of the devkit's
+    /// GND rows, and two `rusty:GND` symbols nobody wired together. The
+    /// bridge used to take one of them, so a resistor to the C3's other GND
+    /// floated here while the rules read its end as low — which is the
+    /// sheet a playground opens on.
+    #[test]
+    fn every_ground_on_the_sheet_is_the_one_ground() {
+        let rows = rows();
+        let grounds: Vec<String> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.rail == Some(nets::Rail::Ground))
+            .map(|(at, _)| (at + 1).to_string())
+            .collect();
+        assert!(grounds.len() > 1, "the C3 devkit has a GND on each side");
+        for ground in &grounds {
+            let mut s = sheet();
+            place(&mut s, "R1", "Device:R", "1k");
+            wire(&mut s, "U1.GPIO2", "R1.1");
+            wire(&mut s, "R1.2", &format!("U1.{ground}"));
+            let bridged = of(
+                &s,
+                &rows,
+                &HashSet::new(),
+                &[(2u8, true)].into_iter().collect(),
+            )
+            .expect("built");
+            let found = dc(&bridged.circuit)
+                .unwrap_or_else(|why| panic!("the GND on row {ground}: {why:?}"));
+            let end = bridged.node_of[&PinRef::new("R1", "2")];
+            assert!(
+                found.volts_at(end).abs() < 1e-9,
+                "row {ground} is ground: {}",
+                found.volts_at(end)
+            );
+        }
+
+        let mut s = sheet();
+        place(&mut s, "PWR1", "rusty:Supply", "3V3");
+        place(&mut s, "R1", "Device:R", "1k");
+        place(&mut s, "R2", "Device:R", "1k");
+        place(&mut s, "GND1", "rusty:GND", "GND");
+        place(&mut s, "GND2", "rusty:GND", "GND");
+        wire(&mut s, "PWR1.VCC", "R1.1");
+        wire(&mut s, "R1.2", "GND1.GND");
+        wire(&mut s, "PWR1.VCC", "R2.1");
+        wire(&mut s, "R2.2", "GND2.GND");
+        let bridged = build(&s).expect("built");
+        let found = dc(&bridged.circuit).expect("both symbols are ground");
+        for end in ["R1", "R2"] {
+            let node = bridged.node_of[&PinRef::new(end, "2")];
+            assert!(found.volts_at(node).abs() < 1e-9, "{end} ends on ground");
+        }
     }
 
     /// A pin the firmware is driving is a source, and the level decides

@@ -1100,6 +1100,94 @@ pub fn autosave_file(state: AppState) {
     );
 }
 
+/// Every unsaved draft written — the file in front in either group and
+/// every tab parked behind them — and then `then`, once all of it is on
+/// disk. What Build, Run and Flash do first: what runs is the code on
+/// screen, the way Wokwi's Run and VS Code's launch save before they start.
+///
+/// Written the way auto-save writes (`autosave_file`): each document moves
+/// forward to exactly the bytes written and the draft is never touched, so
+/// a key pressed during the round trip is not replaced by the disk's copy.
+/// A write that fails stops here with the banner — building the version on
+/// disk while the screen shows another is the thing this exists to prevent.
+pub fn save_all_then(state: AppState, then: impl FnOnce() + 'static) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        text: String,
+    }
+
+    // One write per path: a file open on both sides has one draft, kept the
+    // same in both groups.
+    let mut writes: Vec<(String, String)> = Vec::new();
+    for editor in state.groups.editors {
+        let active = editor.document.with_untracked(|doc| {
+            doc.as_ref()
+                .filter(|doc| !doc.read_only && !rusty_edit::is_expansion(&doc.path))
+                .map(|doc| (doc.path.clone(), doc.text.clone()))
+        });
+        if let Some((path, on_disk)) = active {
+            let draft = editor.draft.get_untracked();
+            if draft != on_disk && !writes.iter().any(|(p, _)| p == &path) {
+                writes.push((path, draft));
+            }
+        }
+        editor.parked.with_untracked(|parked| {
+            for tab in parked {
+                let path = &tab.document.path;
+                if !tab.document.read_only
+                    && !rusty_edit::is_expansion(path)
+                    && tab.draft != tab.document.text
+                    && !writes.iter().any(|(p, _)| p == path)
+                {
+                    writes.push((path.clone(), tab.draft.clone()));
+                }
+            }
+        });
+    }
+    if writes.is_empty() {
+        then();
+        return;
+    }
+
+    state.app.in_flight.update(|n| *n += 1);
+    spawn_local(async move {
+        for (path, text) in writes {
+            let args = Args {
+                path: path.clone(),
+                text: text.clone(),
+            };
+            if let Err(error) = ipc::call::<_, ()>(cmd::files::SAVE, &args).await {
+                state.app.in_flight.update(|n| *n = n.saturating_sub(1));
+                state.app.error.set(Some(error));
+                return;
+            }
+            lsp_saved_doc(path.clone());
+            clear_stale(state, &path);
+            // Every copy of this document, in both groups, is now these
+            // bytes on disk — the file in front and a tab parked behind.
+            for editor in state.groups.editors {
+                editor.document.update(|open| {
+                    if let Some(open) = open
+                        && open.path == path
+                    {
+                        open.text = text.clone();
+                    }
+                });
+                editor.parked.update(|parked| {
+                    for tab in parked.iter_mut() {
+                        if tab.document.path == path {
+                            tab.document.text = text.clone();
+                        }
+                    }
+                });
+            }
+        }
+        state.app.in_flight.update(|n| *n = n.saturating_sub(1));
+        then();
+    });
+}
+
 /// Write the current draft back.
 pub fn save_file(state: AppState) {
     // A dependency's source is not this project's to change; the backend would

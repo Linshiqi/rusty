@@ -619,10 +619,13 @@ pub enum Divider {
     Assistant,
     /// The Git panel's branch and tag list against everything else.
     GitSidebar,
+    /// The simulated board beside the editor: anchored to the right like
+    /// the assistant drawer, so dragging left grows it.
+    Board,
 }
 
 impl Divider {
-    pub const ALL: [Divider; 11] = [
+    pub const ALL: [Divider; 12] = [
         Divider::Tree,
         Divider::Dock,
         Divider::DebugStack,
@@ -634,6 +637,7 @@ impl Divider {
         Divider::EditorSplit,
         Divider::Assistant,
         Divider::GitSidebar,
+        Divider::Board,
     ];
 
     /// Whether the line is vertical — a column split, dragged left and right.
@@ -648,6 +652,7 @@ impl Divider {
                 | Divider::EditorSplit
                 | Divider::Assistant
                 | Divider::GitSidebar
+                | Divider::Board
         )
     }
 
@@ -668,7 +673,7 @@ impl Divider {
             // Anchored to the bottom, so dragging up grows it.
             Divider::Dock | Divider::GitDetail => from_pointer - y,
             // Anchored to the right, so dragging left grows it.
-            Divider::Assistant => from_pointer - x,
+            Divider::Assistant | Divider::Board => from_pointer - x,
             // Anchored to the top, so dragging down grows it.
             Divider::GitMessage => y - from_pointer,
         }
@@ -690,6 +695,7 @@ impl Divider {
             Divider::GitChanges => 380.0,
             Divider::Assistant => 400.0,
             Divider::GitSidebar => 240.0,
+            Divider::Board => 560.0,
             // Permille: half and half.
             Divider::GitSplit | Divider::EditorSplit => 500.0,
         }
@@ -711,6 +717,9 @@ impl Divider {
             // Narrower than 300 and a formula wraps mid-fraction; wider than
             // 900 and there is no editor left beside it on a laptop.
             Divider::Assistant => (300.0, 900.0),
+            // The sheet's corner controls and one devkit need about 340; past
+            // 1400 there is no editor left on any screen worth having.
+            Divider::Board => (340.0, 1400.0),
             // Neither side narrower than a seventh of the text.
             Divider::GitSplit => (150.0, 850.0),
             // Neither group narrower than a fifth of the area: a group that
@@ -732,6 +741,7 @@ impl Divider {
             Divider::EditorSplit => "rusty.layout.editor-split",
             Divider::Assistant => "rusty.layout.assistant",
             Divider::GitSidebar => "rusty.layout.git-sidebar",
+            Divider::Board => "rusty.layout.board",
         }
     }
 }
@@ -1000,11 +1010,17 @@ pub struct Device {
     /// it to — done the moment one is picked, rather than asking for the
     /// click a second time.
     pub pending: RwSignal<Option<DeviceAction>>,
-    /// A flash asked for while a monitor held the port: done when that
-    /// session has actually exited, which is the only moment the port is
-    /// certainly free and the old session's end cannot clear the new one's
-    /// running flag.
-    pub after_stop: RwSignal<Option<DeviceAction>>,
+}
+
+/// What to do once the running session has actually exited: a flash asked
+/// for while a monitor held the port, or a simulation restarted with the
+/// code on screen. Done from the old session's own exit, which is the only
+/// moment the port is certainly free and the old session's end cannot
+/// clear the new one's running flag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AfterStop {
+    Device(DeviceAction),
+    Simulate { debug: bool },
 }
 
 /// The device verbs, as a picker waiting for a device holds them.
@@ -2107,7 +2123,17 @@ pub struct Sim {
     /// Tools whose one-click install failed — those cards reveal the manual
     /// instructions, which stay hidden while the button still deserves trust.
     pub install_failed: RwSignal<Vec<String>>,
+    /// The board editor's unsaved sheet, which Run writes before it starts
+    /// so the emulator is wired as the screen shows — the board is what
+    /// runs as much as the code is. The editor on screen registers it under
+    /// a number of its own, so the one it replaces cannot take the new
+    /// registration with it when it goes (`controller::save_sheet_then`).
+    pub unsaved_sheet: StoredValue<Option<(u64, UnsavedSheet)>>,
 }
+
+/// Asks the board editor on screen for its sheet, when it has changes the
+/// file does not.
+pub type UnsavedSheet = Callback<(), Option<rusty_embed::Sheet>>;
 
 /// The debug session, its breakpoints, and the chip's registers.
 #[derive(Clone, Copy)]
@@ -2213,6 +2239,12 @@ pub struct Layout {
     pub assistant_width: RwSignal<f64>,
     /// The Git panel's branch list, in pixels (`Divider::GitSidebar`).
     pub git_sidebar_width: RwSignal<f64>,
+    /// The simulated board beside the editor, Wokwi's shape: code on the
+    /// left, the board running it on the right, the Output below both.
+    /// Session state — the playground turns it on, and anybody may.
+    pub board_beside: RwSignal<bool>,
+    /// Its width in pixels (`Divider::Board`).
+    pub board_width: RwSignal<f64>,
     /// The file tree folded away: a second click on the Files switcher, or
     /// Ctrl+B. Remembered across sessions, like the pin map's fold.
     pub tree_hidden: RwSignal<bool>,
@@ -2250,6 +2282,7 @@ impl Layout {
             Divider::EditorSplit => self.editor_split,
             Divider::Assistant => self.assistant_width,
             Divider::GitSidebar => self.git_sidebar_width,
+            Divider::Board => self.board_width,
         }
     }
 }
@@ -2357,6 +2390,9 @@ pub struct Workbench {
     pub activity: RwSignal<Option<crate::activity::Activity>>,
     /// How the last session ended, until the next one starts.
     pub outcome: RwSignal<Option<crate::activity::Outcome>>,
+    /// What follows the running session's exit, when something is waiting
+    /// on it (`AfterStop`).
+    pub after_stop: RwSignal<Option<AfterStop>>,
 }
 
 impl Default for AppState {
@@ -2402,7 +2438,6 @@ impl AppState {
                 plan: RwSignal::new(None),
                 picker: RwSignal::new(false),
                 pending: RwSignal::new(None),
-                after_stop: RwSignal::new(None),
             },
             wizard: Wizard {
                 options: RwSignal::new(Vec::new()),
@@ -2522,6 +2557,7 @@ impl AppState {
                 pin_source: RwSignal::new(rusty_embed::PinSource::Firmware),
                 plan: RwSignal::new(None),
                 install_failed: RwSignal::new(Vec::new()),
+                unsaved_sheet: StoredValue::new(None),
             },
             debug: Debug {
                 session: RwSignal::new(None),
@@ -2587,6 +2623,11 @@ impl AppState {
                     Divider::GitSidebar,
                     Divider::GitSidebar.default_size(),
                 )),
+                board_beside: RwSignal::new(false),
+                board_width: RwSignal::new(stored_size(
+                    Divider::Board,
+                    Divider::Board.default_size(),
+                )),
                 tree_hidden: RwSignal::new(stored_tree_hidden()),
                 quick_open: RwSignal::new(false),
                 quick_seed: RwSignal::new(String::new()),
@@ -2616,6 +2657,7 @@ impl AppState {
                 error: RwSignal::new(None),
                 activity: RwSignal::new(None),
                 outcome: RwSignal::new(None),
+                after_stop: RwSignal::new(None),
             },
         }
     }
@@ -2667,6 +2709,23 @@ impl AppState {
     /// one that hides the day it means something.
     pub fn has_project_now(&self) -> bool {
         self.project.detected.with_untracked(Option::is_some)
+    }
+
+    /// The chip whose playground is open, tracked — `None` for any other
+    /// project. The window lays a playground out code beside board, and
+    /// offers what only a playground has: its example back, the other
+    /// chip's, and keeping it as a project of its own.
+    pub fn playground(&self) -> Option<String> {
+        self.project
+            .detected
+            .with(|p| p.as_ref().and_then(|p| p.playground.clone()))
+    }
+
+    /// The same, from a controller.
+    pub fn playground_now(&self) -> Option<String> {
+        self.project
+            .detected
+            .with_untracked(|p| p.as_ref().and_then(|p| p.playground.clone()))
     }
 
     /// The path of the document on screen, tracked — for views.

@@ -93,7 +93,7 @@ pub fn all() -> Vec<Panel> {
             icon: Icon::Simulate,
             needs_project: true,
             hidden: false,
-            render: || simulate::Simulate().into_any(),
+            render: || view! { <simulate::Simulate /> }.into_any(),
         },
         Panel {
             id: "wizard",
@@ -116,6 +116,13 @@ pub fn all() -> Vec<Panel> {
             render: || assistant::Assistant().into_any(),
         },
     ]
+}
+
+/// The simulated board sized for a pane beside the editor — the
+/// playground's shape, and anybody's who asks for it.
+pub fn board_view() -> leptos::prelude::AnyView {
+    use leptos::prelude::IntoAny;
+    view! { <simulate::Simulate compact=true /> }.into_any()
 }
 
 /// The files workspace on its own — what a detached editor window renders.

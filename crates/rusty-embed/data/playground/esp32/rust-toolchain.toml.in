@@ -1,0 +1,4 @@
+# Xtensa is not a stable Rust target; espup's fork is the toolchain that
+# builds it.
+[toolchain]
+channel = "esp"

@@ -48,16 +48,19 @@ pub fn debug_test(state: AppState, filter: String) {
     // The standing list travels with the request rather than being placed on
     // attach. A debug adapter only accepts breakpoints between `initialized`
     // and `configurationDone`; after that the program is running, and a
-    // breakpoint placed then is one a short test has already run past.
-    attach_session(
-        state,
-        cmd::debug::TEST,
-        Args {
-            filter,
-            breakpoints: state.debug.breakpoints.get_untracked(),
-        },
-        crate::state::DockTab::Output,
-    );
+    // breakpoint placed then is one a short test has already run past. The
+    // test is built from what is on screen, so the drafts are written first.
+    save_all_then(state, move || {
+        attach_session(
+            state,
+            cmd::debug::TEST,
+            Args {
+                filter,
+                breakpoints: state.debug.breakpoints.get_untracked(),
+            },
+            crate::state::DockTab::Output,
+        );
+    });
 }
 
 /// The one session loop behind both ways of starting a debugger: generation

@@ -197,6 +197,43 @@
   ];
 
   const ROOT = "E:\\mock\\firmware";
+  const projectOf = (playground) => ({
+    root: playground ? `C:\\mock\\rusty-data\\playground\\${playground}` : ROOT,
+    chip: playground || "esp32c3", chipSource: "target triple", runtime: null,
+    configuredTarget: playground === "esp32" ? "xtensa-esp32-none-elf" : "riscv32imc-unknown-none-elf",
+    configuredToolchain: null, frameworks: ["esp-hal"], usesDefmt: false, usesEmbassy: false,
+    evidence: [], problems: [], playground,
+  });
+  // The playground's own board, as its template draws it: an LED behind a
+  // resistor on the chip's LED pin, and a button to ground on GPIO4.
+  const playgroundBoard = (chip) => {
+    const led = chip === "esp32" ? "GPIO2" : "GPIO0";
+    return {
+      chip, kitX: chip === "esp32" ? 160 : 460, kitY: 96,
+      parts: [
+        { reference: "R1", symbol: "Device:R", value: "220", x: chip === "esp32" ? 440 : 312, y: chip === "esp32" ? 224 : 176, rot: 90 },
+        { reference: "D1", symbol: "Device:LED", value: "red", x: chip === "esp32" ? 536 : 216, y: chip === "esp32" ? 224 : 176 },
+        { reference: "SW1", symbol: "Device:SW_Push", value: "", x: chip === "esp32" ? 440 : 312, y: chip === "esp32" ? 304 : 256 },
+      ],
+      // Both devkits have a ground on each side, which only its number
+      // names: the C3's parts sit to its left (row 13), the ESP32's to its
+      // right (row 17).
+      wires: chip === "esp32" ? [
+        { from: { part: "U1", pin: led }, to: { part: "R1", pin: "1" }, bends: [] },
+        { from: { part: "R1", pin: "2" }, to: { part: "D1", pin: "A" }, bends: [] },
+        { from: { part: "D1", pin: "K" }, to: { part: "U1", pin: "17" }, bends: [] },
+        { from: { part: "U1", pin: "GPIO4" }, to: { part: "SW1", pin: "1" }, bends: [] },
+        { from: { part: "SW1", pin: "2" }, to: { part: "U1", pin: "17" }, bends: [] },
+      ] : [
+        { from: { part: "U1", pin: led }, to: { part: "R1", pin: "1" }, bends: [] },
+        { from: { part: "R1", pin: "2" }, to: { part: "D1", pin: "A" }, bends: [] },
+        { from: { part: "D1", pin: "K" }, to: { part: "U1", pin: "13" }, bends: [] },
+        { from: { part: "U1", pin: "GPIO4" }, to: { part: "SW1", pin: "2" }, bends: [] },
+        { from: { part: "SW1", pin: "1" }, to: { part: "U1", pin: "13" }, bends: [] },
+      ],
+      symbols: MOCK_SYMBOLS,
+    };
+  };
   // Tree paths are project-relative and /-separated, exactly as the real
   // tree.rs builds them — the paths are identities the reveal flow compares.
   const MAIN = "src/main.rs";
@@ -227,7 +264,7 @@
   window.__mock = {
     locale: null, toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [],
     signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {},
-    runs: [], buildFails: false,
+    runs: [], buildFails: false, playground: null, resets: 0, simRuns: [],
     // One board and a port that is not one: Flash picks the board by itself.
     ports: [
       { name: "COM3", bridge: "CP210x", boards: ["ESP32-C3-DevKitM-1"], likelyBoard: true, usb: null },
@@ -277,7 +314,9 @@
   ].join("\n");
 
   const handlers = {
-    recent_projects: () => [ROOT],
+    // `mock.norecents` in localStorage starts the window on the welcome
+    // screen, which a launch that reopens the last project never shows.
+    recent_projects: () => (localStorage.getItem("mock.norecents") ? [] : [ROOT]),
     // Stored across a reload, because that is the whole mechanism: choosing a
     // language saves it and reloads into it. Held in memory this reads as a
     // setting the app ignores, which is what it looked like the first time.
@@ -288,17 +327,26 @@
       return null;
     },
     storage_location: () => ({ path: "C:\\mock\\rusty-data", isDefault: true, envOverride: false }),
-    open_project: () => ({
-      project: {
-        root: ROOT, chip: "esp32c3", chipSource: "target triple", runtime: null,
-        configuredTarget: "riscv32imc-unknown-none-elf", configuredToolchain: null,
-        frameworks: ["esp-hal"], usesDefmt: false, usesEmbassy: false, evidence: [], problems: [],
-      },
-      workspace: null,
-      workspaceError: "mock: no cargo here",
-    }),
-    project_status: () => handlers.open_project().project,
-    project_path: () => ROOT,
+    open_project: () => {
+      window.__mock.playground = null;
+      window.__mock.opened = true;
+      return { project: projectOf(null), workspace: null, workspaceError: "mock: no cargo here" };
+    },
+    // A playground is a project the backend keeps per chip; the one thing
+    // that marks it is `playground`, which lays the window out code beside
+    // board. `reset` forgets what was saved, as the real one rewrites it.
+    open_playground: (a) => {
+      window.__mock.playground = a.chip;
+      window.__mock.opened = true;
+      return { project: projectOf(a.chip) };
+    },
+    reset_playground: () => { window.__mock.saved = {}; window.__mock.resets += 1; return null; },
+    keep_playground: (a) => { window.__mock.kept = a; return a.dest; },
+    project_status: () => projectOf(window.__mock.playground),
+    // Nothing held before anything is opened, as the backend answers at a
+    // fresh launch — or the welcome screen could never be reached here.
+    project_path: () => (localStorage.getItem("mock.norecents") && !window.__mock.opened
+      ? null : projectOf(window.__mock.playground).root),
     file_tree: (a) => {
       window.__mock.trees.push(a);
       return [
@@ -429,7 +477,15 @@
       window.__mock.replaced = a;
       return { changed, replaced: changed.length * 2, skipped, error: null };
     },
-    plan_simulation: () => ({
+    plan_simulation: () => window.__mock.playground ? ({
+      supported: true, reason: null, missing: [],
+      steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
+      board: playgroundBoard(window.__mock.playground),
+      library: MOCK_SYMBOLS,
+      parts: [],
+      debug: { gdbCommand: "echo mock-gdb", elf: "target/x/playground", port: 1234 },
+      debugTool: null,
+    }) : ({
       supported: true, reason: null, missing: [],
       steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
       // A sheet with a *circuit* on it, not an empty one. This used to be
@@ -487,13 +543,28 @@
     }),
     save_sim_board: (a) => { window.__mock.savedBoard = a.board; return null; },
     run_simulation: (a) => {
-      window.__mock.simChannel = a.onLine;
+      const m = window.__mock;
+      m.simChannel = a.onLine;
+      // What the playground's saved code was, as each run found it: the
+      // check that Run and Restart write the editor first.
+      m.simRuns.push({ debug: a.debug, saved: { ...m.saved } });
       // Debug runs freeze the boot and say so; the frontend's hook on that
       // line is what starts the in-app debugger.
       if (a.debug) setTimeout(() => a.onLine.send({ stream: "stdout", text: "[rusty:debug] frozen at reset", level: null }), 40);
+      // A playground's firmware says hello and blinks its LED, so the board
+      // beside the code has something to show.
+      if (m.playground && !a.debug) {
+        const pin = m.playground === "esp32" ? 2 : 0;
+        let on = false;
+        a.onLine.send({ stream: "stdout", text: "Hello from the playground!", level: null });
+        m.simTimer = setInterval(() => {
+          on = !on;
+          a.onLine.send({ stream: "stdout", text: `[rusty:gpio] ${pin}=${on ? 1 : 0}`, level: null });
+        }, 400);
+      }
       // QEMU runs until something stops it, so this resolves only when
       // something does — the Stop button, or the debugger going away.
-      return new Promise((resolve) => { window.__mock.simResolve = resolve; });
+      return new Promise((resolve) => { m.simResolve = resolve; });
     },
     // One cargo-style warning so the Output panel's location links can be
     // exercised: the ` --> path:line:col` must render as a click-to-open.
@@ -553,6 +624,9 @@
     },
     stop_flash: () => {
       const m = window.__mock;
+      // The emulator is in the same slot as everything else that runs.
+      if (m.simTimer) { clearInterval(m.simTimer); m.simTimer = null; }
+      if (m.simResolve) { const r = m.simResolve; m.simResolve = null; setTimeout(() => r(null), 30); }
       if (m.linkTimer) { clearInterval(m.linkTimer); m.linkTimer = null; }
       if (m.linkResolve) { m.linkResolve(null); m.linkResolve = null; }
       if (m.flashTimer) { clearInterval(m.flashTimer); m.flashTimer = null; }
@@ -776,6 +850,7 @@
     event: { listen: () => Promise.resolve(() => {}) },
     // `confirm` is what the app has where a browser has `window.confirm`; the
     // mock answers with the real one so a discard can be exercised here.
-    dialog: { open: () => Promise.resolve(null), confirm: (m) => Promise.resolve(window.confirm(m)) },
+    // A folder picked when a test sets `__mock.pickFolder`; cancelled otherwise.
+    dialog: { open: () => Promise.resolve(window.__mock.pickFolder ?? null), confirm: (m) => Promise.resolve(window.confirm(m)) },
   };
 })();

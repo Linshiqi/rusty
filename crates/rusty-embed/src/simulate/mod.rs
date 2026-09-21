@@ -370,6 +370,19 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
     }
 }
 
+/// The sheet a project's `.rusty/sim.toml` describes, with its symbols
+/// attached — the board as the Simulate panel gets it, for a test outside
+/// this module that has to read one.
+#[cfg(test)]
+pub(crate) fn load_board_for_test(root: &Path, chip: &str) -> Option<Sheet> {
+    let library = crate::schematic::load(Some(root));
+    board_file::load(root, chip).map(|loaded| {
+        let mut sheet = loaded.sheet;
+        resolve_symbols(&mut sheet, &library);
+        sheet
+    })
+}
+
 /// Attach to the sheet every symbol its parts use, so the frontend draws
 /// without a second lookup. A part whose symbol no library has is kept —
 /// deleting somebody's part because a library file went missing is a loss,
@@ -835,6 +848,7 @@ mod tests {
             chip: chip.map(str::to_string),
             chip_source: None,
             firmware_dir: None,
+            playground: None,
             runtime: None,
             configured_target: target.map(str::to_string),
             configured_toolchain: None,

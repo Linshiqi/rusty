@@ -28,6 +28,12 @@ pub struct EmbeddedProject {
     /// can run at all.
     #[serde(default)]
     pub firmware_dir: Option<String>,
+    /// The chip whose playground this is, when it is one of the projects
+    /// rusty keeps for trying things — which is what lays the window out
+    /// with the board beside the code. Detection cannot know it (it is a
+    /// fact about where rusty keeps its data), so the app says it.
+    #[serde(default)]
+    pub playground: Option<String>,
     pub runtime: Option<Runtime>,
     /// Target triple from `.cargo/config.toml`, if set.
     pub configured_target: Option<String>,
@@ -72,6 +78,7 @@ mod root_is_firmware_tests {
             chip: chip.map(str::to_string),
             chip_source: None,
             firmware_dir: firmware_dir.map(str::to_string),
+            playground: None,
             runtime: None,
             configured_target: None,
             configured_toolchain: None,

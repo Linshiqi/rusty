@@ -219,6 +219,31 @@ pub(super) fn TabStrip() -> impl IntoView {
                             </button>
                         }
                     }}
+                    // The board beside the code, as a playground opens —
+                    // lit while it is there, a click takes it away again.
+                    <button
+                        type="button"
+                        title=move || {
+                            if state.layout.board_beside.get() {
+                                t!("files.board-hide")
+                            } else {
+                                t!("files.board-show")
+                            }
+                        }
+                        on:click=move |_| controller::toggle_board(state)
+                        class=move || {
+                            let tint = if state.layout.board_beside.get() {
+                                "text-rust"
+                            } else {
+                                "text-label-3 hover:text-label"
+                            };
+                            format!(
+                                "grid w-8 shrink-0 place-items-center border-l border-line hover:bg-sunken {tint}"
+                            )
+                        }
+                    >
+                        <IconView icon=Icon::Simulate size=14 />
+                    </button>
                 }
             })}
 

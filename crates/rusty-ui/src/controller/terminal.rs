@@ -177,13 +177,16 @@ pub(super) fn run_command_on(
 }
 
 /// Run at the opened project rather than at the firmware crate, on the
-/// test channel — the status bar counts what the harness reports.
+/// test channel — the status bar counts what the harness reports. What is
+/// tested is what is on screen, so every unsaved draft is written first.
 ///
 /// For the host half: `cargo test` in a bare-metal crate cannot link a test
 /// harness, and that crate is excluded from the workspace for exactly that
 /// reason. See `run_command` on the backend.
 pub(super) fn run_tests_at_root(state: AppState, line: String) {
-    run_command_in(state, line, true, "test", |_| {});
+    save_all_then(state, move || {
+        run_command_in(state, line, true, "test", |_| {});
+    });
 }
 
 /// A command given as one line, split on whitespace — what the palette and

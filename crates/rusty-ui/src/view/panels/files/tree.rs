@@ -48,24 +48,48 @@ pub fn FilesPanel() -> impl IntoView {
 
         // The editor area holds one group, or two side by side with a grip
         // between them; the tree folds away on the switcher's second click.
+        // The board can stand to the right of it all — Wokwi's shape, code
+        // on the left and the board running it on the right — which is how
+        // a playground opens and anybody may ask for.
         let area: NodeRef<html::Div> = NodeRef::new();
         view! {
-            <div class="flex min-h-0 flex-1">
-                {move || {
-                    (!state.layout.tree_hidden.get()).then(|| {
-                        view! {
-                            <Tree />
-                            <crate::view::split::Handle divider=crate::state::Divider::Tree />
-                        }
-                    })
-                }}
-                <div class="flex min-h-0 min-w-0 flex-1" node_ref=area>
-                    <EditorGroup which=crate::state::Group::First />
+            <div class="flex min-h-0 flex-1 flex-col">
+                <PlaygroundBar />
+                <div class="flex min-h-0 flex-1">
                     {move || {
-                        state.layout.split.get().then(|| {
+                        (!state.layout.tree_hidden.get()).then(|| {
                             view! {
-                                <SplitGrip area=area />
-                                <EditorGroup which=crate::state::Group::Second />
+                                <Tree />
+                                <crate::view::split::Handle divider=crate::state::Divider::Tree />
+                            }
+                        })
+                    }}
+                    <div class="flex min-h-0 min-w-0 flex-1" node_ref=area>
+                        <EditorGroup which=crate::state::Group::First />
+                        {move || {
+                            state.layout.split.get().then(|| {
+                                view! {
+                                    <SplitGrip area=area />
+                                    <EditorGroup which=crate::state::Group::Second />
+                                }
+                            })
+                        }}
+                    </div>
+                    {move || {
+                        state.layout.board_beside.get().then(|| {
+                            view! {
+                                <crate::view::split::Handle divider=crate::state::Divider::Board />
+                                // Never more than half the row: a window a
+                                // laptop's width left the code a sliver
+                                // beside a board dragged wide on a desk.
+                                <div
+                                    class="flex min-h-0 max-w-[50%] flex-none flex-col"
+                                    style=move || {
+                                        format!("width: {}px", state.layout.board_width.get())
+                                    }
+                                >
+                                    {crate::view::panels::board_view()}
+                                </div>
                             }
                         })
                     }}
@@ -73,6 +97,71 @@ pub fn FilesPanel() -> impl IntoView {
             </div>
         }
         .into_any()
+    }
+}
+
+/// What a playground has that a project does not, in one row across the
+/// top of the workspace and only in a playground: that it is one, the chip
+/// it is for and the other chip's, its example back, and keeping it as a
+/// project of its own. Without the row a playground would look exactly like
+/// a project somebody had opened, which it is not — nothing in it is
+/// anywhere they chose.
+#[component]
+fn PlaygroundBar() -> impl IntoView {
+    let state = AppState::expect();
+    const ACTION: &str = "rounded-[6px] px-2 py-0.5 text-footnote text-label-2 \
+                          transition-colors hover:bg-sunken hover:text-label";
+
+    move || {
+        let open = state.playground()?;
+        let chips = rusty_embed::PLAYGROUND_CHIPS
+            .into_iter()
+            .map(|chip| {
+                let here = chip == open;
+                let name = crate::command::chip_name(state, chip);
+                view! {
+                    <button
+                        type="button"
+                        disabled=here
+                        on:click=move |_| controller::open_playground(state, chip)
+                        class=if here {
+                            "rounded-[5px] bg-raised px-2 py-px text-footnote font-medium text-label shadow-sm"
+                        } else {
+                            "rounded-[5px] px-2 py-px text-footnote text-label-3 hover:text-label"
+                        }
+                    >
+                        {name}
+                    </button>
+                }
+            })
+            .collect_view();
+        Some(view! {
+            <div class="flex h-8 flex-none items-center gap-2 border-b border-line bg-sidebar px-3">
+                <span class="text-rust">
+                    <IconView icon=Icon::Simulate size=13 />
+                </span>
+                <span class="text-footnote font-semibold">{t!("playground.title")}</span>
+                <div class="flex items-center gap-px rounded-[6px] bg-sunken p-0.5">{chips}</div>
+                <span class="min-w-0 truncate text-caption text-label-4">
+                    {t!("playground.hint")}
+                </span>
+                <span class="flex-1" />
+                <button
+                    type="button"
+                    on:click=move |_| controller::reset_playground(state)
+                    class=ACTION
+                >
+                    {t!("playground.reset")}
+                </button>
+                <button
+                    type="button"
+                    on:click=move |_| controller::keep_playground(state)
+                    class=ACTION
+                >
+                    {t!("playground.keep")}
+                </button>
+            </div>
+        })
     }
 }
 

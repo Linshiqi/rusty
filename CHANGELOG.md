@@ -9,6 +9,40 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.56
+
+**A playground: code beside a board that runs it, with no project to
+make.** The welcome screen, File ▸ Playground and the command palette now
+offer a playground for the ESP32-C3 and one for the ESP32, the way Wokwi
+starts. It opens straight onto a small program that blinks an LED and reads
+a button, with the simulated board beside the code: press Run and watch the
+LED, hold the button on the board and it blinks faster, and what the program
+prints appears in the Output below. Change the code and press Run again —
+while it runs, Run restarts it with your change. What you write stays in the
+playground for next time; *Restore example* puts the original back, and
+*Keep as project…* copies it into a folder of your own as an ordinary
+project. The ESP32-C3 playground builds with stable Rust; the ESP32 one
+needs the Xtensa toolchain that espup installs.
+
+**The board beside the code, in any project.** The board button at the end
+of the editor's tab strip (also in View and the palette) shows the simulated
+board to the right of the editor, where it can be watched while you type.
+Parts are added from the `+` in the board's corner, and a selected part's
+settings float over the board.
+
+**Build, Run, Test and Flash save first.** Every unsaved file is written
+before they start — and Run also saves changes to the board — so what runs
+is always what is on screen.
+
+**Restart.** While a simulation runs, the Debug button becomes Restart
+(Ctrl+Shift+F5): the simulation stops and starts again with the code on
+screen.
+
+**Fixed:** a part wired to the second GND pin of a devkit — the ESP32-C3
+board has one on each side — or to a second ground symbol read as floating
+in the board's voltages and currents, so the panel refused to show them.
+Every ground on the board is now the same ground.
+
 ## v0.6.55
 
 **Flash in one click.** The ⚡ button now builds the project, writes it to

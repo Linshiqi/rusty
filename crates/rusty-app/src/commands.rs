@@ -47,6 +47,24 @@ pub struct OpenResult {
 #[tauri::command]
 pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<OpenResult> {
     let root = PathBuf::from(&path);
+    let opened = open_at(root.clone(), &state).await?;
+    // Recorded backend-side, at the single point every open goes through, so
+    // the list exists for the CLI and the next launch without the frontend
+    // having to remember to say so. Under the workbench lock like every other
+    // writer of the file.
+    let path = root.display().to_string();
+    state
+        .with_workbench("recording the recent project", move || {
+            storage::record_recent(&path)
+        })
+        .await?;
+    Ok(opened)
+}
+
+/// Detect and hold a project — everything opening one means but the recents
+/// list, which a playground stays out of: it has its own door, and a list of
+/// the projects somebody works on is not the place for rusty's scratch pad.
+async fn open_at(root: PathBuf, state: &AppState) -> Answer<OpenResult> {
     let firmware = {
         let root = root.clone();
         blocking("detection", move || project::firmware_root(&root)).await?
@@ -62,18 +80,7 @@ pub async fn open_project(path: String, state: State<'_, AppState>) -> Answer<Op
     // told nothing at all until this command answers, so a switch showed the
     // old project for the whole of it. `AppState::workspace` loads it when
     // the first panel that needs it asks.
-    state.open(root.clone()).await;
-    // Recorded backend-side, at the single point every open goes through, so
-    // the list exists for the CLI and the next launch without the frontend
-    // having to remember to say so. Under the workbench lock like every other
-    // writer of the file.
-    let opened = root.display().to_string();
-    state
-        .with_workbench("recording the recent project", move || {
-            storage::record_recent(&opened)
-        })
-        .await?;
-
+    state.open(root).await;
     Ok(OpenResult { project: detected })
 }
 
@@ -120,6 +127,11 @@ fn detected_at(root: &Path, firmware: &Path) -> Answer<EmbeddedProject> {
         // firmware crate.
         project.root = root.display().to_string();
     }
+    // Opened by its own door or through File > Open alike, a playground is
+    // laid out as one.
+    project.playground = storage::data_dir()
+        .and_then(|data| rusty_embed::playground::chip_of(&data, root))
+        .map(str::to_string);
     Ok(project)
 }
 
@@ -357,6 +369,48 @@ pub async fn relocate_storage(
     // The cached catalogue was layered from the old directory.
     state.drop_catalog().await;
     Ok(report)
+}
+
+// ─── the playground ──────────────────────────────────────────────────────────
+
+/// The playground for a chip, opened — written the first time and kept
+/// after. Held like any project, and left out of the recents list.
+#[tauri::command]
+pub async fn open_playground(chip: String, state: State<'_, AppState>) -> Answer<OpenResult> {
+    let data = playground_home()?;
+    let root = blocking("preparing the playground", move || {
+        rusty_embed::playground::prepare(&data, &chip)
+    })
+    .await??;
+    open_at(root, &state).await
+}
+
+/// Put the playground's example back, whatever was written over it.
+#[tauri::command]
+pub async fn reset_playground(chip: String) -> Answer<()> {
+    let data = playground_home()?;
+    blocking("restoring the playground's example", move || {
+        rusty_embed::playground::reset(&data, &chip)
+    })
+    .await??;
+    Ok(())
+}
+
+/// Copy the playground to a folder of the user's as a project of its own,
+/// and say where it went — the frontend opens it there.
+#[tauri::command]
+pub async fn keep_playground(chip: String, dest: String) -> Answer<String> {
+    let data = playground_home()?;
+    let kept = blocking("keeping the playground as a project", move || {
+        rusty_embed::playground::keep(&data, &chip, Path::new(&dest))
+    })
+    .await??;
+    Ok(kept.display().to_string())
+}
+
+fn playground_home() -> Answer<PathBuf> {
+    storage::data_dir()
+        .ok_or_else(|| CommandError::new("There is no data directory to keep a playground in."))
 }
 
 // ─── chips and toolchain ─────────────────────────────────────────────────────

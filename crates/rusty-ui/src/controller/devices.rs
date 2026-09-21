@@ -26,7 +26,7 @@ use super::*;
 use crate::{
     activity::{Activity, Kind, Size},
     ipc::{self, cmd},
-    state::{AppState, DeviceAction},
+    state::{AfterStop, AppState, DeviceAction},
 };
 
 /// Re-enumerate serial ports and debug probes.
@@ -138,7 +138,7 @@ pub fn device_action(state: AppState, action: DeviceAction) {
         // than refusing or failing on a busy port; anything else running —
         // a build, a simulation — is not the flash's to stop.
         if action != DeviceAction::Monitor && holds_port(state) {
-            state.device.after_stop.set(Some(action));
+            state.app.after_stop.set(Some(AfterStop::Device(action)));
             stop_session(state);
         }
         return;
@@ -171,9 +171,13 @@ pub fn device_action(state: AppState, action: DeviceAction) {
 /// alike — with the board on screen while the build streams to the dock.
 ///
 /// F5 during a debug session stopped at a breakpoint resumes it, as it does
-/// in every editor whose F5 starts one. And a run that cannot start switches
-/// to the Simulate panel anyway, which lists what is missing: a key that
-/// did nothing would be a refusal nobody can see.
+/// in every editor whose F5 starts one. Run while a simulation runs is
+/// Wokwi's restart: that run stops and a new one starts with the code on
+/// screen — the loop the playground is for. And a run that cannot start
+/// still shows the board, whose panel lists what is missing: a key that did
+/// nothing would be a refusal nobody can see. With the board beside the
+/// editor the panel stays where it is, since the board is on screen
+/// already.
 pub fn simulate(state: AppState, debug: bool) {
     if debug
         && state
@@ -184,8 +188,19 @@ pub fn simulate(state: AppState, debug: bool) {
         debug_control(state, "resume");
         return;
     }
-    state.layout.panel.set("simulate".to_string());
+    let board_in_view = state.layout.board_beside.get_untracked()
+        && state.layout.panel.with_untracked(|p| p == "files");
+    if !board_in_view {
+        state.layout.panel.set("simulate".to_string());
+    }
     if state.app.session_running.get_untracked() {
+        if simulating(state) {
+            state
+                .app
+                .after_stop
+                .set(Some(AfterStop::Simulate { debug }));
+            stop_anything(state);
+        }
         return;
     }
     let ready = state.sim.plan.with_untracked(|plan| {
@@ -193,8 +208,45 @@ pub fn simulate(state: AppState, debug: bool) {
             .is_some_and(|p| p.supported && p.missing.is_empty() && (!debug || p.debug.is_some()))
     });
     if ready {
-        run_simulation(state, debug);
+        // What runs is what is on screen: the code, and the board.
+        save_all_then(state, move || {
+            save_sheet_then(state, move || {
+                if !state.app.session_running.get_untracked() {
+                    run_simulation(state, debug);
+                }
+            })
+        });
     }
+}
+
+/// Stop the simulation that is running and start it again with the code
+/// and the board on screen — the title bar's Restart, Ctrl+Shift+F5 — the
+/// way it was started, under the debugger or not. With nothing running it
+/// is Run.
+pub fn restart_simulation(state: AppState) {
+    let debug = state
+        .app
+        .activity
+        .with_untracked(|activity| activity.as_ref().is_some_and(|a| a.kind == Kind::Debug));
+    if simulating(state) {
+        state
+            .app
+            .after_stop
+            .set(Some(AfterStop::Simulate { debug }));
+        stop_anything(state);
+    } else if !state.app.session_running.get_untracked() {
+        simulate(state, false);
+    }
+}
+
+/// Whether what runs now is a simulation — plain or under the debugger —
+/// which is what Run restarts rather than refuses.
+pub fn simulating(state: AppState) -> bool {
+    state.app.activity.with_untracked(|activity| {
+        activity
+            .as_ref()
+            .is_some_and(|a| matches!(a.kind, Kind::Simulate | Kind::Debug))
+    })
 }
 
 /// Stop whatever runs — the title bar's Stop, Shift+F5. A debug session
@@ -368,6 +420,15 @@ pub fn build_then(state: AppState, after: impl FnOnce(bool) + 'static) {
     if state.app.session_running.get_untracked() {
         return;
     }
+    // What builds is what is on screen.
+    save_all_then(state, move || {
+        if !state.app.session_running.get_untracked() {
+            build_saved(state, after);
+        }
+    });
+}
+
+fn build_saved(state: AppState, after: impl FnOnce(bool) + 'static) {
     let plan = CommandPlan {
         program: "cargo".to_string(),
         args: vec!["build".to_string(), "--release".to_string()],
@@ -558,10 +619,14 @@ pub(super) fn note_exit(state: AppState, code: Option<i32>) {
         text,
         level: None,
     });
-    // The flash that was waiting for this session to let go of the port.
-    if let Some(action) = state.device.after_stop.get_untracked() {
-        state.device.after_stop.set(None);
-        device_action(state, action);
+    // What was waiting for this session to end: a flash that needed its
+    // port, or the same simulation again with the code on screen.
+    if let Some(next) = state.app.after_stop.get_untracked() {
+        state.app.after_stop.set(None);
+        match next {
+            AfterStop::Device(action) => device_action(state, action),
+            AfterStop::Simulate { debug } => simulate(state, debug),
+        }
     }
 }
 

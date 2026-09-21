@@ -23,6 +23,7 @@ mod device;
 mod firmware;
 mod memory;
 mod part;
+mod playground;
 mod project;
 mod registers;
 mod repo;
@@ -41,6 +42,7 @@ pub use part::{
     Arch, Board, CatalogProblem, CatalogSource, Chip, Flasher, PinAssignment, Runtime,
     ToolchainRequirement, UsbMatch, Vendor,
 };
+pub use playground::{PLAYGROUND_CHIPS, PLAYGROUND_MAIN};
 pub use project::{
     CInterop, Edit, EmbeddedProject, FileChange, Migration, PinClaim, PinInfo, PinReport, Problem,
     ScaffoldReport, Severity,

@@ -13,7 +13,12 @@
 //! debug on the simulator; flash and watch the board, with the board itself
 //! last — the device picker, Arduino IDE 2's board-and-port box beside its
 //! Upload. Run and Debug still switch to the Simulate panel, so the board is
-//! on screen while the build streams to the dock.
+//! on screen while the build streams to the dock — unless the board is
+//! already beside the code.
+//!
+//! While a simulation runs the pair becomes Stop and Restart, in place, so
+//! nothing beside them moves: the loop a playground is for — change the
+//! code, run it again — is one click, as Wokwi's is.
 
 use leptos::prelude::*;
 
@@ -87,6 +92,18 @@ pub fn RunControls() -> impl IntoView {
                 matches!(
                     a.kind,
                     crate::activity::Kind::Monitor | crate::activity::Kind::Link
+                )
+            })
+        })
+    });
+    // A simulation is running, plain or under the debugger: what Restart
+    // restarts.
+    let simulating = Signal::derive(move || {
+        state.app.activity.with(|activity| {
+            activity.as_ref().is_some_and(|a| {
+                matches!(
+                    a.kind,
+                    crate::activity::Kind::Simulate | crate::activity::Kind::Debug
                 )
             })
         })
@@ -172,7 +189,21 @@ pub fn RunControls() -> impl IntoView {
                                 .into_any()
                         }
                     }}
+                    // Debug becomes Restart in place while a simulation runs.
                     {move || {
+                        if simulating.get() {
+                            return view! {
+                                <button
+                                    type="button"
+                                    title=with_chord(state, Action::Restart, t!("toolbar.restart"))
+                                    on:click=move |_| controller::restart_simulation(state)
+                                    class=format!("{BUTTON} text-rust")
+                                >
+                                    <IconView icon=Icon::Refresh size=15 />
+                                </button>
+                            }
+                                .into_any();
+                        }
                         let block = debug_block.get();
                         let disabled = running.get() || block.is_some();
                         let title = block
@@ -188,6 +219,7 @@ pub fn RunControls() -> impl IntoView {
                                 <IconView icon=Icon::Bug size=15 />
                             </button>
                         }
+                            .into_any()
                     }}
                     <span class="mx-1.5 h-4 w-px bg-line" />
                     // Flash: build, write, and stay attached. Allowed while a

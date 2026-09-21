@@ -84,6 +84,9 @@ pub mod net;
 pub mod partfile;
 #[cfg(feature = "backend")]
 pub mod pins;
+/// The playground: a project rusty keeps per chip for trying things.
+#[cfg(feature = "backend")]
+pub mod playground;
 #[cfg(feature = "backend")]
 pub mod process;
 #[cfg(feature = "backend")]

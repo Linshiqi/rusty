@@ -21,6 +21,14 @@ pub mod project {
     pub const WORKSPACE_REPORT: &str = "workspace_report";
 }
 
+/// The playground: a project rusty keeps per chip for trying things.
+pub mod playground {
+    pub const OPEN: &str = "open_playground";
+    pub const RESET: &str = "reset_playground";
+    /// Copy it somewhere as a project of its own.
+    pub const KEEP: &str = "keep_playground";
+}
+
 /// What the workbench remembers, and where it keeps it.
 pub mod workbench {
     pub const RECENTS: &str = "recent_projects";

@@ -104,6 +104,8 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
         // Detection answers for the directory it was given; whether that is
         // the opened project or a crate below it is the caller's knowledge.
         firmware_dir: None,
+        // Where rusty keeps its playgrounds is the app's knowledge.
+        playground: None,
         runtime,
         configured_target,
         configured_toolchain,

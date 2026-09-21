@@ -41,6 +41,18 @@ pub enum Action {
     Run,
     Debug,
     Stop,
+    /// The running simulation stopped and started again with the code on
+    /// screen — Run does the same while one runs.
+    Restart,
+    /// A chip's playground, opened: code beside the board, no project to
+    /// make first. The chip as `rusty_embed::PLAYGROUND_CHIPS` spells it.
+    OpenPlayground(&'static str),
+    /// The open playground's example back, and what is in it kept as a
+    /// project of its own.
+    ResetPlayground,
+    KeepPlayground,
+    /// The simulated board beside the editor, or not.
+    ToggleBoard,
     /// Build, write the image to the chosen device, and stay attached.
     Flash,
     /// Build and write the image, and stop there.
@@ -190,6 +202,26 @@ pub fn all(state: AppState) -> Vec<Command> {
         &t!("menu.file.clone"),
         chord(Action::CloneRepository),
     ));
+    for chip in rusty_embed::PLAYGROUND_CHIPS {
+        out.push(action(
+            Action::OpenPlayground(chip),
+            &t!("palette.playground", chip = chip_name(state, chip)),
+            None,
+        ));
+    }
+    // Only in a playground: anywhere else there is no example to put back.
+    if state.playground_now().is_some() {
+        out.push(action(
+            Action::ResetPlayground,
+            &t!("menu.file.playground-reset"),
+            None,
+        ));
+        out.push(action(
+            Action::KeepPlayground,
+            &t!("menu.file.playground-keep"),
+            None,
+        ));
+    }
     out.push(action(
         Action::RefreshProject,
         &t!("menu.project.recheck"),
@@ -211,6 +243,7 @@ pub fn all(state: AppState) -> Vec<Command> {
         (Action::Run, t!("menu.project.run")),
         (Action::Debug, t!("menu.project.debug")),
         (Action::Stop, t!("menu.project.stop")),
+        (Action::Restart, t!("menu.project.restart")),
         (Action::Flash, t!("menu.device.flash")),
         (Action::FlashOnly, t!("menu.device.flash-only")),
         (Action::Monitor, t!("menu.device.monitor")),
@@ -299,6 +332,11 @@ pub fn all(state: AppState) -> Vec<Command> {
         &t!("menu.view.split"),
         chord(Action::SplitEditor),
     ));
+    out.push(view(
+        Action::ToggleBoard,
+        &t!("menu.view.board-beside"),
+        chord(Action::ToggleBoard),
+    ));
 
     for theme in Theme::ALL {
         out.push(Command {
@@ -316,6 +354,16 @@ pub fn all(state: AppState) -> Vec<Command> {
     });
 
     out
+}
+
+/// A chip as people call it — `ESP32-C3` for `esp32c3` — from the
+/// catalogue, or the id in capitals before the catalogue has arrived.
+pub fn chip_name(state: AppState, chip: &str) -> String {
+    state
+        .project
+        .chips
+        .with_untracked(|chips| chips.iter().find(|c| c.id == chip).map(|c| c.name.clone()))
+        .unwrap_or_else(|| chip.to_uppercase())
 }
 
 /// A recents entry as a menu label: the folder, then where it is — two
@@ -348,6 +396,8 @@ pub enum Requires {
     /// otherwise looks like a broken button.
     NavBack,
     NavForward,
+    /// A playground open: its example and keeping it mean nothing elsewhere.
+    Playground,
 }
 
 impl Requires {
@@ -355,6 +405,7 @@ impl Requires {
         match self {
             Requires::Nothing => true,
             Requires::Project => state.has_project(),
+            Requires::Playground => state.playground().is_some(),
             Requires::NavBack => state.editor.nav.with(|nav| nav.can_go_back()),
             Requires::NavForward => state.editor.nav.with(|nav| nav.can_go_forward()),
         }
@@ -531,6 +582,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             &t!("menu.view.split"),
             chord(Action::SplitEditor),
         ),
+        project_entry(
+            Action::ToggleBoard,
+            &t!("menu.view.board-beside"),
+            chord(Action::ToggleBoard),
+        ),
         Item::Separator,
     ];
     for panel in panels::all().into_iter().filter(|p| !p.hidden) {
@@ -582,6 +638,39 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                         &t!("menu.file.clone"),
                         chord(Action::CloneRepository),
                     ),
+                    // Beside New and Open, because it is the third way to
+                    // have something to work on: one already made, per chip.
+                    Item::Submenu {
+                        label: t!("menu.file.playground"),
+                        items: {
+                            let mut items: Vec<Item> = rusty_embed::PLAYGROUND_CHIPS
+                                .into_iter()
+                                .map(|chip| {
+                                    entry(
+                                        Action::OpenPlayground(chip),
+                                        &chip_name(state, chip),
+                                        None,
+                                    )
+                                })
+                                .collect();
+                            items.extend([
+                                Item::Separator,
+                                entry_when(
+                                    Requires::Playground,
+                                    Action::ResetPlayground,
+                                    &t!("menu.file.playground-reset"),
+                                    None,
+                                ),
+                                entry_when(
+                                    Requires::Playground,
+                                    Action::KeepPlayground,
+                                    &t!("menu.file.playground-keep"),
+                                    None,
+                                ),
+                            ]);
+                            items
+                        },
+                    },
                 ];
                 let recents = state.app.recents.get_untracked();
                 if !recents.is_empty() {
@@ -667,6 +756,11 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                     chord(Action::Debug),
                 ),
                 project_entry(Action::Stop, &t!("menu.project.stop"), chord(Action::Stop)),
+                project_entry(
+                    Action::Restart,
+                    &t!("menu.project.restart"),
+                    chord(Action::Restart),
+                ),
                 Item::Separator,
                 project_entry(
                     Action::RefreshProject,
@@ -809,6 +903,19 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
         Action::Stop => {
             if state.app.session_running.get_untracked() {
                 controller::stop_anything(state);
+            }
+        }
+        Action::Restart => {
+            if state.has_project_now() {
+                controller::restart_simulation(state);
+            }
+        }
+        Action::OpenPlayground(chip) => controller::open_playground(state, chip),
+        Action::ResetPlayground => controller::reset_playground(state),
+        Action::KeepPlayground => controller::keep_playground(state),
+        Action::ToggleBoard => {
+            if state.has_project_now() {
+                controller::toggle_board(state);
             }
         }
         Action::Flash | Action::FlashOnly | Action::Monitor => {

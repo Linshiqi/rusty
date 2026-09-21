@@ -310,7 +310,9 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         .as_ref()
         .is_some_and(|emulator| emulator.gpio_model && !emulator.peripherals)
     {
-        let note = "this is an early build of rusty's QEMU: it models the pins but not the                     ADC, the I2C bus or SPI, so read_oneshot() and bus transactions wait for                     ever. The Simulate panel's Upgrade installs the current build.";
+        let note = "this is an early build of rusty's QEMU: it models the pins but not the \
+                    ADC, the I2C bus or SPI, so read_oneshot() and bus transactions wait for \
+                    ever. The Simulate panel's Upgrade installs the current build.";
         on(Event::Note(note));
         outcome.notes.push(note.to_string());
     }

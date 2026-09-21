@@ -12,6 +12,12 @@
 //! At run time each lamp lights from the pin levels the firmware reports
 //! or the emulator holds, and the caption says which: the stock QEMU
 //! exposes no GPIO state, and the board says so rather than pretending.
+//!
+//! The same editor stands beside the code, narrower (`compact`): Wokwi's
+//! shape, and the playground's. There the sheet is the whole pane, and the
+//! parts library and the inspector float over it when they are wanted — the
+//! library from the corner's `+`, the inspector while something is selected
+//! — rather than taking two columns out of a pane that is only a column.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -55,7 +61,11 @@ const SHEET_BUTTON: &str = "grid size-7 place-items-center rounded-[6px] text-la
 const REACH: f64 = 12.0;
 
 #[component]
-pub fn Simulate() -> impl IntoView {
+pub fn Simulate(
+    /// Drawn in a pane beside the editor rather than as a panel of its own.
+    #[prop(optional)]
+    compact: bool,
+) -> impl IntoView {
     let state = AppState::expect();
 
     Effect::new(move |first: Option<()>| {
@@ -284,6 +294,7 @@ pub fn Simulate() -> impl IntoView {
                     })
                     library=plan.library.clone()
                     sensors=plan.parts.clone()
+                    compact=compact
                 />
             </div>
         }
@@ -421,9 +432,16 @@ fn BoardEditor(
     /// gets no sliders, which is the tunables' rule: a range this panel
     /// invented is how somebody feeds 2000 °/s to a loop written for 250.
     sensors: Vec<rusty_embed::sensor::Spec>,
+    /// Beside the editor: the library and the inspector float over the
+    /// sheet when wanted instead of standing either side of it.
+    #[prop(optional)]
+    compact: bool,
 ) -> impl IntoView {
     let state = AppState::expect();
     let running = state.app.session_running;
+    // The floating library, beside the editor. Closed until asked for, and
+    // closed again by the part it adds, as Wokwi's picker is.
+    let library_open = RwSignal::new(false);
     let chip = board.chip.clone();
     // Copy handles to the chip's name, so the closures the parts' views
     // share can be `Copy` themselves — a `String` captured by move is what
@@ -773,6 +791,24 @@ fn BoardEditor(
             controller::save_sim_board(state, sheet, dirty);
         })
     };
+    // Run writes this sheet first when it has changes the file does not, so
+    // the emulator is wired as the screen shows.
+    {
+        let chip = chip.clone();
+        let unsaved = Callback::new(move |_: ()| {
+            if !dirty.try_get_untracked()? {
+                return None;
+            }
+            Some(sheet_of(
+                &chip,
+                &parts.try_get_untracked()?,
+                &wires.try_get_untracked()?,
+                &no_connect.try_get_untracked()?,
+            ))
+        });
+        let number = controller::offer_unsaved_sheet(state, unsaved);
+        on_cleanup(move || controller::withdraw_unsaved_sheet(state, number));
+    }
 
     let to_world = move |client_x: f64, client_y: f64| -> (f64, f64) {
         let Some(element) = canvas.get_untracked() else {
@@ -805,21 +841,48 @@ fn BoardEditor(
         dirty.set(true);
     };
     // Frame everything the sheet holds, the way every canvas tool's F does.
-    let fit_view = move || {
-        let Some(element) = canvas.get_untracked() else {
+    // Everything on screen, no larger than `cap`, centred in whichever
+    // direction has room to spare.
+    //
+    // Every read is a `try_`: the fit on open runs a frame after mount, and
+    // by then this editor may already be gone — replaced when the plan
+    // loads a second time — and reading a disposed handle panics, which in
+    // wasm takes the whole window with it.
+    let fit_within = move |cap: f64| {
+        let Some(Some(element)) = canvas.try_get_untracked() else {
+            return;
+        };
+        let Some((min, max)) = parts.try_with_untracked(|list| bounds(list)) else {
             return;
         };
         let rect = element.get_bounding_client_rect();
-        let (min, max) = bounds(&parts.get_untracked());
         let (w, h) = (max.0 - min.0 + 80.0, max.1 - min.1 + 80.0);
-        if w <= 0.0 || h <= 0.0 {
+        if w <= 0.0 || h <= 0.0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
             return;
         }
         let k = (rect.width() / w)
             .min(rect.height() / h)
-            .clamp(CANVAS_ZOOM_RANGE.0, CANVAS_ZOOM_RANGE.1);
-        view.set((-(min.0 - 40.0) * k, -(min.1 - 40.0) * k, k));
+            .clamp(CANVAS_ZOOM_RANGE.0, cap.max(CANVAS_ZOOM_RANGE.0));
+        let _ = view.try_set((
+            (rect.width() - w * k) / 2.0 - (min.0 - 40.0) * k,
+            (rect.height() - h * k) / 2.0 - (min.1 - 40.0) * k,
+            k,
+        ));
     };
+    let fit_view = move || fit_within(CANVAS_ZOOM_RANGE.1);
+    // Beside the editor the pane is a column of whatever width it was
+    // dragged to, so the board opens fitted to it, no larger than life —
+    // left at the origin, a devkit placed for the panel's width stood half
+    // off the pane's edge.
+    if compact {
+        Effect::new(move |fitted: Option<bool>| {
+            if fitted == Some(true) || canvas.get().is_none() {
+                return fitted == Some(true);
+            }
+            request_animation_frame(move || fit_within(1.0));
+            true
+        });
+    }
 
     let straighten_wire = move |index: usize| {
         checkpoint();
@@ -1048,15 +1111,37 @@ fn BoardEditor(
         }
     };
 
+    // Whether the inspector has anything to say — beside the editor it is
+    // drawn only then.
+    let inspecting = move || {
+        selected.get().is_some() || selected_wire.get().is_some() || marked.with(|m| m.len() > 1)
+    };
+
     view! {
         <div class="flex min-h-0 flex-1 flex-col">
-            <div class="flex min-h-0 flex-1">
-                <Library
-                    symbols=symbols
-                    on_add=Callback::new(move |symbol: Symbol| add_part(symbol))
-                    on_import=Callback::new(move |number: String| import(number))
-                    importing=Signal::derive(move || importing.get())
-                />
+            <div class="relative flex min-h-0 flex-1">
+                <div class=move || {
+                    if !compact {
+                        "contents"
+                    } else if library_open.get() {
+                        // Below the corner's controls, as the inspector is:
+                        // in a narrow pane the two meet, and the `+` that
+                        // closes the library must not be under it.
+                        "absolute top-12 bottom-2 left-2 z-30 flex overflow-hidden rounded-[8px] shadow-2xl ring-1 ring-line-strong"
+                    } else {
+                        "hidden"
+                    }
+                }>
+                    <Library
+                        symbols=symbols
+                        on_add=Callback::new(move |symbol: Symbol| {
+                            add_part(symbol);
+                            library_open.set(false);
+                        })
+                        on_import=Callback::new(move |number: String| import(number))
+                        importing=Signal::derive(move || importing.get())
+                    />
+                </div>
 
                 <div
                     node_ref=canvas
@@ -1222,6 +1307,9 @@ fn BoardEditor(
                         if event.button() != 0 {
                             return;
                         }
+                        // A press on the sheet puts the floating library
+                        // away, as a press outside any popover does.
+                        library_open.set(false);
                         // An armed part lands where the click says, snapped.
                         if let Some(symbol) = placing.get_untracked() {
                             event.prevent_default();
@@ -1597,6 +1685,28 @@ fn BoardEditor(
                             event.stop_propagation();
                         }
                     >
+                        // Beside the editor the library is behind this, as
+                        // Wokwi's parts are behind its `+`.
+                        {compact
+                            .then(|| {
+                                view! {
+                                    <button
+                                        type="button"
+                                        title=t!("simulate.add-part")
+                                        on:click=move |_| library_open.update(|open| *open = !*open)
+                                        class=move || {
+                                            if library_open.get() {
+                                                format!("{SHEET_BUTTON} bg-selection text-rust")
+                                            } else {
+                                                SHEET_BUTTON.to_string()
+                                            }
+                                        }
+                                    >
+                                        <IconView icon=Icon::Plus size=14 />
+                                    </button>
+                                    <span class="mx-0.5 h-4 w-px bg-line" />
+                                }
+                            })}
                         <button
                             type="button"
                             title=t!("simulate.save")
@@ -1608,10 +1718,15 @@ fn BoardEditor(
                         </button>
                         // KiCad, both ways. Beside Save because that is what
                         // they are — the same sheet, written somewhere else.
-                        <span class="mx-0.5 h-4 w-px bg-line" />
+                        // Not beside the editor, where the corner is a
+                        // column wide; the panel has them.
+                        <span class=move || {
+                            if compact { "hidden" } else { "mx-0.5 h-4 w-px bg-line" }
+                        } />
                         <button
                             type="button"
                             title=t!("simulate.schematic-import")
+                            class:hidden=compact
                             on:click=move |_| {
                                 controller::import_schematic(
                                     state,
@@ -1644,6 +1759,7 @@ fn BoardEditor(
                         <button
                             type="button"
                             title=t!("simulate.kicad-export")
+                            class:hidden=compact
                             on:click=move |_| {
                                 let sheet = sheet_now();
                                 controller::export_kicad(state, sheet);
@@ -1678,6 +1794,7 @@ fn BoardEditor(
                         <button
                             type="button"
                             title=t!("simulate.tidy")
+                            class:hidden=compact
                             on:click=move |_| {
                                 checkpoint();
                                 parts.update(|list| {
@@ -1753,6 +1870,7 @@ fn BoardEditor(
                         <button
                             type="button"
                             title=t!("simulate.grid")
+                            class:hidden=compact
                             on:click=move |_| {
                                 grid.update(|g| {
                                     *g = match *g as i32 {
@@ -1770,6 +1888,29 @@ fn BoardEditor(
                                 {move || format!("{}", grid.get() as i32)}
                             </span>
                         </button>
+                        // The pane's own two: the whole editor, and away.
+                        {compact
+                            .then(|| {
+                                view! {
+                                    <span class="mx-0.5 h-4 w-px bg-line" />
+                                    <button
+                                        type="button"
+                                        title=t!("simulate.open-panel")
+                                        on:click=move |_| state.layout.panel.set("simulate".to_string())
+                                        class=SHEET_BUTTON
+                                    >
+                                        <IconView icon=Icon::External size=14 />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        title=t!("simulate.hide-board")
+                                        on:click=move |_| state.layout.board_beside.set(false)
+                                        class=SHEET_BUTTON
+                                    >
+                                        <IconView icon=Icon::Close size=14 />
+                                    </button>
+                                }
+                            })}
                     </div>
                     <div
                         class="absolute"
@@ -3896,7 +4037,15 @@ fn BoardEditor(
                 </div>
 
                 // ── properties ───────────────────────────────────────────
-                <div class="flex w-[200px] flex-none flex-col overflow-y-auto border-l border-line bg-sidebar">
+                <div class=move || {
+                    if !compact {
+                        "flex w-[200px] flex-none flex-col overflow-y-auto border-l border-line bg-sidebar"
+                    } else if inspecting() {
+                        "absolute top-12 right-2 bottom-2 z-30 flex w-[220px] flex-col overflow-y-auto rounded-[8px] bg-sidebar shadow-2xl ring-1 ring-line-strong"
+                    } else {
+                        "hidden"
+                    }
+                }>
                     {move || {
                         // A selected wire outranks a selected part.
                         if let Some(index) = selected_wire.get() {

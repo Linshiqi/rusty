@@ -102,6 +102,12 @@ pub fn choose_project(state: AppState) {
 
 /// Open a folder as the project.
 pub fn open_project(state: AppState, path: String) {
+    open_project_then(state, path, || {});
+}
+
+/// [`open_project`], then `then` once it is open — how a playground kept as
+/// a project stays laid out the way it was being worked on.
+pub fn open_project_then(state: AppState, path: String, then: impl FnOnce() + 'static) {
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
@@ -116,16 +122,29 @@ pub fn open_project(state: AppState, path: String) {
         move |result| {
             project_opened(state, result);
             load_recents(state);
+            then();
         },
     );
 }
 
-/// Everything that follows a successful open, shared by the picker path and
-/// the recents path so the two cannot drift apart.
-fn project_opened(state: AppState, result: OpenResult) {
+/// Everything that follows a successful open, shared by the picker path, the
+/// recents path and the playground's so none of them can drift apart.
+pub(super) fn project_opened(state: AppState, result: OpenResult) {
     {
         {
+            let was_playground = state.playground_now().is_some();
+            let playground = result.project.playground.clone();
             state.project.detected.set(Some(result.project));
+            // A playground is code beside its board, Wokwi's shape, and
+            // opens on its code; leaving one puts the board back where it
+            // was. Between two ordinary projects the board stays as it was
+            // set — anybody may put it beside their code.
+            if playground.is_some() {
+                state.layout.board_beside.set(true);
+                state.layout.panel.set("files".to_string());
+            } else if was_playground {
+                state.layout.board_beside.set(false);
+            }
             // The last project's analysis describes packages that are not
             // there; dropped before the new one is asked for, so no panel
             // shows the old numbers while the answer is in flight.
@@ -181,7 +200,8 @@ fn project_opened(state: AppState, result: OpenResult) {
                 .detected
                 .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
             {
-                restore_tabs(state, &root);
+                let first = playground.map(|_| rusty_embed::PLAYGROUND_MAIN.to_string());
+                restore_tabs(state, &root, first);
             }
         }
     }
@@ -211,6 +231,15 @@ fn reload_project(state: AppState) {
         ipc::get::<EmbeddedProject>(cmd::project::STATUS),
         move |project| {
             let root = project.root.clone();
+            let first = project
+                .playground
+                .as_ref()
+                .map(|_| rusty_embed::PLAYGROUND_MAIN.to_string());
+            // A window coming back to a playground lays it out as one; a
+            // re-check leaves the board where the user put it.
+            if !state.has_project_now() && project.playground.is_some() {
+                state.layout.board_beside.set(true);
+            }
             state.project.detected.set(Some(project));
             refresh_toolchain(state);
             refresh_firmware(state);
@@ -222,7 +251,7 @@ fn reload_project(state: AppState) {
             // A WebView reload reaches a project the backend never closed —
             // this path skips project_opened, so the strip is replayed here
             // too or a refresh would silently drop every open tab.
-            restore_tabs(state, &root);
+            restore_tabs(state, &root, first);
         },
     );
 }

@@ -90,6 +90,12 @@ pub fn defaults() -> Vec<Binding> {
             action: Action::Stop,
         },
         Binding {
+            id: "project.restart".into(),
+            label: t!("menu.project.restart"),
+            default: "Ctrl+Shift+F5".into(),
+            action: Action::Restart,
+        },
+        Binding {
             id: "device.flash".into(),
             label: t!("menu.device.flash"),
             default: "Ctrl+U".into(),

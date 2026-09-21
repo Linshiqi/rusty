@@ -1,0 +1,51 @@
+# The playground's board: an LED on GPIO2 behind the resistor it needs, and
+# a push button from GPIO4 to ground. Change it right here on the sheet —
+# drag parts in from the library, wire pin to pin — and the firmware sees
+# it on the next Run.
+version = 2
+
+[board]
+chip = "esp32"
+x = 160
+y = 96
+
+[[part]]
+ref = "R1"
+symbol = "Device:R"
+value = "220"
+x = 440
+y = 224
+rot = 90
+
+[[part]]
+ref = "D1"
+symbol = "Device:LED"
+value = "red"
+x = 536
+y = 224
+# A red LED drops about two volts, which is what lets the sheet say how
+# much current the resistor lets through it.
+props = { vf = "2.0" }
+
+[[part]]
+ref = "SW1"
+symbol = "Device:SW_Push"
+x = 440
+y = 304
+
+# GND sits twice on this devkit's header; the one on the right is row 17.
+[[wire]]
+from = "U1.GPIO2"
+to = "R1.1"
+[[wire]]
+from = "R1.2"
+to = "D1.A"
+[[wire]]
+from = "D1.K"
+to = "U1.17"
+[[wire]]
+from = "U1.GPIO4"
+to = "SW1.1"
+[[wire]]
+from = "SW1.2"
+to = "U1.17"

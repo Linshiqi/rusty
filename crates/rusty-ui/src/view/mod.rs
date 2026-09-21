@@ -322,6 +322,7 @@ fn Stage() -> impl IntoView {
                         detail=t!("chrome.no-project-detail")
                     >
                         <OpenProjectButton kind=ButtonKind::Primary />
+                        <Playgrounds />
                         // The way back to yesterday's work, one click deep.
                         {move || {
                             let recents = state.app.recents.get();
@@ -366,6 +367,63 @@ fn Stage() -> impl IntoView {
             }
             Some(panel) => (panel.render)(),
             None => ().into_any(),
+        }
+    }
+}
+
+/// The other way to have something to work on: a playground per chip, its
+/// code beside a board that runs it, with no project to make first.
+#[component]
+fn Playgrounds() -> impl IntoView {
+    let state = AppState::expect();
+
+    move || {
+        let cards = rusty_embed::PLAYGROUND_CHIPS
+            .into_iter()
+            .map(|chip| {
+                let name = crate::command::chip_name(state, chip);
+                // What it takes, from the catalogue: the architecture, and
+                // whether stable Rust builds for it or espup's has to.
+                let needs = state.project.chips.with(|chips| {
+                    chips.iter().find(|c| c.id == chip).map(|c| {
+                        let toolchain = match c.toolchain {
+                            rusty_embed::ToolchainRequirement::Stock => {
+                                t!("chrome.playground-stable")
+                            }
+                            rusty_embed::ToolchainRequirement::EspXtensa => {
+                                t!("chrome.playground-espup")
+                            }
+                        };
+                        format!("{} · {toolchain}", c.arch.label())
+                    })
+                });
+                view! {
+                    <button
+                        type="button"
+                        on:click=move |_| controller::open_playground(state, chip)
+                        class="flex min-w-0 flex-col items-start gap-0.5 rounded-[8px] px-3 py-2 text-left ring-1 ring-line transition-colors hover:bg-sunken hover:ring-line-strong"
+                    >
+                        <span class="flex items-center gap-1.5 text-callout font-medium">
+                            <span class="text-rust">
+                                <IconView icon=Icon::Simulate size=14 />
+                            </span>
+                            {name}
+                        </span>
+                        <span class="truncate text-footnote text-label-3">
+                            {needs.unwrap_or_default()}
+                        </span>
+                    </button>
+                }
+            })
+            .collect_view();
+        view! {
+            <div class="mt-5 flex w-full max-w-[52ch] flex-col gap-1.5 text-left">
+                <div class="text-caption font-semibold tracking-[0.06em] text-label-3 uppercase">
+                    {t!("chrome.playground")}
+                </div>
+                <p class="text-footnote text-label-3">{t!("chrome.playground-detail")}</p>
+                <div class="mt-1 grid grid-cols-2 gap-2">{cards}</div>
+            </div>
         }
     }
 }

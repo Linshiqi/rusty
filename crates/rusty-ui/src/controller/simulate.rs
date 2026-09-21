@@ -502,6 +502,59 @@ fn say(state: AppState, message: String) {
     });
 }
 
+/// Write the board editor's unsaved sheet, if it has one, then `then` —
+/// what Run does after writing the code, so the emulator's pin channel, its
+/// buses and every button's polarity come from the sheet on screen and not
+/// the one last saved. A write that fails stops here with the banner.
+pub fn save_sheet_then(state: AppState, then: impl FnOnce() + 'static) {
+    // `try_run`: the callback belongs to the editor that offered it, and an
+    // editor already gone answers nothing rather than panicking the window.
+    let sheet = state
+        .sim
+        .unsaved_sheet
+        .get_value()
+        .and_then(|(_, unsaved)| unsaved.try_run(()).flatten());
+    let Some(board) = sheet else {
+        then();
+        return;
+    };
+    #[derive(serde::Serialize)]
+    struct Args {
+        board: rusty_embed::Sheet,
+    }
+    let args = Args { board };
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::sim::SAVE_BOARD, &args).await },
+        move |()| {
+            // The editor reopens on the saved sheet, which is its own.
+            load_sim_plan(state);
+            then();
+        },
+    );
+}
+
+/// Register the board editor's unsaved sheet for Run to ask for, under a
+/// number of its own; the returned number takes it back.
+pub fn offer_unsaved_sheet(state: AppState, unsaved: crate::state::UnsavedSheet) -> u64 {
+    let number = state
+        .sim
+        .unsaved_sheet
+        .with_value(|slot| slot.as_ref().map_or(0, |(n, _)| n + 1));
+    state.sim.unsaved_sheet.set_value(Some((number, unsaved)));
+    number
+}
+
+/// Take back the registration made under `number` — and only that one: the
+/// editor replacing this one may have registered already.
+pub fn withdraw_unsaved_sheet(state: AppState, number: u64) {
+    state.sim.unsaved_sheet.update_value(|slot| {
+        if slot.as_ref().is_some_and(|(n, _)| *n == number) {
+            *slot = None;
+        }
+    });
+}
+
 pub fn save_sim_board(state: AppState, board: rusty_embed::Sheet, dirty: RwSignal<bool>) {
     #[derive(serde::Serialize)]
     struct Args {

@@ -51,6 +51,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_project,
+            commands::open_playground,
+            commands::reset_playground,
+            commands::keep_playground,
             commands::project_status,
             commands::project_path,
             commands::workspace_report,
@@ -275,6 +278,9 @@ mod wire_names {
 
         assert_named! {
             cmd::project::OPEN => commands::open_project,
+            cmd::playground::OPEN => commands::open_playground,
+            cmd::playground::RESET => commands::reset_playground,
+            cmd::playground::KEEP => commands::keep_playground,
             cmd::project::STATUS => commands::project_status,
             cmd::project::PATH => commands::project_path,
             cmd::project::WORKSPACE_REPORT => commands::workspace_report,

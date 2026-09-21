@@ -59,7 +59,10 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # exercised here at all — and the chips carried no `gpio`, which draws a
 # devkit with rails and no header and makes every wire to a pin a finding.
 # It is a divider on a C3 now: two resistors, both rails, a tap on GPIO4,
-# and 1.10 V at the middle for anyone to check.
+# and 1.10 V at the middle for anyone to check. Two switches: set
+# `mock.norecents` in localStorage to start on the welcome screen (a launch
+# that reopens the last project never shows it), and `__mock.pickFolder` to
+# answer the folder picker instead of cancelling it.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -1962,7 +1965,7 @@ their board-and-port box, Xcode's destination picker and activity view,
   waits there (`Device::pending`) and runs when a row is picked, rather than
   asking for the click again. A port whose boards cannot carry the project's
   chip says so on its row, and the plan's warning asks before the write.
-- **A monitor holding the port is let go first** (`Device::after_stop`), as
+- **A monitor holding the port is let go first** (`AfterStop::Device`), as
   PlatformIO's Upload does. The flash starts from the old session's own
   exit (`note_exit`), not from the stop's reply: that is the only moment the
   port is certainly free, and the stop's reply can land after the build has
@@ -2005,6 +2008,76 @@ their board-and-port box, Xcode's destination picker and activity view,
   they type characters, which is why this binding system leaves Alt letters
   alone. Every verb is also a menu row and a palette entry — the same
   `Action`.
+
+## The playground
+
+Wokwi's new project, without the folder, the generator or the account: one
+click from the welcome screen, File ▸ Playground or the palette opens code
+beside a board that runs it. `rusty_embed::playground` writes one project
+per chip into `<data dir>/playground/<chip>/`; the window's half is
+`controller/playground.rs`.
+
+- **The templates are the proven projects, not new ones**
+  (`data/playground/<chip>/*.in`, compiled in): the C3's is
+  `examples/blink-rust`'s shape and lockfile, which gate 7 boots, and the
+  ESP32's is `qemu/esp32-probe`'s, which gate 16 boots. Each board is
+  checked by a test against the sheet's own rules *and* required to solve —
+  the red LED carries its `vf` — because a template the rules disagreed
+  with would open every new user's first minute on a warning, and one the
+  solver refused on a refusal in the inspector. A ground on a devkit that
+  has two is spelled by its row (`U1.13`), as the editor itself writes it.
+  The lockfiles are in cargo's own order, so the first build leaves them
+  alone. The release profile is made for editing, not shipping — no LTO,
+  incremental — so a change runs in about two seconds after the first
+  build, measured through `rusty-cli sim` on both chips. The `.in` on every
+  name keeps any tool walking the repository from taking a template for a
+  project of its own.
+- **Written once, never over a file that is there**: what somebody wrote in
+  the playground yesterday is theirs today. *Restore example* rewrites the
+  templates and then opens the playground again from the disk, so no draft
+  of the old code is left on screen to be saved back over the example.
+  *Keep as project…* copies everything but `target/` into an empty folder
+  (refused when the folder has anything in it, or is inside the playground)
+  and opens that.
+- **Out of the recents list, and marked by the app, not by detection.**
+  `open_playground` goes through `open_at`, which is `open_project` less the
+  recents write — the list is the projects somebody works on, and the
+  playground has its own doors. `EmbeddedProject.playground` names the chip;
+  detection cannot know it (it is a fact about where rusty keeps its data),
+  so `detected_at` sets it, which is why the playground's folder opened
+  through File ▸ Open is laid out as one too.
+- **Code beside the board is a layout anybody may have**
+  (`Layout.board_beside`, `Divider::Board`, anchored to the right like the
+  assistant). The editor strip's board button, View and the palette toggle
+  it; entering a playground turns it on, leaving one turns it off, and
+  between two ordinary projects it stays as it was set. A kept playground
+  keeps it, since it is the same work carrying on. With the board in view,
+  Run no longer switches to the Simulate panel.
+- **Beside the editor the sheet is the whole pane** (`Simulate { compact }`):
+  the parts library opens from the corner's `+` and closes on the part it
+  adds, as Wokwi's picker does, and the inspector floats over the sheet
+  while something is selected. Both stay mounted and are hidden by class
+  rather than rebuilt, because the inspector's closure captures half the
+  editor and a conditional around it would have to be rebuilt per change.
+  Import, export, tidy and the grid dial are the panel's; the pane's own
+  two are *open the whole editor* and *hide*.
+- **What runs is what is on screen — the code and the board.** Build, Run,
+  Test and Flash write every unsaved draft first (`save_all_then`: both
+  groups, the parked tabs, one write per path), moving each document
+  forward to the bytes written as auto-save does, so a key pressed during
+  the round trip is not replaced by the disk's copy. Run also writes the
+  board editor's unsaved sheet (`save_sheet_then`), because the pin
+  channel's polarities, the buses and the knobs are read off the file. The
+  editor on screen offers its sheet under a number (`offer_unsaved_sheet`)
+  and withdraws only that number: when the plan reloads, the editor that
+  replaces it can register before the old one's cleanup runs.
+- **Run while a simulation runs restarts it**, Wokwi's loop — change the
+  code, run it again. It is the flash-waits-for-the-monitor mechanism
+  generalised: `AfterStop::Simulate` is set, the run is stopped, and the
+  new run starts from the old one's own exit (`note_exit`), the one moment
+  the old session's end cannot clear the new one's running flag. While a
+  simulation runs the title bar's Debug becomes Restart in place, so
+  nothing beside it moves, and Ctrl+Shift+F5 is VS Code's restart.
 
 ## Updating itself
 
@@ -4146,6 +4219,16 @@ hand, and every bug below was caught that way and by nothing else.
   millisecond, which is a curve with two points on it and is not
   distinguishable from an echo. Ten times slower is ten points per constant.
   `qemu/live-probe`'s sheet says so in its own header.
+- **Every ground on the sheet is the one ground** (`circuit::of`). A
+  devkit's GND pins are one piece of copper — the C3's has one on each
+  side — and a `rusty:GND` drawn twice is two symbols for one net; the
+  rules have always read each of them as low. The bridge took one for
+  ground and left anything on another floating, so the solver called
+  "floating" or "contradiction" a sheet the rules drew lit — found by the
+  playground, whose LED went to the other GND. The rest are joined to the
+  first with a `Short`. And a devkit row is found by its *number* first
+  (`kit_net`): a name two rows share keys only one of them in
+  `solid_nets`, so asked first it answered for both rows.
 - **A pin nobody has reported is not a source.** rusty will not claim to
   know the voltage of a pin it has heard nothing about, so the first report
   of one adds an element and rebuilds the circuit — and the voltages are

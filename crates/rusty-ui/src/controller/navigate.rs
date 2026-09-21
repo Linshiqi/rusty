@@ -82,7 +82,11 @@ pub fn remember_tabs(state: AppState) {
 /// A file that is gone drops off the strip without a word ([`reopen_file`]):
 /// the strip is keyed on the project *directory*, and a directory can hold a
 /// different project than it did last week.
-pub fn restore_tabs(state: AppState, root: &str) {
+///
+/// `first` is opened when there is no strip to put back — a playground's
+/// code, which nobody should have to go looking for in a tree before they
+/// can start typing.
+pub fn restore_tabs(state: AppState, root: &str, first: Option<String>) {
     // A detached window edits one file; the shell's saved strip is not its
     // business to reopen.
     if state.app.detached.with_untracked(Option::is_some) {
@@ -133,7 +137,12 @@ pub fn restore_tabs(state: AppState, root: &str) {
                 Vec::new(),
                 None,
             ),
-            (None, None) => return,
+            (None, None) => {
+                if let Some(first) = first {
+                    reopen_file(state, first);
+                }
+                return;
+            }
         };
 
         // The strip comes back whole; only one file is read.
@@ -150,7 +159,7 @@ pub fn restore_tabs(state: AppState, root: &str) {
         // nothing on screen behind it is a window that looks like it failed.
         state.editor.tabs.set(tabs.clone());
         let active = active.filter(|path| tabs.iter().any(|t| t == path));
-        if let Some(active) = active.or_else(|| tabs.first().cloned()) {
+        if let Some(active) = active.or_else(|| tabs.first().cloned()).or(first) {
             reopen_file(state, active);
         }
         // The second group, when there was one: its strip, its file, and the
