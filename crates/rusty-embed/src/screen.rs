@@ -42,17 +42,26 @@ pub enum Panel {
     /// Sino Wealth's SH1106: the 1.3" module, and the same command set bar
     /// the addressing modes.
     Sh1106,
+    /// Hitachi's HD44780 behind a PCF8574 expander — the two-line character
+    /// module in every kit. Nothing about its traffic resembles the other
+    /// two's: the bytes are an expander's port states and the picture comes
+    /// off their edges ([`crate::lcd`]). It is a panel here anyway because
+    /// what it ends as is the same thing — lit dots on glass at an address —
+    /// and a second kind of display beside this one would be a second copy
+    /// of every place a screen is declared, kept, fed and drawn.
+    Hd44780,
 }
 
 impl Panel {
     /// Every panel, for a menu to iterate rather than spell.
-    pub const ALL: [Panel; 2] = [Panel::Ssd1306, Panel::Sh1106];
+    pub const ALL: [Panel; 3] = [Panel::Ssd1306, Panel::Sh1106, Panel::Hd44780];
 
     /// The id the sheet stores in a part's `panel` prop.
     pub fn id(self) -> &'static str {
         match self {
             Panel::Ssd1306 => "ssd1306",
             Panel::Sh1106 => "sh1106",
+            Panel::Hd44780 => "hd44780",
         }
     }
 
@@ -61,6 +70,7 @@ impl Panel {
         match self {
             Panel::Ssd1306 => "SSD1306",
             Panel::Sh1106 => "SH1106",
+            Panel::Hd44780 => "HD44780",
         }
     }
 
@@ -78,14 +88,29 @@ impl Panel {
         match self {
             Panel::Ssd1306 => 128,
             Panel::Sh1106 => 132,
+            // The widest character module sold, in dots.
+            Panel::Hd44780 => 20 * crate::lcd::CELL_W,
+        }
+    }
+
+    /// Whether the panel's bytes are a framebuffer's or an expander's.
+    pub fn is_character(self) -> bool {
+        matches!(self, Panel::Hd44780)
+    }
+
+    /// What `Screen::of` makes: the module this panel usually comes as.
+    fn usual(self) -> (usize, usize) {
+        match self {
+            Panel::Hd44780 => (16 * crate::lcd::CELL_W, 2 * crate::lcd::CELL_H),
+            _ => (128, 64),
         }
     }
 
     /// Which RAM column the leftmost pixel of the glass is.
     fn offset(self) -> usize {
         match self {
-            Panel::Ssd1306 => 0,
             Panel::Sh1106 => 2,
+            _ => 0,
         }
     }
 
@@ -183,12 +208,26 @@ pub struct Screen {
     /// framebuffer after it is a driver that has started and drawn nothing,
     /// which is worth telling from a screen nobody has addressed.
     written: bool,
+    /// Present exactly for a character panel, and then it is where
+    /// everything above is kept instead.
+    chars: Option<crate::lcd::Chars>,
 }
 
 impl Screen {
-    /// A screen of the size the module usually is: 128×64.
+    /// A screen of the size the module usually is: 128×64 dots, or the
+    /// sixteen by two characters a kit's LCD comes as.
     pub fn of(panel: Panel) -> Screen {
-        Screen::new(panel, 128, 64)
+        let (width, height) = panel.usual();
+        Screen::new(panel, width, height)
+    }
+
+    /// A character module of this many characters across and down.
+    pub fn of_characters(cols: usize, rows: usize) -> Screen {
+        Screen::new(
+            Panel::Hd44780,
+            cols * crate::lcd::CELL_W,
+            rows * crate::lcd::CELL_H,
+        )
     }
 
     /// A screen of a stated size.
@@ -224,6 +263,9 @@ impl Screen {
             all_on: false,
             start_line: 0,
             written: false,
+            chars: panel.is_character().then(|| {
+                crate::lcd::Chars::new(width / crate::lcd::CELL_W, height / crate::lcd::CELL_H)
+            }),
         }
     }
 
@@ -241,12 +283,20 @@ impl Screen {
 
     /// Whether the driver has switched the panel on.
     pub fn is_on(&self) -> bool {
-        self.on
+        self.chars.as_ref().map_or(self.on, |lcd| lcd.is_on())
     }
 
     /// Whether anything has ever been drawn.
     pub fn written(&self) -> bool {
-        self.written
+        self.chars
+            .as_ref()
+            .map_or(self.written, |lcd| lcd.written())
+    }
+
+    /// The character module behind the glass, for anything that wants the
+    /// words rather than the dots.
+    pub fn characters(&self) -> Option<&crate::lcd::Chars> {
+        self.chars.as_ref()
     }
 
     /// A transaction's payload, control byte and all.
@@ -275,6 +325,15 @@ impl Screen {
     }
 
     fn feed(&mut self, bytes: &[u8]) {
+        // A character panel's bytes carry no control byte: each one is a
+        // state of the expander's eight pins, and the controller reads its
+        // bus on the enable's fall.
+        if let Some(lcd) = self.chars.as_mut() {
+            for byte in bytes {
+                lcd.port(*byte);
+            }
+            return;
+        }
         let mut at = 0;
         while at < bytes.len() {
             match self.next {
@@ -454,6 +513,9 @@ impl Screen {
     pub fn lit(&self, x: usize, y: usize) -> bool {
         if x >= self.width || y >= self.height {
             return false;
+        }
+        if let Some(lcd) = self.chars.as_ref() {
+            return lcd.lit(x, y);
         }
         if self.all_on {
             return true;

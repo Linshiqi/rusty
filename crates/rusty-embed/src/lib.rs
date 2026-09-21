@@ -20,6 +20,10 @@ pub mod protocol;
 // a run's first readings and every later move with it, and the frontend
 // reads its channels to draw the sliders.
 pub mod sensor;
+// What a character LCD was told to show. Beside `screen` rather than in it
+// because the bytes crossing the bus for an HD44780 are an expander's port
+// states, not display data — the picture is recovered from their edges.
+pub mod lcd;
 // What a monochrome OLED was told to draw, from the bytes the emulator
 // reports crossing the bus. Wasm-safe with the rest: the frontend reads the
 // stream as it passes and draws the screen from it.

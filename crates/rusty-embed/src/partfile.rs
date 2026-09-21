@@ -565,7 +565,7 @@ lsbs = [256.0, 128.0, 64.0, 32.0]
 
         let mut device = crate::sensor::Device::new(spec.clone(), &BTreeMap::new());
         let mut file = [0u8; 256];
-        let mut lay = |runs: Vec<(u8, Vec<u8>)>, file: &mut [u8; 256]| {
+        let lay = |runs: Vec<(u8, Vec<u8>)>, file: &mut [u8; 256]| {
             for (at, bytes) in runs {
                 for (offset, byte) in bytes.into_iter().enumerate() {
                     file[usize::from(at.wrapping_add(offset as u8))] = byte;
