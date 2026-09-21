@@ -82,7 +82,7 @@ pub fn Settings() -> impl IntoView {
 /// A rounded box of rows, with an optional small title above and one line
 /// of explanation below. The footer is the only place prose goes.
 #[component]
-pub(super) fn Group(
+pub(crate) fn Group(
     #[prop(optional, into)] title: Option<String>,
     #[prop(optional, into)] footer: Option<String>,
     children: Children,
@@ -110,7 +110,7 @@ pub(super) fn Group(
 /// on the right. A control too wide for the right — a URL, a path — goes on a
 /// `stacked` row, under the label at full width.
 #[component]
-pub(super) fn Row(
+pub(crate) fn Row(
     #[prop(into)] label: String,
     /// The second line. A `MaybeProp`, so a caller may hand it a signal —
     /// the assistant's "current" row follows the saved provider — or a
@@ -153,7 +153,7 @@ pub(super) fn Row(
 /// A row that is only a note — a status line, a warning — in the group's
 /// own voice rather than a control's.
 #[component]
-pub(super) fn NoteRow(
+pub(crate) fn NoteRow(
     #[prop(into)] text: String,
     #[prop(default = false)] warn: bool,
 ) -> impl IntoView {

@@ -687,7 +687,9 @@ fn flash_warning(
 pub async fn plan_flash(
     transport: Transport,
     action: FlashAction,
-    firmware: String,
+    // Absent for a monitor attached before anything was built; the planner
+    // refuses everything that would need it.
+    firmware: Option<String>,
     defmt: bool,
     baud: Option<u32>,
     state: State<'_, AppState>,
@@ -716,7 +718,7 @@ pub async fn plan_flash(
             chip_id,
             transport,
             action,
-            firmware: PathBuf::from(firmware),
+            firmware: firmware.map(PathBuf::from),
             defmt,
             baud,
         })?;
@@ -746,7 +748,7 @@ fn c_compiler_gate(chip: Option<&Chip>, on_path: impl Fn(&str) -> bool) -> Resul
         Some((binary, install)) if !on_path(binary) => Err(format!(
             "This project builds for {}, so C in it is compiled by `{binary}`, and that is \
              not on PATH. Nothing has been written. Install it — {install} — and the \
-             Toolchain panel will show it before you try again.",
+             Environment page will show it before you try again.",
             chip.name,
         )),
         None => Err(format!(

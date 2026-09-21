@@ -498,8 +498,6 @@ pub enum DockTab {
     /// Named numeric channels over time — what a control loop is doing, and
     /// the tunables it exposes.
     Plot,
-    /// Serial ports and probes currently attached.
-    Devices,
     /// Where the target is stopped: the call stack and what the variables
     /// hold there.
     Debug,
@@ -515,7 +513,7 @@ impl DockTab {
     /// Every tab there is, in the order the strip draws them. The View menu
     /// and the palette list these; the strip itself carries a subset
     /// ([`Layout::dock_tabs`]).
-    pub const ALL: [DockTab; 10] = [
+    pub const ALL: [DockTab; 9] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
@@ -525,7 +523,6 @@ impl DockTab {
         DockTab::Debug,
         DockTab::Registers,
         DockTab::Flight,
-        DockTab::Devices,
     ];
 
     /// The three every IDE's panel opens with, and the only ones that cannot
@@ -576,7 +573,6 @@ impl DockTab {
             DockTab::Terminal => t!("dock.tab.terminal"),
             DockTab::Waves => t!("dock.tab.waves"),
             DockTab::Plot => t!("dock.tab.plot"),
-            DockTab::Devices => t!("dock.tab.devices"),
             DockTab::Debug => t!("dock.tab.debug"),
             DockTab::Registers => t!("dock.tab.registers"),
             DockTab::Flight => t!("dock.tab.flight"),
@@ -738,6 +734,17 @@ impl Divider {
             Divider::GitSidebar => "rusty.layout.git-sidebar",
         }
     }
+}
+
+/// The build a device verb or the Memory panel means: the one picked in the
+/// Memory panel, else the one built for the configured target, else any.
+/// One rule for the tracked and untracked readers, so they cannot differ.
+fn pick_firmware(all: &[Firmware], selected: Option<&str>) -> Option<Firmware> {
+    selected
+        .and_then(|path| all.iter().find(|f| f.path == path))
+        .or_else(|| all.iter().find(|f| f.matches_configured_target))
+        .or_else(|| all.first())
+        .cloned()
 }
 
 /// The `detach` query parameter, percent-decoded — the file this window
@@ -978,15 +985,37 @@ pub struct Project {
 /// What is plugged in, and the command that would talk to it.
 #[derive(Clone, Copy)]
 pub struct Device {
-    /// Devices currently attached. Shared by the Flash panel, the Monitor panel
-    /// and the dock's Devices tab — three places that must never disagree about
-    /// what is plugged in.
+    /// Devices currently attached, as the last scan found them. The title
+    /// bar's picker lists these and Flash chooses among them — one list, so
+    /// the two cannot disagree about what is plugged in.
     pub ports: RwSignal<Vec<SerialPort>>,
     pub probes: RwSignal<Vec<Probe>>,
     /// How to reach the board, once a device has been chosen.
     pub transport: RwSignal<Option<Transport>>,
-    /// The command that would run, shown before it does.
+    /// The command Flash would run, shown in the picker before it does.
     pub plan: RwSignal<Option<CommandPlan>>,
+    /// The title bar's device picker is open.
+    pub picker: RwSignal<bool>,
+    /// What Flash or Monitor was about to do when it found no device to do
+    /// it to — done the moment one is picked, rather than asking for the
+    /// click a second time.
+    pub pending: RwSignal<Option<DeviceAction>>,
+    /// A flash asked for while a monitor held the port: done when that
+    /// session has actually exited, which is the only moment the port is
+    /// certainly free and the old session's end cannot clear the new one's
+    /// running flag.
+    pub after_stop: RwSignal<Option<DeviceAction>>,
+}
+
+/// The device verbs, as a picker waiting for a device holds them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeviceAction {
+    /// Build, write the image, and stay attached — the inner loop.
+    Flash,
+    /// Build and write the image, and stop there.
+    FlashOnly,
+    /// Attach to what is already on the board.
+    Monitor,
 }
 
 /// Starting a new project.
@@ -1387,13 +1416,14 @@ pub struct Groups {
     pub finds: [Find; 2],
 }
 
-/// The first-run environment check, and the install queue it drives.
+/// The first-run environment check, the install queue it drives, and the
+/// progress of any install — which the Environment page draws too.
 ///
-/// Separate from the Toolchain panel's own state on purpose: that panel
-/// answers "what is on this machine" whenever somebody asks, and this answers
-/// "can you build anything at all" without being asked. They read the same
-/// report — `rusty_embed::setup::plan` is the one derivation — but only this
-/// one interrupts.
+/// The sheet answers "can you build anything at all" without being asked;
+/// the Environment page answers "what is on this machine" whenever somebody
+/// asks. They read the same report — `rusty_embed::setup::plan` is the one
+/// derivation — and the same `busy`, `installed` and `failed`, so an install
+/// begun on one is drawn on both; only the sheet interrupts.
 #[derive(Clone, Copy)]
 pub struct Setup {
     /// The screen is up.
@@ -1402,6 +1432,10 @@ pub struct Setup {
     pub steps: RwSignal<Vec<rusty_embed::setup::SetupStep>>,
     /// Which step the queue is on, when it is running one.
     pub running: RwSignal<Option<usize>>,
+    /// The tool being installed right now, by the queue or by one row's own
+    /// Install — so the sheet and the Environment page draw the same
+    /// spinner beside the same name.
+    pub busy: RwSignal<Option<String>>,
     /// Tools that finished in this run, so a tick can appear beside them
     /// without waiting for the whole queue and a re-probe.
     pub installed: RwSignal<Vec<String>>,
@@ -2228,9 +2262,9 @@ pub struct Dock {
     /// Output panel can show one conversation at a time, the way VSCode's
     /// channel picker does.
     ///
-    /// Lives here rather than in the Flash panel so it survives switching
-    /// panels — watching a device is something you do *while* reading the
-    /// memory report, not instead of it.
+    /// Lives here rather than in any panel so it survives switching panels —
+    /// watching a device is something you do *while* reading the memory
+    /// report, not instead of it.
     pub lines: RwSignal<Vec<(&'static str, LogLine)>>,
     /// Which channel new lines belong to. Sessions set it on start;
     /// `note_exit` drops it back to "app", where one-off notices live.
@@ -2316,6 +2350,13 @@ pub struct Workbench {
     pub in_flight: RwSignal<usize>,
     /// The last failure, shown until something succeeds or the user dismisses.
     pub error: RwSignal<Option<IpcError>>,
+    /// What the running session is doing, for the status bar
+    /// (`crate::activity`). Set when a session starts streaming, cleared
+    /// when it exits — or at once when the user stops it, since a run
+    /// somebody stopped has no verdict to give.
+    pub activity: RwSignal<Option<crate::activity::Activity>>,
+    /// How the last session ended, until the next one starts.
+    pub outcome: RwSignal<Option<crate::activity::Outcome>>,
 }
 
 impl Default for AppState {
@@ -2359,6 +2400,9 @@ impl AppState {
                 probes: RwSignal::new(Vec::new()),
                 transport: RwSignal::new(None),
                 plan: RwSignal::new(None),
+                picker: RwSignal::new(false),
+                pending: RwSignal::new(None),
+                after_stop: RwSignal::new(None),
             },
             wizard: Wizard {
                 options: RwSignal::new(Vec::new()),
@@ -2387,6 +2431,7 @@ impl AppState {
                 open: RwSignal::new(false),
                 steps: RwSignal::new(Vec::new()),
                 running: RwSignal::new(None),
+                busy: RwSignal::new(None),
                 installed: RwSignal::new(Vec::new()),
                 failed: RwSignal::new(Vec::new()),
                 checked: RwSignal::new(false),
@@ -2569,6 +2614,8 @@ impl AppState {
                 session_running: RwSignal::new(false),
                 in_flight: RwSignal::new(0),
                 error: RwSignal::new(None),
+                activity: RwSignal::new(None),
+                outcome: RwSignal::new(None),
             },
         }
     }
@@ -2791,13 +2838,18 @@ impl AppState {
     /// — falls back to the default rather than leaving the panel empty.
     pub fn current_firmware(&self) -> Option<Firmware> {
         let selected = self.project.selected_firmware.get();
-        self.project.firmware.with(|all| {
-            selected
-                .and_then(|path| all.iter().find(|f| f.path == path))
-                .or_else(|| all.iter().find(|f| f.matches_configured_target))
-                .or_else(|| all.first())
-                .cloned()
-        })
+        self.project
+            .firmware
+            .with(|all| pick_firmware(all, selected.as_deref()))
+    }
+
+    /// [`Self::current_firmware`] for a controller, which has no reactive
+    /// owner to subscribe (see `has_project_now`).
+    pub fn current_firmware_untracked(&self) -> Option<Firmware> {
+        let selected = self.project.selected_firmware.get_untracked();
+        self.project
+            .firmware
+            .with_untracked(|all| pick_firmware(all, selected.as_deref()))
     }
 
     /// Compiler errors and warnings, across every file the server has spoken
@@ -2820,8 +2872,8 @@ impl AppState {
 
     /// Bring a dock tab forward, opening the dock if it was collapsed — and
     /// putting it on the strip if it was not, which is how most tabs arrive:
-    /// a debug run brings Debug, a serial link brings Plot, the title bar's
-    /// flash button brings Devices.
+    /// a debug run brings Debug, a serial link brings Plot, a flash brings
+    /// Output.
     pub fn show_dock(&self, tab: DockTab) {
         self.reveal_tab(tab);
         self.layout.dock_tab.set(tab);

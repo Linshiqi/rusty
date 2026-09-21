@@ -265,6 +265,7 @@ pub fn debug_frame(state: AppState, level: u32) {
 
 /// End the session.
 pub fn debug_stop(state: AppState) {
+    abandon_activity(state);
     state.debug.epoch.update(|epoch| *epoch += 1);
     state.debug.session.set(None);
     spawn_local(async move {

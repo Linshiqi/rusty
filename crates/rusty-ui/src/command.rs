@@ -32,6 +32,23 @@ pub enum Action {
     RefreshToolchain,
     ReloadCatalog,
     ScanDevices,
+    /// The project's verbs — the title bar's buttons, the menus' rows and
+    /// the keys, one action each, so none of the three can come to mean
+    /// something the others do not.
+    Build,
+    Test,
+    /// In the simulator.
+    Run,
+    Debug,
+    Stop,
+    /// Build, write the image to the chosen device, and stay attached.
+    Flash,
+    /// Build and write the image, and stop there.
+    FlashOnly,
+    /// Attach to the chosen device without writing anything.
+    Monitor,
+    /// Open the title bar's device picker.
+    PickDevice,
     /// Open the nth entry of the recents list. An index rather than the path
     /// so the action stays `Copy`; resolved against the list at run time.
     OpenRecent(usize),
@@ -188,6 +205,20 @@ pub fn all(state: AppState) -> Vec<Command> {
         &t!("menu.project.reload-catalogue"),
         None,
     ));
+    for (verb, title) in [
+        (Action::Build, t!("menu.project.build")),
+        (Action::Test, t!("menu.project.test")),
+        (Action::Run, t!("menu.project.run")),
+        (Action::Debug, t!("menu.project.debug")),
+        (Action::Stop, t!("menu.project.stop")),
+        (Action::Flash, t!("menu.device.flash")),
+        (Action::FlashOnly, t!("menu.device.flash-only")),
+        (Action::Monitor, t!("menu.device.monitor")),
+        (Action::PickDevice, t!("menu.device.pick")),
+        (Action::ScanDevices, t!("menu.device.rescan")),
+    ] {
+        out.push(action(verb, &title, chord(verb)));
+    }
 
     let view = |action, title: &str, shortcut| Command {
         action,
@@ -620,6 +651,23 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         Menu {
             title: t!("menu.bar.project"),
             items: vec![
+                // The verbs first, as a Build menu leads with Build: they are
+                // what the menu is opened for.
+                project_entry(
+                    Action::Build,
+                    &t!("menu.project.build"),
+                    chord(Action::Build),
+                ),
+                project_entry(Action::Test, &t!("menu.project.test"), chord(Action::Test)),
+                Item::Separator,
+                project_entry(Action::Run, &t!("menu.project.run"), chord(Action::Run)),
+                project_entry(
+                    Action::Debug,
+                    &t!("menu.project.debug"),
+                    chord(Action::Debug),
+                ),
+                project_entry(Action::Stop, &t!("menu.project.stop"), chord(Action::Stop)),
+                Item::Separator,
                 project_entry(
                     Action::RefreshProject,
                     &t!("menu.project.recheck"),
@@ -674,13 +722,24 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         Menu {
             title: t!("menu.bar.device"),
             items: vec![
-                entry(Action::ScanDevices, &t!("menu.device.rescan"), None),
-                Item::Separator,
                 project_entry(
-                    Action::ShowDock(DockTab::Devices),
+                    Action::Flash,
                     &t!("menu.device.flash"),
-                    None,
+                    chord(Action::Flash),
                 ),
+                project_entry(
+                    Action::FlashOnly,
+                    &t!("menu.device.flash-only"),
+                    chord(Action::FlashOnly),
+                ),
+                project_entry(
+                    Action::Monitor,
+                    &t!("menu.device.monitor"),
+                    chord(Action::Monitor),
+                ),
+                Item::Separator,
+                project_entry(Action::PickDevice, &t!("menu.device.pick"), None),
+                entry(Action::ScanDevices, &t!("menu.device.rescan"), None),
                 Item::Separator,
                 project_entry(Action::ShowPanel("memory"), &t!("menu.device.memory"), None),
             ],
@@ -725,10 +784,48 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
     match action {
         Action::CheckEnvironment => {
             // Re-probe first: the report may be from before somebody
-            // installed something in a terminal, and a screen that says a
-            // tool is missing when it is not is worse than no screen.
+            // installed something in a terminal, and a page that says a tool
+            // is missing when it is not is worse than no page. The
+            // Environment page rather than the first-run sheet: it says
+            // everything the sheet does and what is installed besides.
             controller::refresh_toolchain(state);
-            controller::open_setup(state);
+            state.layout.panel.set("toolchain".to_string());
+        }
+        Action::Build => {
+            if state.has_project_now() {
+                controller::build_project(state);
+            }
+        }
+        Action::Test => {
+            if state.has_project_now() {
+                controller::test_project(state);
+            }
+        }
+        Action::Run | Action::Debug => {
+            if state.has_project_now() {
+                controller::simulate(state, action == Action::Debug);
+            }
+        }
+        Action::Stop => {
+            if state.app.session_running.get_untracked() {
+                controller::stop_anything(state);
+            }
+        }
+        Action::Flash | Action::FlashOnly | Action::Monitor => {
+            if state.has_project_now() {
+                let verb = match action {
+                    Action::Flash => crate::state::DeviceAction::Flash,
+                    Action::FlashOnly => crate::state::DeviceAction::FlashOnly,
+                    _ => crate::state::DeviceAction::Monitor,
+                };
+                controller::device_action(state, verb);
+            }
+        }
+        Action::PickDevice => {
+            if state.has_project_now() {
+                controller::scan_devices(state);
+                state.device.picker.set(true);
+            }
         }
         Action::CheckUpdates => controller::check_update(state, true),
         Action::ShowPanel("assistant") => state.ai.open.set(true),

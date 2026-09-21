@@ -26,7 +26,12 @@ pub struct FlashRequest {
     pub action: FlashAction,
     /// The linked ELF. espflash and probe-rs both take the ELF rather than a
     /// raw binary — they derive the flash layout from it.
-    pub firmware: std::path::PathBuf,
+    ///
+    /// Optional because a serial monitor needs none: attaching to a board
+    /// flashed last week, or by somebody else, is exactly the case for
+    /// looking without building. Given, it turns defmt indices and panic
+    /// addresses back into text; absent, everything that writes refuses.
+    pub firmware: Option<std::path::PathBuf>,
     /// Decode defmt frames instead of showing raw bytes. Only meaningful when
     /// the firmware was built with defmt; the ELF carries the string table.
     pub defmt: bool,
@@ -78,7 +83,17 @@ pub fn chip_mismatch(project_chip: &str, candidates: &[String]) -> Option<String
 
 /// Decide what to run. Pure — no process is started.
 pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
-    let firmware = request.firmware.display().to_string();
+    let firmware = request
+        .firmware
+        .as_ref()
+        .map(|path| path.display().to_string());
+    // Everything but a serial monitor writes the image, or reads its symbols
+    // to find the RTT buffer — so everything but that needs a build.
+    let built = || {
+        firmware.clone().ok_or_else(|| {
+            Error::refused("Nothing has been built yet, so there is no image to use — build first.")
+        })
+    };
     let chip = chip::by_id(&request.chip_id);
 
     let (program, args, rationale) = match &request.transport {
@@ -114,9 +129,13 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
                     let mut monitor = vec!["monitor".to_string()];
                     monitor.extend(args);
                     // The ELF is what turns defmt indices back into strings,
-                    // and what maps a panic address to a line.
-                    monitor.push("--elf".into());
-                    monitor.push(firmware.clone());
+                    // and what maps a panic address to a line — worth
+                    // passing whenever there is one, and no reason not to
+                    // attach when there is not.
+                    if let Some(firmware) = &firmware {
+                        monitor.push("--elf".into());
+                        monitor.push(firmware.clone());
+                    }
                     (
                         "espflash",
                         monitor,
@@ -124,12 +143,13 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
                     )
                 }
                 action => {
+                    let firmware = built()?;
                     let mut flash = vec!["flash".to_string()];
                     flash.extend(args);
                     if action == FlashAction::FlashAndMonitor {
                         flash.push("--monitor".into());
                     }
-                    flash.push(firmware.clone());
+                    flash.push(firmware);
                     (
                         "espflash",
                         flash,
@@ -148,23 +168,34 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
                 })?;
 
             // `probe-rs run` flashes, attaches, and decodes RTT in one step,
-            // which is the whole inner loop. `download` is the flash-only form.
-            let subcommand = match request.action {
-                FlashAction::Flash => "download",
-                _ => "run",
+            // which is the whole inner loop. `download` is the flash-only
+            // form, and `attach` the look-only one: it was `run` too once,
+            // which rewrote the flash of a board somebody had asked only to
+            // watch — destroying the state they wanted to look at. All three
+            // read the ELF, `attach` for where the RTT buffer is.
+            let (subcommand, rationale) = match request.action {
+                FlashAction::Flash => (
+                    "download",
+                    "Flashing through the debug probe, and stopping there.",
+                ),
+                FlashAction::FlashAndMonitor => (
+                    "run",
+                    "Flashing through the debug probe; defmt arrives over RTT.",
+                ),
+                FlashAction::Monitor => (
+                    "attach",
+                    "Attaching through the debug probe without rewriting flash; defmt \
+                     arrives over RTT.",
+                ),
             };
             let mut args = vec![subcommand.to_string(), "--chip".into(), target];
             if let Some(identifier) = identifier {
                 args.push("--probe".into());
                 args.push(identifier.clone());
             }
-            args.push(firmware.clone());
+            args.push(built()?);
 
-            (
-                "probe-rs",
-                args,
-                "Flashing through the debug probe; defmt arrives over RTT.",
-            )
+            ("probe-rs", args, rationale)
         }
     };
 
@@ -229,10 +260,49 @@ mod tests {
             chip_id: chip_id.to_string(),
             transport,
             action,
-            firmware: PathBuf::from("target/blinky"),
+            firmware: Some(PathBuf::from("target/blinky")),
             defmt: false,
             baud: None,
         }
+    }
+
+    /// Attaching to a board needs no build: the one flashed last week is
+    /// exactly the one somebody wants to watch. The ELF is passed when it
+    /// exists, because it is what decodes defmt and panics.
+    #[test]
+    fn a_serial_monitor_attaches_without_a_build() {
+        let mut req = request("esp32c3", serial(), FlashAction::Monitor);
+        req.firmware = None;
+        let plan = plan(&req).unwrap();
+        assert_eq!(plan.args[0], "monitor");
+        assert!(!plan.args.contains(&"--elf".to_string()));
+        assert!(plan.display.contains("COM3"));
+    }
+
+    /// Everything that writes needs an image, and says so rather than
+    /// handing espflash a path that is not there.
+    #[test]
+    fn writing_without_a_build_is_refused_by_name() {
+        for action in [FlashAction::Flash, FlashAction::FlashAndMonitor] {
+            let mut req = request("esp32c3", serial(), action);
+            req.firmware = None;
+            let err = plan(&req).unwrap_err().to_string();
+            assert!(err.contains("build first"), "{err}");
+        }
+    }
+
+    /// Watching through a probe must not rewrite the flash: that destroys
+    /// the state of the board somebody attached to look at.
+    #[test]
+    fn a_probe_monitor_attaches_rather_than_flashing() {
+        let plan = plan(&request(
+            "esp32c3",
+            Transport::Probe { identifier: None },
+            FlashAction::Monitor,
+        ))
+        .unwrap();
+        assert_eq!(plan.program, "probe-rs");
+        assert_eq!(plan.args[0], "attach");
     }
 
     fn serial() -> Transport {

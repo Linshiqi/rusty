@@ -12,8 +12,10 @@
 //! returns — the commitment in `docs/extensibility.md` that a contributed panel
 //! can slot in later without the shell being rewritten to accept it.
 
+mod activity;
 mod clone;
 pub mod components;
+mod device;
 pub mod dock;
 pub mod icon;
 pub mod loclink;
@@ -42,7 +44,7 @@ use crate::{
     controller,
     state::{AppState, Divider},
     view::{
-        components::{Button, ButtonKind, Dot, ErrorBanner, Tone},
+        components::{Button, ButtonKind, ErrorBanner, Tone},
         icon::{Icon, IconView},
     },
 };
@@ -808,15 +810,10 @@ fn StatusBar() -> impl IntoView {
 
     view! {
         <footer class="flex h-[26px] flex-none items-center border-t border-line bg-window font-mono text-footnote text-label-2">
-            {move || {
-                let busy = state.is_busy();
-                view! {
-                    <span class="flex h-full shrink-0 items-center gap-1.5 whitespace-nowrap border-r border-line px-3">
-                        <Dot tone=if busy { Tone::Amber } else { Tone::Patina } />
-                        {if busy { t!("status.working") } else { t!("status.ready") }}
-                    </span>
-                }
-            }}
+            // What is running, or how the last run went — Xcode's activity
+            // view. "Working" for everything was a status bar that said
+            // nothing a spinner could not.
+            <activity::ActivityStatus />
 
             {move || {
                 let (errors, _) = state.diag_counts();

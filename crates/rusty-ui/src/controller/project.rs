@@ -257,7 +257,14 @@ fn refresh_workspace(state: AppState) {
 /// four-byte read per candidate, and a memory panel showing yesterday's build
 /// list is worse than useless — it is confidently wrong.
 pub fn refresh_firmware(state: AppState) {
+    refresh_firmware_then(state, || {});
+}
+
+/// [`refresh_firmware`], then `then` once the list is in — how a build
+/// hands the image it just made to the flash after it.
+pub fn refresh_firmware_then(state: AppState, then: impl FnOnce() + 'static) {
     if !state.has_project_now() {
+        then();
         return;
     }
     track(
@@ -274,6 +281,7 @@ pub fn refresh_firmware(state: AppState) {
                 }
             });
             state.project.firmware.set(found);
+            then();
         },
     );
 }

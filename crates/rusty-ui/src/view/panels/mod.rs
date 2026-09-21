@@ -12,7 +12,6 @@ pub(crate) mod files;
 pub mod git;
 mod memory;
 mod search;
-pub(crate) mod session;
 mod simulate;
 mod toolchain;
 mod wizard;

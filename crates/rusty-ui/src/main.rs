@@ -11,6 +11,7 @@
 //! | `state` | signals and pure operations on them |
 //! | `ipc` | transport, and nothing else |
 
+mod activity;
 mod calls;
 mod command;
 mod controller;

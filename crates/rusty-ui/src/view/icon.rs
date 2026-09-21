@@ -59,6 +59,14 @@ pub enum Icon {
     FolderPlus,
     /// A funnel: narrow a list to what matches — the Git log to one branch.
     Filter,
+    /// A screen with a prompt in it: watch what the board prints.
+    Monitor,
+    /// A USB plug: the device on the other end of the cable.
+    Plug,
+    /// A tick.
+    Check,
+    /// A triangle with a bar: something needs doing.
+    Warn,
 }
 
 impl Icon {
@@ -144,6 +152,10 @@ impl Icon {
                 "M2.5 5.5a1 1 0 0 1 1-1h4.3l1.6 1.6h7.1a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1zM10 8.5v5M7.5 11h5"
             }
             Icon::Filter => "M3.5 4.5h13L11.5 10.5V15l-3 1.5v-6z",
+            Icon::Monitor => "M3 4.5h14v11H3zM6 8.5l2.5 2-2.5 2M10.5 12.5H14",
+            Icon::Plug => "M7.5 2.5v3M12.5 2.5v3M5.5 5.5h9v3.5a4.5 4.5 0 0 1-9 0zM10 13.5v4",
+            Icon::Check => "M4.5 10.5 8.3 14.2 15.5 6.3",
+            Icon::Warn => "M10 3.2 17.3 16.3H2.7zM10 8.3v3.8M10 14.3v.2",
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

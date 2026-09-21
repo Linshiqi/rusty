@@ -142,6 +142,9 @@ where
                     // running — otherwise a tool that is not installed leaves
                     // the Stop button up and the prompt refusing to send.
                     state.app.session_running.set(false);
+                    // And the status bar's "Building…" becomes the failure
+                    // it is, rather than counting on for ever.
+                    end_activity(state, Some(-1));
                 }
                 // The banner is transient — dismissed, or replaced by the next
                 // failure. The dock keeps it, so "what did that error say?" is

@@ -161,16 +161,29 @@ pub(super) fn run_command_then(
     line: String,
     after: impl FnOnce(Option<i32>) + 'static,
 ) {
-    run_command_in(state, line, false, after);
+    run_command_in(state, line, false, "commands", after);
 }
 
-/// Run at the opened project rather than at the firmware crate.
+/// [`run_command_then`] on a channel of the caller's naming — an install
+/// that is a plain command (`rustup target add`) is still an install to
+/// the status bar.
+pub(super) fn run_command_on(
+    state: AppState,
+    line: String,
+    channel: &'static str,
+    after: impl FnOnce(Option<i32>) + 'static,
+) {
+    run_command_in(state, line, false, channel, after);
+}
+
+/// Run at the opened project rather than at the firmware crate, on the
+/// test channel — the status bar counts what the harness reports.
 ///
 /// For the host half: `cargo test` in a bare-metal crate cannot link a test
 /// harness, and that crate is excluded from the workspace for exactly that
 /// reason. See `run_command` on the backend.
-pub(super) fn run_command_at_root(state: AppState, line: String) {
-    run_command_in(state, line, true, |_| {});
+pub(super) fn run_tests_at_root(state: AppState, line: String) {
+    run_command_in(state, line, true, "test", |_| {});
 }
 
 /// A command given as one line, split on whitespace — what the palette and
@@ -180,6 +193,7 @@ fn run_command_in(
     state: AppState,
     line: String,
     at_project_root: bool,
+    channel: &'static str,
     after: impl FnOnce(Option<i32>) + 'static,
 ) {
     let mut parts = line.split_whitespace().map(str::to_string);
@@ -187,7 +201,7 @@ fn run_command_in(
         return;
     };
     let args: Vec<String> = parts.collect();
-    run_parts_in(state, program, args, at_project_root, after);
+    run_parts_in(state, program, args, at_project_root, channel, after);
 }
 
 /// A command given as a program and its arguments, one argument one string
@@ -199,7 +213,7 @@ pub(super) fn run_args_at_root_then(
     args: Vec<String>,
     after: impl FnOnce(Option<i32>) + 'static,
 ) {
-    run_parts_in(state, program.into(), args, true, after);
+    run_parts_in(state, program.into(), args, true, "commands", after);
 }
 
 fn run_parts_in(
@@ -207,9 +221,10 @@ fn run_parts_in(
     program: String,
     args: Vec<String>,
     at_project_root: bool,
+    channel: &'static str,
     after: impl FnOnce(Option<i32>) + 'static,
 ) {
-    state.dock.source.set("commands");
+    state.dock.source.set(channel);
 
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -232,6 +247,9 @@ fn run_parts_in(
     });
 
     let channel = stream_to_terminal(state);
+    // A command is named by itself in the status bar: "git push" says more
+    // than "running".
+    name_activity(state, line);
     let args = Args {
         program,
         args,
@@ -267,10 +285,20 @@ fn shell_word(arg: &str) -> String {
 
 /// End the running session. The normal way a monitor finishes, not an error.
 pub fn stop_session(state: AppState) {
+    abandon_activity(state);
     track(
         state,
         ipc::get::<serde_json::Value>(cmd::flash::STOP),
-        move |_| state.app.session_running.set(false),
+        move |_| {
+            // Unless the next session has already begun — a flash that was
+            // waiting for this monitor to let go of the port starts the
+            // moment the monitor exits, and this answer can arrive after
+            // that. Cleared then, it would say nothing runs while the build
+            // does.
+            if state.app.activity.with_untracked(Option::is_none) {
+                state.app.session_running.set(false);
+            }
+        },
     );
 }
 
@@ -307,8 +335,8 @@ pub fn run_test(state: AppState, filter: String) {
     } else {
         format!("cargo test {filter} -- --nocapture")
     };
-    // At the project, not at the firmware crate: see `run_command_at_root`.
-    run_command_at_root(state, line);
+    // At the project, not at the firmware crate: see `run_tests_at_root`.
+    run_tests_at_root(state, line);
 }
 
 /// The whole suite — the title bar's Test. The same path as the lens with

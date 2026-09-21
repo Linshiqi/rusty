@@ -70,6 +70,10 @@ mod update;
 use rusty_i18n::t;
 
 pub use shell::Settings;
+// The grouped-box shapes, shared with the Environment page: a page that
+// checks the machine reads as the same kind of thing as the one that
+// configures it.
+pub(crate) use shell::{Group, NoteRow, Row};
 // `Group`, `Row` and the controls every category is built from.
 use shell::*;
 

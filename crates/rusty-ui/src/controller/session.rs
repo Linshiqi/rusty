@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use rusty_embed::{CommandPlan, LogLevel, LogLine, LogStream};
+use rusty_embed::{LogLevel, LogLine, LogStream};
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -167,6 +167,7 @@ pub(super) fn clear_capture(state: AppState) {
 /// place it is read. A `[rusty:pwm]` line reveals nothing on purpose: a servo
 /// or a dimmed lamp is a duty too, and the board sheet already shows those.
 pub(super) fn absorb(state: AppState, line: LogLine) {
+    follow_activity(state, &line.text);
     if let Some(sample) = rusty_embed::protocol::parse_telemetry(&line.text) {
         record_plot(state, sample);
         state.reveal_tab(crate::state::DockTab::Plot);
@@ -421,6 +422,12 @@ pub fn open_link(state: AppState, port: String, baud: u32) {
 
     state.app.session_running.set(true);
     state.sim.link_port.set(Some(port.clone()));
+    // Said in the status bar like every other session, and known there to
+    // hold the port — which is what lets Flash release it first.
+    let mut link = crate::activity::Activity::new(crate::activity::Kind::Link, js_sys::Date::now());
+    link.target = Some(port.clone());
+    state.app.activity.set(Some(link));
+    state.app.outcome.set(None);
     state.show_dock(crate::state::DockTab::Plot);
 
     let args = Args { port, baud };
@@ -494,20 +501,5 @@ pub fn export_vcd(state: AppState) {
 /// the title bar's Build, sharing the one session slot with
 /// everything else that runs.
 pub fn build_project(state: AppState) {
-    if state.app.session_running.get_untracked() {
-        return;
-    }
-    run_session(
-        state,
-        CommandPlan {
-            program: "cargo".to_string(),
-            args: vec!["build".to_string(), "--release".to_string()],
-            display: "cargo build --release".to_string(),
-            rationale: "the project's own toolchain builds the exact firmware a device \
-                        would get"
-                .to_string(),
-            warning: None,
-        },
-        "build",
-    );
+    build_then(state, |_| {});
 }

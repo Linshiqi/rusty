@@ -63,7 +63,6 @@ pub fn Dock() -> impl IntoView {
                         }
                         DockTab::Debug => view! { <DebugTab /> }.into_any(),
                         DockTab::Registers => view! { <RegistersTab /> }.into_any(),
-                        DockTab::Devices => view! { <DevicesTab /> }.into_any(),
                         DockTab::Flight => view! { <FlightTab /> }.into_any(),
                         DockTab::Calls => view! { <CallsTab /> }.into_any(),
                     }}
@@ -253,7 +252,6 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             // one number worth glancing at from another tab: it says whether
             // the telemetry is arriving at all.
             DockTab::Plot => (state.sim.plot.with(|p| p.channels.len()), Tone::Neutral),
-            DockTab::Devices => (0, Tone::Neutral),
             DockTab::Calls => (0, Tone::Neutral),
             // How many motors are being driven right now. Worth a glance
             // from another tab for one reason: it is not zero when it should
@@ -346,7 +344,6 @@ struct DiagMenuAt {
 
 mod calls;
 mod debug;
-mod devices;
 mod flight;
 mod output;
 mod problems;
@@ -355,7 +352,6 @@ mod shell;
 
 use calls::*;
 use debug::*;
-use devices::*;
 use flight::*;
 use output::*;
 use problems::*;

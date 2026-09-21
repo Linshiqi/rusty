@@ -60,6 +60,47 @@ pub fn defaults() -> Vec<Binding> {
             default: "Ctrl+R".into(),
             action: Action::RefreshProject,
         },
+        // The project's verbs, on the keys the tools people come from put
+        // them: VS Code's build task and its F5 family, Arduino's upload and
+        // serial monitor. Flash and Monitor are Arduino's rather than
+        // PlatformIO's Ctrl+Alt letters, which on a layout with AltGr type
+        // characters — the reason this system leaves Alt letters alone.
+        Binding {
+            id: "project.build".into(),
+            label: t!("menu.project.build"),
+            default: "Ctrl+Shift+B".into(),
+            action: Action::Build,
+        },
+        Binding {
+            id: "project.run".into(),
+            label: t!("menu.project.run"),
+            default: "Ctrl+F5".into(),
+            action: Action::Run,
+        },
+        Binding {
+            id: "project.debug".into(),
+            label: t!("menu.project.debug"),
+            default: "F5".into(),
+            action: Action::Debug,
+        },
+        Binding {
+            id: "project.stop".into(),
+            label: t!("menu.project.stop"),
+            default: "Shift+F5".into(),
+            action: Action::Stop,
+        },
+        Binding {
+            id: "device.flash".into(),
+            label: t!("menu.device.flash"),
+            default: "Ctrl+U".into(),
+            action: Action::Flash,
+        },
+        Binding {
+            id: "device.monitor".into(),
+            label: t!("menu.device.monitor"),
+            default: "Ctrl+Shift+M".into(),
+            action: Action::Monitor,
+        },
         Binding {
             id: "editor.comment".into(),
             label: t!("bind.comment"),

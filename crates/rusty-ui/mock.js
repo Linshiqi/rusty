@@ -224,7 +224,16 @@
     problems: [],
   };
 
-  window.__mock = { locale: null, toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [], signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {} };
+  window.__mock = {
+    locale: null, toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [],
+    signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {},
+    runs: [], buildFails: false,
+    // One board and a port that is not one: Flash picks the board by itself.
+    ports: [
+      { name: "COM3", bridge: "CP210x", boards: ["ESP32-C3-DevKitM-1"], likelyBoard: true, usb: null },
+      { name: "COM1", bridge: null, boards: [], likelyBoard: false, usb: null },
+    ],
+  };
 
   // Every construct the renderer claims to handle, so the preview can be
   // looked at rather than reasoned about.
@@ -337,15 +346,19 @@
     // chains on the exit code, so a resolved promise is the contract here —
     // unlike the streams above, this one *must* end. `__mock.installs`
     // records the order, which is the thing worth asserting.
-    install_sim_tool: (a) => {
+    // `__mock.installDelay` (ms) holds each install open, so the progress a
+    // page draws while one runs can be looked at rather than raced.
+    install_sim_tool: (a) => new Promise((resolve) => {
       window.__mock.installs.push(a.name);
       a.onLine.send({ stream: "stdout", text: `$ installing ${a.name}`, level: null });
-      // Mark it present, so the re-probe afterwards reflects the install and
-      // the screen empties the way it would against a real machine.
-      const found = window.__mock.toolchain.status.tools.find((t) => t.name === a.name);
-      if (found) found.path = `C:/Users/mock/.cargo/bin/${a.name}.exe`;
-      return 0;
-    },
+      setTimeout(() => {
+        // Mark it present, so the re-probe afterwards reflects the install
+        // and the screen empties the way it would against a real machine.
+        const found = window.__mock.toolchain.status.tools.find((t) => t.name === a.name);
+        if (found) found.path = `C:/Users/mock/.cargo/bin/${a.name}.exe`;
+        resolve(0);
+      }, window.__mock.installDelay || 0);
+    }),
     lsp_open: () => null,
     lsp_saved: () => null,
     lsp_close: () => null,
@@ -542,32 +555,102 @@
       const m = window.__mock;
       if (m.linkTimer) { clearInterval(m.linkTimer); m.linkTimer = null; }
       if (m.linkResolve) { m.linkResolve(null); m.linkResolve = null; }
+      if (m.flashTimer) { clearInterval(m.flashTimer); m.flashTimer = null; }
+      if (m.flashResolve) { m.flashResolve(null); m.flashResolve = null; }
       return null;
     },
+    // Every planned command — a build, a flash, a monitor — the way the tools
+    // talk: cargo's `Compiling` and its own summary line, espflash's
+    // `Flashing has completed!`, then a board printing until something stops
+    // it. `__mock.buildFails` makes the build fail with cargo's own counts;
+    // `__mock.runs` records what ran, so a driven test can assert the order.
+    run_flash: (a) => new Promise((resolve) => {
+      const m = window.__mock;
+      m.runs.push(a.plan.display);
+      const send = (text) => a.onLine.send({ stream: "stderr", text, level: null });
+      const script = (lines, then) => {
+        let at = 0;
+        const tick = () => {
+          if (at < lines.length) { send(lines[at++]); setTimeout(tick, 250); } else { then(); }
+        };
+        tick();
+      };
+      const watch = () => {
+        let n = 0;
+        m.flashResolve = resolve;
+        m.flashTimer = setInterval(() => send(`hello from the board ${++n}`), 400);
+      };
+      if (a.plan.program === "cargo") {
+        const compiling = ["   Compiling esp-hal v1.1.2", "   Compiling blinky v0.1.0 (E:/mock/blinky)"];
+        if (m.buildFails) {
+          script([...compiling,
+            "error[E0425]: cannot find value `led` in this scope",
+            "  --> src/bin/main.rs:21:9",
+            "warning: `blinky` (bin \"blinky\") generated 1 warning",
+            "error: could not compile `blinky` (bin \"blinky\") due to 1 previous error; 1 warning emitted",
+          ], () => resolve(101));
+        } else {
+          script([...compiling,
+            "warning: `blinky` (bin \"blinky\") generated 2 warnings",
+            "    Finished `release` profile [optimized] target(s) in 1.52s",
+          ], () => resolve(0));
+        }
+      } else if (a.plan.display.startsWith("espflash monitor")) {
+        script(["Commands:", "    CTRL+R    Reset chip", "    CTRL+C    Exit"], watch);
+      } else {
+        script([
+          "[2026-09-21T08:00:00Z INFO ] Serial port: 'COM3'",
+          "Chip type:         esp32c3 (revision v0.4)",
+          "[00:00:01] [========================================]      13/13      0x10000",
+          "Flashing has completed!",
+        ], () => (a.plan.display.includes("--monitor") ? watch() : resolve(0)));
+      }
+    }),
+    memory_report: (a) => ({
+      elfPath: a.elfPath, chip: "esp32c3", sections: [], crates: [], unattributedBytes: 0,
+      totals: { flashBytes: 87342, ramBytes: 20612, ramCapacity: 327680 },
+    }),
+    editor_view: () => ({ inlayHints: true, minimap: true, stickyScroll: true, indentGuides: true }),
+    set_editor_view: () => null,
+    auto_save_enabled: () => false,
+    set_auto_save: () => null,
     // The real shape, and a machine with holes in it — the empty stub here
     // never matched `ToolchainReport` at all, so the Toolchain panel and the
     // environment check both failed to decode it and showed nothing.
     // `__mock.toolchain` is swappable, so a ready machine can be tested too.
     toolchain_report: () => window.__mock.toolchain,
-    serial_ports: () => [{ name: "COM3", bridge: "CP210x", boards: ["ESP32 DevKit"], likelyBoard: true, usb: null }],
+    // Swappable, like the toolchain: one board is the auto-picked case, two
+    // are a question, none is the empty picker.
+    serial_ports: () => window.__mock.ports,
     debug_probes: () => [],
     firmware_list: () => [{
       path: "target/xtensa-esp32-none-elf/release/blinky", name: "blinky",
       profile: "release", target: "xtensa-esp32-none-elf", bytes: 1234567,
       modified: 1765600000, matchesConfiguredTarget: true,
     }],
-    plan_flash: (a) => ({
-      program: "espflash", args: ["flash", "--monitor"],
-      display: a.action === "monitor" ? "espflash monitor --port COM3"
-        : "espflash flash --monitor target/xtensa-esp32-none-elf/release/blinky",
-      rationale: "mock: espflash speaks the ROM bootloader on this transport",
-    }),
+    // The planner's shape for the device and action asked about, and its
+    // warning when the port's board is not the project's chip.
+    plan_flash: (a) => {
+      const port = a.transport.port;
+      const elf = a.firmware ? ` ${a.firmware}` : "";
+      const display = a.action === "monitor"
+        ? `espflash monitor --chip esp32c3 --port ${port}${a.firmware ? " --elf" + elf : ""}`
+        : `espflash flash --chip esp32c3 --port ${port}${a.action === "flashAndMonitor" ? " --monitor" : ""}${elf}`;
+      const boards = (window.__mock.ports.find((p) => p.name === port) || { boards: [] }).boards;
+      const warning = boards.includes("ESP32 DevKit")
+        ? "This project builds for esp32c3, but the device on this port looks like esp32."
+        : undefined;
+      return { program: "espflash", args: [], display, rationale: "", warning };
+    },
     chip_catalogue: () => [
       { id: "esp32", name: "ESP32", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 520000, flashBytes: null, bareMetalTarget: "xtensa-esp32-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [], gpio: ESP32_GPIO },
       { id: "esp32c3", name: "ESP32-C3", vendor: "espressif", arch: "riscV", cores: 1, sramBytes: 400000, flashBytes: null, bareMetalTarget: "riscv32imc-unknown-none-elf", stdTarget: null, toolchain: "stock", flashers: [], probeRsTarget: null, radios: [], gpio: C3_GPIO },
       { id: "esp32s3", name: "ESP32-S3", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 512000, flashBytes: null, bareMetalTarget: "xtensa-esp32s3-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [] },
     ],
-    board_catalogue: () => [],
+    board_catalogue: () => [
+      { id: "esp32-devkitc", name: "ESP32 DevKit", chip: "esp32", flashBytes: 4194304, psramBytes: null, usb: [], flashBaud: null, pins: [], source: "builtin" },
+      { id: "esp32c3-devkitm-1", name: "ESP32-C3-DevKitM-1", chip: "esp32c3", flashBytes: 4194304, psramBytes: null, usb: [], flashBaud: null, pins: [], source: "builtin" },
+    ],
     catalog_problems: () => [],
     wizard_options: () => [],
     ai_presets: () => [],

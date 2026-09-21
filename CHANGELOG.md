@@ -9,6 +9,39 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.55
+
+**Flash in one click.** The ⚡ button now builds the project, writes it to
+your board and shows what the board prints. It used to open a panel where
+you picked a device, picked a mode and pressed a second button — and it
+flashed whatever had last been built, not the code on screen. The board it
+goes to is shown beside it in the title bar: with one board plugged in there
+is nothing to choose, and with several it asks once and remembers. Flashing
+while the serial monitor is open closes the monitor first instead of failing
+on a busy port. A new Monitor button attaches to a board without writing
+anything, and needs no build.
+
+**The status bar says what is happening, and how it went.** While a build
+runs it shows the crate being compiled and a clock; afterwards it says
+"Build succeeded · 12.4 s · Flash 85.3 KB · RAM 20.1 KB / 320 KB (6%)", or
+how many errors and warnings stopped it. Flashes, tests and installs report
+the same way, and a click opens the full output.
+
+**An Environment page in place of the toolchain list.** It opens with an
+answer — "Ready to build and flash this project", or what is missing, with
+one button that installs exactly that — and then lists each tool under what
+it is for, with its version or an Install button that shows its progress in
+place. Help ▸ Check my environment opens it.
+
+**Keyboard shortcuts for the project's verbs**, the ones VS Code and Arduino
+use: Ctrl+Shift+B to build, F5 to debug (and to continue at a breakpoint),
+Ctrl+F5 to run, Shift+F5 to stop, Ctrl+U to flash, Ctrl+Shift+M to monitor.
+They are in the Project and Device menus and the command palette too, and
+can be changed in Settings.
+
+**Monitoring through a debug probe no longer rewrites the board.** It ran
+`probe-rs run`, which flashes; it now attaches.
+
 ## v0.6.54
 
 **Wires are drawn click by click.** Click a pin and the wire follows the

@@ -102,6 +102,28 @@ pub fn Dot(tone: Tone) -> impl IntoView {
     view! { <span class=format!("size-1.5 shrink-0 rounded-full {}", tone.dot()) /> }
 }
 
+/// Something is under way: a quarter of a ring, turning. Drawn in the
+/// current colour, so it takes the tone of the text beside it.
+#[component]
+pub fn Spinner(#[prop(default = 12)] size: u32) -> impl IntoView {
+    view! {
+        <svg
+            width=size
+            height=size
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+            class="shrink-0 animate-spin"
+        >
+            <circle cx="10" cy="10" r="7" opacity="0.25" />
+            <path d="M10 3a7 7 0 0 1 7 7" />
+        </svg>
+    }
+}
+
 /// A section header: a small uppercase caption over a hairline. The sidebar and
 /// the panels share it so the rhythm is the same everywhere.
 #[component]

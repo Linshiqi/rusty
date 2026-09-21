@@ -9,23 +9,34 @@
 //! the title bar already says what is open, and this is what you do with it.
 //! One position on every panel, in a row the window was already spending.
 //!
-//! Run and Debug still switch to the Simulate panel, so the board is on
-//! screen while the build streams to the dock. The objection to a top row —
-//! that it put Run far from the panel it switches to — was answered by the
-//! button doing the switching itself.
+//! Three groups, the order the work happens in: build and test; run and
+//! debug on the simulator; flash and watch the board, with the board itself
+//! last — the device picker, Arduino IDE 2's board-and-port box beside its
+//! Upload. Run and Debug still switch to the Simulate panel, so the board is
+//! on screen while the build streams to the dock.
 
 use leptos::prelude::*;
 
 use rusty_i18n::t;
 
 use crate::{
+    command::Action,
     controller,
-    state::{AppState, DockTab},
+    state::{AppState, DeviceAction},
     view::icon::{Icon, IconView},
 };
 
 const BUTTON: &str = "grid size-7 place-items-center rounded-[6px] transition-colors \
                       hover:bg-sunken disabled:pointer-events-none disabled:opacity-40";
+
+/// A tooltip with the key that does the same, as the menu writes it — so
+/// the chord is learnt from the button, and a rebound one is what is shown.
+fn with_chord(state: AppState, action: Action, label: String) -> String {
+    crate::view::palette::effective(state)
+        .into_iter()
+        .find(|(binding, _)| binding.action == action)
+        .map_or(label.clone(), |(_, chord)| format!("{label} ({chord})"))
+}
 
 #[component]
 pub fn RunControls() -> impl IntoView {
@@ -67,6 +78,19 @@ pub fn RunControls() -> impl IntoView {
             .with(|p| p.as_ref().is_some_and(|p| p.root_is_firmware()))
             .then(|| t!("toolbar.test-blocked"))
     });
+    // What is running holds a serial port — a monitor, a flash gone on to
+    // monitor, the Plot panel's link. Flash lets it go and writes; nothing
+    // else that runs is a flash's to stop.
+    let holds_port = Signal::derive(move || {
+        state.app.activity.with(|activity| {
+            activity.as_ref().is_some_and(|a| {
+                matches!(
+                    a.kind,
+                    crate::activity::Kind::Monitor | crate::activity::Kind::Link
+                )
+            })
+        })
+    });
 
     move || {
         state.has_project().then(|| {
@@ -77,7 +101,7 @@ pub fn RunControls() -> impl IntoView {
                     // in front of the finder's own.
                     <button
                         type="button"
-                        title=t!("menu.view.quick-open")
+                        title=move || with_chord(state, Action::QuickOpen, t!("menu.view.quick-open"))
                         on:click=move |_| state.layout.quick_open.set(true)
                         class=format!("{BUTTON} text-label-2 hover:text-label")
                     >
@@ -86,20 +110,19 @@ pub fn RunControls() -> impl IntoView {
                     <span class="mx-1.5 h-4 w-px bg-line" />
                     <button
                         type="button"
-                        title=t!("toolbar.build")
+                        title=move || with_chord(state, Action::Build, t!("toolbar.build"))
                         disabled=move || running.get()
                         on:click=move |_| controller::build_project(state)
                         class=format!("{BUTTON} text-label-2 hover:text-label")
                     >
                         <IconView icon=Icon::Hammer size=15 />
                     </button>
-                    // Test, between Build and Run: the suite is what stands
-                    // between a build that passed and a run worth watching.
-                    // Nothing else ran it before this — Build is `cargo build`
-                    // and nothing more, and the only other way to the suite
-                    // was one lens at a time.
+                    // Test, beside Build: the suite is what stands between a
+                    // build that passed and a run worth watching.
                     {move || {
-                        let title = test_block.get().unwrap_or_else(|| t!("toolbar.test"));
+                        let title = test_block
+                            .get()
+                            .unwrap_or_else(|| with_chord(state, Action::Test, t!("toolbar.test")));
                         view! {
                             <button
                                 type="button"
@@ -112,23 +135,18 @@ pub fn RunControls() -> impl IntoView {
                             </button>
                         }
                     }}
+                    <span class="mx-1.5 h-4 w-px bg-line" />
                     // Run becomes Stop in place while something runs — a
-                    // build, a run, a debug session — so nothing beside it
-                    // moves. A debug session ends through the debugger, which
-                    // stops the emulator it booted as well.
+                    // build, a run, a debug session, a flash — so nothing
+                    // beside it moves. A debug session ends through the
+                    // debugger, which stops the emulator it booted as well.
                     {move || {
                         if running.get() {
                             view! {
                                 <button
                                     type="button"
-                                    title=t!("toolbar.stop")
-                                    on:click=move |_| {
-                                        if state.debug.session.with_untracked(Option::is_some) {
-                                            controller::debug_stop(state);
-                                        } else {
-                                            controller::stop_session_now(state);
-                                        }
-                                    }
+                                    title=with_chord(state, Action::Stop, t!("toolbar.stop"))
+                                    on:click=move |_| controller::stop_anything(state)
                                     class=format!("{BUTTON} text-crimson")
                                 >
                                     <IconView icon=Icon::Stop size=15 />
@@ -138,16 +156,14 @@ pub fn RunControls() -> impl IntoView {
                         } else {
                             let block = run_block.get();
                             let disabled = block.is_some();
-                            let title = block.unwrap_or_else(|| t!("toolbar.run"));
+                            let title = block
+                                .unwrap_or_else(|| with_chord(state, Action::Run, t!("toolbar.run")));
                             view! {
                                 <button
                                     type="button"
                                     title=title
                                     disabled=disabled
-                                    on:click=move |_| {
-                                        state.layout.panel.set("simulate".to_string());
-                                        controller::run_simulation(state, false);
-                                    }
+                                    on:click=move |_| controller::simulate(state, false)
                                     class=format!("{BUTTON} text-rust")
                                 >
                                     <IconView icon=Icon::Play size=15 />
@@ -159,30 +175,65 @@ pub fn RunControls() -> impl IntoView {
                     {move || {
                         let block = debug_block.get();
                         let disabled = running.get() || block.is_some();
-                        let title = block.unwrap_or_else(|| t!("toolbar.debug"));
+                        let title = block
+                            .unwrap_or_else(|| with_chord(state, Action::Debug, t!("toolbar.debug")));
                         view! {
                             <button
                                 type="button"
                                 title=title
                                 disabled=disabled
-                                on:click=move |_| {
-                                    state.layout.panel.set("simulate".to_string());
-                                    controller::run_simulation(state, true);
-                                }
+                                on:click=move |_| controller::simulate(state, true)
                                 class=format!("{BUTTON} text-label-2 hover:text-label")
                             >
                                 <IconView icon=Icon::Bug size=15 />
                             </button>
                         }
                     }}
+                    <span class="mx-1.5 h-4 w-px bg-line" />
+                    // Flash: build, write, and stay attached. Allowed while a
+                    // monitor holds the port — it is let go first.
                     <button
                         type="button"
-                        title=t!("toolbar.flash")
-                        on:click=move |_| state.show_dock(DockTab::Devices)
+                        title=move || with_chord(state, Action::Flash, t!("toolbar.flash"))
+                        disabled=move || running.get() && !holds_port.get()
+                        on:click=move |_| controller::device_action(state, DeviceAction::Flash)
                         class=format!("{BUTTON} text-label-2 hover:text-label")
                     >
                         <IconView icon=Icon::Flash size=15 />
                     </button>
+                    // Monitor toggles: watching is stopped where it was
+                    // started, as Arduino's serial monitor is closed.
+                    {move || {
+                        if holds_port.get() {
+                            view! {
+                                <button
+                                    type="button"
+                                    title=t!("toolbar.monitor-stop")
+                                    on:click=move |_| controller::stop_session(state)
+                                    class=format!("{BUTTON} bg-selection text-crimson")
+                                >
+                                    <IconView icon=Icon::Monitor size=15 />
+                                </button>
+                            }
+                                .into_any()
+                        } else {
+                            view! {
+                                <button
+                                    type="button"
+                                    title=with_chord(state, Action::Monitor, t!("toolbar.monitor"))
+                                    disabled=move || running.get()
+                                    on:click=move |_| {
+                                        controller::device_action(state, DeviceAction::Monitor)
+                                    }
+                                    class=format!("{BUTTON} text-label-2 hover:text-label")
+                                >
+                                    <IconView icon=Icon::Monitor size=15 />
+                                </button>
+                            }
+                                .into_any()
+                        }
+                    }}
+                    <crate::view::device::DevicePicker />
                 </div>
             }
         })

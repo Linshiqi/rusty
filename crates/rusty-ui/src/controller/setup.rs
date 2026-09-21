@@ -66,18 +66,10 @@ fn read_data_dir(state: AppState) {
     });
 }
 
-/// Open it deliberately — the Help menu's "Check my environment".
-///
-/// Separate from [`check_environment`] because that one is allowed to decide
-/// not to appear, and a menu item that sometimes does nothing is a menu item
-/// people stop trusting.
-pub fn open_setup(state: AppState) {
-    if let Some(report) = state.project.toolchain.get_untracked() {
-        state.setup.steps.set(rusty_embed::setup::plan(&report));
-    }
-    read_data_dir(state);
-    state.setup.open.set(true);
-}
+// The deliberate way in — Help ▸ "Check my environment" — is the
+// Environment page now, which says everything this sheet does and what is
+// installed besides; the sheet stays what interrupts a machine that cannot
+// build.
 
 pub fn close_setup(state: AppState) {
     state.setup.open.set(false);
@@ -115,29 +107,112 @@ fn run_from(state: AppState, index: usize) {
     }
 
     state.setup.running.set(Some(index));
-    let tool = step.tool.clone();
-
-    let finished = move |ok: bool| {
+    run_step(state, step, move |ok| {
         if ok {
-            state.setup.installed.update(|done| done.push(tool.clone()));
             run_from(state, index + 1);
         } else {
             // Stop. Carrying on would end by reporting a ready machine that
             // is not, and the dock already holds the reason this one failed.
-            state.setup.failed.update(|bad| bad.push(tool.clone()));
             state.setup.running.set(None);
             refresh_toolchain(state);
         }
+    });
+}
+
+/// The Environment page's "Install what is missing": the steps for exactly
+/// the tools it marked as needed, in the plan's order, stopping at the first
+/// failure as the sheet's queue does. Not the sheet's whole plan — that one
+/// offers the optional tools too, which is right on a first run and wrong
+/// under a button that says what it installs.
+pub fn install_needed(state: AppState, tools: Vec<String>) {
+    if state.app.session_running.get_untracked() || state.setup.busy.with_untracked(Option::is_some)
+    {
+        return;
+    }
+    let Some(report) = state.project.toolchain.get_untracked() else {
+        return;
+    };
+    let steps: Vec<SetupStep> = rusty_embed::setup::plan(&report)
+        .into_iter()
+        .filter(|step| step.manual.is_none() && tools.contains(&step.tool))
+        .collect();
+    state.dock.source.set("tools");
+    run_list(state, steps, 0);
+}
+
+fn run_list(state: AppState, steps: Vec<SetupStep>, index: usize) {
+    let Some(step) = steps.get(index).cloned() else {
+        refresh_toolchain(state);
+        return;
+    };
+    run_step(state, step, move |ok| {
+        if ok {
+            run_list(state, steps, index + 1);
+        } else {
+            refresh_toolchain(state);
+        }
+    });
+}
+
+/// One row's Install on the Environment page: the step the queue would run
+/// for that tool, run alone, with the same progress the queue shows.
+pub fn install_step(state: AppState, tool: String) {
+    if state.app.session_running.get_untracked() || state.setup.busy.with_untracked(Option::is_some)
+    {
+        return;
+    }
+    let Some(report) = state.project.toolchain.get_untracked() else {
+        return;
+    };
+    let Some(step) = rusty_embed::setup::plan(&report)
+        .into_iter()
+        .find(|step| step.tool == tool && step.manual.is_none())
+    else {
+        return;
+    };
+    state.dock.source.set("tools");
+    run_step(state, step, move |_| refresh_toolchain(state));
+}
+
+/// One step, and the progress every screen that shows installs reads: busy
+/// while it runs, then installed or failed.
+fn run_step(state: AppState, step: SetupStep, finished: impl FnOnce(bool) + 'static) {
+    let tool = step.tool.clone();
+    state.setup.busy.set(Some(tool.clone()));
+    state.setup.failed.update(|bad| bad.retain(|t| t != &tool));
+    let done = move |ok: bool| {
+        state.setup.busy.set(None);
+        let list = if ok {
+            state.setup.installed
+        } else {
+            state.setup.failed
+        };
+        list.update(|names| {
+            if !names.contains(&tool) {
+                names.push(tool.clone());
+            }
+        });
+        // The editor gets its language server the moment it exists, rather
+        // than at the next project open.
+        if ok && tool == "rust-analyzer" {
+            start_lsp(state);
+        }
+        finished(ok);
     };
 
     match step.tool.strip_prefix("target:") {
         // `rustup target add` is a plain command; everything else goes
         // through the backend's installer, which knows the multi-step
-        // recipes and the archive downloads.
-        Some(_) => run_command_then(state, step.command.clone(), move |code| {
-            finished(matches!(code, Some(0)));
-        }),
-        None => install_one(state, step.tool.clone(), finished),
+        // recipes and the archive downloads. Both are installs to the
+        // status bar, named by what they install.
+        Some(target) => {
+            let target = target.to_string();
+            run_command_on(state, step.command.clone(), "tools", move |code| {
+                done(matches!(code, Some(0)));
+            });
+            name_activity(state, target);
+        }
+        None => install_one(state, step.tool.clone(), done),
     }
 }
 
@@ -149,6 +224,7 @@ fn install_one(state: AppState, name: String, finished: impl FnOnce(bool) + 'sta
     }
 
     let channel = stream_to_terminal(state);
+    name_activity(state, name.clone());
     let args = Args { name };
     spawn_local(async move {
         let outcome =
@@ -157,7 +233,10 @@ fn install_one(state: AppState, name: String, finished: impl FnOnce(bool) + 'sta
         let code = match outcome {
             Ok(code) => code,
             Err(error) => {
+                // The session this started has ended too: without the exit
+                // the Stop button stayed up over nothing.
                 state.app.error.set(Some(error));
+                note_exit(state, Some(-1));
                 finished(false);
                 return;
             }

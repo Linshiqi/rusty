@@ -75,6 +75,16 @@ pub fn run_simulation(state: AppState, debug: bool) {
     channel.set_onmessage(&on_line);
     on_line.forget();
     state.app.session_running.set(true);
+    let kind = if debug {
+        crate::activity::Kind::Debug
+    } else {
+        crate::activity::Kind::Simulate
+    };
+    state.app.activity.set(Some(crate::activity::Activity::new(
+        kind,
+        js_sys::Date::now(),
+    )));
+    state.app.outcome.set(None);
     state.show_dock(crate::state::DockTab::Output);
     spawn_local(async move {
         match ipc::call_streaming::<_, Option<i32>>(
@@ -112,6 +122,7 @@ pub fn install_sim_tool(state: AppState, name: String) {
     }
     let args = Args { name: name.clone() };
     let channel = stream_to_terminal(state);
+    name_activity(state, name.clone());
     spawn_local(async move {
         let outcome =
             ipc::call_streaming::<_, Option<i32>>(cmd::sim::INSTALL, &args, "onLine", &channel)

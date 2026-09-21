@@ -1898,7 +1898,9 @@ install that is a workbench and one that is a list of things to go and find.
   is worth offering, not worth a dialog. A first-run check that shows up on a
   working machine is one people dismiss without reading, and then dismiss the
   time it mattered. Help ▸ "Check my environment…" is the way in when nothing
-  interrupted.
+  interrupted, and it opens the Environment page (*Building, flashing and the
+  environment*, below) rather than this sheet: the page says everything the
+  sheet does and what is installed besides.
 - **On an `-msvc` host the linker is checked before anything is offered.**
   Without the C++ build tools every `cargo install` compiles for a minute and
   dies with "linker `link.exe` not found". The `msvc` row finds `link.exe`
@@ -1932,6 +1934,77 @@ install that is a workbench and one that is a list of things to go and find.
   `LIBCLANG_PATH` when the user has none. The user's environment is never
   written; `tools::find` consults the same directories so the panel cannot
   report absent what the build would find.
+
+## Building, flashing and the environment
+
+The three things an embedded workbench does before anything else, and the
+three that were still shaped like a debug view: Build was a button whose
+whole result was a scrollback, Flash was a button that opened a dock tab — a
+device list, a mode toggle, a command, a second button — and the Toolchain
+panel was a grid of readouts over a list of binaries. The references are the
+tools people arrive from: PlatformIO's and Arduino's one-click Upload and
+their board-and-port box, Xcode's destination picker and activity view,
+`flutter doctor` and the ESP-IDF extension's doctor.
+
+- **Flash is one click and builds first** (`controller::device_action`):
+  `cargo build --release`, then the plan against the image that build just
+  made, then `espflash flash --monitor`. It used to flash whatever had last
+  been built — a board that disagrees with the code on screen for a reason
+  nothing names. The command still reaches the dock before it runs, and the
+  picker shows it before that; the rule the old Devices tab kept, kept
+  without the tab.
+- **The device is chosen once, in the title bar** (`view/device.rs`), and
+  kept. With nothing chosen, the one board plugged in is the answer
+  (`only_candidate`, pure and tested): ports that look like boards when the
+  chip has a serial bootloader — a C3 on native USB is a port *and* a probe,
+  and counting both would ask every time about one board — and probes when
+  it has none. Anything else opens the picker, and the verb that opened it
+  waits there (`Device::pending`) and runs when a row is picked, rather than
+  asking for the click again. A port whose boards cannot carry the project's
+  chip says so on its row, and the plan's warning asks before the write.
+- **A monitor holding the port is let go first** (`Device::after_stop`), as
+  PlatformIO's Upload does. The flash starts from the old session's own
+  exit (`note_exit`), not from the stop's reply: that is the only moment the
+  port is certainly free, and the stop's reply can land after the build has
+  begun — which is why it clears `session_running` only while no activity
+  has replaced the one it stopped.
+- **Monitor attaches without writing, and needs no build.** The planner's
+  ELF is optional for a serial monitor (a board flashed last week is exactly
+  the one somebody wants to watch) and passed when it exists, for defmt and
+  panics. A probe's monitor is `probe-rs attach`; it was `run`, which
+  rewrote the flash of a board somebody had asked only to watch.
+- **The status bar's first item is the activity view** (`crate::activity`,
+  pure and tested; `view/activity.rs`): what runs, with the crate being
+  compiled and a clock, and then the verdict until the next run — `Build
+  succeeded · 12.4 s · Flash 85.3 KB · RAM 20.1 KB / 320 KB (6%) · 2
+  warnings`. The counts are cargo's own summary lines, kept **per unit**: a
+  crate that fails says its warnings twice (`generated 1 warning`, then
+  `…; 1 warning emitted`), and summing lines reported two for one — found by
+  driving a failing build, not by reading cargo. A flash that goes on
+  monitoring reports *flashed* at espflash's `Flashing has completed!` and
+  carries on as a monitor of the same port; a run somebody stopped has no
+  verdict; a command's success says nothing, since a git write's success is
+  the panel moving. The image's size comes from the memory report, which a
+  build now refreshes — `target/` is not watched, so nothing else would.
+- **The Environment page answers before it lists** (`view/panels/
+  toolchain.rs`): a verdict with the one button that fixes it — *Install what
+  is missing*, which installs exactly the rows it marked, not the sheet's
+  whole plan with the optional tools in it — then each tool in the group of
+  work it serves, drawn in the Settings page's shapes, its state and its
+  Install on the right. What is needed is read off the report's own fields
+  as the setup plan reads them, plus what the backend's blocking problems
+  name: counted from problems alone, the page said "one missing" above two
+  rows marked missing. The Xtensa toolchain appears only when the chip needs
+  it; "absent — not needed here" at headline size was the old page's most
+  confusing line. Install progress is `Setup::busy`, shared with the
+  first-run sheet, so an install begun on either is drawn on both.
+- **The keys are the ones people bring**: Ctrl+Shift+B builds and F5,
+  Ctrl+F5 and Shift+F5 debug, run and stop, as in VS Code — F5 on a paused
+  debug session resumes it — and Ctrl+U flashes and Ctrl+Shift+M monitors,
+  as in Arduino. Not PlatformIO's Ctrl+Alt letters: on a layout with AltGr
+  they type characters, which is why this binding system leaves Alt letters
+  alone. Every verb is also a menu row and a palette entry — the same
+  `Action`.
 
 ## Updating itself
 
@@ -2134,10 +2207,14 @@ the debugger's transport, git's fetch/pull/push — and read as one 46px column
 of sixteen icons at one weight, with Run in a different place on every panel
 and the transport pushing it down the column when a session began. Four kinds
 of button, four homes now. The **project's verbs** (Build, Test, Run/Stop,
-Debug, Flash) sit in the title bar's centre with the file finder's icon
-(`view/run.rs`), where Xcode and CLion put them: one position on every
-panel, in a row the window already spends, and Run switches to the board
-itself so nothing is far from anything. Build is `cargo build --release`
+Debug, Flash, Monitor, and the device they go to) sit in the title bar's
+centre with the file finder's icon (`view/run.rs`), where Xcode and CLion
+put them: one position on every panel, in a row the window already spends,
+and Run switches to the board itself so nothing is far from anything. Three
+groups in the order the work happens — build and test, run and debug on the
+simulator, flash and watch the board — and every tooltip carries the key
+that does the same, read off the bindings so a rebound one is what is shown.
+Build is `cargo build --release`
 and nothing more — it never ran the tests, and until Test arrived the only
 way to the suite was one lens at a time. Test is `cargo test` at the
 project root through the lens's own path (`test_project`), and it is
@@ -2153,7 +2230,7 @@ has to say so where the click landed. The **debugger's transport** floats over t
 session is live (`view/transport.rs`) — VS Code's debug toolbar, an overlay so
 its arrival moves nothing, and one copy where there were two. A **panel's own
 actions** sit at the right of the row that names the panel — the Files
-header, Git's branch row, the Crates and Toolchain headings, the board
+header, Git's branch row, the Crates and Environment headings, the board
 sheet's corner — as VS Code's view titles carry theirs. **Save** sits at the
 right of the file header beside the dirty dot, because it acts on the file.
 A full-width toolbar row was tried before the rail and cost forty pixels on
