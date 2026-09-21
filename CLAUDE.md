@@ -3958,6 +3958,15 @@ to one it does.
   wire across the whole sheet. Both live in `nets`, so the rules, the probe
   and the backend's button polarity all read them the same way. A label with
   no name joins nothing: an empty tag is one somebody has not written on.
+  **This paragraph was true of every reader but one.** `button_drives` looked
+  for the rail among the devkit's own rows only, so a button wired to a
+  `rusty:GND` drove nothing: the sheet said "pressing it changes nothing",
+  the press never reached the emulator, and firmware reading its pull-up
+  kept its LED lit whatever the user pressed — a user's own board, and the
+  most natural way to draw a button. `drivers` and `divider_at` had always
+  read power symbols; a reader that finds rails for itself has to be held to
+  the same list, and `a_switch_to_a_power_symbol_drives_its_gpio` holds this
+  one.
 - **`Evaluation` carries the nets themselves**, not only the levels, so a
   pin can be asked what it is joined to. That is the probe: selecting a wire
   says high, low or floating, and lists every pin in its net. The union-find
@@ -4065,6 +4074,23 @@ to one it does.
   runs; the cap sinks, the rules see it conducting, and the GPIO it
   reaches is driven through the same `B<pin>=1` the old buttons sent, so
   firmware written for the text protocol hears it too.
+- **A running board is not a drawing** (`live`, from Run to the run's end,
+  build included). Nothing moves, nothing is rewired, nothing is selected
+  and no inspector opens: a switch is pressed, a knob turned, a slider
+  slid, a drag on the sheet pans, and the keys, the menu and the corner's
+  controls keep only what views. It was an editor for the whole run — wires
+  that dragged, an inspector over the board at every click — which the user
+  named as exactly that. **The wires let the pointer through while it
+  runs**, because the wire layer is drawn over the parts: a wire routed
+  across a switch's cap took every press meant for the switch, so which
+  wire the pointer is near is asked of the geometry (`wire_under`) instead.
+  What the inspector used to say while it ran is said by the reading line
+  at the sheet's foot, for whatever the pointer is over: `D1 · 1.97 V ·
+  6.03 mA`, or a net's level and voltage — the probe, without a panel over
+  the board. **Beside the editor the inspector floats on the side away from
+  the part it describes** (`inspector_left`), and is only as tall as what it
+  says; it stood over the right of a pane whose parts were all on the
+  right.
 
 ## Laying the sheet out
 

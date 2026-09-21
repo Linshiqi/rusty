@@ -1799,12 +1799,19 @@ pub fn button_drives(sheet: &Sheet, rows: &[Row], part: &str) -> Option<(u8, boo
         let mut gpio = None;
         let mut rail = None;
         for (other, other_pin) in graph.nodes.iter().enumerate() {
-            if other_pin.part != KIT_REFERENCE || dc.find(other) != root {
+            if dc.find(other) != root {
                 continue;
             }
-            if let Some(row) = kit_pin(rows, &other_pin.pin) {
-                gpio = gpio.or(rows[row].gpio);
-                rail = rail.or(rows[row].rail);
+            if other_pin.part == KIT_REFERENCE {
+                if let Some(row) = kit_pin(rows, &other_pin.pin) {
+                    gpio = gpio.or(rows[row].gpio);
+                    rail = rail.or(rows[row].rail);
+                }
+            } else {
+                // A power symbol is a rail wherever it is drawn, as
+                // `drivers` and `divider_at` read it: a button to a GND
+                // symbol is a button to ground.
+                rail = rail.or_else(|| sheet.symbol_of(&other_pin.part).and_then(power_rail));
             }
         }
         sides.push((gpio, rail));
@@ -2231,6 +2238,35 @@ mod tests {
             eval(&s, &[], &[]).warnings,
             vec![Warning::SwitchDrivesNothing { part: "SW3".into() }]
         );
+    }
+
+    /// A switch to a ground *symbol* is a switch to ground, as a lamp to one
+    /// is a lamp to ground: a power symbol is a rail wherever it is drawn.
+    /// The press reading looked only at the devkit's own rows, so a button
+    /// wired to a `rusty:GND` drove nothing — the press never reached the
+    /// emulator, the firmware read its pull-up for ever, and the sheet said
+    /// "pressing it changes nothing" about a circuit that is right.
+    #[test]
+    fn a_switch_to_a_power_symbol_drives_its_gpio() {
+        let rows = rows();
+        let mut s = sheet();
+        place(&mut s, "SW1", "Device:SW_Push");
+        place(&mut s, "#PWR1", "rusty:GND");
+        wire(&mut s, "U1.GPIO4", "SW1.1");
+        wire(&mut s, "SW1.2", "#PWR1.GND");
+        assert_eq!(button_drives(&s, &rows, "SW1"), Some((4, false)));
+        assert!(
+            eval(&s, &[], &[]).warnings.is_empty(),
+            "{:?}",
+            eval(&s, &[], &[]).warnings
+        );
+
+        let mut s = sheet();
+        place(&mut s, "SW2", "Device:SW_Push");
+        place(&mut s, "#PWR2", "rusty:Supply");
+        wire(&mut s, "U1.GPIO5", "SW2.2");
+        wire(&mut s, "SW2.1", "#PWR2.VCC");
+        assert_eq!(button_drives(&s, &rows, "SW2"), Some((5, true)));
     }
 
     /// The two findings that are about the drawing rather than the run, and

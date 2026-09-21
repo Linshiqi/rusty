@@ -9,6 +9,28 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.57
+
+**A button wired to a GND symbol now works.** A push button connected to a
+ground (or supply) symbol on the board, rather than straight to the board's
+own GND pin, was treated as connected to nothing: the board said "pressing
+it changes nothing", the press never reached the simulated chip, and code
+reading the button never saw it pressed. It now drives its pin like any
+other button — in the window, from `rusty-cli sim` scenarios and in the
+assistant's simulations.
+
+**The board stops being an editor while it runs.** During a simulation,
+parts and wires no longer move, clicks no longer select parts or open their
+settings over the board, and a drag on the board pans it. Buttons, knobs and
+sliders work as before — including a button with a wire drawn across it,
+which used to take the click. Hovering a part shows what it is doing
+(`D1 · 1.97 V · 6.03 mA`), and hovering a wire shows the level and voltage
+of its net. Stop the simulation to edit the board again.
+
+**Part settings no longer cover the part.** Beside the code, a selected
+part's settings float on the side of the board away from it, and only as
+tall as they need.
+
 ## v0.6.56
 
 **A playground: code beside a board that runs it, with no project to

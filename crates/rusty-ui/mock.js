@@ -212,7 +212,7 @@
       chip, kitX: chip === "esp32" ? 160 : 460, kitY: 96,
       parts: [
         { reference: "R1", symbol: "Device:R", value: "220", x: chip === "esp32" ? 440 : 312, y: chip === "esp32" ? 224 : 176, rot: 90 },
-        { reference: "D1", symbol: "Device:LED", value: "red", x: chip === "esp32" ? 536 : 216, y: chip === "esp32" ? 224 : 176 },
+        { reference: "D1", symbol: "Device:LED", value: "red", x: chip === "esp32" ? 536 : 216, y: chip === "esp32" ? 224 : 176, props: { vf: "2.0" } },
         { reference: "SW1", symbol: "Device:SW_Push", value: "", x: chip === "esp32" ? 440 : 312, y: chip === "esp32" ? 304 : 256 },
       ],
       // Both devkits have a ground on each side, which only its number

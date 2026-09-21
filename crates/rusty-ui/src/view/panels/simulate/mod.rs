@@ -439,6 +439,27 @@ fn BoardEditor(
 ) -> impl IntoView {
     let state = AppState::expect();
     let running = state.app.session_running;
+    // While the firmware runs, the sheet is the board on the desk and not a
+    // drawing: nothing moves, nothing is rewired, nothing is selected, and
+    // no inspector opens over it. A switch is pressed, a knob turned, a
+    // slider slid; a drag on the sheet moves the view; hovering says what a
+    // part or a wire is at. Wokwi's rule, and the user's words for the
+    // alternative — still an editor, wires that drag, a panel over the
+    // board — were exactly this. From the moment Run is pressed, build
+    // included, until the run ends.
+    let live = Signal::derive(move || {
+        running.get()
+            && state.app.activity.with(|activity| {
+                activity.as_ref().is_some_and(|a| {
+                    matches!(
+                        a.kind,
+                        crate::activity::Kind::Simulate | crate::activity::Kind::Debug
+                    )
+                })
+            })
+    });
+    // The part under the pointer while it runs, for the reading line.
+    let hover_part = RwSignal::new(None::<usize>);
     // The floating library, beside the editor. Closed until asked for, and
     // closed again by the part it adds, as Wokwi's picker is.
     let library_open = RwSignal::new(false);
@@ -761,6 +782,9 @@ fn BoardEditor(
         dirty.set(true);
     };
     let add_part = move |symbol: Symbol| {
+        if live.get_untracked() {
+            return;
+        }
         placing.set(Some(symbol));
         place_at.set(None);
     };
@@ -1111,10 +1135,44 @@ fn BoardEditor(
         }
     };
 
+    // Going live puts down whatever was in hand: a selection, a part being
+    // placed, a wire half drawn, a menu, the floating library.
+    Effect::new(move |_| {
+        if live.get() {
+            selected.set(None);
+            selected_wire.set(None);
+            marked.set(Vec::new());
+            drawing.set(None);
+            placing.set(None);
+            place_at.set(None);
+            drag.set(None);
+            ghost.set(None);
+            hover_pin.set(None);
+            menu.set(None);
+            library_open.set(false);
+        }
+    });
+
     // Whether the inspector has anything to say — beside the editor it is
     // drawn only then.
     let inspecting = move || {
         selected.get().is_some() || selected_wire.get().is_some() || marked.with(|m| m.len() > 1)
+    };
+    // Beside the editor it floats on the side of the pane away from the
+    // part it describes, so what is being edited is never under the panel
+    // editing it — on the right, the ESP32's parts all were.
+    let inspector_left = move || {
+        let Some(x) = selected
+            .get()
+            .and_then(|index| parts.with(|list| list.get(index).map(|p| p.inst.x)))
+        else {
+            return false;
+        };
+        let (tx, _, k) = view.get();
+        let width = canvas
+            .get()
+            .map_or(0.0, |element| element.get_bounding_client_rect().width());
+        tx + x * k > width / 2.0
     };
 
     view! {
@@ -1122,7 +1180,11 @@ fn BoardEditor(
             <div class="relative flex min-h-0 flex-1">
                 <div class=move || {
                     if !compact {
-                        "contents"
+                        if live.get() {
+                            "pointer-events-none flex flex-none opacity-40"
+                        } else {
+                            "flex flex-none"
+                        }
                     } else if library_open.get() {
                         // Below the corner's controls, as the inspector is:
                         // in a narrow pane the two meet, and the `+` that
@@ -1147,6 +1209,14 @@ fn BoardEditor(
                     node_ref=canvas
                     tabindex="0"
                     on:keydown=move |event: ev::KeyboardEvent| {
+                        // A running board takes no edits; F still fits.
+                        if live.get_untracked() {
+                            if matches!(event.key().as_str(), "f" | "F") && !event.ctrl_key() {
+                                event.prevent_default();
+                                fit_view();
+                            }
+                            return;
+                        }
                         // While a wire is being drawn the keys are about the
                         // wire: Backspace takes back the last click (and the
                         // drawing itself once there is none), Space turns
@@ -1310,6 +1380,22 @@ fn BoardEditor(
                         // A press on the sheet puts the floating library
                         // away, as a press outside any popover does.
                         library_open.set(false);
+                        // While it runs a drag on the sheet moves the view,
+                        // as a map's does: there is nothing to select.
+                        if live.get_untracked() {
+                            event.prevent_default();
+                            if let Some(element) = canvas.get_untracked() {
+                                let _ = element.focus();
+                            }
+                            let (tx, ty, _) = view.get_untracked();
+                            drag.set(Some(Drag::Pan {
+                                start_tx: tx,
+                                start_ty: ty,
+                                px: f64::from(event.client_x()),
+                                py: f64::from(event.client_y()),
+                            }));
+                            return;
+                        }
                         // An armed part lands where the click says, snapped.
                         if let Some(symbol) = placing.get_untracked() {
                             event.prevent_default();
@@ -1357,6 +1443,22 @@ fn BoardEditor(
                         }
                     }
                     on:pointermove=move |event: ev::PointerEvent| {
+                        // While it runs the wires let the pointer through to
+                        // the parts under them, so which wire it is near is
+                        // asked of the geometry — for its highlight and the
+                        // reading line.
+                        if live.get_untracked() && drag.with_untracked(Option::is_none) {
+                            let world = to_world(
+                                f64::from(event.client_x()),
+                                f64::from(event.client_y()),
+                            );
+                            let near = parts.with_untracked(|list| {
+                                wires.with_untracked(|all| wire_under(list, all, world, 6.0))
+                            });
+                            if hover_wire.get_untracked() != near {
+                                hover_wire.set(near);
+                            }
+                        }
                         if placing.with_untracked(Option::is_some) {
                             let step = grid.get_untracked();
                             let world = to_world(
@@ -1666,6 +1768,7 @@ fn BoardEditor(
                         guides.set((None, None));
                         ghost.set(None);
                         hover_pin.set(None);
+                        hover_wire.set(None);
                         box_to.set(None);
                         group_start.set(Vec::new());
                         drag.set(None);
@@ -1693,6 +1796,7 @@ fn BoardEditor(
                                     <button
                                         type="button"
                                         title=t!("simulate.add-part")
+                                        disabled=move || live.get()
                                         on:click=move |_| library_open.update(|open| *open = !*open)
                                         class=move || {
                                             if library_open.get() {
@@ -1710,7 +1814,7 @@ fn BoardEditor(
                         <button
                             type="button"
                             title=t!("simulate.save")
-                            disabled=move || !dirty.get()
+                            disabled=move || !dirty.get() || live.get()
                             on:click=move |_| save.run(())
                             class=SHEET_BUTTON
                         >
@@ -1727,6 +1831,7 @@ fn BoardEditor(
                             type="button"
                             title=t!("simulate.schematic-import")
                             class:hidden=compact
+                            disabled=move || live.get()
                             on:click=move |_| {
                                 controller::import_schematic(
                                     state,
@@ -1772,7 +1877,7 @@ fn BoardEditor(
                         <button
                             type="button"
                             title=t!("simulate.undo")
-                            disabled=move || history.with(Vec::is_empty)
+                            disabled=move || history.with(Vec::is_empty) || live.get()
                             on:click=move |_| undo()
                             class=SHEET_BUTTON
                         >
@@ -1781,7 +1886,7 @@ fn BoardEditor(
                         <button
                             type="button"
                             title=t!("simulate.redo")
-                            disabled=move || future.with(Vec::is_empty)
+                            disabled=move || future.with(Vec::is_empty) || live.get()
                             on:click=move |_| redo()
                             class=SHEET_BUTTON
                         >
@@ -1795,6 +1900,7 @@ fn BoardEditor(
                             type="button"
                             title=t!("simulate.tidy")
                             class:hidden=compact
+                            disabled=move || live.get()
                             on:click=move |_| {
                                 checkpoint();
                                 parts.update(|list| {
@@ -2079,6 +2185,11 @@ fn BoardEditor(
                                             if event.button() != 0 {
                                                 return;
                                             }
+                                            // Left to the part and the sheet
+                                            // under it while the board runs.
+                                            if live.get_untracked() {
+                                                return;
+                                            }
                                             event.prevent_default();
                                             event.stop_propagation();
                                             selected.set(Some(index));
@@ -2097,11 +2208,23 @@ fn BoardEditor(
                                             if event.button() != 0 {
                                                 return;
                                             }
+                                            // While it runs a switch is pressed
+                                            // and anything else is the sheet
+                                            // under the pointer, which pans.
+                                            if live.get_untracked() {
+                                                if behaviour.get_untracked() == Some(Behaviour::Switch) {
+                                                    event.prevent_default();
+                                                    event.stop_propagation();
+                                                    press(index, true);
+                                                }
+                                                return;
+                                            }
                                             event.prevent_default();
                                             event.stop_propagation();
                                             if let Some(element) = canvas.get_untracked() {
                                                 let _ = element.focus();
                                             }
+                                            library_open.set(false);
                                             selected_wire.set(None);
                                             // Shift adds this part to the selection
                                             // or takes it out — KiCad's modifier. A
@@ -2175,10 +2298,12 @@ fn BoardEditor(
                                         let on_menu = move |event: ev::MouseEvent| {
                                             event.prevent_default();
                                             event.stop_propagation();
-                                            selected.set(Some(index));
-                                            selected_wire.set(None);
-                                            if !marked.with_untracked(|m| m.contains(&index)) {
-                                                marked.set(vec![index]);
+                                            if !live.get_untracked() {
+                                                selected.set(Some(index));
+                                                selected_wire.set(None);
+                                                if !marked.with_untracked(|m| m.contains(&index)) {
+                                                    marked.set(vec![index]);
+                                                }
                                             }
                                             menu.set(Some((
                                                 f64::from(event.client_x()),
@@ -2726,9 +2851,18 @@ fn BoardEditor(
                                                             r=move || if target() { 5.5 } else { 3.4 }
                                                             fill=move || if target() { "#ffd75c" } else if wired() { "#c9a227" } else { "#e0a838" }
                                                             class=move || if wired() || target() || answered() { "" } else { "animate-pulse" }
-                                                            style="pointer-events: all; cursor: crosshair"
+                                                            style=move || {
+                                                                if live.get() {
+                                                                    "pointer-events: all; cursor: inherit"
+                                                                } else {
+                                                                    "pointer-events: all; cursor: crosshair"
+                                                                }
+                                                            }
                                                             on:pointerdown=move |event: ev::PointerEvent| start_wire(event, number.get_value())
                                                             on:dblclick=move |event: ev::MouseEvent| {
+                                                                if live.get_untracked() {
+                                                                    return;
+                                                                }
                                                                 event.stop_propagation();
                                                                 disconnect_pin(index, number.get_value());
                                                             }
@@ -2868,6 +3002,8 @@ fn BoardEditor(
                                                 "cursor: grabbing"
                                             } else if behaviour.get() == Some(Behaviour::Switch) && running.get() {
                                                 "cursor: pointer"
+                                            } else if live.get() {
+                                                "cursor: default"
                                             } else {
                                                 "cursor: grab"
                                             }
@@ -2882,7 +3018,11 @@ fn BoardEditor(
                                                 style=cursor
                                                 on:pointerdown=on_down
                                                 on:pointerup=on_up
-                                                on:pointerleave=on_up
+                                                on:pointerenter=move |_| hover_part.set(Some(index))
+                                                on:pointerleave=move |event| {
+                                                    on_up(event);
+                                                    hover_part.set(None);
+                                                }
                                                 on:contextmenu=on_menu
                                             >
                                                 {ring}
@@ -3335,7 +3475,7 @@ fn BoardEditor(
                                     let list = parts.get();
                                     let picked = selected_wire.get();
                                     let hovered = hover_wire.get();
-                                    let live = running.get();
+                                    let powered = running.get();
                                     wires
                                         .get()
                                         .iter()
@@ -3351,7 +3491,7 @@ fn BoardEditor(
                                             // while the firmware runs: high is
                                             // green, low is dim, unknown is the
                                             // sheet's grey.
-                                            let level = live
+                                            let level = powered
                                                 .then(|| eval.with(|e| e.levels.get(&wire.from).copied().flatten()))
                                                 .flatten();
                                             let stroke = if is_picked {
@@ -3398,14 +3538,25 @@ fn BoardEditor(
                                                             y2=b.1
                                                             stroke="transparent"
                                                             stroke-width="12"
-                                                            style=format!("pointer-events: stroke; cursor: {cursor}")
+                                                            // Through to the parts while it runs:
+                                                            // a wire drawn across a switch's cap
+                                                            // took every press meant for it.
+                                                            style=move || {
+                                                                if live.get() {
+                                                                    "pointer-events: none".to_string()
+                                                                } else {
+                                                                    format!("pointer-events: stroke; cursor: {cursor}")
+                                                                }
+                                                            }
                                                             on:pointerenter=move |_| hover_wire.set(Some(wire_index))
                                                             on:pointerleave=move |_| hover_wire.set(None)
                                                             on:contextmenu=move |event: ev::MouseEvent| {
                                                                 event.prevent_default();
                                                                 event.stop_propagation();
-                                                                selected.set(None);
-                                                                selected_wire.set(Some(wire_index));
+                                                                if !live.get_untracked() {
+                                                                    selected.set(None);
+                                                                    selected_wire.set(Some(wire_index));
+                                                                }
                                                                 menu.set(Some((
                                                                     f64::from(event.client_x()),
                                                                     f64::from(event.client_y()),
@@ -3414,6 +3565,10 @@ fn BoardEditor(
                                                             }
                                                             on:pointerdown=move |event: ev::PointerEvent| {
                                                                 if event.button() != 0 {
+                                                                    return;
+                                                                }
+                                                                // The sheet's, which pans, while it runs.
+                                                                if live.get_untracked() {
                                                                     return;
                                                                 }
                                                                 event.prevent_default();
@@ -3485,6 +3640,9 @@ fn BoardEditor(
                                                                 fill="#e05d38"
                                                                 style="pointer-events: auto; cursor: pointer"
                                                                 on:dblclick=move |event: ev::MouseEvent| {
+                                                                    if live.get_untracked() {
+                                                                        return;
+                                                                    }
                                                                     event.stop_propagation();
                                                                     checkpoint();
                                                                     wires.update(|all| {
@@ -3826,6 +3984,50 @@ fn BoardEditor(
                                 }
                             })
                         }}
+                        // While it runs, what the pointer is over, measured:
+                        // the probe and the inspector's numbers, said on the
+                        // board instead of in a panel over it.
+                        {move || {
+                            if !live.get() {
+                                return None;
+                            }
+                            let text = if let Some(index) = hover_part.get() {
+                                let reference = parts
+                                    .with(|list| list.get(index).map(|p| p.inst.reference.clone()))?;
+                                let reading = solved.with(|answer| {
+                                    answer.as_ref().ok().and_then(|found| found.reading(&reference))
+                                })?;
+                                format!(
+                                    "{reference} · {} · {}",
+                                    readout::volts(reading.across),
+                                    readout::amps(reading.through)
+                                )
+                            } else {
+                                let index = hover_wire.get()?;
+                                let from = wires.with(|all| all.get(index).map(|w| w.from.clone()))?;
+                                let word = match eval.with(|e| e.levels.get(&from).copied().flatten()) {
+                                    Some(true) => t!("simulate.net-high"),
+                                    Some(false) => t!("simulate.net-low"),
+                                    None => t!("simulate.net-floating"),
+                                };
+                                let volts = solved.with(|answer| {
+                                    answer
+                                        .as_ref()
+                                        .ok()
+                                        .and_then(|found| found.volts_at(&from))
+                                        .map(readout::volts)
+                                });
+                                match volts {
+                                    Some(volts) => format!("{word} · {volts}"),
+                                    None => word,
+                                }
+                            };
+                            Some(view! {
+                                <span class="self-start rounded-[6px] bg-raised/90 px-2 py-1 font-mono text-caption text-label ring-1 ring-line">
+                                    {text}
+                                </span>
+                            })
+                        }}
                         {move || {
                             let (label, detail) = match state.sim.pin_source.get() {
                                 rusty_embed::PinSource::Emulator => (
@@ -3853,6 +4055,9 @@ fn BoardEditor(
                     {move || {
                         let (x, y, target) = menu.get()?;
                         let close = Callback::new(move |_| menu.set(None));
+                        // A running board's menu is the view's, whatever it
+                        // was opened on: nothing in it edits.
+                        let target = if live.get_untracked() { MenuTarget::Sheet } else { target };
                         let items = match target {
                             MenuTarget::Wire(index) => view! {
                                 <MenuItem
@@ -3963,34 +4168,39 @@ fn BoardEditor(
                                 .into_any()
                             }
                             MenuTarget::Sheet => view! {
-                                <MenuItem
-                                    label=t!("menu.edit.undo")
-                                    shortcut="Ctrl+Z"
-                                    disabled=history.with_untracked(Vec::is_empty)
-                                    on_select=Callback::new(move |_| {
-                                        undo();
-                                        menu.set(None);
-                                    })
-                                />
-                                <MenuItem
-                                    label=t!("menu.edit.redo")
-                                    shortcut="Ctrl+Y"
-                                    disabled=future.with_untracked(Vec::is_empty)
-                                    on_select=Callback::new(move |_| {
-                                        redo();
-                                        menu.set(None);
-                                    })
-                                />
-                                <MenuItem
-                                    label=t!("simulate.select-all")
-                                    shortcut="Ctrl+A"
-                                    on_select=Callback::new(move |_| {
-                                        marked.set((0..parts.with_untracked(Vec::len)).collect());
-                                        selected_wire.set(None);
-                                        menu.set(None);
-                                    })
-                                />
-                                <MenuSeparator />
+                                {(!live.get_untracked())
+                                    .then(|| {
+                                        view! {
+                                            <MenuItem
+                                                label=t!("menu.edit.undo")
+                                                shortcut="Ctrl+Z"
+                                                disabled=history.with_untracked(Vec::is_empty)
+                                                on_select=Callback::new(move |_| {
+                                                    undo();
+                                                    menu.set(None);
+                                                })
+                                            />
+                                            <MenuItem
+                                                label=t!("menu.edit.redo")
+                                                shortcut="Ctrl+Y"
+                                                disabled=future.with_untracked(Vec::is_empty)
+                                                on_select=Callback::new(move |_| {
+                                                    redo();
+                                                    menu.set(None);
+                                                })
+                                            />
+                                            <MenuItem
+                                                label=t!("simulate.select-all")
+                                                shortcut="Ctrl+A"
+                                                on_select=Callback::new(move |_| {
+                                                    marked.set((0..parts.with_untracked(Vec::len)).collect());
+                                                    selected_wire.set(None);
+                                                    menu.set(None);
+                                                })
+                                            />
+                                            <MenuSeparator />
+                                        }
+                                    })}
                                 {state
                                     .sim.plan
                                     .with_untracked(|plan| {
@@ -4041,7 +4251,11 @@ fn BoardEditor(
                     if !compact {
                         "flex w-[200px] flex-none flex-col overflow-y-auto border-l border-line bg-sidebar"
                     } else if inspecting() {
-                        "absolute top-12 right-2 bottom-2 z-30 flex w-[220px] flex-col overflow-y-auto rounded-[8px] bg-sidebar shadow-2xl ring-1 ring-line-strong"
+                        if inspector_left() {
+                            "absolute top-12 left-2 z-30 flex max-h-[calc(100%-3.5rem)] w-[220px] flex-col overflow-y-auto rounded-[8px] bg-sidebar shadow-2xl ring-1 ring-line-strong"
+                        } else {
+                            "absolute top-12 right-2 z-30 flex max-h-[calc(100%-3.5rem)] w-[220px] flex-col overflow-y-auto rounded-[8px] bg-sidebar shadow-2xl ring-1 ring-line-strong"
+                        }
                     } else {
                         "hidden"
                     }
@@ -4183,7 +4397,11 @@ fn BoardEditor(
                         let Some(index) = selected.get() else {
                             return view! {
                                 <p class="p-3 text-footnote text-label-4">
-                                    {t!("simulate.nothing-selected")}
+                                    {if live.get() {
+                                        t!("simulate.live-hint")
+                                    } else {
+                                        t!("simulate.nothing-selected")
+                                    }}
                                 </p>
                             }
                                 .into_any();

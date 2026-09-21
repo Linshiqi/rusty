@@ -484,9 +484,14 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
                             match crate::nets::button_drives(sheet, &rows, part) {
                                 Some((gpio, _)) => gpio,
                                 None => {
-                                    break 'run Verdict::Failed(format!(
-                                        "{part} is not a switch that reaches a GPIO on the board"
-                                    ));
+                                    // The sheet's own finding, in its words:
+                                    // which half is missing is the fix.
+                                    break 'run Verdict::Failed(
+                                        crate::nets::Warning::SwitchDrivesNothing {
+                                            part: part.to_string(),
+                                        }
+                                        .to_string(),
+                                    );
                                 }
                             }
                         }
