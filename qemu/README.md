@@ -286,7 +286,7 @@ platform as an artifact.
 
 ## What it is proven to do
 
-Fourteen gates, each able to fail:
+Fifteen gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -423,6 +423,23 @@ the two and reports the lead.
     before the firmware has done anything — and with `sw 3-6=1` it must
     report the key where that row crosses that column, which a model
     driving the column instead would spread across the whole column.
+
+15. An **ESP32 application survives its first float**, and the emulator says
+    so when it does not. This is the one gate whose subject is the CPU, and
+    it exists because rusty spent months telling ESP32 users that "the
+    emulator stops at the first floating-point instruction". It does not:
+    `CPENABLE` resets to zero, nothing in esp-hal or its runtime writes it,
+    the float takes a coprocessor-disabled exception, and the handler —
+    which saves the floating-point registers — faults too and spins in the
+    double-exception vector for ever. `float-probe/` counts in integers,
+    multiplies two floats, and counts again, with one `wsr.cpenable` before
+    it; the gate requires the product **and** the last line, so a build
+    whose FPU stopped working fails here rather than in somebody's flight
+    controller. Built **twice**: once more with
+    `FLOAT_PROBE_NO_CPENABLE=1`, where the run must go quiet after "about
+    to multiply" *and* the emulator must print
+    `[rusty:cpu] coprocessor 0 is disabled` — because a diagnostic nobody
+    emits is a silence with a comment above it.
 
 
 ## What each desktop needed

@@ -136,6 +136,34 @@ EDITS = [
         "            (unsigned)(index - ESP32C3_INTMATRIX_IO_STATUS0_REG);\n"
         "        r = (uint32_t)(s->irq_levels >> (half * 32));\n",
     ),
+    # An ESP32 application that touches a float with CPENABLE at its reset
+    # value of zero takes a coprocessor-disabled exception — and its handler
+    # saves the floating-point registers, so the handler faults too and the
+    # CPU spins in the double-exception vector for ever. Measured: the run
+    # goes quiet after the last line before the float, and rusty told
+    # everybody the emulator had stopped at the instruction. It had not; the
+    # application had. So the emulator says so, once, in the terms the fix is
+    # written in. Both machines, because the register is the CPU's.
+    (
+        "target/xtensa/exc_helper.c",
+        "    env->sregs[EXCCAUSE] = cause;\n",
+        "    /* rusty: name the one exception whose symptom is silence. */\n"
+        "    if (cause == COPROCESSOR0_DISABLED) {\n"
+        "        static bool rusty_said_cp0;\n"
+        "        if (!rusty_said_cp0) {\n"
+        "            rusty_said_cp0 = true;\n"
+        "            fprintf(stderr,\n"
+        "                \"[rusty:cpu] coprocessor 0 is disabled and the \"\n"
+        "                \"application used it at pc=0x%08x: CPENABLE is 0, \"\n"
+        "                \"its reset value, and nothing has set it.\\n\"\n"
+        "                \"[rusty:cpu] the exception handler saves the \"\n"
+        "                \"floating-point registers, so it faults too and the \"\n"
+        "                \"CPU spins in the double-exception vector. Write \"\n"
+        "                \"CPENABLE before the first float.\\n\", pc);\n"
+        "            fflush(stderr);\n"
+        "        }\n"
+        "    }\n",
+    ),
 ]
 
 def read(path):

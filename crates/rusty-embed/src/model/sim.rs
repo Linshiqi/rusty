@@ -37,10 +37,15 @@ impl SimLimit {
             "esp32" => vec![
                 SimLimit::new(
                     "esp32-float",
-                    "Espressif's QEMU stops at the first floating-point instruction an ESP32 \
-                     application runs: the log ends mid-boot with \"Fatal error: divide by \
-                     zero\". Integer firmware runs; float-heavy firmware needs an ESP32-C3 build \
-                     to be watched.",
+                    "An ESP32 application that touches a float goes quiet, and the emulator is \
+                     not the reason: CPENABLE resets to zero, nothing in esp-hal, xtensa-lx or \
+                     xtensa-lx-rt writes it, so the first floating-point instruction takes a \
+                     coprocessor-disabled exception — and the handler saves the floating-point \
+                     registers, so it faults too and the CPU spins in the double-exception \
+                     vector. Enable coprocessor 0 before the first float: \
+                     `unsafe { core::arch::asm!(\"wsr.cpenable {0}\", \"rsync\", in(reg) 1u32) }` \
+                     under `#![feature(asm_experimental_arch)]`. With it the same firmware runs \
+                     here to the end.",
                 ),
                 SimLimit::new(
                     "esp32-peripherals",
@@ -64,9 +69,20 @@ impl SimLimit {
     /// A line the emulator printed that one of these limits explains, so
     /// the explanation lands where the run stopped rather than only on a
     /// panel somebody may not be looking at.
+    /// `[rusty:cpu] coprocessor 0 is disabled …` is the emulator's own
+    /// account of it, printed at the exception rather than inferred from
+    /// what came after. `divide by zero` stays recognised because it is
+    /// what a spinning guest eventually produces, and somebody running an
+    /// older emulator still gets the explanation.
     pub fn explaining(chip: &str, line: &str) -> Option<SimLimit> {
-        (chip == "esp32" && line.contains("divide by zero"))
-            .then(|| SimLimit::for_chip(chip).into_iter().next())
+        let cp0 = line.contains("[rusty:cpu] coprocessor 0 is disabled");
+        let spun = chip == "esp32" && line.contains("divide by zero");
+        (cp0 || spun)
+            .then(|| {
+                SimLimit::for_chip("esp32")
+                    .into_iter()
+                    .find(|limit| limit.kind == "esp32-float")
+            })
             .flatten()
     }
 }
@@ -262,6 +278,24 @@ mod tests {
         assert_eq!(esp32, ["esp32-float", "esp32-peripherals"]);
         assert_eq!(SimLimit::for_chip("esp32s3")[0].kind, "s3-unproven");
 
+        // The emulator's own account, which names the cause at the
+        // exception rather than leaving it to be inferred from what the
+        // guest did afterwards. It is not chip-specific: CPENABLE is the
+        // CPU's, and an S3 firmware hits the same wall the same way.
+        let said = "[rusty:cpu] coprocessor 0 is disabled and the application used it at \
+                    pc=0x400d1472: CPENABLE is 0, its reset value, and nothing has set it.";
+        assert_eq!(
+            SimLimit::explaining("esp32", said).map(|l| l.kind),
+            Some("esp32-float".to_string())
+        );
+        assert_eq!(
+            SimLimit::explaining("esp32s3", said).map(|l| l.kind),
+            Some("esp32-float".to_string()),
+            "the register is the CPU's, not the machine's"
+        );
+
+        // And what a guest that spun on it eventually produced, so somebody
+        // on an emulator from before that line existed is still told why.
         let fatal = "qemu-system-xtensa: Fatal error: divide by zero";
         assert_eq!(
             SimLimit::explaining("esp32", fatal).map(|l| l.kind),
@@ -270,7 +304,7 @@ mod tests {
         assert_eq!(
             SimLimit::explaining("esp32c3", fatal),
             None,
-            "not this chip's limit"
+            "not this chip's symptom"
         );
         assert_eq!(
             SimLimit::explaining("esp32", "ets Jun  8 2016 00:22:57"),

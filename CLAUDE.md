@@ -553,11 +553,15 @@ the plan says what the one it took can do (`Emulator.peripherals`), so an
 early build gets the panel's Upgrade as a stock one does.
 
 **What the emulator cannot do on a chip is said before the run**
-(`SimLimit`, a stable kind beside the English): on an ESP32 the first
-floating-point instruction ends the run and the converter and buses are not
-modelled; on an S3 nothing has been checked. A run that dies with QEMU's
-`divide by zero` on an ESP32 gets the explanation where it stopped
-(`SimLimit::explaining`).
+(`SimLimit`, a stable kind beside the English): on an ESP32 the converter
+and the buses are not modelled; on an S3 nothing has been checked. And one
+of those entries is not a limit at all any more but a **diagnosis with a
+fix in it** — an ESP32 application's first float faults because its own
+`CPENABLE` is zero, which is the application's to set (*An ESP32
+application that touches a float*, under Hard-won specifics).
+`SimLimit::explaining` puts it where the run stopped, on the emulator's own
+`[rusty:cpu] coprocessor 0 is disabled` and on the `divide by zero` an
+older emulator eventually spun its way to.
 
 ### 6. Extensibility is data first
 
@@ -2911,19 +2915,32 @@ usty`) holds `location.toml`
   and the `run:` line was not, so every platform stopped at `can't open file`
   with exit 2, before a single file was compiled. Grep for the old name, not
   for the old description.
-- **An ESP32 cannot be simulated once it does floating point.** Espressif's
-  QEMU dies — `Fatal error: divide by zero`, taking the emulator with it, so
-  the guest's buffered console output is lost too and the log ends mid-boot —
-  on the **first FPU instruction** an `-M esp32` application executes.
-  Bisected down from a minimal firmware: integer `println!`s tick over
-  indefinitely; adding one `black_box(1.25) * black_box(3.0)` ends it before
-  the next line prints. LEDC, UART0 with `with_rx`/`with_tx`, and GPIO were
-  each cleared first, so it is not a peripheral. `-M esp32c3` runs the same
-  code. That is why every example here is a C3 — `pid-tune` is float PID and
-  has always worked — and why anything float-heavy for an ESP32 board needs a
-  C3 build to be watchable at all. The symptom to recognise: two lines of
-  output and then silence, with `esp32_i2c: slave mode not implemented`
-  alongside as unrelated machine-init noise.
+- **An ESP32 application that touches a float needs `CPENABLE` set, and
+  nothing sets it.** This paragraph said for months that Espressif's QEMU
+  "dies on the first FPU instruction"; it was wrong in every part, and the
+  way it was wrong is the lesson. `Fatal error: divide by zero` appears
+  **nowhere in QEMU's source** — it is libgcrypt's `_gcry_fatal_error`,
+  reached long after the fact — and the emulator's FPU works perfectly.
+  What actually happens, measured with `-d int` and the gdbstub
+  (`qemu/float-probe`): `CPENABLE` reads **0** at the instruction, because
+  it resets to zero and nothing in `esp-hal`, `xtensa-lx` or `xtensa-lx-rt`
+  ever writes it — grep them, there is not one `wsr.cpenable` in a built
+  image. So `lsi f8, a1, 40` takes a coprocessor-disabled exception; the
+  exception is `EXC_USER` at the float, and the very next one is
+  `EXC_DOUBLE` at `save_context + 138`, which is `rur.fcr` — **the handler
+  saves the floating-point registers, so the handler faults too**, for ever.
+  Setting `cpenable = 1` from gdb at that breakpoint and continuing runs
+  the whole firmware to its last line; so does one `wsr.cpenable` in the
+  application, which is what `float-probe` now carries and what the limit's
+  text tells the user to write. Xtensa inline assembly is still unstable,
+  so it needs `#![feature(asm_experimental_arch)]` — part of the finding.
+  rusty's QEMU says it at the exception now (`[rusty:cpu] coprocessor 0 is
+  disabled …`, `patches.py` on `target/xtensa/exc_helper.c`), because the
+  symptom without that line is *silence*: the last `println!` before the
+  float and then nothing. **Three claims, all "measured", all wrong: that
+  the emulator stopped, that the message was the emulator's, and that a C3
+  build was the only way out.** What made the difference was letting the
+  output out and reading the first exception rather than the last.
 - Child processes get `CREATE_NO_WINDOW` on Windows; the toolchain panel probes
   six tools on open and would otherwise flash six console windows.
 - **`NO_COLOR=1` breaks Trunk.** It maps the variable onto its `--no-color`

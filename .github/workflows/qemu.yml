@@ -1979,6 +1979,104 @@ jobs:
             }
           tail -30 live-probe.log
 
+      # The Xtensa toolchain, which none of the gates above need: every
+      # other probe is an ESP32-C3 on stable Rust. This one is an ESP32,
+      # and there is no ESP32 without espup — a prebuilt Xtensa `core` does
+      # not exist.
+      - name: Install the Xtensa toolchain for the ESP32 probe
+        run: |
+          cargo install espup --locked --version 0.15.1 || cargo install espup --locked
+          espup install --targets esp32 --toolchain-version 1.97.0.0
+          echo "LIBCLANG_PATH=$(ls -d "$HOME"/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-clang/lib 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+
+      - name: Build the float probe, with the coprocessor enabled and without
+        working-directory: qemu/float-probe
+        run: |
+          . "$HOME/export-esp.sh" 2>/dev/null || true
+          mkdir -p target/sim
+          cargo build --release
+          espflash save-image --chip esp32 --merge \
+            target/xtensa-esp32-none-elf/release/float-probe \
+            target/sim/float.bin
+          FLOAT_PROBE_NO_CPENABLE=1 cargo build --release
+          espflash save-image --chip esp32 --merge \
+            target/xtensa-esp32-none-elf/release/float-probe \
+            target/sim/nocp.bin
+
+      # The one gate whose subject is the CPU, and the one written against a
+      # claim rusty made for months and never re-measured: that "Espressif's
+      # QEMU stops at the first floating-point instruction". It does not.
+      # `CPENABLE` resets to zero, nothing in esp-hal or its runtime ever
+      # writes it, so the float takes a coprocessor-disabled exception — and
+      # the handler saves the floating-point registers, so the handler faults
+      # too and the CPU spins in the double-exception vector for ever.
+      #
+      # Both halves, and each fails on its own. **With one `wsr.cpenable` the
+      # firmware must run to its last line**, which is what proves the FPU is
+      # modelled at all. **Without it the run must go quiet and the emulator
+      # must say why**, because the symptom on its own is silence, and a
+      # diagnostic nobody emits is a silence with a comment above it.
+      - name: An ESP32 application survives its first float, and is told when it will not
+        shell: python
+        run: |
+          import subprocess, sys
+
+          QEMU = "qemu-install/bin/qemu-system-xtensa"
+          BIOS = "qemu-src/pc-bios"
+
+          def run(image, seconds=25):
+              # `timeout` rather than a wait: the firmware ends in `loop {}`
+              # on the way we want and spins in the double-exception vector
+              # on the way we do not, so neither run ever exits by itself.
+              with open(f"{image}.out", "w") as o, open(f"{image}.err", "w") as e:
+                  proc = subprocess.Popen(
+                      [QEMU, "-nographic", "-machine", "esp32", "-L", BIOS,
+                       "-drive", f"file={image},if=mtd,format=raw"],
+                      stdout=o, stderr=e,
+                  )
+                  try:
+                      proc.wait(timeout=seconds)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      proc.wait()
+              read = lambda p: open(p, encoding="utf-8", errors="replace").read()
+              return read(f"{image}.out"), read(f"{image}.err")
+
+          def stop(why, out, err):
+              detail = (out[-2000:] + "\n--- stderr ---\n" + err[-2000:])
+              detail = detail.replace("%", "%25")
+              detail = "".join(f"{line}%0A" for line in detail.splitlines())
+              print(f"::error::{why}%0A{detail}")
+              sys.exit(1)
+
+          out, err = run("qemu/float-probe/target/sim/float.bin")
+          if "[float] product 3.75" not in out:
+              stop("an ESP32 with coprocessor 0 enabled did not multiply two "
+                   "floats: the emulator's FPU is not doing what it did when "
+                   "this gate was written", out, err)
+          if "[float] survived" not in out:
+              stop("the float probe multiplied and then stopped before its "
+                   "last line", out, err)
+          if "[rusty:cpu]" in err:
+              stop("the emulator reported a disabled coprocessor for a "
+                   "firmware that enabled it", out, err)
+          print("with CPENABLE set, the ESP32 runs its floats to the end")
+
+          out, err = run("qemu/float-probe/target/sim/nocp.bin")
+          if "[float] about to multiply" not in out:
+              stop("the probe without CPENABLE did not even reach its float",
+                   out, err)
+          if "[float] product" in out:
+              stop("a float ran with CPENABLE at zero, which means the "
+                   "coprocessor-disabled exception is no longer raised and "
+                   "the emulator is now more permissive than the silicon",
+                   out, err)
+          if "[rusty:cpu] coprocessor 0 is disabled" not in err:
+              stop("the run went quiet at the float and the emulator said "
+                   "nothing about why — which is the state this gate exists "
+                   "to keep rusty out of", out, err)
+          print("without it, the run stops and the emulator names the reason")
+
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
         # comparison above rejected, and a step that only runs when the run
@@ -2009,4 +2107,6 @@ jobs:
             keypad-qemu.out
             board-probe.log
             live-probe.log
+            qemu/float-probe/target/sim/*.out
+            qemu/float-probe/target/sim/*.err
           if-no-files-found: warn
