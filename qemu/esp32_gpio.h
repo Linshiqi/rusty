@@ -126,10 +126,19 @@ REG32(GPIO_STATUS1_W1TC, 0x0058)
  * entry in upstream's build system, and every one of those is a way for a
  * build to fail that has nothing to do with what is being modelled.
  *
- * `esp32.gpio` is instantiated on every part in the family and only the
- * machines that map region 1 get an ADC — which today is the C3, the part
- * whose registers these are. Offsets from esp-idf's
- * soc/esp32c3/apb_saradc_reg.h.
+ * **The two parts have two different converters, not two layouts of one.**
+ * On the C3 a one-shot conversion is `APB_SARADC`: a unit, a channel and a
+ * start edge in `ONETIME_SAMPLE`, a done bit in `INT_RAW`, the counts in a
+ * data register of the unit's own. The original ESP32 has no such
+ * peripheral — its converter is driven from `SENS`, where one register per
+ * unit carries the whole conversation: the pad enable as a bitmap, the
+ * start bit, the done bit and the counts, all in `SAR_MEAS_STARTn`. So the
+ * region answers two ways (`saradc_esp32`), rather than one way with the
+ * offsets moved about, because they are not the same register file with
+ * different addresses.
+ *
+ * C3 offsets from esp-idf's soc/esp32c3/apb_saradc_reg.h; the ESP32's from
+ * the `sens` block of the vendor's own SVD, as `esp32`'s PAC generates it.
  */
 #define ESP32_SARADC_REGION 0x1000
 
@@ -166,6 +175,24 @@ REG32(RUSTY_SARADC_INT_CLR, 0x004c)
  * not as zero. */
 #define ESP32_SARADC_FULL_SCALE 0xfff
 
+/* The original ESP32's `SENS_SAR_MEAS_STARTn`, one register per unit and
+ * the whole of a one-shot conversion.
+ *
+ * `EN_PAD` is a *bitmap* rather than a channel number — the silicon lets
+ * more than one pad be selected and the driver sets exactly one, so the
+ * channel is the bit that is set. Nothing else in the window is touched:
+ * `SAR_READ_CTRL`'s width and `SAR_ATTENn`'s attenuation scale a real
+ * voltage onto the converter's range, and this model is handed counts
+ * rather than volts precisely so it never has to guess at anybody's
+ * divider. */
+#define ESP32_SENS_MEAS_START1 0x0054
+#define ESP32_SENS_MEAS_START2 0x0094
+#define ESP32_SENS_DATA_MASK   0xffff
+#define ESP32_SENS_DONE        (1u << 16)
+#define ESP32_SENS_START       (1u << 17)
+#define ESP32_SENS_EN_PAD_SHIFT 19
+#define ESP32_SENS_EN_PAD_MASK  0xfff
+
 /*
  * The I2C master, which this device also answers for.
  *
@@ -198,8 +225,16 @@ REG32(RUSTY_I2C_INT_ENA, 0x0028)
 REG32(RUSTY_I2C_INT_STATUS, 0x002c)
 REG32(RUSTY_I2C_COMD0, 0x0058)
 
-/* Eight command slots, each holding one step of a transaction. */
-#define ESP32_I2C_COMMANDS 8
+/* Command slots, each holding one step of a transaction — and how many
+ * there are is the part's, not the family's: the original ESP32 has
+ * sixteen and the C3 eight. Reading the C3's as sixteen would run four
+ * registers of its bus timing as commands (`SCL_ST_TIME_OUT` and its
+ * neighbours sit where the ESP32's slots 8..15 are), and reading the
+ * ESP32's as eight would cut a long transaction in half. `i2c_commands`
+ * holds the part's own count; this is the larger, for the array. */
+#define ESP32_I2C_COMMANDS 16
+#define ESP32_I2C_COMMANDS_ESP32 16
+#define ESP32_I2C_COMMANDS_MODERN 8
 
 /*
  * `CTR`'s three write-triggered bits. Every one of them is `WT` in the
@@ -250,25 +285,40 @@ REG32(RUSTY_I2C_SCL_SP_CONF, 0x0080)
 #define ESP32_I2C_CMD_BYTES_MASK 0xff
 
 /*
- * The op codes, from esp-idf's hal/esp32c3/i2c_ll.h. They are *not*
- * consecutive and they are not in the order a driver's `Command` enum lists
- * them — which is exactly the mistake that was here: 0, 1, 2, 3, 4, read off
- * esp-hal's Rust enum instead of the hardware.
+ * The op codes — and **they are different numbers on the two parts**, which
+ * is the same trap sprung from the other side.
  *
- * What that produced is worth remembering, because it looked like nothing at
- * all. A `Start` (6) fell through to the default case and set no address; the
- * `Write` (1) after it then had no device to talk to and returned before it
- * could even report a NACK. So every transaction completed having done
- * nothing, no byte was ever reported on the channel, and the bus read as
- * empty — indistinguishable, from outside, from a model that had never been
- * asked. It took a register dump from the firmware to see the four command
- * words and decode them.
+ * The C3's are not consecutive and are not in the order a driver's
+ * `Command` enum lists them, which is exactly the mistake that was here
+ * once: 0, 1, 2, 3, 4, read off esp-hal's Rust enum instead of the
+ * hardware. What that produced is worth remembering, because it looked like
+ * nothing at all. A `Start` (6) fell through to the default case and set no
+ * address; the `Write` (1) after it then had no device to talk to and
+ * returned before it could even report a NACK. So every transaction
+ * completed having done nothing, no byte was ever reported on the channel,
+ * and the bus read as empty — indistinguishable, from outside, from a model
+ * that had never been asked. It took a register dump from the firmware to
+ * see the four command words and decode them.
+ *
+ * The original ESP32's *are* 0, 1, 2, 3, 4 — so a model carrying only the
+ * C3's numbers answers that part's `RSTART` with its own `default:` arm,
+ * and the very first scan comes back `?op0`. Which is what happened, and
+ * what the `default:` arm exists to make visible in one run rather than
+ * three.
+ *
+ * Both sets from the `COMD` register's own `OPCODE` enumeration in each
+ * part's SVD, which is the register map rather than anybody's driver.
  */
-#define ESP32_I2C_OP_RSTART 6
-#define ESP32_I2C_OP_WRITE 1
-#define ESP32_I2C_OP_READ 3
-#define ESP32_I2C_OP_STOP 2
-#define ESP32_I2C_OP_END 4
+#define ESP32_I2C_OP_RSTART_ESP32 0
+#define ESP32_I2C_OP_WRITE_ESP32  1
+#define ESP32_I2C_OP_READ_ESP32   2
+#define ESP32_I2C_OP_STOP_ESP32   3
+#define ESP32_I2C_OP_END_ESP32    4
+#define ESP32_I2C_OP_RSTART_MODERN 6
+#define ESP32_I2C_OP_WRITE_MODERN  1
+#define ESP32_I2C_OP_READ_MODERN   3
+#define ESP32_I2C_OP_STOP_MODERN   2
+#define ESP32_I2C_OP_END_MODERN    4
 
 /* The hardware FIFOs are 32 bytes each on this part. Modelling the depth
  * rather than an unbounded queue is deliberate: a driver that queued more
@@ -306,38 +356,64 @@ REG32(RUSTY_I2C_SCL_SP_CONF, 0x0080)
  * reported; a sensor's driver sends a command byte and reads the answer out
  * of the same transfer, which is what a full-duplex buffer gives it.
  *
- * Offsets from esp-idf's soc/esp32c3/spi_reg.h.
+ * **Every register of this one has moved between the parts**, which is why
+ * none of them is a `REG32` here. `CMD` is at zero on both and even its
+ * start bit is not the same bit; the data words are at 0x80 on the ESP32
+ * and 0x98 on the C3; the length is one register there and two here; and
+ * the done flag lives in `DMA_INT_RAW`, cleared by writing ones, against
+ * `SLAVE`, cleared by writing the bit back clear. A model that guessed any
+ * of these would poll a bit that never falls, which is the hang this whole
+ * peripheral exists to remove.
+ *
+ * Offsets from esp-idf's soc/esp32c3/spi_reg.h and the `spi` block of the
+ * ESP32's own SVD; the sequence from esp-hal's `spi::master::low_level` —
+ * `v1.rs` is this part's, `v3.rs` the C3's.
  */
 #define ESP32_SPI_REGION 0x1000
 #define ESP32_SPI_WORDS (ESP32_SPI_REGION / 4)
 
-REG32(RUSTY_SPI_CMD, 0x0000)
-REG32(RUSTY_SPI_USER, 0x0010)
-REG32(RUSTY_SPI_MS_DLEN, 0x001c)
-REG32(RUSTY_SPI_MISC, 0x0020)
-REG32(RUSTY_SPI_DMA_INT_CLR, 0x0038)
-REG32(RUSTY_SPI_DMA_INT_RAW, 0x003c)
-REG32(RUSTY_SPI_W0, 0x0098)
+#define ESP32_SPI_CMD 0x0000
+#define ESP32_SPI_USER_ESP32  0x001c
+#define ESP32_SPI_USER_MODERN 0x0010
+#define ESP32_SPI_DLEN_ESP32  0x0028
+#define ESP32_SPI_DLEN_MODERN 0x001c
+#define ESP32_SPI_CS_ESP32  0x0034
+#define ESP32_SPI_CS_MODERN 0x0020
+#define ESP32_SPI_W0_ESP32  0x0080
+#define ESP32_SPI_W0_MODERN 0x0098
+
+/* Where the done flag is and how it is put away. On the C3 it is a bit of
+ * `DMA_INT_RAW` and a one written to `DMA_INT_CLR` clears it; on the ESP32
+ * it is a bit of `SLAVE`, which a driver clears by writing the register
+ * back with the bit down. */
+#define ESP32_SPI_DONE_ESP32  0x0038
+#define ESP32_SPI_DONE_MODERN 0x003c
+#define ESP32_SPI_DONE_CLR_MODERN 0x0038
+#define ESP32_SPI_INT_TRANS_DONE_ESP32  (1u << 4)
+#define ESP32_SPI_INT_TRANS_DONE_MODERN (1u << 12)
 
 /* `CMD`: `USR` starts a transfer and the model clears it when the transfer
  * is over, which is exactly what the driver polls. `UPDATE` latches the
- * configuration and clears itself. */
-#define ESP32_SPI_CMD_USR (1u << 24)
-#define ESP32_SPI_CMD_UPDATE (1u << 23)
+ * configuration and clears itself — the ESP32 has no such bit, and zero
+ * there means nothing is ever matched. */
+#define ESP32_SPI_CMD_USR_ESP32  (1u << 18)
+#define ESP32_SPI_CMD_USR_MODERN (1u << 24)
+#define ESP32_SPI_CMD_UPDATE_ESP32  0
+#define ESP32_SPI_CMD_UPDATE_MODERN (1u << 23)
 
-/* `USER`: which phases this transfer has. */
+/* `USER`: which phases this transfer has. The same two bits on both. */
 #define ESP32_SPI_USER_MISO (1u << 28)
 #define ESP32_SPI_USER_MOSI (1u << 27)
 
-/* `MS_DLEN` holds the length in bits, less one. */
+/* The length register holds the transfer in bits, less one. */
 #define ESP32_SPI_DLEN_MASK 0x3ffff
 
-/* `DMA_INT_RAW`: the done flag an interrupt-driven driver waits on. */
-#define ESP32_SPI_INT_TRANS_DONE (1u << 12)
-
-/* `MISC` bits 0..5 *disable* each chip select, so the active one is the
- * lowest bit that is clear. */
+/* The chip-select register's low bits *disable* each select, so the active
+ * one is the lowest bit that is clear. Six on the C3, three on the ESP32 —
+ * and the array is the larger. */
 #define ESP32_SPI_SELECTS 6
+#define ESP32_SPI_SELECTS_ESP32  3
+#define ESP32_SPI_SELECTS_MODERN 6
 
 /* Sixteen 32-bit words, which is the whole of a CPU-driven transfer. */
 #define ESP32_SPI_BUFFER 64
@@ -361,25 +437,45 @@ REG32(RUSTY_SPI_W0, 0x0098)
  * `[rusty:pwm]` line exists to avoid putting on a channel the console
  * shares.
  *
- * Offsets from esp-idf's soc/esp32c3/ledc_reg.h, and the sequence a driver
- * writes them in from esp-hal's `ledc::low_level`.
+ * **The original ESP32 has two halves of this peripheral, not one.** Eight
+ * *high-speed* channels and four high-speed timers, then eight low-speed
+ * channels and four low-speed timers — and the two halves differ in more
+ * than their addresses: the high-speed half has no `para_up` at all, so
+ * what is written to it takes effect at once, and each timer picks its own
+ * clock with `TICK_SEL` where the C3's whole peripheral shares one chosen
+ * in `CONF`. Both halves are laid out contiguously, so the model numbers
+ * them 0..15 and 0..7 and keeps one table each; `ledc_hs_channels` and
+ * `ledc_hs_timers` are where the high-speed half ends.
+ *
+ * Offsets from esp-idf's soc/esp32c3/ledc_reg.h and the `ledc` block of the
+ * ESP32's own SVD; the sequence a driver writes them in from esp-hal's
+ * `ledc::low_level` — `v1.rs` is this part's, `v2.rs` the C3's.
  */
 #define ESP32_LEDC_REGION 0x1000
 #define ESP32_LEDC_WORDS (ESP32_LEDC_REGION / 4)
 
-/* Six channels and four timers on the C3, each a small cluster. */
-#define ESP32_LEDC_CHANNELS 6
-#define ESP32_LEDC_TIMERS 4
+/* The largest of any part here — sixteen channels and eight timers on the
+ * ESP32, six and four on the C3 — for the arrays. What this part actually
+ * has is `ledc_channels` and `ledc_timers`. */
+#define ESP32_LEDC_CHANNELS 16
+#define ESP32_LEDC_TIMERS 8
 #define ESP32_LEDC_CH0 0x0000
 #define ESP32_LEDC_CH_STRIDE 0x14
-#define ESP32_LEDC_TIMER0 0x00a0
-#define ESP32_LEDC_TIMER_STRIDE 0x8
 
-REG32(RUSTY_LEDC_INT_RAW, 0x00c0)
-REG32(RUSTY_LEDC_INT_ST, 0x00c4)
-REG32(RUSTY_LEDC_INT_ENA, 0x00c8)
-REG32(RUSTY_LEDC_INT_CLR, 0x00cc)
-REG32(RUSTY_LEDC_CONF, 0x00d0)
+/* Where the timers and the interrupt registers sit, by part. The channel
+ * clusters begin at zero on both, which is why `CH0` is not a pair. */
+#define ESP32_LEDC_TIMER0_ESP32  0x0140
+#define ESP32_LEDC_TIMER0_MODERN 0x00a0
+#define ESP32_LEDC_TIMER_STRIDE 0x8
+#define ESP32_LEDC_INT_RAW_ESP32  0x0180
+#define ESP32_LEDC_INT_RAW_MODERN 0x00c0
+
+/* `INT_ST`, `INT_ENA`, `INT_CLR` and `CONF` follow `INT_RAW` one word each
+ * on both parts. */
+#define ESP32_LEDC_INT_ST_AT  0x4
+#define ESP32_LEDC_INT_ENA_AT 0x8
+#define ESP32_LEDC_INT_CLR_AT 0xc
+#define ESP32_LEDC_CONF_AT    0x10
 
 /* A channel's cluster: `CONF0`, `HPOINT`, `DUTY`, `CONF1`, `DUTY_R`. */
 #define ESP32_LEDC_CH_CONF0  0x0
@@ -411,26 +507,43 @@ REG32(RUSTY_LEDC_CONF, 0x00d0)
 #define ESP32_LEDC_DUTY_FRACTION 4
 
 /* A timer's `CONF`: the resolution in bits, the divider in Q10.8, the two
- * stop bits, and its own latch. */
-#define ESP32_LEDC_TIMER_RES_MASK 0xf
-#define ESP32_LEDC_TIMER_DIV_SHIFT 4
+ * stop bits, its clock select and its latch — every one of them a bit
+ * further up on the ESP32, whose resolution field is five bits where the
+ * C3's is four. One place shifted is a frequency out by a factor of two,
+ * or a running timer read as paused. */
+#define ESP32_LEDC_TIMER_RES_MASK_ESP32  0x1f
+#define ESP32_LEDC_TIMER_RES_MASK_MODERN 0xf
+#define ESP32_LEDC_TIMER_DIV_SHIFT_ESP32  5
+#define ESP32_LEDC_TIMER_DIV_SHIFT_MODERN 4
 #define ESP32_LEDC_TIMER_DIV_MASK 0x3ffff
-#define ESP32_LEDC_TIMER_PAUSE (1u << 22)
-#define ESP32_LEDC_TIMER_RST (1u << 23)
-#define ESP32_LEDC_TIMER_PARA_UP (1u << 25)
+#define ESP32_LEDC_TIMER_PAUSE_ESP32  (1u << 23)
+#define ESP32_LEDC_TIMER_PAUSE_MODERN (1u << 22)
+#define ESP32_LEDC_TIMER_RST_ESP32  (1u << 24)
+#define ESP32_LEDC_TIMER_RST_MODERN (1u << 23)
+#define ESP32_LEDC_TIMER_TICK_SEL_ESP32 (1u << 25)
+#define ESP32_LEDC_TIMER_PARA_UP_ESP32  (1u << 26)
+#define ESP32_LEDC_TIMER_PARA_UP_MODERN (1u << 25)
 
-/* `INT_RAW` bit 4 + n: channel n's fade has finished. A driver waits on
- * this one, so a fade that is applied at once still has to raise it. */
-#define ESP32_LEDC_INT_FADE_SHIFT 4
+/* `INT_RAW`: channel n's fade has finished. A driver waits on this one, so
+ * a fade that is applied at once still has to raise it. Above the per-timer
+ * overflow bits, of which the ESP32 has eight and the C3 four. */
+#define ESP32_LEDC_INT_FADE_SHIFT_ESP32  8
+#define ESP32_LEDC_INT_FADE_SHIFT_MODERN 4
 
-/* `CONF`'s clock select, and what each source runs at. The C3's LEDC is fed
- * by one of three; the divider and the resolution are counted against
- * whichever the firmware chose, so a frequency reported from the wrong one
- * would be wrong by a factor of two or five. */
+/* What each clock source runs at, and how a timer's is chosen.
+ *
+ * Two schemes, and the difference is not cosmetic: a frequency computed
+ * against the wrong source is a servo reported at the wrong angle. The C3's
+ * whole peripheral shares one clock, named in `CONF`'s low two bits. On the
+ * ESP32 each timer names its own with `TICK_SEL` — the 80 MHz APB clock, or
+ * REF_TICK at 1 MHz — and `CONF`'s one bit only says what the low-speed
+ * half's slow clock is, which esp-hal always sets to APB.
+ */
 #define ESP32_LEDC_CLK_SEL_MASK 0x3
 #define ESP32_LEDC_CLK_APB 80000000.0
 #define ESP32_LEDC_CLK_RC_FAST 17500000.0
 #define ESP32_LEDC_CLK_XTAL 40000000.0
+#define ESP32_LEDC_CLK_REF_TICK 1000000.0
 
 /* The GPIO matrix's output selection: `FUNC_OUT_SEL_CFG` per pin, and the
  * signal number that means "this pad is a plain GPIO output" rather than a
@@ -443,8 +556,12 @@ REG32(RUSTY_LEDC_CONF, 0x00d0)
 #define ESP32_GPIO_OUT_SEL_MASK 0xff
 #define ESP32_GPIO_OUT_SEL_GPIO 128
 
-/* Which signal each LEDC channel puts on the matrix, on the C3. */
-#define ESP32_LEDC_SIG0 45
+/* Which signal each LEDC channel puts on the matrix. Contiguous on both
+ * parts — on the ESP32 the eight high-speed signals are 71..78 and the
+ * eight low-speed ones 79..86, which is the same order the model numbers
+ * its channels in, so one base still answers. */
+#define ESP32_LEDC_SIG0_ESP32  71
+#define ESP32_LEDC_SIG0_MODERN 45
 
 /* One channel, as the model keeps it: the registers the guest wrote, and
  * the duty that is actually driving the pad — the two differ until a
@@ -499,32 +616,67 @@ typedef struct Esp32LedcTimer {
 #define ESP32_RMT_REGION 0x1000
 #define ESP32_RMT_WORDS (ESP32_RMT_REGION / 4)
 
-/* Two transmitting channels on the C3, each with 48 codes of RAM at
- * `0x400`, and the two others (which receive) beside them. */
-#define ESP32_RMT_TX_CHANNELS 2
-#define ESP32_RMT_CHANNELS 4
-#define ESP32_RMT_RAM 0x400
-#define ESP32_RMT_CODES 48
+/*
+ * **This is the peripheral the two parts share least.** The C3 has two
+ * transmitting channels and two receiving ones, 48 codes of RAM each, and
+ * one `CH_TX_CONF0` per channel holding everything. The original ESP32 has
+ * eight channels that all transmit, 64 codes each, and splits the
+ * configuration over two registers — `CHnCONF0` for the divider, the memory
+ * size and the carrier, `CHnCONF1` for the start, the resets and the
+ * continuous mode. It is the second of those this model writes to, so what
+ * it keeps per channel is "the control register" rather than conf0.
+ *
+ * Even the interrupts are shaped differently: the C3 gives each channel one
+ * bit per event in bands (`end` at 0 + channel, `threshold` at 8 + channel),
+ * the ESP32 three bits per channel in a run (`end` at 3 × channel) with the
+ * thresholds gathered at 24. So the bit is computed rather than shifted.
+ *
+ * The largest of each, for the arrays; what this part has is `rmt_*`.
+ */
+#define ESP32_RMT_TX_CHANNELS 8
+#define ESP32_RMT_CHANNELS 8
+#define ESP32_RMT_CODES 64
 
-REG32(RUSTY_RMT_INT_RAW, 0x0038)
-REG32(RUSTY_RMT_INT_ST, 0x003c)
-REG32(RUSTY_RMT_INT_ENA, 0x0040)
-REG32(RUSTY_RMT_INT_CLR, 0x0044)
-#define ESP32_RMT_CONF0 0x0010
-#define ESP32_RMT_TX_LIM 0x0058
+#define ESP32_RMT_TX_CHANNELS_ESP32  8
+#define ESP32_RMT_TX_CHANNELS_MODERN 2
+#define ESP32_RMT_CHANNELS_ESP32  8
+#define ESP32_RMT_CHANNELS_MODERN 4
+#define ESP32_RMT_RAM_ESP32  0x800
+#define ESP32_RMT_RAM_MODERN 0x400
+#define ESP32_RMT_CODES_ESP32  64
+#define ESP32_RMT_CODES_MODERN 48
 
-/* `CHnCONF0`: start, the two resets, wrap, and the stop. */
+#define ESP32_RMT_INT_RAW_ESP32  0x00a0
+#define ESP32_RMT_INT_RAW_MODERN 0x0038
+/* `INT_ST`, `INT_ENA` and `INT_CLR` follow it one word each on both. */
+#define ESP32_RMT_INT_ST_AT  0x4
+#define ESP32_RMT_INT_ENA_AT 0x8
+#define ESP32_RMT_INT_CLR_AT 0xc
+
+#define ESP32_RMT_CTRL_ESP32  0x0024
+#define ESP32_RMT_CTRL_MODERN 0x0010
+#define ESP32_RMT_CTRL_STRIDE_ESP32  8
+#define ESP32_RMT_CTRL_STRIDE_MODERN 4
+#define ESP32_RMT_TX_LIM_ESP32  0x00d0
+#define ESP32_RMT_TX_LIM_MODERN 0x0058
+
+/* The control register's triggers. No stop bit on the ESP32 at all — its
+ * `CHnCONF1` has none — so that mask is zero there and a `&` with it is
+ * never true, which is the whole of the difference. */
 #define ESP32_RMT_TX_START (1u << 0)
-#define ESP32_RMT_MEM_RD_RST (1u << 1)
-#define ESP32_RMT_APB_MEM_RST (1u << 2)
-#define ESP32_RMT_TX_CONTI (1u << 3)
-#define ESP32_RMT_TX_WRAP (1u << 4)
-#define ESP32_RMT_TX_STOP (1u << 7)
+#define ESP32_RMT_MEM_RD_RST_ESP32  (1u << 3)
+#define ESP32_RMT_MEM_RD_RST_MODERN (1u << 1)
+#define ESP32_RMT_APB_MEM_RST_ESP32  (1u << 4)
+#define ESP32_RMT_APB_MEM_RST_MODERN (1u << 2)
+#define ESP32_RMT_TX_STOP_ESP32  0
+#define ESP32_RMT_TX_STOP_MODERN (1u << 7)
 
-/* `INT_RAW`: end at bit 0 + channel, error at 4 + channel, the threshold
- * that asks for a refill at 8 + channel. */
-#define ESP32_RMT_INT_END 0
-#define ESP32_RMT_INT_THR 8
+/* `INT_RAW`, per part: how far apart two channels' `end` bits are, and
+ * where the thresholds begin. */
+#define ESP32_RMT_END_STRIDE_ESP32  3
+#define ESP32_RMT_END_STRIDE_MODERN 1
+#define ESP32_RMT_INT_THR_ESP32  24
+#define ESP32_RMT_INT_THR_MODERN 8
 
 /* `CHn_TX_LIM`: how many codes go out before the threshold fires. */
 #define ESP32_RMT_TX_LIM_MASK 0x1ff
@@ -535,17 +687,21 @@ REG32(RUSTY_RMT_INT_CLR, 0x0044)
 #define ESP32_RMT_SECOND_SHIFT 16
 #define ESP32_RMT_LEVEL1 (1u << 31)
 
-/* Which signal each transmitting channel puts on the matrix, on the C3. */
-#define ESP32_RMT_SIG0 51
+/* Which signal each transmitting channel puts on the matrix. Contiguous on
+ * both parts: 87..94 on the ESP32, 51.. on the C3. */
+#define ESP32_RMT_SIG0_ESP32  87
+#define ESP32_RMT_SIG0_MODERN 51
 
 /* The longest run of bytes one transmission reports. A strip of sixty is
  * 180 bytes, which is 360 characters of hex — beyond this the report says
  * how much it dropped rather than growing without limit. */
 #define ESP32_RMT_BYTES 256
 
-/* One transmitting channel, as the model keeps it. */
+/* One transmitting channel, as the model keeps it. `ctrl` is whichever
+ * register this part puts the start and the resets in — `CH_TX_CONF0` on
+ * the C3, `CHnCONF1` on the ESP32. */
 typedef struct Esp32RmtChannel {
-    uint32_t conf0;
+    uint32_t ctrl;
     uint32_t tx_lim;
     /* Where the next code comes from, and whether a transmission is going. */
     unsigned read_at;
@@ -598,17 +754,52 @@ typedef struct Esp32I2cDevice {
  * a pad's function is the matrix's business (`FUNC_OUT_SEL_CFG`), which
  * this device already reads.
  *
- * **Mapped on the C3 only.** The ESP32's IO_MUX registers are not in pin
- * order — they are a table indexed by pad name — so the same arithmetic
- * would put GPIO2's pull on another pin's register. With the region
- * unmapped there, `io_mux` stays zero, no pin has a pull, and that machine
- * behaves exactly as it did.
+ * **Which register belongs to which pad is not arithmetic on every part.**
+ * On the C3 and the S3 the pads follow `IO_MUX_PIN_CTRL` in pin order, one
+ * word each, so pin `n` is at `0x04 + 4n`. The original ESP32's are a table
+ * in *pad-name* order — `GPIO0` is at 0x44, `GPIO2` at 0x40, `MTDI`, which
+ * is GPIO12, at 0x34 — and the same arithmetic would put one pin's pull on
+ * another pin's register, which is a wrong answer no firmware could
+ * distinguish from a missing one. So the device holds the map rather than
+ * computing it (`iomux_at`, filled in `realize`), and both parts read the
+ * same way. The ESP32's table is `esp32::io_mux`'s own field order, whose
+ * registers are 32 bits each and `repr(C)`, so the order *is* the offsets.
  */
 #define ESP32_IOMUX_REGION 0x1000
-/* `IO_MUX_PIN_CTRL` is at 0, and the pads follow it one word each. */
+/* Words of the window that can name a pad. The C3 needs up to `0x04 + 4*39`
+ * and the ESP32 up to 0x90, so one 0x100 byte table covers both parts. */
+#define ESP32_IOMUX_WORDS 64
+/* On the parts whose pads are in pin order, `IO_MUX_PIN_CTRL` is at 0 and
+ * the pads follow it one word each. */
 #define ESP32_IOMUX_PIN0 0x04
 #define ESP32_IOMUX_WPD (1u << 7)
 #define ESP32_IOMUX_WPU (1u << 8)
+
+/*
+ * The source-status words, which this device also answers for — the eighth
+ * region, and two registers of it.
+ *
+ * **A wired interrupt line is not an interrupt a dispatcher can find.** The
+ * CPU takes it, and then esp-hal reads `INTERRUPT_COREn_INTR_STATUS` to
+ * learn *which source* asserted so it can call that source's handler. Both
+ * parts have the same hole: on the C3 those registers are the interrupt
+ * matrix's and `patches.py` answers them there, and on the ESP32 they are
+ * `DPORT`'s, three words at 0xec, which upstream's model reads as zero.
+ * With them zero the handler finds nothing pending and returns — from the
+ * firmware's side identical to a line that was never raised, which is
+ * exactly what a `listen(Event::AnyEdge)` on an ESP32 did: the pin moved,
+ * the model raised its line, and the count of edges stayed at zero.
+ *
+ * **It answers for one source: its own.** This device knows when *it* is
+ * asserting and nothing about anybody else's peripheral, so every other bit
+ * reads zero — which is what the register read before, so no source that
+ * worked stops working. The source number comes from the machine as a
+ * property rather than being written down here, because it is the SoC's
+ * fact and not the device's: unset, the region answers zero and the part
+ * behaves exactly as it did.
+ */
+#define ESP32_INTR_STATUS_REGION 0x10
+#define ESP32_INTR_STATUS_WORDS (ESP32_INTR_STATUS_REGION / 4)
 
 /* How many pin-to-pin switches the host may declare.
  *
@@ -691,9 +882,20 @@ typedef struct Esp32GpioState {
      * satisfied by whatever a driver happened to write there. */
     uint16_t adc_data[2];
     int adc_pin[2];
+    /* Which converter this part has: the C3's `APB_SARADC` or the original
+     * ESP32's `SENS`. Not a layout difference — see the header above. */
+    bool saradc_esp32;
 
-    /* The I2C master, and the devices the host has put on its bus. */
+    /* The I2C master, and the devices the host has put on its bus.
+     * `i2c_commands` is how many command slots this part has and `i2c_op_*`
+     * what its command words mean — both per part; see above. */
     MemoryRegion i2c_iomem;
+    unsigned i2c_commands;
+    unsigned i2c_op_rstart;
+    unsigned i2c_op_write;
+    unsigned i2c_op_read;
+    unsigned i2c_op_stop;
+    unsigned i2c_op_end;
     uint32_t i2c_reg[ESP32_I2C_WORDS];
     Esp32I2cDevice i2c_devices[ESP32_I2C_DEVICES];
     uint8_t i2c_tx[ESP32_I2C_FIFO];
@@ -722,8 +924,22 @@ typedef struct Esp32GpioState {
      * repeated is said once. */
     char i2c_last_report[ESP32_BUS_VERBS][ESP32_I2C_REPORT];
 
-    /* The SPI master, and what each chip select answers with. */
+    /* The SPI master, and what each chip select answers with — then this
+     * part's layout of it, every register of which has moved. */
     MemoryRegion spi_iomem;
+    hwaddr spi_user_reg;
+    hwaddr spi_dlen_reg;
+    hwaddr spi_cs_reg;
+    hwaddr spi_w0_reg;
+    hwaddr spi_done_reg;
+    hwaddr spi_done_clr_reg;
+    uint32_t spi_done_bit;
+    uint32_t spi_cmd_usr;
+    uint32_t spi_cmd_update;
+    unsigned spi_selects;
+    /* Whether a one written to the clearing register puts the flag away
+     * (the C3) or the register is simply stored as written (the ESP32). */
+    bool spi_done_w1c;
     uint32_t spi_reg[ESP32_SPI_WORDS];
     uint8_t spi_miso[ESP32_SPI_SELECTS][ESP32_SPI_BUFFER];
     unsigned spi_miso_len[ESP32_SPI_SELECTS];
@@ -739,6 +955,24 @@ typedef struct Esp32GpioState {
     uint32_t ledc_int_ena;
     int ledc_said_pin[ESP32_LEDC_CHANNELS];
     char ledc_said[ESP32_LEDC_CHANNELS][ESP32_I2C_REPORT];
+    /* This part's layout of it. `ledc_hs_channels` and `ledc_hs_timers` are
+     * where the high-speed half ends — zero on a part with only one half —
+     * and everything below that index takes its settings without a
+     * `para_up` and picks its clock with `TICK_SEL`. */
+    hwaddr ledc_timer0_reg;
+    hwaddr ledc_int_raw_reg;
+    unsigned ledc_channels;
+    unsigned ledc_timers;
+    unsigned ledc_hs_channels;
+    unsigned ledc_hs_timers;
+    unsigned ledc_sig0;
+    unsigned ledc_fade_shift;
+    unsigned ledc_div_shift;
+    uint32_t ledc_res_mask;
+    uint32_t ledc_timer_pause;
+    uint32_t ledc_timer_rst;
+    uint32_t ledc_timer_para_up;
+    bool ledc_clock_per_timer;
 
     /* The GPIO matrix's output selection per pad, which is how a
      * peripheral's signal is followed to the pin it reaches — and how a pad
@@ -747,17 +981,57 @@ typedef struct Esp32GpioState {
     hwaddr func_out_reg;
 
     /* RMT: the transmitting channels, the RAM they read their codes from,
-     * and the interrupts a driver's refill loop polls. */
+     * and the interrupts a driver's refill loop polls. Then this part's
+     * layout of all of it — see the header. */
     MemoryRegion rmt_iomem;
     Esp32RmtChannel rmt_ch[ESP32_RMT_TX_CHANNELS];
     uint32_t rmt_ram[ESP32_RMT_CHANNELS][ESP32_RMT_CODES];
     uint32_t rmt_int_raw;
     uint32_t rmt_int_ena;
     uint32_t rmt_sys_conf;
+    hwaddr rmt_ctrl_reg;
+    hwaddr rmt_tx_lim_reg;
+    hwaddr rmt_int_raw_reg;
+    hwaddr rmt_ram_at;
+    /* Everything in the window this model has no opinion about, kept as
+     * the firmware left it. The other peripherals here shadow their whole
+     * window for exactly this reason and RMT did not, which was invisible
+     * while the only part had its memory size in the same register as its
+     * start bit: on the ESP32 `MEM_SIZE` is in `CHnCONF0`, the driver reads
+     * it back to find out how many blocks it owns, a dropped write answered
+     * zero, and every transmission failed with the RAM untouched. */
+    uint32_t rmt_reg[ESP32_RMT_WORDS];
+    unsigned rmt_ctrl_stride;
+    unsigned rmt_tx_channels;
+    unsigned rmt_channels;
+    unsigned rmt_codes;
+    unsigned rmt_sig0;
+    unsigned rmt_end_stride;
+    unsigned rmt_thr_shift;
+    uint32_t rmt_mem_rd_rst;
+    uint32_t rmt_apb_mem_rst;
+    uint32_t rmt_tx_stop;
 
-    /* IO_MUX: one register per pad, of which two bits are modelled. */
+    /* IO_MUX: one register per pad, of which two bits are modelled.
+     *
+     * `iomux_at` is which pad each word of the window belongs to, or -1 for
+     * a word that is no pad's — the part's own table rather than arithmetic,
+     * because the original ESP32's pads are ordered by name. `iomux_no_pull`
+     * are the pads that have no pull circuitry at all: the ESP32's GPIO34-39
+     * are input-only and their `FUN_WPU`/`FUN_WPD` read back 0 whatever is
+     * written, so firmware asking for a pull there gets a floating pad on
+     * the desk and must get one here. */
     MemoryRegion iomux_iomem;
     uint32_t io_mux[ESP32_GPIO_PINS];
+    int8_t iomux_at[ESP32_IOMUX_WORDS];
+    uint64_t iomux_no_pull;
+
+    /* The source-status words: which interrupt source is asserting, as the
+     * CPU's dispatcher reads it. `intr_source` is this device's own number
+     * in that map, given by the machine; -1 is "nobody told me", and the
+     * region then answers zero. */
+    MemoryRegion intr_status_iomem;
+    int32_t intr_source;
 
     /* The switches the host has put between pads. */
     Esp32GpioSwitch switches[ESP32_GPIO_SWITCHES];

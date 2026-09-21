@@ -76,14 +76,26 @@ ones.
   firmware's side, identical to a line that was never raised. That is what
   gate 6 caught, with the model's own witness insisting it had raised it.
 
-**The ESP32 gets the first fix and not the second, and its interrupts are
-therefore unproven.** `hw/xtensa/esp32_intc.c` keeps no level state at all —
-it forwards straight to the CPU's external lines — and its status registers
-live in DPORT, a different device, so answering them needs new state and a
-link between two upstream models. There is no gate here that could prove
-that, and a release note claiming it would be exactly the confident wrong
-answer this emulator exists to stop giving. ESP-IDF-style firmware, which
-dispatches on the CPU line, has what it needs on that machine.
+**The ESP32 had both holes and a third, and all three are filled.** Its
+status words are DPORT's — three at 0xec, which upstream reads as zero — and
+`hw/xtensa/esp32_intc.c` keeps no level state to answer them from. So the
+eighth region of this device answers them for the one source it raises, its
+own, which the machine tells it (`ETS_GPIO_INTR_SOURCE`) rather than this
+file writing the number down; every other bit reads zero, which is what it
+read before, so no source that worked stops working.
+
+The third hole was not an interrupt model at all. With the status words
+answered, a GPIO edge on an ESP32 reached esp-hal's dispatcher and its
+handler still never ran — and the handler's own context save turned out to
+be writing the CPU's registers through the GPIO window. Read back from the
+guest, the chain said why: esp-hal's interrupt entry saves the
+floating-point registers (`float-save-restore`, a default feature), the
+FPU was switched off, and the save faulted inside itself. Upstream's system
+emulation leaves `CPENABLE` at zero; the silicon has the FPU on from reset —
+nothing in the ROM, the bootloader or an esp-hal application writes it,
+disassembled, and esp-hal's interrupts work on real boards. `patches.py`
+brings the CPU out of reset the way the board does
+(`target/xtensa/cpu.c`). Gates 15 and 16 hold both.
 
 ## And the analog half
 
@@ -110,6 +122,24 @@ the window is shadowed, so a driver's read-modify-write of a register this
 has no opinion about keeps what it put there. A conversion is instant —
 the silicon takes microseconds and the driver waits for the bit either way,
 so a timer here would only add a way to lose one.
+
+**The original ESP32 has a different converter, not a different layout of
+this one.** There is no `APB_SARADC` on it; its SAR is driven from `SENS`,
+where one register per unit — `SAR_MEAS_STARTn` — carries the pad enable as
+a bitmap, the start bit, the done bit and the counts. The same region
+answers that way on that part, mapped at `SENS` and cut down to the 0x400
+window it has there, and the channels are that part's own scattered table:
+ADC1 on GPIO36..39 and 32..35, ADC2 on ten ordinary pads.
+
+**And every other peripheral here is on both machines too**, each with the
+layout of its own part chosen in `realize` exactly as the pin
+configuration's offset always was: the I2C master's sixteen command slots
+and its 0..4 op codes, SPI2's registers (every one of which moved, down to
+the start bit), LEDC's two halves — the high-speed one with no latch at all
+— and RMT's eight channels, their control bits in a second register and
+their RAM twice as far in. Upstream maps its own models at I2C, SPI2 and
+LEDC on the ESP32; none of them can reach this channel, so these go over
+them at a higher priority rather than by deleting somebody else's device.
 
 **Counts, not volts**, on the host's side and the model's. rusty does not
 know anybody's divider or reference, and a voltage the emulator converted
@@ -252,10 +282,15 @@ answers IO_MUX and two of its bits mean something: `FUN_WPU` and `FUN_WPD`.
 Everything else in the register is stored and given back, so a driver's
 read-modify-write keeps what it put there.
 
-Mapped **on the C3 only**: the ESP32's IO_MUX registers are a table in pad
-name order rather than pin order, so the same arithmetic would put one
-pin's pull on another's register. Unmapped there, `io_mux` stays zero, no
-pad has a pull, and that machine behaves exactly as it did.
+**Which register is which pad is the part's, not arithmetic.** The C3 puts
+the pads after `IO_MUX_PIN_CTRL` in pin order; the ESP32's are a table in
+pad-name order — `GPIO0` at 0x44, `GPIO2` at 0x40, `MTDI`, which is GPIO12,
+at 0x34 — so the same arithmetic would put one pin's pull on another's
+register. The device holds the map (`iomux_at`), filled per part in
+`realize` from the field order of the ESP32's own SVD, and checked against
+it by script when it was transcribed. And the ESP32's GPIO34..39 have no
+pull circuitry at all: their two bits read back zero whatever is written,
+so firmware asking for a pull there floats here as it does on the desk.
 
 **A switch between two pads.** `sw 4-6=1` joins two of them and `sw 4-6=0`
 parts them again. That is not a level: `4=0` says the *host* is driving pad
@@ -286,7 +321,7 @@ platform as an artifact.
 
 ## What it is proven to do
 
-Fifteen gates, each able to fail:
+Sixteen gates, each able to fail:
 
 1. The upstream files still hash to what this was written against.
 2. The built binary contains this model — `strings | grep '\[rusty:gpio@'`,
@@ -425,22 +460,34 @@ the two and reports the lead.
     driving the column instead would spread across the whole column.
 
 15. An **ESP32 application survives its first float**, and the emulator says
-    so when it does not. This is the one gate whose subject is the CPU, and
-    it exists because rusty spent months telling ESP32 users that "the
-    emulator stops at the first floating-point instruction". It does not:
-    `CPENABLE` resets to zero, nothing in esp-hal or its runtime writes it,
-    the float takes a coprocessor-disabled exception, and the handler —
-    which saves the floating-point registers — faults too and spins in the
-    double-exception vector for ever. `float-probe/` counts in integers,
-    multiplies two floats, and counts again, with one `wsr.cpenable` before
-    it; the gate requires the product **and** the last line, so a build
-    whose FPU stopped working fails here rather than in somebody's flight
-    controller. Built **twice**: once more with
-    `FLOAT_PROBE_NO_CPENABLE=1`, where the run must go quiet after "about
-    to multiply" *and* the emulator must print
-    `[rusty:cpu] coprocessor 0 is disabled` — because a diagnostic nobody
-    emits is a silence with a comment above it.
-
+    so when it does not. The one gate whose subject is the CPU, written
+    against two claims rusty made and took back: that "the emulator stops
+    at the first floating-point instruction" (it does not), and then that
+    the *application* had to switch its FPU on (it does not either — on the
+    silicon the FPU is on from reset; see *Two holes between the pin and the
+    handler*). `float-probe/` counts in integers, multiplies two floats and
+    counts again, doing **nothing** to `CPENABLE`, as an ordinary application
+    does not; the gate requires the product **and** the last line. Built
+    **twice**: once more with `FLOAT_PROBE_DISABLE=1`, which switches
+    coprocessor 0 off itself before the float — what xtensa-lx-rt does
+    inside every interrupt when `float-save-restore` is off — and then the
+    run must go quiet after "about to multiply" *and* the emulator must print
+    `[rusty:cpu] coprocessor 0 is disabled`, because the symptom on its own
+    is silence.
+16. An **ESP32 gets the board the C3 gets**. `esp32-probe/` walks every
+    peripheral this device answers for, on the original ESP32, where each
+    one failed in a way of its own before it was modelled: the pulls land on
+    the right pads (IO_MUX's pad-name-ordered table, with pins chosen so the
+    table read as arithmetic answers wrongly for all of them) and an
+    input-only pad refuses its pull; the converter answers through `SENS`;
+    the bus reads a declared register (its op codes are 0..4 here, not the
+    C3's 6, 1, 3, 2, 4 — found as `?op0` on this probe's first run); the
+    wire reads a declared buffer; both halves of LEDC report a duty and a
+    carrier; the strip's bytes come out of RMT; and then the host turns two
+    knobs, presses a button and drives an edge, and the gate requires the
+    converter to follow, the pulled-up pad to fall, and **the firmware's own
+    handler** to count the edge — the chain that needs the dispatcher's
+    status words answered and the FPU on from reset.
 
 ## What each desktop needed
 

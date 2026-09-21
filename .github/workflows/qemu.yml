@@ -1989,7 +1989,7 @@ jobs:
           espup install --targets esp32 --toolchain-version 1.97.0.0
           echo "LIBCLANG_PATH=$(ls -d "$HOME"/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-clang/lib 2>/dev/null | head -1)" >> "$GITHUB_ENV"
 
-      - name: Build the float probe, with the coprocessor enabled and without
+      - name: Build the float probe, as an application writes it and with the FPU switched off
         working-directory: qemu/float-probe
         run: |
           . "$HOME/export-esp.sh" 2>/dev/null || true
@@ -1998,31 +1998,42 @@ jobs:
           espflash save-image --chip esp32 --merge \
             target/xtensa-esp32-none-elf/release/float-probe \
             target/sim/float.bin
-          FLOAT_PROBE_NO_CPENABLE=1 cargo build --release
+          FLOAT_PROBE_DISABLE=1 cargo build --release
           espflash save-image --chip esp32 --merge \
             target/xtensa-esp32-none-elf/release/float-probe \
-            target/sim/nocp.bin
+            target/sim/off.bin
 
-      # The one gate whose subject is the CPU, and the one written against a
-      # claim rusty made for months and never re-measured: that "Espressif's
-      # QEMU stops at the first floating-point instruction". It does not.
-      # `CPENABLE` resets to zero, nothing in esp-hal or its runtime ever
-      # writes it, so the float takes a coprocessor-disabled exception — and
-      # the handler saves the floating-point registers, so the handler faults
-      # too and the CPU spins in the double-exception vector for ever.
+      # The one gate whose subject is the CPU, written against two claims
+      # rusty made and took back. First that "Espressif's QEMU stops at the
+      # first floating-point instruction" — it does not. Then, measured, that
+      # the *application* had to switch its FPU on, because CPENABLE read
+      # zero at the float — also wrong. Nothing in the ESP32's ROM, its
+      # bootloader or an esp-hal application ever writes CPENABLE (all three
+      # disassembled; one read turned up), esp-hal's interrupt entry saves
+      # the floating-point registers unconditionally, and esp-hal's
+      # interrupts work on real boards: the FPU is on from reset on the
+      # silicon, and upstream's system emulation leaves it off. rusty's comes
+      # out of reset the way the board does (`patches.py`, target/xtensa/cpu.c).
       #
-      # Both halves, and each fails on its own. **With one `wsr.cpenable` the
-      # firmware must run to its last line**, which is what proves the FPU is
-      # modelled at all. **Without it the run must go quiet and the emulator
-      # must say why**, because the symptom on its own is silence, and a
-      # diagnostic nobody emits is a silence with a comment above it.
-      - name: An ESP32 application survives its first float, and is told when it will not
+      # Both halves, and each fails on its own. **The build that does nothing
+      # to CPENABLE must run to its last line**, as the same image does on a
+      # board. **The build that switches coprocessor 0 off itself must go
+      # quiet and the emulator must say why** — xtensa-lx-rt does exactly
+      # that inside every interrupt when float-save-restore is off — because
+      # the symptom on its own is silence.
+      #
+      # `tools/qemu/bin`, the package as a user unpacks it, like every gate
+      # above. This gate's first version named the build job's
+      # `qemu-install/` and `qemu-src/pc-bios`, which do not exist in this
+      # job, and failed on every push with a Python traceback and no
+      # annotation at all — a gate that could not start reads exactly like
+      # one that ran and found something.
+      - name: An ESP32 application survives its first float, and is told when it switched the FPU off
         shell: python
         run: |
           import subprocess, sys
 
-          QEMU = "qemu-install/bin/qemu-system-xtensa"
-          BIOS = "qemu-src/pc-bios"
+          QEMU = "tools/qemu/bin/qemu-system-xtensa"
 
           def run(image, seconds=25):
               # `timeout` rather than a wait: the firmware ends in `loop {}`
@@ -2030,7 +2041,7 @@ jobs:
               # on the way we do not, so neither run ever exits by itself.
               with open(f"{image}.out", "w") as o, open(f"{image}.err", "w") as e:
                   proc = subprocess.Popen(
-                      [QEMU, "-nographic", "-machine", "esp32", "-L", BIOS,
+                      [QEMU, "-nographic", "-machine", "esp32",
                        "-drive", f"file={image},if=mtd,format=raw"],
                       stdout=o, stderr=e,
                   )
@@ -2051,31 +2062,209 @@ jobs:
 
           out, err = run("qemu/float-probe/target/sim/float.bin")
           if "[float] product 3.75" not in out:
-              stop("an ESP32 with coprocessor 0 enabled did not multiply two "
-                   "floats: the emulator's FPU is not doing what it did when "
-                   "this gate was written", out, err)
+              stop("an ESP32 application that never touches CPENABLE could "
+                   "not multiply two floats: the emulator is leaving the FPU "
+                   "off at reset again, where the silicon has it on", out, err)
           if "[float] survived" not in out:
               stop("the float probe multiplied and then stopped before its "
                    "last line", out, err)
           if "[rusty:cpu]" in err:
               stop("the emulator reported a disabled coprocessor for a "
-                   "firmware that enabled it", out, err)
-          print("with CPENABLE set, the ESP32 runs its floats to the end")
+                   "firmware that never disabled it", out, err)
+          print("an application that never touches CPENABLE runs its floats "
+                "to the end, as it does on a board")
 
-          out, err = run("qemu/float-probe/target/sim/nocp.bin")
+          out, err = run("qemu/float-probe/target/sim/off.bin")
           if "[float] about to multiply" not in out:
-              stop("the probe without CPENABLE did not even reach its float",
-                   out, err)
+              stop("the probe that switches the FPU off did not even reach "
+                   "its float", out, err)
           if "[float] product" in out:
-              stop("a float ran with CPENABLE at zero, which means the "
-                   "coprocessor-disabled exception is no longer raised and "
+              stop("a float ran with coprocessor 0 switched off, which means "
+                   "the coprocessor-disabled exception is no longer raised and "
                    "the emulator is now more permissive than the silicon",
                    out, err)
           if "[rusty:cpu] coprocessor 0 is disabled" not in err:
               stop("the run went quiet at the float and the emulator said "
                    "nothing about why — which is the state this gate exists "
                    "to keep rusty out of", out, err)
-          print("without it, the run stops and the emulator names the reason")
+          print("with the FPU switched off, the run stops and the emulator "
+                "names the reason")
+
+      - name: Build the ESP32 peripheral probe and make its image
+        working-directory: qemu/esp32-probe
+        run: |
+          . "$HOME/export-esp.sh" 2>/dev/null || true
+          mkdir -p target/sim
+          cargo build --release
+          espflash save-image --chip esp32 --merge \
+            target/xtensa-esp32-none-elf/release/esp32-probe \
+            target/sim/flash.bin
+
+      # Everything the C3 gets, on the original ESP32 — and each item one
+      # that failed on this part in a way of its own before it was modelled
+      # (see the probe's header for the whole list). The assertions are the
+      # firmware's account of what it read, compared with what the host put
+      # there, and the model's account of what the firmware drove:
+      #
+      # - **pulls** land on the right pads, which is what proves IO_MUX's
+      #   pad-name-ordered table (the probe's pins are chosen so that the
+      #   table read as arithmetic answers wrongly for every one of them);
+      # - **an input-only pad refuses its pull**, as the silicon does;
+      # - **a host press** drags a pulled-up button low;
+      # - **the converter** answers through `SENS`, the bus answers with a
+      #   declared register, the wire with a declared buffer;
+      # - **both halves of LEDC** report a duty and a carrier, the high-speed
+      #   half having no latch at all;
+      # - **the strip's bytes** come out of RMT on the right pin;
+      # - **a GPIO edge reaches the firmware's own handler**, which needs
+      #   the dispatcher's status words answered and the FPU on from reset;
+      # - and the emulator says nothing about the CPU.
+      - name: An ESP32 gets the board the C3 gets
+        shell: python
+        run: |
+          import re, socket, subprocess, sys, threading, time
+
+          IMAGE = "qemu/esp32-probe/target/sim/flash.bin"
+          SERIAL = "esp32-serial.log"
+          PORT = 5599
+          traffic = []
+
+          def read():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def emulator():
+              try:
+                  return open("esp32-qemu.out", encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+          def stop(why):
+              log = read()
+              said = [l for l in log.splitlines() if l.startswith("[esp32]")]
+              print(f"::error::{why}")
+              for line in said[-12:]:
+                  print(f"::error::probe: {line.replace('%', '%25')[:900]}")
+              for line in traffic[-12:]:
+                  print(f"::error::channel: {line.replace('%', '%25')[:900]}")
+              ours = emulator()
+              if ours.strip():
+                  ours = ours[-1500:].replace("%", "%25").replace("\r", "")
+                  print("::error::the emulator said:%0A" + ours.replace("\n", "%0A"))
+              sys.exit(1)
+
+          def settle(want, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if want in read():
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          def heard(pattern, seconds, why):
+              deadline = time.time() + seconds
+              while time.time() < deadline:
+                  if any(re.search(pattern, line) for line in traffic):
+                      return
+                  time.sleep(0.25)
+              stop(why)
+
+          qemu = subprocess.Popen(
+              [
+                  "tools/qemu/bin/qemu-system-xtensa", "-M", "esp32", "-nographic",
+                  "-drive", f"file={IMAGE},if=mtd,format=raw",
+                  "-serial", f"file:{SERIAL}",
+                  "-chardev",
+                  f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                  "-global", "driver=esp32.gpio,property=pins,value=pins",
+              ],
+              stdout=open("esp32-qemu.out", "w"), stderr=subprocess.STDOUT,
+          )
+          try:
+              link = None
+              for _ in range(60):
+                  try:
+                      link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                      break
+                  except OSError:
+                      time.sleep(0.25)
+              if link is None:
+                  stop("the emulator never opened its pin channel")
+
+              # Before the first instruction (`wait=on`): the sensor and the
+              # wire have to be declared before the firmware reaches for them.
+              link.sendall(b"i2c 68:75=68\n")
+              link.sendall(b"spi 0=1a68\n")
+
+              def listen():
+                  buffered = b""
+                  while True:
+                      try:
+                          chunk = link.recv(4096)
+                      except OSError:
+                          return
+                      if not chunk:
+                          return
+                      buffered += chunk
+                      while b"\n" in buffered:
+                          one, buffered = buffered.split(b"\n", 1)
+                          traffic.append(one.decode("utf-8", "replace").strip())
+
+              threading.Thread(target=listen, daemon=True).start()
+
+              settle("[esp32] listening for edges on 17", 90,
+                     "the ESP32 probe never booted")
+              for pin, level in (("4", "1"), ("13", "0"), ("32", "1"),
+                                 ("27", "0"), ("23", "1")):
+                  settle(f"[esp32] pull {pin}={level}", 30,
+                         f"GPIO{pin} did not rest at its pull — IO_MUX's table "
+                         f"put that pad's pull somewhere else, or nowhere")
+              settle("[esp32] nopull 39=0", 30,
+                     "an input-only pad took the pull-up it has no circuitry "
+                     "for — the silicon floats it")
+              settle("[esp32] i2c 68:75 -> 68", 30,
+                     "the bus did not read the declared register — look for "
+                     "`?op` on the channel, which is a command the model does "
+                     "not know")
+              settle("[esp32] spi read 1a6800", 30,
+                     "the wire did not read what chip select 0 declared")
+              heard(r"\] 16=0\.7500@24002\.4$", 30,
+                    "the low-speed LEDC channel never reported its duty")
+              heard(r"\] 33=0\.0800@50\.0$", 30,
+                    "the high-speed LEDC channel never reported its duty — "
+                    "a model waiting for a latch this half does not have")
+              heard(r"\] 26 100020$", 30,
+                    "the strip's three bytes never came out of RMT on GPIO26")
+              print("booted: pulls, the converter at rest, the bus, the wire, "
+                    "both halves of LEDC and the strip all answer")
+
+              # Now the host acts on the board: a knob on each ADC pin, the
+              # button on GPIO4 pressed, and an edge on GPIO17.
+              for line in (b"A34=2048\n", b"A35=999\n", b"4=0\n", b"17=1\n"):
+                  link.sendall(line)
+              settle("[esp32] adc 34=2048 35=999", 30,
+                     "the converter did not read what the host put on its pins")
+              settle("[esp32] pull 4=0", 30,
+                     "a pressed button did not drag its pulled-up pad low")
+              deadline = time.time() + 30
+              while time.time() < deadline:
+                  counts = re.findall(r"\[esp32\] edges on 17: (\d+)", read())
+                  if counts and int(counts[-1]) >= 1:
+                      break
+                  time.sleep(0.25)
+              else:
+                  stop("the pin moved and the firmware's own handler never ran "
+                       "— look at the probe's `latched:` line, which names the "
+                       "link of the chain that was open")
+              if "[rusty:cpu]" in emulator():
+                  stop("the emulator reported a disabled coprocessor for a "
+                       "firmware that never disabled it")
+              print("and the host's knob, button and edge all reached the "
+                    "firmware")
+          finally:
+              qemu.kill()
 
       - uses: actions/upload-artifact@v4
         # Especially on failure: the logs are the evidence for whatever the
@@ -2109,4 +2298,6 @@ jobs:
             live-probe.log
             qemu/float-probe/target/sim/*.out
             qemu/float-probe/target/sim/*.err
+            esp32-serial.log
+            esp32-qemu.out
           if-no-files-found: warn

@@ -1,21 +1,28 @@
 //! Does an ESP32 application survive its first floating-point instruction?
 //!
 //! This is the one probe here whose subject is the *CPU* rather than a
-//! peripheral, and it exists because rusty told every ESP32 user that
-//! "Espressif's QEMU stops at the first floating-point instruction" — a
-//! claim bisected once, written down, and then never reproduced with the
-//! output let out. The message it named, `Fatal error: divide by zero`,
-//! appears nowhere in QEMU's source, so whatever prints it is the guest.
+//! peripheral, and it has been wrong about that CPU twice. rusty told every
+//! ESP32 user for months that "Espressif's QEMU stops at the first
+//! floating-point instruction", which it does not; then, measured properly,
+//! that the *application* had to switch its FPU on, because `CPENABLE` read
+//! zero at the float and nothing in esp-hal writes it. That was measured and
+//! was still wrong: nothing in the ESP32's ROM or its bootloader writes it
+//! either, esp-hal's interrupt entry saves the floating-point registers
+//! unconditionally, and esp-hal's interrupts work on real boards — so on
+//! the silicon the FPU is on from reset, and it was the emulator that left
+//! it off. rusty's emulator now comes out of reset the way the board does.
 //!
-//! So: count in integers, then multiply two floats the optimiser cannot
-//! fold, then count again. Whatever ends the run, ends it between two
-//! lines that say exactly where it was.
+//! So the default build does **nothing** to `CPENABLE`, exactly as an
+//! ordinary application does, and has to run to its last line. Built with
+//! `FLOAT_PROBE_DISABLE=1` it switches coprocessor 0 off itself before the
+//! float, and then the run has to go quiet *and the emulator has to say
+//! why*, because the symptom on its own is silence.
 
 #![no_std]
 #![no_main]
-// Xtensa inline assembly is still unstable, which is itself part of the
-// finding: the one instruction an ESP32 application needs before it touches
-// a float is not something it can write on stable Rust.
+// Xtensa inline assembly is still unstable; only the disabling build uses
+// it, and it is the one instruction this probe needs to reach the case the
+// emulator's diagnostic exists for.
 #![feature(asm_experimental_arch)]
 
 use core::hint::black_box;
@@ -38,17 +45,15 @@ esp_bootloader_esp_idf::esp_app_desc!();
 fn main() -> ! {
     let _ = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
-    // Enable coprocessor 0 — the FPU — unless this probe is asked to show
-    // what happens without it. Nothing in `esp-hal`, `xtensa-lx` or
-    // `xtensa-lx-rt` writes this register, and it resets to zero, so an
-    // ESP32 application that touches a float without it takes a
-    // coprocessor-disabled exception whose handler is itself full of
-    // floating-point instructions: a double exception, for ever.
-    if option_env!("FLOAT_PROBE_NO_CPENABLE").is_none() {
+    // Switch coprocessor 0 — the FPU — off, when asked to show what that
+    // costs. xtensa-lx-rt does the same inside every interrupt when esp-hal's
+    // `float-save-restore` is off, and a float taken then faults; with the
+    // floating-point save on, the handler faults too and the CPU spins.
+    if option_env!("FLOAT_PROBE_DISABLE").is_some() {
         unsafe {
-            core::arch::asm!("wsr.cpenable {0}", "rsync", in(reg) 1u32, options(nostack));
+            core::arch::asm!("wsr.cpenable {0}", "rsync", in(reg) 0u32, options(nostack));
         }
-        println!("[float] cpenable set");
+        println!("[float] cpenable cleared");
     }
 
     println!("[float] integers");
