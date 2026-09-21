@@ -990,40 +990,6 @@ static const MemoryRegionOps iomux_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-/*
- * Which interrupt sources are asserting, as the CPU's dispatcher reads it.
- *
- * One bit, this device's own, in whichever of the three words holds it. See
- * the header: a wired line the dispatcher cannot attribute is an interrupt
- * that is taken and then returned from, and that is what a GPIO edge on an
- * ESP32 did until this answered.
- */
-static uint64_t esp32_intr_status_read(void *opaque, hwaddr addr,
-                                       unsigned int size)
-{
-    Esp32GpioState *s = ESP32_GPIO(opaque);
-    unsigned word = addr / 4;
-
-    if (s->intr_source < 0 || !s->irq_level
-        || word >= ESP32_INTR_STATUS_WORDS
-        || (unsigned)s->intr_source / 32 != word) {
-        return 0;
-    }
-    return 1u << ((unsigned)s->intr_source % 32);
-}
-
-/* Read-only: the status of a source is the peripheral's to say, and a
- * driver clears it by clearing what raised it. */
-static void esp32_intr_status_write(void *opaque, hwaddr addr, uint64_t value,
-                                    unsigned int size)
-{
-}
-
-static const MemoryRegionOps intr_status_ops = {
-    .read = esp32_intr_status_read,
-    .write = esp32_intr_status_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-};
 
 static const MemoryRegionOps uart_ops = {
     .read =  esp32_gpio_read,
@@ -2739,12 +2705,6 @@ static void esp32_gpio_init(Object *obj)
     /* Set the default value for the strap_mode property */
     object_property_set_int(obj, "strap_mode", ESP32_STRAP_MODE_FLASH_BOOT, &error_fatal);
 
-    /* Nobody has said which source this is. A plain field rather than a
-     * qdev property because the machine sets it beside the mapping, after
-     * realize, and a property set then asserts; the default is the refusal,
-     * so a machine that says nothing gets the behaviour it always had. */
-    s->intr_source = -1;
-
     memory_region_init_io(&s->iomem, obj, &uart_ops, s,
                           TYPE_ESP32_GPIO, 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
@@ -2781,13 +2741,6 @@ static void esp32_gpio_init(Object *obj)
     memory_region_init_io(&s->iomux_iomem, obj, &iomux_ops, s,
                           TYPE_ESP32_GPIO ".iomux", ESP32_IOMUX_REGION);
     sysbus_init_mmio(sbd, &s->iomux_iomem);
-    /* Region 7 is the source-status words the CPU's dispatcher reads —
-     * three registers of somebody else's peripheral, answered for this
-     * device's own source alone. */
-    memory_region_init_io(&s->intr_status_iomem, obj, &intr_status_ops, s,
-                          TYPE_ESP32_GPIO ".intr-status",
-                          ESP32_INTR_STATUS_REGION);
-    sysbus_init_mmio(sbd, &s->intr_status_iomem);
     sysbus_init_irq(sbd, &s->irq);
 }
 

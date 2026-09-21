@@ -775,32 +775,6 @@ typedef struct Esp32I2cDevice {
 #define ESP32_IOMUX_WPD (1u << 7)
 #define ESP32_IOMUX_WPU (1u << 8)
 
-/*
- * The source-status words, which this device also answers for — the eighth
- * region, and two registers of it.
- *
- * **A wired interrupt line is not an interrupt a dispatcher can find.** The
- * CPU takes it, and then esp-hal reads `INTERRUPT_COREn_INTR_STATUS` to
- * learn *which source* asserted so it can call that source's handler. Both
- * parts have the same hole: on the C3 those registers are the interrupt
- * matrix's and `patches.py` answers them there, and on the ESP32 they are
- * `DPORT`'s, three words at 0xec, which upstream's model reads as zero.
- * With them zero the handler finds nothing pending and returns — from the
- * firmware's side identical to a line that was never raised, which is
- * exactly what a `listen(Event::AnyEdge)` on an ESP32 did: the pin moved,
- * the model raised its line, and the count of edges stayed at zero.
- *
- * **It answers for one source: its own.** This device knows when *it* is
- * asserting and nothing about anybody else's peripheral, so every other bit
- * reads zero — which is what the register read before, so no source that
- * worked stops working. The source number comes from the machine as a
- * property rather than being written down here, because it is the SoC's
- * fact and not the device's: unset, the region answers zero and the part
- * behaves exactly as it did.
- */
-#define ESP32_INTR_STATUS_REGION 0x10
-#define ESP32_INTR_STATUS_WORDS (ESP32_INTR_STATUS_REGION / 4)
-
 /* How many pin-to-pin switches the host may declare.
  *
  * Sixteen is a 4x4 keypad, which is the case this exists for; a larger
@@ -1025,13 +999,6 @@ typedef struct Esp32GpioState {
     uint32_t io_mux[ESP32_GPIO_PINS];
     int8_t iomux_at[ESP32_IOMUX_WORDS];
     uint64_t iomux_no_pull;
-
-    /* The source-status words: which interrupt source is asserting, as the
-     * CPU's dispatcher reads it. `intr_source` is this device's own number
-     * in that map, given by the machine; -1 is "nobody told me", and the
-     * region then answers zero. */
-    MemoryRegion intr_status_iomem;
-    int32_t intr_source;
 
     /* The switches the host has put between pads. */
     Esp32GpioSwitch switches[ESP32_GPIO_SWITCHES];

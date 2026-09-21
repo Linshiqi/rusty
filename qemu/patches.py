@@ -188,15 +188,15 @@ EDITS = [
         "        }\n"
         "\n"
         "        /* And the source-status words the CPU's dispatcher reads,\n"
-        "         * which on this part are DPORT's and read as zero — so a\n"
-        "         * GPIO edge was taken by the CPU and then returned from,\n"
-        "         * with esp-hal finding nothing pending. Region 7 answers\n"
-        "         * for this device's own source, which it is told here\n"
-        "         * rather than having written down. */\n"
-        "        s->gpio.intr_source = ETS_GPIO_INTR_SOURCE;\n"
+        "         * which on this part are DPORT's and read as zero — so an\n"
+        "         * interrupt was taken by the CPU and then returned from,\n"
+        "         * with esp-hal finding nothing pending. The interrupt matrix\n"
+        "         * knows every source's level (rusty keeps it there, below),\n"
+        "         * so its second region answers them, for both cores. */\n"
         "        memory_region_add_subregion_overlap(dport_mem,\n"
         "            DPORT_PRO_INTR_STATUS_0,\n"
-        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->gpio), 7), 1);\n"
+        "            sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->intmatrix), 1),\n"
+        "            1);\n"
         "    }\n",
     ),
     # `INTERRUPT_CORE0_INTR_STATUS_0`, three words at 0xec of DPORT. Named
@@ -208,9 +208,182 @@ EDITS = [
         "#include \"hw/sd/dwc_sdmmc.h\"\n",
         "\n"
         "/* rusty: where the per-source interrupt status words live on this\n"
-        " * part. DPORT + 0xec, three of them, from the `dport` block of the\n"
-        " * ESP32's own SVD. */\n"
+        " * part. DPORT + 0xec, three for the PRO core and three more for the\n"
+        " * APP core straight after, from the `dport` block of the ESP32's own\n"
+        " * SVD. */\n"
         "#define DPORT_PRO_INTR_STATUS_0 0x0ec\n",
+    ),
+    # The ESP32's interrupt matrix keeps no level state: it forwards each
+    # source's line to whichever CPU input the source is mapped to and
+    # forgets it. So nothing could answer the status words a dispatcher reads
+    # to learn *which* source fired, and esp-hal — which shares CPU lines
+    # between sources and reads them on every level-triggered interrupt —
+    # found nothing pending and returned. Measured on this machine: a GPIO
+    # edge and a TIMG timer both raised their lines, both were taken, and
+    # neither handler ever ran. A periodic timer is Embassy's clock. The C3's
+    # matrix had the same hole and keeps the state already; this one gets it,
+    # and a second region reading it.
+    (
+        "include/hw/xtensa/esp32_intc.h",
+        "    uint8_t irq_map[ESP32_CPU_COUNT][ESP32_INT_MATRIX_INPUTS];\n",
+        "    /* rusty: which sources are asserting right now, one bit each, and\n"
+        "     * the status words that say so to the CPU's dispatcher. */\n"
+        "    uint32_t rusty_levels[(ESP32_INT_MATRIX_INPUTS + 31) / 32];\n"
+        "    MemoryRegion rusty_status;\n",
+    ),
+    # And a CPU input is asserted while *any* source mapped to it is. The
+    # matrix forwarded the last source's change to the CPU line and nothing
+    # else, which is right only while every source has a line of its own —
+    # ESP-IDF's allocation, so upstream never met it. esp-hal shares one
+    # line per priority: the timer (source 14) and FROM_CPU0 (source 24)
+    # land on the same one. So a timer handler that raised the software
+    # interrupt to switch tasks, and then cleared its own source, lowered
+    # the line under a request that was still pending; the switch waited for
+    # the next timer interrupt. Measured in an Embassy application: a
+    # 100 ms ticker ran only when a 500 ms one woke, and with nothing else
+    # waiting it never ran at all.
+    (
+        "hw/xtensa/esp32_intc.c",
+        "#define IRQ_MAP(cpu, input) s->irq_map[cpu][input]\n",
+        "\n"
+        "/* rusty: drive one CPU input from every source mapped to it. */\n"
+        "static void rusty_intmatrix_line(Esp32IntMatrixState *s, int cpu, int line)\n"
+        "{\n"
+        "    bool on = false;\n"
+        "\n"
+        "    for (int m = 0; m < ESP32_INT_MATRIX_INPUTS; m++) {\n"
+        "        if (IRQ_MAP(cpu, m) == line\n"
+        "            && (s->rusty_levels[m / 32] & (1u << (m % 32)))) {\n"
+        "            on = true;\n"
+        "            break;\n"
+        "        }\n"
+        "    }\n"
+        "    for (int k = 0; k < s->cpu[cpu]->env.config->nextint; k++) {\n"
+        "        if (s->cpu[cpu]->env.config->extint[k] == line) {\n"
+        "            qemu_set_irq(s->outputs[cpu][k], on);\n"
+        "            break;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "/* rusty: and every input, after a source is mapped somewhere else —\n"
+        " * the line it left may have been held by it alone. */\n"
+        "static void rusty_intmatrix_all(Esp32IntMatrixState *s)\n"
+        "{\n"
+        "    for (int i = 0; i < ESP32_CPU_COUNT; i++) {\n"
+        "        if (s->outputs[i] == NULL) {\n"
+        "            continue;\n"
+        "        }\n"
+        "        for (int k = 0; k < s->cpu[i]->env.config->nextint; k++) {\n"
+        "            rusty_intmatrix_line(s, i, s->cpu[i]->env.config->extint[k]);\n"
+        "        }\n"
+        "    }\n"
+        "}\n",
+    ),
+    (
+        "hw/xtensa/esp32_intc.c",
+        "static void esp32_intmatrix_irq_handler(void *opaque, int n, int level)\n"
+        "{\n"
+        "    Esp32IntMatrixState *s = ESP32_INTMATRIX(opaque);\n",
+        "    /* rusty: remember it, for the status words and for every line it\n"
+        "     * shares — then drive those lines from all their sources, rather\n"
+        "     * than from this one's change alone (upstream's loop below). */\n"
+        "    if (n >= 0 && n < ESP32_INT_MATRIX_INPUTS) {\n"
+        "        if (level) {\n"
+        "            s->rusty_levels[n / 32] |= 1u << (n % 32);\n"
+        "        } else {\n"
+        "            s->rusty_levels[n / 32] &= ~(1u << (n % 32));\n"
+        "        }\n"
+        "        for (int i = 0; i < ESP32_CPU_COUNT; ++i) {\n"
+        "            if (s->outputs[i] != NULL) {\n"
+        "                rusty_intmatrix_line(s, i, IRQ_MAP(i, n));\n"
+        "            }\n"
+        "        }\n"
+        "        return;\n"
+        "    }\n",
+    ),
+    (
+        "hw/xtensa/esp32_intc.c",
+        "        *map_entry = value & 0x1f;\n",
+        "        rusty_intmatrix_all(s);\n",
+    ),
+    (
+        "hw/xtensa/esp32_intc.c",
+        "static const MemoryRegionOps esp_intmatrix_ops = {\n"
+        "    .read =  esp32_intmatrix_read,\n"
+        "    .write = esp32_intmatrix_write,\n"
+        "    .endianness = DEVICE_LITTLE_ENDIAN,\n"
+        "};\n",
+        "\n"
+        "/* rusty: `PRO_INTR_STATUS_0..2` then `APP_INTR_STATUS_0..2` — which\n"
+        " * sources are asserting, raw, before the mapping and the enable, as\n"
+        " * the silicon reports them to both cores. Read-only: a source's\n"
+        " * status is its peripheral's to say, and a driver clears it by\n"
+        " * clearing what raised it. */\n"
+        "static uint64_t rusty_intmatrix_status_read(void *opaque, hwaddr addr,\n"
+        "                                            unsigned int size)\n"
+        "{\n"
+        "    Esp32IntMatrixState *s = ESP32_INTMATRIX(opaque);\n"
+        "    unsigned word = (unsigned)(addr / 4) % ARRAY_SIZE(s->rusty_levels);\n"
+        "\n"
+        "    return s->rusty_levels[word];\n"
+        "}\n"
+        "\n"
+        "static void rusty_intmatrix_status_write(void *opaque, hwaddr addr,\n"
+        "                                         uint64_t value, unsigned int size)\n"
+        "{\n"
+        "}\n"
+        "\n"
+        "static const MemoryRegionOps rusty_intmatrix_status_ops = {\n"
+        "    .read = rusty_intmatrix_status_read,\n"
+        "    .write = rusty_intmatrix_status_write,\n"
+        "    .endianness = DEVICE_LITTLE_ENDIAN,\n"
+        "};\n",
+    ),
+    (
+        "hw/xtensa/esp32_intc.c",
+        "    sysbus_init_mmio(sbd, &s->iomem);\n",
+        "    /* rusty: region 1, the source-status words, for both cores. */\n"
+        "    memory_region_init_io(&s->rusty_status, obj,\n"
+        "                          &rusty_intmatrix_status_ops, s,\n"
+        "                          TYPE_ESP32_INTMATRIX \".status\",\n"
+        "                          2 * sizeof(s->rusty_levels));\n"
+        "    sysbus_init_mmio(sbd, &s->rusty_status);\n",
+    ),
+    (
+        "hw/xtensa/esp32_intc.c",
+        "    memset(s->irq_map, INTMATRIX_UNINT_VALUE, sizeof(s->irq_map));\n",
+        "    memset(s->rusty_levels, 0, sizeof(s->rusty_levels));\n",
+    ),
+    # And the ESP32's timer interrupt never reached the matrix in the first
+    # place. On this part `INT_ENA` is ineffective — a timer's own
+    # `LEVEL_INT_EN` is what lets its level interrupt fire — and esp-hal
+    # says so in as many words and never writes `INT_ENA` here. Upstream's
+    # model gates the line on `INT_ENA`, so read back from the guest a
+    # periodic timer showed `INT_RAW` set, `INT_ENA` zero, the line down and
+    # the handler never run: Embassy's clock, stopped. Only the ESP32 uses
+    # this model (the C3 and the S3 have their own), so it follows this
+    # part's rule without asking which part it is.
+    (
+        "hw/timer/esp32_timg.c",
+        "        s->int_raw |= int_mask;\n",
+        "        /* rusty: INT_ENA is ineffective on the ESP32; LEVEL_INT_EN\n"
+        "         * is what lets a timer's level interrupt fire. */\n"
+        "        qemu_irq_raise(get_level_irq(s, ts->int_type));\n",
+    ),
+    (
+        "hw/timer/esp32_timg.c",
+        "    uint32_t int_st = s->int_ena & s->int_raw;\n",
+        "    /* rusty: the same rule on every re-evaluation, so a write that\n"
+        "     * makes this model look again cannot lower a line a pending timer\n"
+        "     * still holds. The watchdog and the RTC calibration timer keep\n"
+        "     * INT_ENA. */\n"
+        "    if (s->t0.level_int_en) {\n"
+        "        int_st |= s->int_raw & (1u << TIMG_T0_INT);\n"
+        "    }\n"
+        "    if (s->t1.level_int_en) {\n"
+        "        int_st |= s->int_raw & (1u << TIMG_T1_INT);\n"
+        "    }\n",
     ),
     (
         "hw/riscv/esp32c3_intmatrix.c",
