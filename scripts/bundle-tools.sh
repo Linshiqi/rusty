@@ -44,7 +44,7 @@ esac
 # Pinned, every one of them. A tool version that comes from `latest` is not a
 # version: the build that ships is then whatever the release page held that
 # morning, and a bug report names an installer rather than a binary.
-qemu_tag="${RUSTY_QEMU_TAG:-qemu-v7}"
+qemu_tag="${RUSTY_QEMU_TAG:-qemu-v8}"
 gdb_release=esp-gdb-v14.2_20240403
 gdb_version=14.2_20240403
 espflash_version=v4.0.1
@@ -174,15 +174,21 @@ rm -f "$dest/$qemu_asset"
 # firmware nothing here can boot.
 find "$dest/qemu/share/qemu" -mindepth 1 -maxdepth 1 ! -name 'esp32*' -exec rm -rf {} +
 
-# Every model the app drives, asked for by name — the same list
-# `simulate::has_peripherals` checks at run time, for the same reason: a
+# Every model the app drives, asked for by name and of each binary — the
+# same list `simulate::markers_of` checks at run time, for the same reason: a
 # bundle carrying four of the six answers every question about the four and
 # then hangs the firmware in `wait()`, or leaves a servo still, with nothing
-# on screen to say the installer is a generation behind.
+# on screen to say the installer is a generation behind. The ESP32's
+# interrupt matrix is compiled into the Xtensa binary alone, so only that
+# one is asked for it.
 missing=""
-for marker in gpio adc i2c spi pwm rmt sw; do
-  grep -q "\[rusty:$marker@" "$dest"/qemu/bin/qemu-system-riscv32* || missing="$missing $marker"
+for arch in riscv32 xtensa; do
+  for marker in gpio adc i2c spi pwm rmt sw; do
+    grep -q "\[rusty:$marker@" "$dest"/qemu/bin/qemu-system-$arch* || missing="$missing $arch:$marker"
+  done
 done
+grep -qF "misc.esp32.intmatrix.status" "$dest"/qemu/bin/qemu-system-xtensa* \
+  || missing="$missing xtensa:esp32-interrupts"
 if [ -z "$missing" ]; then
   echo "bundle-tools: qemu ready ($qemu_tag) — rusty's build, with every model"
 else

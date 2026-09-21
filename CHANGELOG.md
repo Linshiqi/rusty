@@ -9,6 +9,30 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.54
+
+**Wires are drawn click by click.** Click a pin and the wire follows the
+pointer, shown the whole way rather than appearing once it is finished.
+Each click on the sheet fixes a corner where you clicked, and a click on
+another pin finishes the wire — or a click on a wire, to branch into it.
+Space turns the corner under the pointer the other way round, Backspace
+takes back the last click, and Escape or a right-click abandons the wire.
+Dragging from pin to pin still works as it did.
+
+**A correction to v0.6.53: ESP32 interrupts did not all work, and now they
+do.** Its note said an ESP32 application's interrupts — "every Embassy
+timer" — ran as they do on the board. Only a GPIO interrupt did. A timer's
+interrupt never reached its handler, so an Embassy application's
+`Timer::after()` never returned, and a software interrupt raised to switch
+tasks was lost whenever a timer shared its interrupt line, which on an
+ESP32 running esp-hal it does. Timers, software interrupts and every other
+interrupt source reach their handlers now, and an Embassy application's
+tasks wake on time. Every build of the emulator is now checked against the
+exact sequence Embassy uses.
+
+rusty offers the new emulator from the Simulate panel's **Upgrade** button
+if the copy you have is older; a fresh install already carries it.
+
 ## v0.6.53
 
 **An ESP32 gets the whole board.** Until now the simulator's knobs, buses,

@@ -45,14 +45,17 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// pin instead of never returning at all, a duty reaches its pin at the
 /// frequency its timer sets, and a strip's codes come back as the bytes
 /// they carry — on the original ESP32 as well as the C3, whose CPU comes
-/// out of reset with its FPU on as the silicon's does.
+/// out of reset with its FPU on as the silicon's does and whose every
+/// interrupt source, a timer's among them, reaches its handler.
 ///
 /// The tag is pinned for the reason in this module's header; the repository
 /// it hangs off is [`REPO`], named once for the whole crate. **It moves with
-/// `PERIPHERAL_MARKERS`**: a marker no published build carries makes every
-/// copy on every machine out of date, and the Upgrade that would fix it
-/// would fetch the same old build again.
-const RUSTY_QEMU_TAG: &str = "qemu-v7";
+/// `PERIPHERAL_MARKERS` and `ESP32_MODEL_MARKER`**: a marker no published
+/// build carries makes every copy on every machine out of date, and the
+/// Upgrade that would fix it would fetch the same old build again. The
+/// QEMU workflow's packaging step checks the same list, so a build that
+/// lacks one never becomes a release.
+const RUSTY_QEMU_TAG: &str = "qemu-v8";
 
 /// An archive to fetch: where to put it, the URLs to try in order, and the
 /// extraction step. One shape for QEMU, the debuggers and the C toolchain —

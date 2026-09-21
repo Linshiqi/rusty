@@ -550,15 +550,25 @@ the data directory's QEMU is usually rusty's own download from whenever it
 was installed, and one from before the converter and the buses beat the
 current build in the bundle — firmware reading a knob hung in its own
 `read_oneshot()` with the right emulator one directory away. `find_emulator`
-takes the first copy carrying every model marker (`is_current_build`), and
+takes the copy carrying the most model markers (`models_carried`, the
+ladder breaking ties, so a user's own install beats an equal bundle), and
 the plan says what the one it took can do (`Emulator.peripherals`), so an
-early build gets the panel's Upgrade as a stock one does.
+early build gets the panel's Upgrade as a stock one does. **A marker is
+asked only of the binary that can carry it** (`markers_of`): the ESP32's
+interrupt matrix is compiled into the Xtensa emulator alone, so its marker
+asked of the RISC-V one would call every current C3 build out of date. And
+a marker names what a build *does*, never which build it is — the previous
+ESP32 marker was the name of a region the next generation removed, and it
+left with it. The QEMU workflow's packaging step checks the same list per
+binary, so a build missing one never becomes the release rusty pins.
 
 **What the emulator cannot do on a chip is said before the run**
 (`SimLimit`, a stable kind beside the English), **and it depends on the
 emulator as well as the chip**: `for_chip(chip, outdated)`. The ESP32 has
-every peripheral the C3 has, in its own layout, a GPIO edge reaching the
-firmware's handler and the FPU on from reset — so with rusty's current
+every peripheral the C3 has, in its own layout, every interrupt source
+reaching its handler — a timer's and a software interrupt's as well as a
+GPIO edge's, which is what an Embassy application's clock is made of — and
+the FPU on from reset — so with rusty's current
 build it has no limit, and with an older copy it has one
 (`esp32-outdated`), because each of those arrived after that copy was
 built; the panel's Upgrade is the fix. The S3 has never been checked,
@@ -2849,6 +2859,28 @@ usty`) holds `location.toml`
   there and why the hole survived. Two rounds of CI said only "nothing
   happened" before a witness in the model itself named the half that was
   working.
+- **And a CPU line is the OR of every source mapped to it — upstream's
+  ESP32 matrix drove it from whichever source changed last.** The same
+  ESP-IDF assumption again: one source per line, so the last change *is*
+  the line's state. esp-hal maps sources onto a line by priority, a TIMG
+  alarm and `FROM_CPU0` share one, and a timer handler that raises the
+  software interrupt to wake a task and then clears its own source lowered
+  the line under the switch — which was never taken, so nothing set the
+  next alarm and an Embassy clock stopped at its first tick. Beside it, the
+  ESP32's timer group enables a level interrupt through the timer's own
+  `LEVEL_INT_EN`; `INT_ENA` does nothing for it there and esp-hal never
+  writes it, and upstream gated the line on `INT_ENA`. Both are
+  `patches.py`'s now, and `qemu-v7` shipped with neither: a GPIO edge
+  reached its handler and was announced as "every interrupt".
+- **A proof that passes whichever way the model is written proves
+  nothing.** The first version of the clock probe had the timer clear
+  itself and *then* raise the switch — and under that order the
+  last-change rule is right, because the line's last change is the
+  switch. Measured on an emulator rebuilt with the old rule: 347 alarms
+  and 347 switches, as healthy as the fixed matrix's count. The order that
+  tells them apart is the one Embassy uses (raise, then clear), which on
+  the same rebuilt emulator stops at `timer 1 switch 0`. Before trusting a
+  gate, make it fail.
 - **`qemu_set_irq` on an unconnected line returns without doing anything.**
   A device whose `sysbus_init_irq` line no machine ever connected reports
   interrupts into nothing, silently. The model says `unconnected` on its own

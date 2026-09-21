@@ -74,8 +74,8 @@ impl Machine {
         }
     }
 
-    /// The emulator to boot: the first copy on the ladder that is rusty's
-    /// current build, or the first copy when none is.
+    /// The emulator to run, which is the **most capable copy** rather than
+    /// the first one on the ladder.
     ///
     /// For every other tool the first copy found wins, because somebody put
     /// it there. The emulator is the one binary whose copies are told apart
@@ -85,8 +85,6 @@ impl Machine {
     /// build sitting in the bundle, and firmware reading a knob hung in its
     /// own `read_oneshot()` with the right emulator installed one directory
     /// away.
-    /// The emulator to run, which is the **most capable copy** rather than
-    /// the first one on the ladder.
     ///
     /// Generations pile up: a build somebody installed a year ago sits in
     /// the data directory, the installer's sits in the bundle, and each
@@ -570,49 +568,61 @@ const RMT_MODEL_MARKER: &[u8] = b"[rusty:rmt@";
 /// them a keypad's key reaches an emulator that drops the line, and every
 /// `Pull::Up` button reads as held down from reset.
 const PAD_MODEL_MARKER: &[u8] = b"[rusty:sw@";
-/// And the ESP32's: every peripheral above in that part's own layout, the
-/// dispatcher's status words answered, and the FPU on from reset. There is
-/// no new line on the channel to recognise it by — the ESP32 speaks the
-/// protocol the C3 already does — so the marker is the name of the region
-/// that arrived with it, which only this generation's file declares and
-/// every binary built from it carries. A copy without it boots an ESP32
-/// whose first interrupt faults and whose buses are the C3's.
-const ESP32_MODEL_MARKER: &[u8] = b"esp32.gpio.intr-status";
-
-/// Every model this rusty drives, in one list: what `has_peripherals`
-/// requires and what ranks one copy of the emulator against another.
-const PERIPHERAL_MARKERS: [&[u8]; 7] = [
+/// Every model this rusty drives on both machines, in one list: what
+/// `has_peripherals` requires and what ranks one copy of the emulator
+/// against another.
+const PERIPHERAL_MARKERS: [&[u8]; 6] = [
     ADC_MODEL_MARKER,
     I2C_MODEL_MARKER,
     SPI_MODEL_MARKER,
     PWM_MODEL_MARKER,
     RMT_MODEL_MARKER,
     PAD_MODEL_MARKER,
-    ESP32_MODEL_MARKER,
 ];
 
-/// Does this emulator model the converter, both buses, LEDC, RMT and the
-/// pads' own pulls and switches?
-pub fn has_peripherals(qemu: &Path) -> bool {
+/// And the ESP32's own: every interrupt source reaching its handler — the
+/// interrupt matrix keeping each source's level, answering the status words
+/// the dispatcher reads and driving a CPU line from every source mapped to
+/// it, and the timer group raising a level interrupt the way this part
+/// enables one — on top of the peripherals in this part's layout and the
+/// FPU on from reset, which arrived a generation earlier. There is no line
+/// on the channel to recognise it by, so the marker is the name of the
+/// matrix's status region, which only this generation declares.
+///
+/// **Asked of the Xtensa binary alone** (`markers_of`), because the matrix
+/// is compiled into no other: asked of the RISC-V one it would call every
+/// current C3 build out of date. A copy without it runs an ESP32 whose
+/// timer never interrupts, so an Embassy application's `Timer::after()`
+/// never returns. The one before it answered the status words through a
+/// region of rusty's own device, `esp32.gpio.intr-status`, for GPIO's
+/// source alone — which is why a marker names what a build does rather
+/// than which build it is.
+const ESP32_MODEL_MARKER: &[u8] = b"misc.esp32.intmatrix.status";
+
+/// The markers this binary has to carry: every machine's, and the ESP32's
+/// when it is the machine that runs one.
+fn markers_of(qemu: &Path) -> impl Iterator<Item = &'static [u8]> {
+    let xtensa = qemu
+        .file_stem()
+        .is_some_and(|stem| stem == "qemu-system-xtensa");
     PERIPHERAL_MARKERS
         .into_iter()
-        .all(|marker| carries(qemu, marker))
+        .chain(xtensa.then_some(ESP32_MODEL_MARKER))
+}
+
+/// Does this emulator model the converter, both buses, LEDC, RMT and the
+/// pads' own pulls and switches — and, for an ESP32, its interrupts?
+pub fn has_peripherals(qemu: &Path) -> bool {
+    markers_of(qemu).all(|marker| carries(qemu, marker))
 }
 
 /// How many of rusty's models this binary carries, pins included — the
 /// number one copy is ranked against another by.
 fn models_carried(qemu: &Path) -> usize {
     usize::from(has_gpio_model(qemu))
-        + PERIPHERAL_MARKERS
-            .into_iter()
+        + markers_of(qemu)
             .filter(|marker| carries(qemu, marker))
             .count()
-}
-
-/// Is this rusty's current build — every model this version of rusty
-/// drives present?
-pub fn is_current_build(qemu: &Path) -> bool {
-    has_gpio_model(qemu) && has_peripherals(qemu)
 }
 
 /// Does this emulator model GPIO, or is it the stock one whose write handler
@@ -919,7 +929,7 @@ mod tests {
         let current = write(
             &dir.path().join("bundle"),
             b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@ \
-              [rusty:sw@ esp32.gpio.intr-status",
+              [rusty:sw@",
         );
         let both = Machine {
             tools: Some(dir.path().join("data")),
@@ -943,6 +953,58 @@ mod tests {
         let emulator = plan.emulator.expect("found");
         assert!(emulator.gpio_model);
         assert!(!emulator.peripherals, "and the plan says what it lacks");
+    }
+
+    /// The ESP32's interrupts are compiled into the Xtensa binary alone, so
+    /// only that binary is asked for their marker. A C3 build carrying
+    /// every other model is current; the same models in an Xtensa binary
+    /// without the matrix's are a generation behind — an ESP32 whose timer
+    /// never interrupts — and the plan for an ESP32 says so where the plan
+    /// for a C3 on the same machine says nothing.
+    #[test]
+    fn only_the_xtensa_emulator_is_asked_for_the_esp32_interrupts() {
+        let dir = firmware(BLINKY);
+        let every: &[u8] =
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@ [rusty:sw@";
+        let install = |root: &str, xtensa: &[u8]| {
+            let tools = dir.path().join(root);
+            for (binary, contents) in [
+                ("qemu-system-riscv32", every),
+                ("qemu-system-xtensa", xtensa),
+            ] {
+                let path = tools.join("qemu").join("bin").join(tools::exe(binary));
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, contents).unwrap();
+            }
+            Machine {
+                tools: Some(tools),
+                bundled: None,
+                target_dir: None,
+            }
+        };
+        let esp32 = project(dir.path(), Some("esp32"), Some("xtensa-esp32-none-elf"));
+        let limits = |plan: SimPlan| -> Vec<String> {
+            plan.limits.into_iter().map(|limit| limit.kind).collect()
+        };
+        // What the plan calls a build that is not out of date.
+        let is_current = |qemu: &Path| has_gpio_model(qemu) && has_peripherals(qemu);
+
+        let behind = install("behind", every);
+        let c3_build = behind.find_emulator("qemu-system-riscv32").expect("found");
+        assert!(
+            is_current(&c3_build),
+            "a C3 build is not asked for the ESP32's matrix"
+        );
+        let esp32_build = behind.find_emulator("qemu-system-xtensa").expect("found");
+        assert!(!is_current(&esp32_build));
+        assert_eq!(limits(plan_on(&esp32, false, &behind)), ["esp32-outdated"]);
+        assert!(limits(plan_on(&c3(dir.path()), false, &behind)).is_empty());
+
+        let with_matrix = [every, &b" misc.esp32.intmatrix.status"[..]].concat();
+        let current = install("current", &with_matrix);
+        let esp32_build = current.find_emulator("qemu-system-xtensa").expect("found");
+        assert!(is_current(&esp32_build));
+        assert!(limits(plan_on(&esp32, false, &current)).is_empty());
     }
 
     /// Both sockets are the emulator's own. The pin channel waits for rusty

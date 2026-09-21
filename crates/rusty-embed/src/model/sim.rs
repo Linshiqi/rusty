@@ -32,22 +32,28 @@ impl SimLimit {
     /// The C3 is the chip every model was written and proven against, and
     /// the ESP32 now has every one of them in its own layout — the pads'
     /// pulls in IO_MUX's pad-name order, the converter at `SENS`, the
-    /// buses, LEDC's two halves, RMT's eight channels, a GPIO edge reaching
-    /// the firmware's handler, and the FPU on from reset as the silicon has
+    /// buses, LEDC's two halves, RMT's eight channels, every interrupt
+    /// source reaching its handler (a timer's and a software interrupt's as
+    /// well as a GPIO edge's), and the FPU on from reset as the silicon has
     /// it. So neither has a limit **with rusty's current emulator**, and
     /// the ESP32 has one with an older copy of it (`outdated_emulator`):
     /// there, each of those fails in a way of its own, and the panel's
-    /// Upgrade is the fix.
+    /// Upgrade is the fix. The text says what the copy one generation back
+    /// cannot do and then what the ones before it could not either, since
+    /// the plan knows only that the copy is not current.
     pub fn for_chip(chip: &str, outdated_emulator: bool) -> Vec<SimLimit> {
         match chip {
             "esp32" if outdated_emulator => vec![SimLimit::new(
                 "esp32-outdated",
-                "This emulator predates rusty's ESP32 models. On an ESP32 it leaves the FPU \
-                 switched off at reset, where the silicon has it on, so the first interrupt an \
-                 esp-hal application takes faults inside its own context save and the run goes \
-                 quiet — and its converter, buses, LEDC, RMT and pad pulls are the C3's, so a \
-                 read_oneshot() or a bus transaction waits for ever and every Pull::Up button \
-                 reads as held down. Upgrade the emulator from this panel.",
+                "This emulator predates rusty's current ESP32 models, so on an ESP32 a timer's \
+                 interrupt and a software interrupt never reach their handlers: an Embassy \
+                 application's Timer::after() never returns, and anything waiting on an alarm \
+                 waits for ever. Builds older still leave the FPU switched off at reset, where \
+                 the silicon has it on, so an interrupt that does arrive faults inside its own \
+                 context save and the run goes quiet — and lay the converter, buses, LEDC, RMT \
+                 and pad pulls out as the C3's, so a read_oneshot() or a bus transaction waits \
+                 for ever and every Pull::Up button reads as held down. Upgrade the emulator \
+                 from this panel.",
             )],
             "esp32s3" => vec![SimLimit::new(
                 "s3-unproven",
