@@ -554,6 +554,11 @@ fn BoardEditor(
     // cursor is within reach of — the dot that lights up to take it.
     let ghost = RwSignal::new(None::<(f64, f64)>);
     let hover_pin = RwSignal::new(None::<(usize, String)>);
+    // A wire being drawn click by click — started by a click on a pin, a
+    // corner per click on the sheet, finished by a click on a pin or a
+    // wire. Beside `drag` rather than in it, because it outlives every
+    // press: a pan in the middle of a wire must not end the wire.
+    let drawing = RwSignal::new(None::<Drawing>);
     // Every part in the selection: the one under the ring plus whatever a
     // rubber band or a Shift-click added. `selected` stays the one the
     // inspector describes and the keys act on when the group is one part.
@@ -898,6 +903,88 @@ fn BoardEditor(
         }
     };
 
+    // A wire being drawn, abandoned: Escape, a right-click, or a click back
+    // on the pin it started from.
+    let cancel_drawing = move || {
+        drawing.set(None);
+        ghost.set(None);
+        hover_pin.set(None);
+    };
+
+    // One click while a wire is being drawn, at `world` on the sheet. A pin
+    // in reach finishes it there — its own start pin takes it back — a wire
+    // in reach finishes it as a branch, and anywhere else is a corner. The
+    // preview under the pointer is drawn from the same `Drawing`, so what
+    // was on screen before the click is what the click makes.
+    let drawing_click = move |world: (f64, f64)| {
+        let Some(mut draft) = drawing.get_untracked() else {
+            return;
+        };
+        let list = parts.get_untracked();
+        let start = list.get(draft.from.0).and_then(|part| {
+            let pin = part.pin(&draft.from.1)?;
+            Some((pin_point(part, pin), pin_out(part, pin)))
+        });
+        let Some((pin, out)) = start else {
+            // The part it started from is gone — undone under it.
+            cancel_drawing();
+            return;
+        };
+        let from = (draft.from.0, draft.from.1.as_str());
+        let made = if let Some(hit) = pin_under(&list, world, REACH) {
+            if hit == draft.from {
+                cancel_drawing();
+                return;
+            }
+            let to = (hit.0, hit.1.as_str());
+            if draft.placed.is_empty() {
+                // Pin to pin with nothing laid between: the same routed
+                // wire a drag makes, which is what the preview showed.
+                checkpoint();
+                wires
+                    .try_update(|all| edit::connect(&list, all, from, to))
+                    .flatten()
+            } else {
+                let end = list.get(hit.0).and_then(|part| {
+                    let pin = part.pin(&hit.1)?;
+                    Some((pin_point(part, pin), pin_out(part, pin)))
+                });
+                end.and_then(|(end, end_out)| {
+                    let route = draft.route_into(pin, out, end, end_out);
+                    checkpoint();
+                    wires
+                        .try_update(|all| edit::connect_drawn(&list, all, from, to, route))
+                        .flatten()
+                })
+            }
+        } else {
+            let step = grid.get_untracked();
+            let at = (snap_to(world.0, step), snap_to(world.1, step));
+            match wires.with_untracked(|all| wire_under(&list, all, at, REACH)) {
+                Some(trunk) => {
+                    let route = draft.route_to(pin, out, at);
+                    checkpoint();
+                    wires
+                        .try_update(|all| edit::branch_drawn(&list, all, from, trunk, route))
+                        .flatten()
+                }
+                None => {
+                    draft.place(pin, out, at);
+                    drawing.set(Some(draft));
+                    return;
+                }
+            }
+        };
+        if made.is_some() {
+            selected.set(None);
+            selected_wire.set(made);
+            dirty.set(true);
+        }
+        // Finished either way: a pair already joined is refused, and there is
+        // nothing more that drawing could become.
+        cancel_drawing();
+    };
+
     // A switch pressed on the sheet: the rules see it as conducting, and
     // while a session runs the GPIO it reaches is driven to the level its
     // other side holds — through the same message the old buttons sent, so
@@ -975,6 +1062,40 @@ fn BoardEditor(
                     node_ref=canvas
                     tabindex="0"
                     on:keydown=move |event: ev::KeyboardEvent| {
+                        // While a wire is being drawn the keys are about the
+                        // wire: Backspace takes back the last click (and the
+                        // drawing itself once there is none), Space turns
+                        // the live leg the other way round — KiCad's
+                        // posture — and Escape abandons it.
+                        if drawing.with_untracked(Option::is_some) {
+                            match event.key().as_str() {
+                                "Delete" | "Backspace" => {
+                                    event.prevent_default();
+                                    let undone = drawing
+                                        .try_update(|d| d.as_mut().is_some_and(Drawing::unplace))
+                                        .unwrap_or(false);
+                                    if !undone {
+                                        cancel_drawing();
+                                    }
+                                    return;
+                                }
+                                " " => {
+                                    event.prevent_default();
+                                    drawing.update(|d| {
+                                        if let Some(d) = d.as_mut() {
+                                            d.flip = !d.flip;
+                                        }
+                                    });
+                                    return;
+                                }
+                                "Escape" => {
+                                    event.prevent_default();
+                                    cancel_drawing();
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
                         match event.key().as_str() {
                             "Delete" | "Backspace" => {
                                 event.prevent_default();
@@ -983,6 +1104,7 @@ fn BoardEditor(
                             "Escape" => {
                                 // A drag in flight is what Escape is most
                                 // often reaching for.
+                                drawing.set(None);
                                 placing.set(None);
                                 place_at.set(None);
                                 drag.set(None);
@@ -1156,6 +1278,24 @@ fn BoardEditor(
                             place_at
                                 .set(Some((snap_to(world.0, step), snap_to(world.1, step))));
                         }
+                        // A wire being drawn follows the pointer, snapped as
+                        // its corners will be, and lights the pin it would
+                        // land on — unless the sheet itself is being panned
+                        // under it, when the pointer is not aiming at all.
+                        if let Some(from) = drawing.with_untracked(|d| d.as_ref().map(|d| d.from.clone()))
+                            && !matches!(drag.get_untracked(), Some(Drag::Pan { .. }))
+                        {
+                            let step = grid.get_untracked();
+                            let world = to_world(
+                                f64::from(event.client_x()),
+                                f64::from(event.client_y()),
+                            );
+                            ghost.set(Some((snap_to(world.0, step), snap_to(world.1, step))));
+                            let hit = parts
+                                .with_untracked(|list| pin_under(list, world, REACH))
+                                .filter(|hit| *hit != from);
+                            hover_pin.set(hit);
+                        }
                         let Some(current) = drag.get_untracked() else {
                             return;
                         };
@@ -1236,7 +1376,7 @@ fn BoardEditor(
                                 });
                                 dirty.set(true);
                             }
-                            Drag::Wire { from } => {
+                            Drag::Wire { from, .. } => {
                                 ghost.set(Some(world));
                                 let hit = parts
                                     .with_untracked(|list| pin_under(list, world, REACH))
@@ -1352,9 +1492,16 @@ fn BoardEditor(
                         // A wire lands on the pin under the pointer, from
                         // whichever end it was pulled: one assignment for
                         // both directions, so the two gestures cannot
-                        // disagree about what wiring means.
-                        if let Some(Drag::Wire { from }) = drag.get_untracked() {
+                        // disagree about what wiring means. And a press
+                        // that lands nowhere is the start of a wire drawn
+                        // click by click, not a wire dropped on the floor.
+                        let mut started = None;
+                        if let Some(Drag::Wire { from, press }) = drag.get_untracked() {
                             let list = parts.get_untracked();
+                            let released = ghost.get_untracked();
+                            let moved = released.is_some_and(|at| {
+                                (at.0 - press.0).hypot(at.1 - press.1) > CLICK_SLOP
+                            });
                             // A pin first, and the middle of a wire only
                             // when no pin is in reach: a branch is what the
                             // gesture means where there was nothing else to
@@ -1367,7 +1514,7 @@ fn BoardEditor(
                                         edit::connect(&list, all, (from.0, &from.1), (to.0, &to.1))
                                     })
                                     .flatten()
-                            } else if let Some(at) = ghost.get_untracked() {
+                            } else if moved && let Some(at) = released {
                                 let step = grid.get_untracked();
                                 let at = (snap_to(at.0, step), snap_to(at.1, step));
                                 let trunk = wires
@@ -1387,9 +1534,26 @@ fn BoardEditor(
                                             })
                                             .flatten()
                                     }
-                                    None => None,
+                                    None => {
+                                        // Pulled out and let go on bare
+                                        // sheet: that is the first corner,
+                                        // and the wire carries on from it.
+                                        let mut draft = Drawing::new(from.clone());
+                                        if let Some(part) = list.get(from.0)
+                                            && let Some(pin) = part.pin(&from.1)
+                                        {
+                                            draft.place(pin_point(part, pin), pin_out(part, pin), at);
+                                        }
+                                        drawing.set(Some(draft));
+                                        started = Some(at);
+                                        None
+                                    }
                                 }
                             } else {
+                                // A click on the pin: every schematic
+                                // editor's gesture for starting a wire.
+                                drawing.set(Some(Drawing::new(from.clone())));
+                                started = Some(released.unwrap_or(press));
                                 None
                             };
                             if made.is_some() {
@@ -1403,6 +1567,12 @@ fn BoardEditor(
                         hover_pin.set(None);
                         box_to.set(None);
                         drag.set(None);
+                        // A drawing just begun shows at once, from where the
+                        // pointer is, rather than waiting for it to move.
+                        if let Some(at) = started {
+                            let step = grid.get_untracked();
+                            ghost.set(Some((snap_to(at.0, step), snap_to(at.1, step))));
+                        }
                     }
                     on:pointerleave=move |_| {
                         guides.set((None, None));
@@ -1775,7 +1945,11 @@ fn BoardEditor(
                                             if let Some(element) = canvas.get_untracked() {
                                                 let _ = element.focus();
                                             }
-                                            drag.set(Some(Drag::Wire { from: (index, number) }));
+                                            let press = to_world(
+                                                f64::from(event.client_x()),
+                                                f64::from(event.client_y()),
+                                            );
+                                            drag.set(Some(Drag::Wire { from: (index, number), press }));
                                         };
 
                                         let on_down = move |event: ev::PointerEvent| {
@@ -3277,9 +3451,93 @@ fn BoardEditor(
                                 // reach it is the elbow out of the pin,
                                 // which is the shape a schematic wire has
                                 // whatever it ends on.
+                                // A wire being drawn click by click is drawn
+                                // the whole way: what the clicks have fixed,
+                                // solid, and the leg following the pointer,
+                                // dashed — both from the `Drawing` the next
+                                // click will use, so the click makes what
+                                // the screen showed.
                                 {move || {
                                     let target = ghost.get()?;
-                                    let Some(Drag::Wire { from }) = drag.get() else {
+                                    let draft = drawing.get()?;
+                                    let landing = hover_pin.get();
+                                    let (fixed, live) = parts.with(|list| {
+                                        let part = list.get(draft.from.0)?;
+                                        let pin = part.pin(&draft.from.1)?;
+                                        let (start, out) = (pin_point(part, pin), pin_out(part, pin));
+                                        let mut fixed = vec![start];
+                                        fixed.extend(draft.placed.iter().copied());
+                                        let anchor = *fixed.last()?;
+                                        let mut live = vec![anchor];
+                                        match landing.as_ref() {
+                                            // Pin to pin with nothing laid
+                                            // between is the routed wire a
+                                            // drag makes, and so is its
+                                            // preview.
+                                            Some(to) if draft.placed.is_empty() => {
+                                                let routed = wires.with(|all| {
+                                                    edit::connection(
+                                                        list,
+                                                        all,
+                                                        (draft.from.0, &draft.from.1),
+                                                        (to.0, &to.1),
+                                                    )
+                                                });
+                                                match routed.and_then(|w| {
+                                                    wire_ends(list, &w).map(|e| wire_path(&e, &w.bends))
+                                                }) {
+                                                    Some(path) => live = path,
+                                                    None => live.extend(draft.leg_to(start, out, target)),
+                                                }
+                                            }
+                                            Some(to) => {
+                                                let end_part = list.get(to.0)?;
+                                                let end_pin = end_part.pin(&to.1)?;
+                                                live.extend(last_leg(
+                                                    anchor,
+                                                    pin_point(end_part, end_pin),
+                                                    pin_out(end_part, end_pin),
+                                                ));
+                                            }
+                                            None => live.extend(draft.leg_to(start, out, target)),
+                                        }
+                                        Some((fixed, simplify_route(live)))
+                                    })?;
+                                    let join = |points: &[(f64, f64)]| {
+                                        points
+                                            .iter()
+                                            .map(|(x, y)| format!("{x},{y}"))
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                    };
+                                    let solid = (fixed.len() >= 2).then(|| {
+                                        view! {
+                                            <polyline
+                                                points=join(&fixed)
+                                                fill="none"
+                                                stroke="#e0a838"
+                                                stroke-width="1.8"
+                                                style="pointer-events: none"
+                                            />
+                                        }
+                                    });
+                                    Some(view! {
+                                        <g>
+                                            {solid}
+                                            <polyline
+                                                points=join(&live)
+                                                fill="none"
+                                                stroke="#e0a838"
+                                                stroke-width="1.8"
+                                                stroke-dasharray="5 4"
+                                                style="pointer-events: none"
+                                            />
+                                        </g>
+                                    })
+                                }}
+                                {move || {
+                                    let target = ghost.get()?;
+                                    let Some(Drag::Wire { from, .. }) = drag.get() else {
                                         return None;
                                     };
                                     let landing = hover_pin.get();
@@ -3355,6 +3613,56 @@ fn BoardEditor(
                             </g>
                         </svg>
                     </div>
+
+                    // While a wire is being drawn the whole sheet is one
+                    // click target: a click is a corner, a pin or a wire
+                    // finishes it, and nothing under the pointer — a part,
+                    // a wire's grab handle — takes the press for itself.
+                    // Under the corner controls (z-20), which stay usable;
+                    // the middle button and Ctrl/Alt with the left fall
+                    // through to the canvas, which pans, and the drawing
+                    // survives the pan.
+                    {move || {
+                        drawing.with(Option::is_some).then(|| {
+                            view! {
+                                <div
+                                    class="absolute inset-0 z-10 cursor-crosshair"
+                                    on:pointerdown=move |event: ev::PointerEvent| {
+                                        match event.button() {
+                                            0 if !(event.ctrl_key() || event.alt_key()) => {
+                                                event.prevent_default();
+                                                event.stop_propagation();
+                                                if let Some(element) = canvas.get_untracked() {
+                                                    let _ = element.focus();
+                                                }
+                                                drawing_click(to_world(
+                                                    f64::from(event.client_x()),
+                                                    f64::from(event.client_y()),
+                                                ));
+                                            }
+                                            2 => {
+                                                event.prevent_default();
+                                                event.stop_propagation();
+                                                cancel_drawing();
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    on:contextmenu=move |event: ev::MouseEvent| {
+                                        event.prevent_default();
+                                        event.stop_propagation();
+                                    }
+                                >
+                                    // What the keys do while drawing, where
+                                    // KiCad puts it: said while it applies
+                                    // and gone the moment it does not.
+                                    <span class="pointer-events-none absolute top-2 left-3 rounded-[6px] bg-raised/90 px-2 py-1 text-caption text-label-2 ring-1 ring-line">
+                                        {t!("simulate.drawing-hint")}
+                                    </span>
+                                </div>
+                            }
+                        })
+                    }}
 
                     // What the rules found, and where the pin levels come
                     // from — on the board rather than in a rail beside it,

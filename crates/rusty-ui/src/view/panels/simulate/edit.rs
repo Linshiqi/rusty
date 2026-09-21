@@ -13,7 +13,8 @@
 use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
 
 use super::geometry::{
-    EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, pin_key, turned_anchor,
+    EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, pin_key, simplify_route,
+    turned_anchor,
 };
 use super::layout;
 
@@ -313,6 +314,87 @@ pub(super) fn connect(
 ) -> Option<usize> {
     let wire = connection(list, wires, from, to)?;
     wires.push(wire);
+    Some(wires.len() - 1)
+}
+
+/// Join two pins along the route somebody drew, click by click — `route`
+/// is the whole polyline, start pin first and end pin last — and answer
+/// with the index of the wire made.
+///
+/// Not routed: the author laid every corner, and a wire that moved them
+/// would be a wire nobody drew. What is stored is exactly the corners
+/// between the two pins, folded where two segments run straight on. The
+/// refusals are `connect`'s, for its reasons: a pin to itself, and a pair
+/// already joined.
+pub(super) fn connect_drawn(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    to: (usize, &str),
+    route: Vec<(f64, f64)>,
+) -> Option<usize> {
+    if from == to {
+        return None;
+    }
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let b = key_of(list.get(to.0)?, to.1)?;
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    let tidy = simplify_route(route);
+    let bends = if tidy.len() > 2 {
+        tidy[1..tidy.len() - 1].to_vec()
+    } else {
+        Vec::new()
+    };
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends,
+    });
+    Some(wires.len() - 1)
+}
+
+/// A drawn wire that ends on another wire rather than on a pin: the T,
+/// made as a wire to one of the trunk's own pins exactly as `branch` makes
+/// one, with the corners the author laid before it. `route` runs from the
+/// start pin to the point on the trunk where the click landed.
+pub(super) fn branch_drawn(
+    list: &[EditPart],
+    wires: &mut Vec<Wire>,
+    from: (usize, &str),
+    trunk: usize,
+    route: Vec<(f64, f64)>,
+) -> Option<usize> {
+    let a = key_of(list.get(from.0)?, from.1)?;
+    let at = *route.last()?;
+    let (b, along) = branch_route(list, wires.get(trunk)?, at)?;
+    if a == b {
+        return None;
+    }
+    if wires
+        .iter()
+        .any(|w| (w.from == a && w.to == b) || (w.from == b && w.to == a))
+    {
+        return None;
+    }
+    // The drawn route to the trunk, then along the trunk to its pin: the
+    // drop point is the last of the one and the first of the other, and the
+    // fold takes the duplicate out.
+    let mut full = route;
+    full.extend(along);
+    let tidy = simplify_route(full);
+    // The start pin is the route's first point; everything after it is a
+    // bend, since the trunk's pin the wire names is not on this list.
+    let bends = tidy.get(1..).map(<[_]>::to_vec).unwrap_or_default();
+    wires.push(Wire {
+        from: a,
+        to: b,
+        bends,
+    });
     Some(wires.len() - 1)
 }
 
@@ -657,5 +739,98 @@ mod tests {
         assert_eq!(past.len(), HISTORY_CAP);
         assert_eq!(past[0].0[0].inst.x, 5.0, "the oldest five were dropped");
         assert_eq!(past.last().unwrap().0[0].inst.x, (HISTORY_CAP + 4) as f64);
+    }
+
+    /// Where a pin is and which way its wire leaves it, on the sheet.
+    fn end(list: &[EditPart], index: usize, number: &str) -> ((f64, f64), (f64, f64)) {
+        use crate::view::panels::simulate::geometry::{pin_out, pin_point};
+        let part = &list[index];
+        let pin = part.pin(number).expect("the pin");
+        (pin_point(part, pin), pin_out(part, pin))
+    }
+
+    /// A wire drawn click by click is made of the corners that were drawn
+    /// — not routed afterwards — so the wire on the sheet draws exactly the
+    /// polyline the preview showed; and it refuses what `connect` refuses.
+    #[test]
+    fn a_drawn_wire_is_the_route_it_was_drawn_as() {
+        use crate::view::panels::simulate::geometry::{Drawing, wire_ends, wire_path};
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let (start, out) = end(&list, 0, "4");
+        let (finish, finish_out) = end(&list, d, "2");
+
+        let mut draft = Drawing::new((0, "4".into()));
+        draft.place(start, out, (start.0 - 80.0, start.1 + 64.0));
+        draft.place(start, out, (finish.0 + 64.0, start.1 + 96.0));
+        let route = draft.route_into(start, out, finish, finish_out);
+
+        let mut wires = Vec::new();
+        let made = connect_drawn(&list, &mut wires, (0, "4"), (d, "2"), route.clone())
+            .expect("drawn and made");
+        let ends = wire_ends(&list, &wires[made]).expect("both ends resolve");
+        assert_eq!(
+            wire_path(&ends, &wires[made].bends),
+            route,
+            "the wire draws the route that was drawn, corner for corner"
+        );
+
+        assert!(
+            connect_drawn(&list, &mut wires, (0, "4"), (d, "2"), route.clone()).is_none(),
+            "a pair already joined is refused, drawn or not"
+        );
+        assert!(
+            connect_drawn(&list, &mut wires, (d, "2"), (d, "2"), route).is_none(),
+            "a pin to itself means nothing"
+        );
+    }
+
+    /// A drawn wire that ends on another wire is the T a drag onto a wire
+    /// makes: a wire to one of the trunk's pins, through the drawn corners
+    /// and the point where the click landed.
+    #[test]
+    fn a_drawn_wire_ending_on_a_wire_branches_through_the_click() {
+        use crate::view::panels::simulate::geometry::{Drawing, wire_ends, wire_path};
+        let mut list = sheet();
+        let d = add(&mut list, &led(), 100.0, 100.0);
+        let mut wires = Vec::new();
+        let trunk = connect(&list, &mut wires, (0, "4"), (d, "2")).expect("trunk");
+        let trunk_path = wire_path(
+            &wire_ends(&list, &wires[trunk]).unwrap(),
+            &wires[trunk].bends,
+        );
+        // A point on the trunk's longest segment, snapped as a click would be.
+        let (a, b) = trunk_path
+            .windows(2)
+            .map(|pair| (pair[0], pair[1]))
+            .max_by(|x, y| {
+                let length = |(p, q): &((f64, f64), (f64, f64))| (q.0 - p.0).hypot(q.1 - p.1);
+                length(x).total_cmp(&length(y))
+            })
+            .unwrap();
+        let on_trunk = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+
+        let (start, out) = end(&list, 0, "5");
+        let draft = Drawing::new((0, "5".into()));
+        let route = draft.route_to(start, out, on_trunk);
+        let made = branch_drawn(&list, &mut wires, (0, "5"), trunk, route).expect("a branch");
+
+        let branch = &wires[made];
+        let names_trunk_pin = branch.to == wires[trunk].from || branch.to == wires[trunk].to;
+        assert!(
+            names_trunk_pin,
+            "the branch names one of the trunk's own pins"
+        );
+        let path = wire_path(&wire_ends(&list, branch).unwrap(), &branch.bends);
+        assert!(
+            path.windows(2).any(|pair| {
+                let (p, q) = (pair[0], pair[1]);
+                let on_x = (p.0 - q.0).abs() < 0.01 && (on_trunk.0 - p.0).abs() < 0.01;
+                let on_y = (p.1 - q.1).abs() < 0.01 && (on_trunk.1 - p.1).abs() < 0.01;
+                let within = |v: f64, m: f64, n: f64| v >= m.min(n) - 0.01 && v <= m.max(n) + 0.01;
+                (on_x && within(on_trunk.1, p.1, q.1)) || (on_y && within(on_trunk.0, p.0, q.0))
+            }),
+            "the branch passes through the point that was clicked: {path:?}"
+        );
     }
 }

@@ -92,6 +92,189 @@ pub(super) type WireStart = (usize, Option<bool>, Option<bool>);
 /// a wire leaves it, for the `from` end and the `to` end.
 pub(super) type WireEnds = [((f64, f64), (f64, f64)); 2];
 
+/// How far a press may travel before its release and still be a click, in
+/// sheet units: a hand that tapped a pin and moved a pixel meant to tap it.
+pub(super) const CLICK_SLOP: f64 = 4.0;
+
+/// A wire being drawn click by click, the way every schematic editor draws
+/// one: a click on a pin starts it, each click on the sheet fixes a corner,
+/// a click on another pin (or on a wire, for a branch) finishes it, and the
+/// route follows the pointer the whole way rather than appearing once it is
+/// made.
+///
+/// Its own state rather than a [`Drag`], because it outlives every press:
+/// a pan or a zoom in the middle of a wire must not end it, and a drag is
+/// by definition over at the release.
+///
+/// `placed` is every corner laid so far, after the start pin — already
+/// orthogonal, stub out of the pin included — so the wire made at the end
+/// is exactly the polyline that was drawn, with nothing inferred between
+/// two points that the preview did not show. `marks` is where each click's
+/// corners begin, so Backspace takes back one click, not one corner.
+/// `flip` turns the live leg the other way round — Space, KiCad's posture.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Drawing {
+    pub from: (usize, String),
+    pub placed: Vec<(f64, f64)>,
+    pub marks: Vec<usize>,
+    pub flip: bool,
+}
+
+impl Drawing {
+    pub(super) fn new(from: (usize, String)) -> Self {
+        Drawing {
+            from,
+            placed: Vec::new(),
+            marks: Vec::new(),
+            flip: false,
+        }
+    }
+
+    /// Lay the corners that take the wire to `to`: out of the pin first if
+    /// nothing is laid yet, and on from the last corner otherwise.
+    pub(super) fn place(&mut self, pin: (f64, f64), out: (f64, f64), to: (f64, f64)) {
+        let leg = self.leg_to(pin, out, to);
+        self.marks.push(self.placed.len());
+        for point in leg {
+            let repeat = self.placed.last().is_some_and(|last| {
+                (last.0 - point.0).abs() < 0.01 && (last.1 - point.1).abs() < 0.01
+            });
+            if !repeat {
+                self.placed.push(point);
+            }
+        }
+    }
+
+    /// Take back the last click. `false` when there was none to take back,
+    /// which is the caller's cue that the drawing itself is what Backspace
+    /// is undoing.
+    pub(super) fn unplace(&mut self) -> bool {
+        match self.marks.pop() {
+            Some(at) => {
+                self.placed.truncate(at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The leg from wherever the wire has got to, to `to`, as the corners
+    /// after that point. The first leg leaves the pin along the pin's own
+    /// direction, the way a pin is drawn; every later one runs the way the
+    /// hand moved furthest before it turns — both unless `flip` says
+    /// otherwise.
+    pub(super) fn leg_to(
+        &self,
+        pin: (f64, f64),
+        out: (f64, f64),
+        to: (f64, f64),
+    ) -> Vec<(f64, f64)> {
+        match self.placed.last() {
+            None => first_leg(pin, out, to, self.flip),
+            Some(&last) => drawn_leg(last, to, self.flip),
+        }
+    }
+
+    /// The whole route as it stands, pin to `to`, for the preview.
+    pub(super) fn route_to(
+        &self,
+        pin: (f64, f64),
+        out: (f64, f64),
+        to: (f64, f64),
+    ) -> Vec<(f64, f64)> {
+        let mut points = vec![pin];
+        points.extend(self.placed.iter().copied());
+        points.extend(self.leg_to(pin, out, to));
+        simplify_route(points)
+    }
+
+    /// The whole route ending on a pin at `end`, which it meets along that
+    /// pin's own direction (`end_out`) — from outside the part, as a wire
+    /// on a schematic meets a pin — for the preview and for the wire made.
+    pub(super) fn route_into(
+        &self,
+        pin: (f64, f64),
+        out: (f64, f64),
+        end: (f64, f64),
+        end_out: (f64, f64),
+    ) -> Vec<(f64, f64)> {
+        let mut points = vec![pin];
+        points.extend(self.placed.iter().copied());
+        let from = match self.placed.last() {
+            Some(&last) => last,
+            None => {
+                let stub = (pin.0 + out.0 * ROW_PITCH, pin.1 + out.1 * ROW_PITCH);
+                points.push(stub);
+                stub
+            }
+        };
+        points.extend(last_leg(from, end, end_out));
+        simplify_route(points)
+    }
+}
+
+/// One leg of a drawn wire from `from` to `to`, turning once: the corners
+/// after `from`, `to` last. It runs first along the axis the pointer moved
+/// furthest, so the wire grows the way the hand is going; `flip` runs it the
+/// other way round.
+pub(super) fn drawn_leg(from: (f64, f64), to: (f64, f64), flip: bool) -> Vec<(f64, f64)> {
+    let (dx, dy) = ((to.0 - from.0).abs(), (to.1 - from.1).abs());
+    if dx < 0.01 || dy < 0.01 {
+        return vec![to];
+    }
+    let across_first = (dx >= dy) != flip;
+    let corner = if across_first {
+        (to.0, from.1)
+    } else {
+        (from.0, to.1)
+    };
+    vec![corner, to]
+}
+
+/// The first leg, out of the start pin: a row pitch along the pin's own
+/// direction, so the wire leaves the body the way the pin does, then on
+/// along that axis before turning towards `to` — unless `flip`.
+pub(super) fn first_leg(
+    pin: (f64, f64),
+    out: (f64, f64),
+    to: (f64, f64),
+    flip: bool,
+) -> Vec<(f64, f64)> {
+    let stub = (pin.0 + out.0 * ROW_PITCH, pin.1 + out.1 * ROW_PITCH);
+    let along_x = out.0.abs() > out.1.abs();
+    let corner = if along_x != flip {
+        (to.0, stub.1)
+    } else {
+        (stub.0, to.1)
+    };
+    let mut points = vec![stub];
+    for point in [corner, to] {
+        if points
+            .last()
+            .is_none_or(|last| (last.0 - point.0).abs() > 0.01 || (last.1 - point.1).abs() > 0.01)
+        {
+            points.push(point);
+        }
+    }
+    points
+}
+
+/// The last leg, into a pin at `end` whose wire leaves along `end_out`:
+/// across to the column (or row) of the pin's stub, over to the stub, and in
+/// along the pin — the corners after `from`, the pin last.
+pub(super) fn last_leg(from: (f64, f64), end: (f64, f64), end_out: (f64, f64)) -> Vec<(f64, f64)> {
+    let stub = (end.0 + end_out.0 * ROW_PITCH, end.1 + end_out.1 * ROW_PITCH);
+    let along_x = end_out.0.abs() > end_out.1.abs();
+    // Reach the stub moving *across* the pin's axis, so the final turn into
+    // the pin is a clean corner rather than a line doubling back on itself.
+    let corner = if along_x {
+        (stub.0, from.1)
+    } else {
+        (from.0, stub.1)
+    };
+    vec![corner, stub, end]
+}
+
 /// What the pointer is doing between a press and its release.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Drag {
@@ -109,8 +292,13 @@ pub(super) enum Drag {
         from: (f64, f64),
         legs: Vec<WireStart>,
     },
-    /// A new wire being pulled from a pin toward another.
-    Wire { from: (usize, String) },
+    /// A new wire being pulled from a pin toward another, and where the
+    /// press was: released barely off it, the press was a click, and a click
+    /// on a pin starts a [`Drawing`] rather than asking for a drag.
+    Wire {
+        from: (usize, String),
+        press: (f64, f64),
+    },
     /// The rubber band.
     Box { start: (f64, f64) },
     /// One segment of a wire being pushed sideways.
@@ -1438,5 +1626,106 @@ mod tests {
         let tall = kit_art(style, 300.0, "ESP32-C3");
         assert!(short.contains(r#"y="188""#), "connector at 200-12: {short}");
         assert!(tall.contains(r#"y="288""#), "connector at 300-12: {tall}");
+    }
+
+    /// Every pair of neighbours on a route shares an axis, which is what
+    /// makes the drawn route and the stored wire the same polyline:
+    /// `orthogonalize` then has no corner of its own to add between them.
+    fn is_orthogonal(route: &[(f64, f64)]) -> bool {
+        route.windows(2).all(|pair| {
+            (pair[0].0 - pair[1].0).abs() < 0.01 || (pair[0].1 - pair[1].1).abs() < 0.01
+        })
+    }
+
+    /// The first leg leaves the pin the way the pin points — a row pitch
+    /// out, then on along that axis before it turns — so a wire drawn from
+    /// a pin on the right of a part does not cut back across the part.
+    #[test]
+    fn a_drawn_wire_leaves_its_pin_the_way_the_pin_points() {
+        let right = first_leg((0.0, 0.0), (1.0, 0.0), (50.0, 40.0), false);
+        assert_eq!(right, vec![(16.0, 0.0), (50.0, 0.0), (50.0, 40.0)]);
+        let down = first_leg((0.0, 0.0), (0.0, 1.0), (50.0, 40.0), false);
+        assert_eq!(down, vec![(0.0, 16.0), (0.0, 40.0), (50.0, 40.0)]);
+        // Space turns it the other way round, still out of the stub.
+        let flipped = first_leg((0.0, 0.0), (1.0, 0.0), (50.0, 40.0), true);
+        assert_eq!(flipped, vec![(16.0, 0.0), (16.0, 40.0), (50.0, 40.0)]);
+        // Straight on needs no corner.
+        assert_eq!(
+            first_leg((0.0, 0.0), (1.0, 0.0), (80.0, 0.0), false),
+            vec![(16.0, 0.0), (80.0, 0.0)]
+        );
+    }
+
+    /// After the first corner, each leg runs first the way the hand moved
+    /// furthest, so the wire grows the way it is being drawn.
+    #[test]
+    fn each_later_leg_runs_the_way_the_hand_moved_furthest() {
+        assert_eq!(
+            drawn_leg((0.0, 0.0), (50.0, 20.0), false),
+            vec![(50.0, 0.0), (50.0, 20.0)]
+        );
+        assert_eq!(
+            drawn_leg((0.0, 0.0), (20.0, 50.0), false),
+            vec![(0.0, 50.0), (20.0, 50.0)]
+        );
+        assert_eq!(
+            drawn_leg((0.0, 0.0), (50.0, 20.0), true),
+            vec![(0.0, 20.0), (50.0, 20.0)]
+        );
+        assert_eq!(drawn_leg((0.0, 0.0), (0.0, 30.0), false), vec![(0.0, 30.0)]);
+    }
+
+    /// The last leg meets its pin along the pin's own axis, from outside —
+    /// over to the pin's stub, then in — so the wire does not arrive through
+    /// the body of the part it ends on.
+    #[test]
+    fn a_drawn_wire_meets_its_end_pin_from_outside() {
+        // A pin whose wire leaves to the left, at (100, 50).
+        let leg = last_leg((0.0, 0.0), (100.0, 50.0), (-1.0, 0.0));
+        assert_eq!(leg, vec![(84.0, 0.0), (84.0, 50.0), (100.0, 50.0)]);
+        // And one whose wire leaves upwards, at (40, 100).
+        let leg = last_leg((0.0, 0.0), (40.0, 100.0), (0.0, -1.0));
+        assert_eq!(leg, vec![(0.0, 84.0), (40.0, 84.0), (40.0, 100.0)]);
+    }
+
+    /// Clicks lay corners, Backspace takes back a click rather than a corner,
+    /// and every route a drawing produces — to the pointer or into a pin —
+    /// is square, so what the preview shows is what the wire will draw.
+    #[test]
+    fn a_drawing_lays_a_click_at_a_time_and_takes_one_back_at_a_time() {
+        let (pin, out) = ((0.0, 0.0), (1.0, 0.0));
+        let mut draft = Drawing::new((1, "2".into()));
+        draft.place(pin, out, (64.0, 48.0));
+        let after_one = draft.placed.clone();
+        assert_eq!(after_one, vec![(16.0, 0.0), (64.0, 0.0), (64.0, 48.0)]);
+        draft.place(pin, out, (160.0, 96.0));
+        assert!(draft.placed.len() > after_one.len());
+        assert!(is_orthogonal(&draft.route_to(pin, out, (200.0, 10.0))));
+        assert!(is_orthogonal(&draft.route_into(
+            pin,
+            out,
+            (240.0, 128.0),
+            (-1.0, 0.0)
+        )));
+
+        assert!(draft.unplace(), "the second click comes back off");
+        assert_eq!(draft.placed, after_one, "and only the second click");
+        assert!(draft.unplace());
+        assert!(draft.placed.is_empty());
+        assert!(
+            !draft.unplace(),
+            "nothing left: the caller abandons the drawing"
+        );
+
+        // With nothing laid, the route into a pin still leaves the start pin
+        // along the pin's own axis — its stub folded into the straight run
+        // that follows it, since a corner that turns nothing is not kept.
+        let straight_in = draft.route_into(pin, out, (120.0, 64.0), (-1.0, 0.0));
+        assert!(is_orthogonal(&straight_in));
+        let (first, second) = (straight_in[0], straight_in[1]);
+        assert!(
+            (second.1 - first.1).abs() < 0.01 && second.0 > first.0,
+            "out of the pin to the right, the way it points: {straight_in:?}"
+        );
     }
 }

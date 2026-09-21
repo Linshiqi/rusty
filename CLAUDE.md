@@ -3091,13 +3091,34 @@ usty`) holds `location.toml`
   inside it.
 - **Both ends of a wire are a place to start it.** Any pin drags to any
   other — a part's to the devkit's, the devkit's to a part's, part to part
-  — through one `Drag::Wire { from }` and one `edit::connect` in
-  `pointerup`, because two gestures that agreed about what wiring means
-  only in prose would drift. `pin_under` works in sheet units so the reach
-  does not shrink with the zoom, and answers nothing when nothing is in
-  reach — a wire that landed on a pin forty pixels from the pointer would
-  be a connection nobody made. A pin to itself and a pair already joined
-  are refused as wires that mean nothing.
+  — through one `Drag::Wire` and one `edit::connect` in `pointerup`,
+  because two gestures that agreed about what wiring means only in prose
+  would drift. `pin_under` works in sheet units so the reach does not
+  shrink with the zoom, and answers nothing when nothing is in reach — a
+  wire that landed on a pin forty pixels from the pointer would be a
+  connection nobody made. A pin to itself and a pair already joined are
+  refused as wires that mean nothing.
+- **And a wire is drawn click by click, the way every schematic editor
+  draws one.** A click on a pin (a press that travels less than
+  `CLICK_SLOP`) starts a `Drawing`; each click on the sheet fixes a
+  corner; a click on a pin finishes it, and on a wire makes the T; the
+  route follows the pointer the whole way — fixed corners solid, the live
+  leg dashed — rather than appearing once the wire exists. Reported by the
+  user as the one way wiring works everywhere else, and it was: pressing
+  and holding across the sheet was the only gesture there was. Space turns
+  the live leg the other way round (KiCad's posture), Backspace takes back
+  one click and then the drawing, Escape or a right-click abandons it, and
+  a drag let go on bare sheet becomes the first corner rather than a wire
+  dropped on the floor. **A `Drawing` is not a `Drag`, because it outlives
+  every press**: the middle button still pans mid-wire and the wire
+  survives it. **While one is live the sheet is one click target** — an
+  overlay under the corner controls — so a part or a wire's grab handle
+  cannot take a press meant as a corner. **What is drawn is what is made**:
+  the corners are stored already square, stub out of the pin included, so
+  `orthogonalize` has nothing to add between two of them and the wire draws
+  the preview's polyline point for point (`connect_drawn`, and a test that
+  holds the two equal). With nothing laid between two pins the click-click
+  wire is the routed wire a drag makes, and the preview says so.
 - **Selection is a set, and the left button on empty sheet draws it.** A
   plain drag on the background is the rubber band (`Drag::Box`,
   `parts_in_box`, touching rather than enclosed); panning is the middle
