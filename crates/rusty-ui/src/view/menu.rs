@@ -154,33 +154,90 @@ fn Dropdown(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> impl IntoV
     }
 }
 
+/// How long the pointer rests before a level's open flyout changes. Long
+/// enough to cross a row on the way into the flyout that is open; short
+/// enough that resting on another row reads as pointing at it. The first
+/// flyout waits a moment too, so running the pointer down a menu does not
+/// flash open every flyout it passes.
+const OPEN_MS: u64 = 80;
+const SWITCH_MS: u64 = 200;
+const CLOSE_MS: u64 = 300;
+
 /// The rows of one dropdown level; submenus recurse into a flyout.
+///
+/// Which flyout of a level is open belongs to the level, and it follows the
+/// pointer on a delay: only where the pointer comes to rest decides. Each
+/// flyout used to open on its own row's enter and shut on its leave, which
+/// broke the one trip that matters once most of a menu is flyouts — from a
+/// row down and across into its flyout, the pointer crosses the row below,
+/// and that shut the flyout it was heading for.
 #[component]
 fn Rows(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> AnyView {
     let state = AppState::expect();
+    let open = RwSignal::new(None::<usize>);
+    // Every row the pointer enters bumps this, so a change it only passed
+    // through on its way is dropped when its timer fires — the hover card's
+    // rule.
+    let moved = StoredValue::new(0u64);
+    let settle = move |to: Option<usize>, after: u64| {
+        let generation = moved.get_value() + 1;
+        moved.set_value(generation);
+        set_timeout(
+            move || {
+                // A menu shut in the meantime has disposed of both.
+                if moved.try_get_value() == Some(generation) {
+                    let _ = open.try_set(to);
+                }
+            },
+            std::time::Duration::from_millis(after),
+        );
+    };
+    let stay = move || moved.update_value(|generation| *generation += 1);
 
     items
         .into_iter()
-        .map(|item| match item {
+        .enumerate()
+        .map(|(index, item)| match item {
                     Item::Separator => {
                         view! { <div class="my-1 h-px bg-line" /> }.into_any()
                     }
                     Item::Submenu { label, items } => {
-                        // Hover opens, like every menu bar; the flyout sits to
-                        // the right, aligned with its parent row.
-                        let hovering = RwSignal::new(false);
+                        let shown = Signal::derive(move || open.get() == Some(index));
+                        // The flyout is inside this box, so the pointer
+                        // arriving in it from a sibling row enters here too
+                        // and keeps it; one it is only passing asks for a
+                        // change that the next row overtakes.
+                        let enter = move |_: ev::MouseEvent| match open.get_untracked() {
+                            Some(at) if at == index => stay(),
+                            None => settle(Some(index), OPEN_MS),
+                            Some(_) => settle(Some(index), SWITCH_MS),
+                        };
+                        // A click opens it at once, for a hand that clicks.
+                        let pick = move |_: ev::MouseEvent| {
+                            stay();
+                            open.set(Some(index));
+                        };
+                        let row = move || {
+                            let base = "flex w-full cursor-default items-center gap-6 px-3 \
+                                        py-[3px] text-left text-callout transition-colors";
+                            // Lit while its flyout is open, as a native menu
+                            // keeps the row the pointer came from.
+                            if shown.get() {
+                                format!("{base} bg-selection text-rust")
+                            } else {
+                                format!("{base} text-label-2 hover:bg-selection hover:text-rust")
+                            }
+                        };
                         view! {
-                            <div
-                                class="relative"
-                                on:mouseenter=move |_| hovering.set(true)
-                                on:mouseleave=move |_| hovering.set(false)
-                            >
-                                <div class="flex w-full cursor-default items-center gap-6 px-3 py-[3px] text-left text-callout text-label-2 transition-colors hover:bg-selection hover:text-rust">
+                            <div class="relative" on:mouseenter=enter>
+                                <div class=row on:click=pick>
                                     <span class="flex-1 whitespace-nowrap">{label}</span>
                                     <span class="shrink-0 text-footnote text-label-3">"▸"</span>
                                 </div>
-                                <Show when=move || hovering.get()>
-                                    <div class="absolute top-0 left-full z-50 min-w-[280px] max-w-[440px] rounded-[8px] bg-raised py-1 shadow-2xl ring-1 ring-line-strong">
+                                // Raised by its own padding, so its first row
+                                // sits level with the row that opened it.
+                                <Show when=move || shown.get()>
+                                    <div class="absolute -top-1 left-full z-50 min-w-[280px] max-w-[440px] rounded-[8px] bg-raised py-1 shadow-2xl ring-1 ring-line-strong">
                                         <Rows items=items.clone() chrome=chrome close=close />
                                     </div>
                                 </Show>
@@ -190,10 +247,18 @@ fn Rows(items: Vec<Item>, chrome: Chrome, close: Callback<()>) -> AnyView {
                     }
                     Item::Entry { action, label, shortcut, requires } => {
                         let disabled = Signal::derive(move || !requires.met(state));
+                        let enter = move |_: ev::MouseEvent| {
+                            if open.get_untracked().is_some() {
+                                settle(None, CLOSE_MS);
+                            } else {
+                                stay();
+                            }
+                        };
                         view! {
                             <button
                                 type="button"
                                 disabled=move || disabled.get()
+                                on:mouseenter=enter
                                 on:click=move |_| {
                                     close.run(());
                                     command::run(action, state, chrome);

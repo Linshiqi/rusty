@@ -468,155 +468,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
             .map(|(_, chord)| chord.clone())
     };
 
-    // Shaped like VSCode's View menu: palette on top, appearance folded into
-    // a submenu, then the panels the sidebar shows — and only those. The
-    // wizard and the assistant have their own doors; listing them here made
-    // the menu a pile.
-    let mut view_items = vec![
-        entry(
-            Action::OpenPalette,
-            &t!("menu.view.palette"),
-            chord(Action::OpenPalette),
-        ),
-        project_entry(
-            Action::QuickOpen,
-            &t!("menu.view.quick-open"),
-            chord(Action::QuickOpen),
-        ),
-        project_entry(
-            Action::GoToLine,
-            &t!("menu.view.go-to-line"),
-            chord(Action::GoToLine),
-        ),
-        project_entry(
-            Action::GoToSymbolInFile,
-            &t!("menu.view.symbol-in-file"),
-            chord(Action::GoToSymbolInFile),
-        ),
-        project_entry(
-            Action::GoToSymbolInWorkspace,
-            &t!("menu.view.symbol-in-workspace"),
-            chord(Action::GoToSymbolInWorkspace),
-        ),
-        project_entry(
-            Action::FindReferences,
-            &t!("menu.view.references"),
-            chord(Action::FindReferences),
-        ),
-        project_entry(
-            Action::GoToImplementations,
-            &t!("menu.view.implementations"),
-            chord(Action::GoToImplementations),
-        ),
-        project_entry(
-            Action::GoToTypeDefinition,
-            &t!("menu.view.type-definition"),
-            chord(Action::GoToTypeDefinition),
-        ),
-        project_entry(
-            Action::ShowCallHierarchy,
-            &t!("menu.view.call-hierarchy"),
-            chord(Action::ShowCallHierarchy),
-        ),
-        project_entry(
-            Action::ExpandMacro,
-            &t!("menu.view.expand-macro"),
-            chord(Action::ExpandMacro),
-        ),
-        Item::Separator,
-        Item::Submenu {
-            label: t!("menu.view.appearance"),
-            items: vec![
-                entry(
-                    Action::SetTheme(Theme::System),
-                    &t!("menu.view.theme-system"),
-                    None,
-                ),
-                entry(
-                    Action::SetTheme(Theme::Light),
-                    &t!("menu.view.theme-light"),
-                    None,
-                ),
-                entry(
-                    Action::SetTheme(Theme::Dark),
-                    &t!("menu.view.theme-dark"),
-                    None,
-                ),
-                Item::Separator,
-                entry(Action::ResetLayout, &t!("menu.view.reset-layout"), None),
-            ],
-        },
-        Item::Separator,
-        // Above Appearance, not inside it. Both of these were folded into
-        // that submenu at first, where nobody found them — a modal editing
-        // switch is not a *look*, and navigation certainly is not. The
-        // symptom was exactly what you would expect: "I cannot turn Vim on",
-        // from someone looking in every reasonable place.
-        entry_when(
-            Requires::NavBack,
-            Action::NavBack,
-            &t!("menu.view.back"),
-            chord(Action::NavBack),
-        ),
-        entry_when(
-            Requires::NavForward,
-            Action::NavForward,
-            &t!("menu.view.forward"),
-            chord(Action::NavForward),
-        ),
-        project_entry(
-            Action::SwitchEditor,
-            &t!("menu.view.switch-editor"),
-            chord(Action::SwitchEditor),
-        ),
-        Item::Separator,
-        entry(Action::ToggleVim, &t!("menu.view.vim"), None),
-        Item::Separator,
-        project_entry(
-            Action::ToggleTree,
-            &t!("menu.view.toggle-tree"),
-            chord(Action::ToggleTree),
-        ),
-        project_entry(
-            Action::SplitEditor,
-            &t!("menu.view.split"),
-            chord(Action::SplitEditor),
-        ),
-        project_entry(
-            Action::ToggleBoard,
-            &t!("menu.view.board-beside"),
-            chord(Action::ToggleBoard),
-        ),
-        Item::Separator,
-    ];
-    for panel in panels::all().into_iter().filter(|p| !p.hidden) {
-        view_items.push(Item::Entry {
-            action: Action::ShowPanel(panel.id),
-            label: panel.title.to_string(),
-            shortcut: chord(Action::ShowPanel(panel.id)),
-            requires: if panel.needs_project {
-                Requires::Project
-            } else {
-                Requires::Nothing
-            },
-        });
-    }
-    view_items.extend([
-        Item::Separator,
-        entry(
-            Action::ToggleDock,
-            &t!("menu.view.panel-below"),
-            chord(Action::ToggleDock),
-        ),
-    ]);
-    // The dock's own list, so a tab added there appears here without anyone
-    // remembering to — the same reason the panels above come from the
-    // registry.
-    view_items.extend(
-        DockTab::ALL
-            .into_iter()
-            .map(|tab| entry(Action::ShowDock(tab), &tab.label(), None)),
-    );
+    let view_items = view_menu(&chord);
 
     vec![
         Menu {
@@ -735,6 +587,20 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                     &t!("menu.edit.search"),
                     chord(Action::ShowPanel("search")),
                 ),
+                Item::Separator,
+                // Where VSCode's Edit menu keeps the comment toggle. Both of
+                // these sat inside Project ▸ Add C interop, where a bulk edit
+                // had spliced them into the wrong list.
+                project_entry(
+                    Action::ToggleComment,
+                    &t!("menu.edit.comment"),
+                    chord(Action::ToggleComment),
+                ),
+                project_entry(
+                    Action::Rename,
+                    &t!("menu.edit.rename"),
+                    chord(Action::Rename),
+                ),
             ],
         },
         Menu {
@@ -784,17 +650,6 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 Item::Submenu {
                     label: t!("menu.project.c-interop"),
                     items: vec![
-                        project_entry(
-                            Action::ToggleComment,
-                            &t!("menu.project.comment"),
-                            chord(Action::ToggleComment),
-                        ),
-                        project_entry(
-                            Action::Rename,
-                            &t!("menu.project.rename"),
-                            chord(Action::Rename),
-                        ),
-                        Item::Separator,
                         project_entry(
                             Action::ScaffoldC("rust-calls-c"),
                             &t!("menu.project.rust-calls-c"),
@@ -870,6 +725,186 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 entry(Action::OpenUrl(RELEASES), &t!("menu.help.releases"), None),
             ],
         },
+    ]
+}
+
+/// The View menu, folded the way VSCode's is: the two finders on top, one
+/// flyout per kind of thing — where to go, how it looks, how the window is
+/// laid out, the panels on the rail and the ones below — and the one switch
+/// that is none of those. Flat, it was thirty-seven rows: a list to read
+/// rather than a menu to use.
+///
+/// A function of the shortcut lookup alone, so a test can hold it to every
+/// row it used to have.
+fn view_menu(chord: &dyn Fn(Action) -> Option<String>) -> Vec<Item> {
+    let go_to = vec![
+        project_entry(
+            Action::GoToLine,
+            &t!("menu.view.go-to-line"),
+            chord(Action::GoToLine),
+        ),
+        project_entry(
+            Action::GoToSymbolInFile,
+            &t!("menu.view.symbol-in-file"),
+            chord(Action::GoToSymbolInFile),
+        ),
+        project_entry(
+            Action::GoToSymbolInWorkspace,
+            &t!("menu.view.symbol-in-workspace"),
+            chord(Action::GoToSymbolInWorkspace),
+        ),
+        Item::Separator,
+        project_entry(
+            Action::FindReferences,
+            &t!("menu.view.references"),
+            chord(Action::FindReferences),
+        ),
+        project_entry(
+            Action::GoToImplementations,
+            &t!("menu.view.implementations"),
+            chord(Action::GoToImplementations),
+        ),
+        project_entry(
+            Action::GoToTypeDefinition,
+            &t!("menu.view.type-definition"),
+            chord(Action::GoToTypeDefinition),
+        ),
+        project_entry(
+            Action::ShowCallHierarchy,
+            &t!("menu.view.call-hierarchy"),
+            chord(Action::ShowCallHierarchy),
+        ),
+        project_entry(
+            Action::ExpandMacro,
+            &t!("menu.view.expand-macro"),
+            chord(Action::ExpandMacro),
+        ),
+        Item::Separator,
+        // Back and Forward where VSCode's Go menu keeps them. They were in
+        // Appearance once, beside the Vim switch, and nobody found either.
+        entry_when(
+            Requires::NavBack,
+            Action::NavBack,
+            &t!("menu.view.back"),
+            chord(Action::NavBack),
+        ),
+        entry_when(
+            Requires::NavForward,
+            Action::NavForward,
+            &t!("menu.view.forward"),
+            chord(Action::NavForward),
+        ),
+        project_entry(
+            Action::SwitchEditor,
+            &t!("menu.view.switch-editor"),
+            chord(Action::SwitchEditor),
+        ),
+    ];
+    let appearance = vec![
+        entry(
+            Action::SetTheme(Theme::System),
+            &t!("menu.view.theme-system"),
+            None,
+        ),
+        entry(
+            Action::SetTheme(Theme::Light),
+            &t!("menu.view.theme-light"),
+            None,
+        ),
+        entry(
+            Action::SetTheme(Theme::Dark),
+            &t!("menu.view.theme-dark"),
+            None,
+        ),
+    ];
+    let layout = vec![
+        project_entry(
+            Action::ToggleTree,
+            &t!("menu.view.toggle-tree"),
+            chord(Action::ToggleTree),
+        ),
+        project_entry(
+            Action::SplitEditor,
+            &t!("menu.view.split"),
+            chord(Action::SplitEditor),
+        ),
+        project_entry(
+            Action::ToggleBoard,
+            &t!("menu.view.board-beside"),
+            chord(Action::ToggleBoard),
+        ),
+        Item::Separator,
+        entry(Action::ResetLayout, &t!("menu.view.reset-layout"), None),
+    ];
+    // The rail's panels from the registry, as the rail itself reads them — a
+    // contributed panel appears here without anyone remembering to add it.
+    let rail: Vec<Item> = panels::all()
+        .into_iter()
+        .filter(|p| !p.hidden)
+        .map(|panel| Item::Entry {
+            action: Action::ShowPanel(panel.id),
+            label: panel.title.to_string(),
+            shortcut: chord(Action::ShowPanel(panel.id)),
+            requires: if panel.needs_project {
+                Requires::Project
+            } else {
+                Requires::Nothing
+            },
+        })
+        .collect();
+    // And the dock's own list, for the same reason.
+    let mut below = vec![
+        entry(
+            Action::ToggleDock,
+            &t!("menu.view.toggle-panel-below"),
+            chord(Action::ToggleDock),
+        ),
+        Item::Separator,
+    ];
+    below.extend(
+        DockTab::ALL
+            .into_iter()
+            .map(|tab| entry(Action::ShowDock(tab), &tab.label(), None)),
+    );
+
+    vec![
+        entry(
+            Action::OpenPalette,
+            &t!("menu.view.palette"),
+            chord(Action::OpenPalette),
+        ),
+        project_entry(
+            Action::QuickOpen,
+            &t!("menu.view.quick-open"),
+            chord(Action::QuickOpen),
+        ),
+        Item::Separator,
+        Item::Submenu {
+            label: t!("menu.view.go"),
+            items: go_to,
+        },
+        Item::Submenu {
+            label: t!("menu.view.appearance"),
+            items: appearance,
+        },
+        Item::Submenu {
+            label: t!("menu.view.layout"),
+            items: layout,
+        },
+        Item::Separator,
+        Item::Submenu {
+            label: t!("menu.view.panels"),
+            items: rail,
+        },
+        Item::Submenu {
+            label: t!("menu.view.panel-below"),
+            items: below,
+        },
+        Item::Separator,
+        // Not in a flyout, and not in Appearance where it was at first: a
+        // modal editing switch is not a look, and "I cannot turn Vim on" was
+        // the report of somebody who had looked in every reasonable place.
+        entry(Action::ToggleVim, &t!("menu.view.vim"), None),
     ]
 }
 
@@ -1162,6 +1197,73 @@ mod menu_tests {
             panic!("not an entry");
         };
         assert_eq!(requires, Requires::Nothing, "a plain row asks nothing");
+    }
+
+    fn actions(items: &[Item], out: &mut Vec<Action>) {
+        for item in items {
+            match item {
+                Item::Entry { action, .. } => out.push(*action),
+                Item::Submenu { items, .. } => actions(items, out),
+                Item::Separator => {}
+            }
+        }
+    }
+
+    /// Every row the flat View menu had is still in it, and its top level is
+    /// short enough to be a menu. Folding thirty-seven rows into flyouts is
+    /// only an improvement if nothing fell out on the way.
+    #[test]
+    fn the_view_menu_folds_without_losing_a_row() {
+        let menu = view_menu(&|_| None);
+        assert!(menu.len() <= 12, "{} rows at the top", menu.len());
+
+        let mut reached = Vec::new();
+        actions(&menu, &mut reached);
+        let mut wanted = vec![
+            Action::OpenPalette,
+            Action::QuickOpen,
+            Action::GoToLine,
+            Action::GoToSymbolInFile,
+            Action::GoToSymbolInWorkspace,
+            Action::FindReferences,
+            Action::GoToImplementations,
+            Action::GoToTypeDefinition,
+            Action::ShowCallHierarchy,
+            Action::ExpandMacro,
+            Action::NavBack,
+            Action::NavForward,
+            Action::SwitchEditor,
+            Action::ResetLayout,
+            Action::ToggleVim,
+            Action::ToggleTree,
+            Action::SplitEditor,
+            Action::ToggleBoard,
+            Action::ToggleDock,
+        ];
+        wanted.extend(Theme::ALL.into_iter().map(Action::SetTheme));
+        wanted.extend(
+            panels::all()
+                .into_iter()
+                .filter(|p| !p.hidden)
+                .map(|p| Action::ShowPanel(p.id)),
+        );
+        wanted.extend(DockTab::ALL.into_iter().map(Action::ShowDock));
+        for action in wanted {
+            assert!(reached.contains(&action), "{action:?} fell out of View");
+        }
+    }
+
+    /// The Vim switch stays on the top level. It was in a submenu once, and
+    /// the report was "I cannot turn Vim on" from somebody who had looked.
+    #[test]
+    fn the_vim_switch_is_not_in_a_flyout() {
+        assert!(view_menu(&|_| None).iter().any(|item| matches!(
+            item,
+            Item::Entry {
+                action: Action::ToggleVim,
+                ..
+            }
+        )),);
     }
 
     /// The View menu offers Back and Forward, and each says when it applies

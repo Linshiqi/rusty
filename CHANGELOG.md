@@ -9,6 +9,18 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.59
+
+**A shorter View menu.** Its thirty-seven rows are grouped into submenus —
+Go to, Appearance, Layout, Panels and Panel below — with the command
+palette, Go to file and the Vim switch still on top. A submenu waits a
+moment before switching to another, so moving the pointer diagonally into
+one no longer closes it on the way, and the row that opened it stays
+highlighted.
+
+**Comment and rename are in the Edit menu**, with their shortcuts. They had
+ended up inside Project ▸ Add C interop.
+
 ## v0.6.58
 
 **LEDs on the board glow as brightly as their current.** A lamp was either

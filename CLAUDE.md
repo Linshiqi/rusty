@@ -2347,6 +2347,24 @@ the nine dock tabs were once spelled out by hand and the other four were
 reachable from nowhere but a click on the strip. `Divider::ALL` and
 `Divider::default_size` play the same role for Reset layout.
 
+**A menu is read at a glance, so what it holds is folded into flyouts.**
+The View menu grew to thirty-seven rows, and the user's word for it was
+"too long". It is the two finders, five flyouts — Go to, Appearance,
+Layout, Panels, Panel below — and the Vim switch, which stays on the top
+level because it was in a submenu once and "I cannot turn Vim on" was the
+report. `view_menu` is a function of the shortcut lookup alone, so
+`the_view_menu_folds_without_losing_a_row` holds the folded menu to every
+action the flat one reached. **Which flyout of a level is open belongs to
+the level** (`menu.rs`, `Rows`) and follows the pointer on a delay — the
+hover card's generation rule: 80 ms before the first opens, 200 ms to
+switch, 300 ms to close on a plain row. Opened and shut by each row's own
+enter and leave, the trip that matters broke: from a row down and across
+into its flyout the pointer crosses the row below, which shut the flyout
+it was heading for. The flyout sits raised by its own padding so its first
+row is level with its parent, and the parent stays lit while it is open.
+Driven in the browser with events dispatched at chosen gaps, which is the
+only way to hold a timing to account.
+
 **The dock's strip carries the tabs that have something to say.** Problems,
 Output and Terminal (`DockTab::PINNED`) are always there; the others
 appear when something puts them there and go when the user hides them with
