@@ -179,14 +179,10 @@ impl Recipe {
                 ),
                 step(
                     "espup",
-                    &[
-                        "install",
-                        "--toolchain-version",
-                        crate::install::XTENSA_RUST_VERSION,
-                    ],
+                    &crate::install::ESPUP_INSTALL_ARGS,
                     "downloads the esp toolchain (Xtensa rustc + gcc) — a gigabyte-class \
-                     download, so this step takes minutes. The version is named because \
-                     espup's own \"latest\" lookup asks GitHub's API, which refuses \
+                     download, so this step takes minutes. The version is named, and its \
+                     check skipped, because both ask GitHub's API, which refuses \
                      unauthenticated calls through a busy proxy; `espup update` moves \
                      forward later",
                 ),
@@ -509,8 +505,8 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
             )
             .arg("version", &reported)
             .fix(format!(
-                "espup install --toolchain-version {}",
-                crate::install::XTENSA_RUST_VERSION
+                "espup {}",
+                crate::install::ESPUP_INSTALL_ARGS.join(" ")
             )),
         );
     }
@@ -914,10 +910,12 @@ mod tests {
         assert_eq!(
             install_command("espup"),
             Some(format!(
-                "cargo install espup --locked && espup install --toolchain-version {}",
+                "cargo install espup --locked && espup install --toolchain-version {} \
+                 --skip-version-parse",
                 crate::install::XTENSA_RUST_VERSION
             )),
-            "a two-step recipe shows both steps, the second with the pinned version",
+            "a two-step recipe shows both steps, the second with the pinned version \
+             and the check that would ask GitHub's API skipped",
         );
         assert_eq!(
             install_command("rust-analyzer").as_deref(),

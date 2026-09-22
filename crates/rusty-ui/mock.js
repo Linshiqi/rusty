@@ -263,7 +263,7 @@
       tools: [
         tool("rustup", "Manages Rust toolchains and targets", true, true, "https://rustup.rs"),
         tool("espflash", "Flashes and monitors over USB serial", false, true, "cargo install espflash --locked"),
-        tool("rust-analyzer", "Completion, diagnostics and navigation", true, true, "rustup component add rust-analyzer"),
+        tool("rust-analyzer", "Completion, diagnostics and navigation", true, true, "rustup component add rust-analyzer --toolchain stable"),
         tool("probe-rs", "Flashes and debugs through a JTAG/SWD probe", false, false, "cargo install probe-rs-tools --locked"),
         tool("qemu-system-riscv32", "Runs the firmware without a board", false, false, "downloaded by rusty"),
       ],
@@ -843,6 +843,15 @@
       current: "0.1.0", latest: "0.2.0", newer: true,
       url: "https://github.com/Linshiqi/rusty/releases/tag/v0.2.0", note: null,
     }),
+    // A download that streams its progress and is verified, and an apply
+    // that never answers — on Windows the process ends inside it.
+    // `__mock.applied` counts restarts, so a driven test can assert that a
+    // refused one did not happen.
+    download_update: (a) => new Promise((resolve) => {
+      a.onProgress.send({ received: 50, total: 100 });
+      setTimeout(() => { a.onProgress.send({ received: 100, total: 100 }); resolve(true); }, 300);
+    }),
+    apply_update: () => { window.__mock.applied = (window.__mock.applied || 0) + 1; return new Promise(() => {}); },
     open_url: () => null,
     terminal_shell_info: () => ({
       active: window.__mock.shellPref === "system" ? "pwsh.exe" : "rusty's built-in shell",

@@ -1292,6 +1292,13 @@ cancel = "取消"
 restart = "立即重启"
 close = "关闭"
 releases = "打开发布页"
+restart-while-running = "{what}还在运行。现在重启会把它中途打断——安装被打断可能让工具链坏掉、什么都编译不了。仍要重启吗？"
+running-install = "{tool} 的安装"
+running-build = "构建"
+running-test = "测试"
+running-flash = "烧录"
+running-command = "命令“{command}”"
+running-something = "一条命令"
 
 # The dock's Calls tab: who calls a function and what it calls.
 [calls]

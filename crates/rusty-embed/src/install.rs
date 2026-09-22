@@ -409,6 +409,21 @@ fn codelldb_download_into(tools: &Path) -> Result<ToolDownload> {
 /// deliberately, and `espup update` moves a machine forward on its own.
 pub const XTENSA_RUST_VERSION: &str = "1.97.0.0";
 
+/// What `espup install` is given: the pinned version, and
+/// `--skip-version-parse`. Naming the version was meant to keep espup off
+/// GitHub's API, and espup 0.17 asks it anyway: it checks a named version
+/// against the list of esp-rs/rust-build's releases, through the API, before
+/// it downloads a byte. Behind a busy proxy that list answers 403 and the
+/// install stops at its first step — measured on this machine, and a minute
+/// later the same command with the flag installed completely, every archive
+/// a release download.
+pub const ESPUP_INSTALL_ARGS: [&str; 4] = [
+    "install",
+    "--toolchain-version",
+    XTENSA_RUST_VERSION,
+    "--skip-version-parse",
+];
+
 /// How many times a route that was delivering is asked for the rest before
 /// the ladder moves on. A link that dies every few minutes still finishes a
 /// large archive within this; one that dies at once hands over.

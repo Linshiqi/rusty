@@ -1,6 +1,8 @@
 //! Preferences that outlive the window: updates, modal editing, shortcuts.
 
 use leptos::prelude::*;
+use leptos::task::spawn_local;
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -145,22 +147,63 @@ pub fn cancel_update(state: AppState) {
 /// Install what was downloaded and restart into it. On Windows the process
 /// ends inside the call, so the answer never arrives; a failure puts the
 /// download back on offer.
+///
+/// **It asks first while something is running that would not stop by
+/// itself.** The restart ends this process and what it started goes with
+/// it, and an install cut off halfway is how a toolchain loses its
+/// compiler: a restart during an espup run left one machine with a stable
+/// toolchain whose components had been removed and an esp toolchain with
+/// no rustc, so every cargo command failed until both were reinstalled. A
+/// monitor or a simulation is only stopped, as its own Stop would.
 pub fn apply_update(state: AppState) {
     if state.app.update_stage.get_untracked() != UpdateStage::Ready {
         return;
     }
-    state.app.update_stage.set(UpdateStage::Applying);
-    track(
-        state,
-        async move {
-            let applied = ipc::get::<()>(cmd::workbench::UPDATE_APPLY).await;
-            if applied.is_err() {
-                state.app.update_stage.set(UpdateStage::Ready);
-            }
-            applied
-        },
-        move |()| {},
-    );
+    let busy = running_work(state);
+    spawn_local(async move {
+        if let Some(what) = busy
+            && !ipc::confirm(&t!("update.restart-while-running", what = what)).await
+        {
+            return;
+        }
+        state.app.update_stage.set(UpdateStage::Applying);
+        track(
+            state,
+            async move {
+                let applied = ipc::get::<()>(cmd::workbench::UPDATE_APPLY).await;
+                if applied.is_err() {
+                    state.app.update_stage.set(UpdateStage::Ready);
+                }
+                applied
+            },
+            move |()| {},
+        );
+    });
+}
+
+/// What is running that a restart would cut off halfway, in words for the
+/// question — or nothing, when all that runs is open-ended.
+fn running_work(state: AppState) -> Option<String> {
+    use crate::activity::Kind;
+    if let Some(tool) = state.setup.busy.get_untracked() {
+        return Some(t!("update.running-install", tool = tool));
+    }
+    if !state.app.session_running.get_untracked() {
+        return None;
+    }
+    let Some(activity) = state.app.activity.get_untracked() else {
+        return Some(t!("update.running-something"));
+    };
+    match activity.kind {
+        kind if kind.open_ended() => None,
+        Kind::Build => Some(t!("update.running-build")),
+        Kind::Test => Some(t!("update.running-test")),
+        Kind::Flash => Some(t!("update.running-flash")),
+        _ => Some(match activity.target {
+            Some(command) => t!("update.running-command", command = command),
+            None => t!("update.running-something"),
+        }),
+    }
 }
 
 /// Stop prompting about the version on offer, and close the sheet.

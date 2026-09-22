@@ -1920,7 +1920,14 @@ install that is a workbench and one that is a list of things to go and find.
   address behind a proxy has spent its sixty unauthenticated calls an hour —
   seen on the first run, the one run that has to work. The archives come
   from release downloads, which have no quota. The setup step reads the
-  command off espup's tool row, so the pin is spelled once.
+  command off espup's tool row, so the pin is spelled once. **And the pin
+  alone was not enough**: espup 0.17 checks a named version against
+  esp-rs/rust-build's release list — through the same API — before it
+  downloads a byte, and stopped at `GitHub API returned status code: 403`
+  on a machine behind a proxy. `--skip-version-parse` skips the check, and
+  the same install then completed a minute later. `install::ESPUP_INSTALL_ARGS`
+  carries both, and the Xtensa problem's fix text is joined from it, where
+  it was a second spelling of the command.
 - **Downloads resume.** Each attempt is bounded (fifteen minutes), and a
   slow link carries a 420 MB archive only a piece at a time; the first
   version restarted from zero on every route and never finished. `download`
@@ -2115,6 +2122,16 @@ it needs no capability.
   Linux it replaces the bundle and returns, and `app.restart()` is what picks
   the new one up. So `apply_update`'s answer never arrives on Windows, and
   the frontend treats that as normal.
+- **Restart asks first while something runs that would not stop by itself**
+  (`controller::apply_update`, `running_work`): an install, a build, the
+  tests, a flash or a dock command, named in the question. The restart ends
+  the process and what it started goes with it, and an install cut off
+  halfway is how a toolchain loses its compiler — a restart during an espup
+  run left a user's `stable` with every component removed and their `esp`
+  with no `rustc.exe` (the next file, `rustc_driver.dll`, was loaded by
+  something and could not be deleted, which is where the removal stopped),
+  so every cargo command failed until both were reinstalled. A monitor or a
+  simulation is only stopped, as its own Stop would.
 - **The whole flow is testable without a release.** Debug builds honour
   `RUSTY_UPDATE_FEED=<url>` as the endpoint (the plugin allows plain http in
   debug builds only, with a warning), and a fake installer signed with the
@@ -3490,6 +3507,19 @@ usty`) holds `location.toml`
   stripped and `CREATE_NO_WINDOW` set. rusty-core cannot depend on it, so
   `workspace.rs` carries its own three-line `quiet()` for `cargo metadata`
   and `rustc -vV` — guppy's builder gave the GUI a console window per open.
+  **The same goes for installing a component**: the language server's
+  "not installed" answer offered `rustup component add rust-analyzer`, its
+  own copy of the recipe without `--toolchain stable`, and run in an esp
+  project rustup aimed it at `esp`, which cannot take a component — the
+  button did nothing, twice. It is `toolchain::install_command` now, the
+  one the Environment page shows.
+- **An esp toolchain without a cargo of its own borrows stable's.** espup's
+  1.95 toolchain shipped no `cargo.exe`, so rustup ran the stable
+  toolchain's through its fallback (`~/.rustup/fallback`) — and with stable
+  broken, every cargo command in every esp project died with `unable to
+  hard link fallback exe … (os error 3)`, which names neither toolchain.
+  1.97.0.0 carries its own cargo. When an esp build fails before compiling
+  anything, check `rustc +stable --version` as well as `+esp`.
 - **`Channel::send` failing means the WebView is gone, nothing less.** A JS
   side that drops its handler tells Rust nothing, so every "stop when the
   user leaves the panel" loop keyed on `send().is_err()` ran until the

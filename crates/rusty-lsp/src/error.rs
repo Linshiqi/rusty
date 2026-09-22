@@ -9,9 +9,9 @@ pub enum Error {
     /// Nothing to spawn. The message names the fix because the symptom —
     /// no squiggles, no completion — does not.
     #[error(
-        "rust-analyzer is not installed. `rustup component add rust-analyzer` \
-         puts it in the stable toolchain, which is the one rusty uses even for \
-         projects pinned to another."
+        "rust-analyzer is not installed. `rustup component add rust-analyzer \
+         --toolchain stable` puts it in the stable toolchain, which is the one \
+         rusty uses even for projects pinned to another."
     )]
     NotFound,
 

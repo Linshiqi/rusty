@@ -68,9 +68,14 @@ pub async fn lsp_start(
     let (client, events) = match spawned {
         Ok(pair) => pair,
         Err(e) => {
+            // The toolchain table's recipe, not a copy of it: the copy here
+            // had no `--toolchain stable`, and rustup answers for the
+            // directory it runs in, so in an esp project it tried to add the
+            // component to `esp` — which cannot take one — and the button
+            // did nothing twice.
             let _ = on_event.send(LspEvent::Unavailable {
                 message: e.to_string(),
-                install: Some("rustup component add rust-analyzer".into()),
+                install: rusty_embed::toolchain::install_command("rust-analyzer"),
             });
             return Ok(());
         }

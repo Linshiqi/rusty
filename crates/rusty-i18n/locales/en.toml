@@ -1366,6 +1366,13 @@ cancel = "Cancel"
 restart = "Restart now"
 close = "Close"
 releases = "Open the releases page"
+restart-while-running = "{what} is still running. Restarting now stops it halfway — and an install cut off in the middle can leave a toolchain that builds nothing. Restart anyway?"
+running-install = "The install of {tool}"
+running-build = "A build"
+running-test = "The tests"
+running-flash = "A flash"
+running-command = "The command “{command}”"
+running-something = "A command"
 
 # The dock's Calls tab: who calls a function and what it calls.
 [calls]

@@ -9,6 +9,25 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.60
+
+**Restarting to update now asks first while something is still running.**
+If an install, a build, the tests, a flash or another command is running
+when you press Restart, rusty says what it is and asks before stopping it.
+An install cut off halfway can leave a Rust toolchain unable to build
+anything — which is what happened on one machine when the app restarted in
+the middle of installing the Xtensa toolchain.
+
+**Installing rust-analyzer from an ESP project works.** The button that
+appears when rust-analyzer is missing now installs it into the stable
+toolchain, which is the one rusty uses. Pressed in an ESP project, it used
+to aim at the project's own Xtensa toolchain and do nothing.
+
+**Installing the Xtensa toolchain works behind a busy proxy.** rusty's
+install step now skips espup's version check, which asks GitHub's API and
+is refused once a shared network address has used its hourly quota. The
+downloads themselves were never affected.
+
 ## v0.6.59
 
 **A shorter View menu.** Its thirty-seven rows are grouped into submenus —
