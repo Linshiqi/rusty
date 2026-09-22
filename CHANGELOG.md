@@ -9,6 +9,16 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.61
+
+**Where a wire branches off another, the sheet draws a dot.** A branch
+dropped on a wire runs along it to the pin, and the point where it leaves
+was drawn with no dot — the same picture as two wires crossing, which mean
+opposite things. Every such fork has a dot now, including where several
+wires out of one pin share a line and then go their own ways. Lines of two
+different nets that happen to touch still get none, since they are not
+connected.
+
 ## v0.6.60
 
 **Restarting to update now asks first while something is still running.**

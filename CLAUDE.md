@@ -4184,7 +4184,19 @@ way a reader loses the thread:
   paths, not the net model, because what a reader needs marked is what is
   drawn: two ends at a pin is a dot (the pin is a conductor too — KiCad's
   three-things rule) and so is an end landing on another wire's line, which
-  a branch makes and which the pin-only rule drew nothing for.
+  a branch makes and which the pin-only rule drew nothing for. **And so is a
+  fork that is nobody's end.** A branch is a wire to the trunk's pin laid
+  along the trunk (`branch_route`), so where it leaves the trunk is one of
+  its *bends*, and a rule that read only ends drew that T with no dot —
+  reported with a red box round it, beside a crossing that looked the same.
+  A bend is a fork when the lines through it leave in three directions or
+  more (`arms_at`, a bit per direction): the corner two wires share turns
+  and gets none, and a crossing is nobody's bend. Three unrouted wires out
+  of one pin share its lane and part where the first turns off, which is a
+  fork too. **All of it between wires of one net only** — wires whose drawn
+  ends meet, directly or through each other — because a line of another net
+  over the same point is a drawing fault, and a dot there would make it a
+  connection the board does not have.
 - **The ghost under the pointer is the route, computed by the code that
   will make it.** `edit::connection` is `connect` less the push, so the
   preview cannot promise a shape the connection does not deliver — a

@@ -736,15 +736,24 @@ fn snap(value: f64) -> f64 {
     (value / SNAP).round() * SNAP
 }
 
-/// Where a dot belongs: a point two or more wire ends share, or where one
-/// wire's end sits on another's line.
+/// Where a dot belongs: a point two or more wire ends share, where one
+/// wire's end sits on another's line, or where a wire leaves one it ran
+/// along.
 ///
 /// Two wires crossing and two wires joining are the same picture without
 /// it, and which one it is decides what the firmware reads. Two ends at a
 /// pin is a dot because the pin is a conductor too — KiCad's rule, three
-/// things meeting — and a wire ending on another's line is the T a branch
-/// makes. Computed from the drawn paths rather than the net model, because
-/// what a reader needs marked is what is drawn.
+/// things meeting — and a wire ending on another's line is a T. So is a
+/// branch: dropped on a wire, it is a wire to that wire's pin laid along
+/// it (`branch_route`), so where it forks off is one of its *bends*, and a
+/// rule that read only the ends drew that T as a crossing. A bend is a fork
+/// where the lines through it leave in three directions or more — a corner
+/// two wires share leaves in two, and a crossing is nobody's bend. All of
+/// it only between wires that meet at a pin, directly or through each
+/// other, because that is the only way two wires join on this sheet: a
+/// line of another net over the same point is not joined to it, and a dot
+/// there would say it was. Computed from the drawn paths rather than the
+/// net model, because what a reader needs marked is what is drawn.
 pub(super) fn junctions(parts: &[EditPart], wires: &[Wire]) -> Vec<(f64, f64)> {
     let paths: Vec<Vec<(f64, f64)>> = wires
         .iter()
@@ -753,35 +762,115 @@ pub(super) fn junctions(parts: &[EditPart], wires: &[Wire]) -> Vec<(f64, f64)> {
             Some(super::geometry::wire_path(&ends, &wire.bends))
         })
         .collect();
-    let same = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 0.6 && (a.1 - b.1).abs() < 0.6;
+    fn ends_of(path: &[(f64, f64)]) -> [Option<(f64, f64)>; 2] {
+        [path.first().copied(), path.last().copied()]
+    }
+
+    // Which wires meet, read off where their drawn ends are, so a pin
+    // spelled by its name on one wire and by its number on the next is
+    // still one pin.
+    let mut group: Vec<usize> = (0..paths.len()).collect();
+    fn root(group: &mut [usize], mut at: usize) -> usize {
+        while group[at] != at {
+            group[at] = group[group[at]];
+            at = group[at];
+        }
+        at
+    }
+    for a in 0..paths.len() {
+        for b in a + 1..paths.len() {
+            let meet = ends_of(&paths[a]).into_iter().flatten().any(|one| {
+                ends_of(&paths[b])
+                    .into_iter()
+                    .flatten()
+                    .any(|two| same_point(one, two))
+            });
+            if meet {
+                let (ra, rb) = (root(&mut group, a), root(&mut group, b));
+                group[ra] = rb;
+            }
+        }
+    }
+    let net: Vec<usize> = (0..paths.len()).map(|at| root(&mut group, at)).collect();
+    // The other wires of a wire's own net: the only ones it can join.
+    let others = |index: usize| {
+        let own = net[index];
+        paths
+            .iter()
+            .zip(&net)
+            .enumerate()
+            .filter(move |&(other, (_, &group))| other != index && group == own)
+            .map(|(_, (path, _))| path)
+    };
 
     let mut dots: Vec<(f64, f64)> = Vec::new();
+    let mut mark = |at: (f64, f64)| {
+        if !dots.iter().any(|d| same_point(*d, at)) {
+            dots.push(at);
+        }
+    };
     for (index, path) in paths.iter().enumerate() {
-        for end in [path.first(), path.last()].into_iter().flatten() {
-            let mut ends_here = 1;
-            let mut passes = false;
-            for (other, theirs) in paths.iter().enumerate() {
-                if other == index {
-                    continue;
-                }
-                for one in [theirs.first(), theirs.last()].into_iter().flatten() {
-                    if same(*one, *end) {
-                        ends_here += 1;
-                    }
-                }
-                passes = passes
+        for end in ends_of(path).into_iter().flatten() {
+            let joined = others(index).any(|theirs| {
+                ends_of(theirs)
+                    .into_iter()
+                    .flatten()
+                    .any(|one| same_point(one, end))
                     || theirs.windows(2).any(|pair| {
-                        on_segment(*end, pair[0], pair[1])
-                            && !same(pair[0], *end)
-                            && !same(pair[1], *end)
-                    });
+                        on_segment(end, pair[0], pair[1])
+                            && !same_point(pair[0], end)
+                            && !same_point(pair[1], end)
+                    })
+            });
+            if joined {
+                mark(end);
             }
-            if (ends_here >= 2 || passes) && !dots.iter().any(|d| same(*d, *end)) {
-                dots.push(*end);
+        }
+        for &bend in path.iter().skip(1).take(path.len().saturating_sub(2)) {
+            let mine = arms_at(bend, path);
+            let forks = others(index).any(|theirs| {
+                let arms = arms_at(bend, theirs);
+                arms != 0 && (mine | arms).count_ones() >= 3
+            });
+            if forks {
+                mark(bend);
             }
         }
     }
     dots
+}
+
+fn same_point(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() < 0.6 && (a.1 - b.1).abs() < 0.6
+}
+
+/// The directions a drawn path leaves a point in, one bit each for left,
+/// right, up and down, and none when it does not reach the point.
+fn arms_at(point: (f64, f64), path: &[(f64, f64)]) -> u8 {
+    let toward = |from: (f64, f64), to: (f64, f64)| -> u8 {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        match (dx.abs() >= dy.abs(), dx < 0.0, dy < 0.0) {
+            (true, true, _) => 1,
+            (true, false, _) => 2,
+            (false, _, true) => 4,
+            (false, _, false) => 8,
+        }
+    };
+    let mut arms = 0;
+    for pair in path.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if same_point(a, b) {
+            continue;
+        }
+        if same_point(point, a) {
+            arms |= toward(a, b);
+        } else if same_point(point, b) {
+            arms |= toward(b, a);
+        } else if on_segment(point, a, b) {
+            arms |= toward(point, a) | toward(point, b);
+        }
+    }
+    arms
 }
 
 /// Whether a point lies on a horizontal or vertical segment.
@@ -1031,23 +1120,88 @@ mod tests {
             fake("R2", 140.0, 90.0),
             fake("R3", 260.0, 200.0),
         ];
-        // Three wires at U1's pin 1.
+        // Three wires at U1's pin 1. Unrouted, they leave it down one lane
+        // and part where the first two turn off it, one up to R1 and one
+        // down to R2 — which is a fork, and marked as one.
         let wires = vec![
             wire("U1.1", "R1.1"),
             wire("U1.1", "R2.1"),
             wire("U1.1", "R3.1"),
         ];
+        let u = pin_at(&parts, "U1.1");
+        let parting = (pin_at(&parts, "R1.1").0 - ROW_PITCH, u.1);
         let dots = junctions(&parts, &wires);
-        assert_eq!(dots.len(), 1, "{dots:?}");
+        let has = |dots: &[(f64, f64)], at| dots.iter().any(|p| same_point(*p, at));
+        assert!(has(&dots, u), "the pin: {dots:?}");
+        assert!(has(&dots, parting), "where they part: {dots:?}");
+        assert_eq!(dots.len(), 2, "{dots:?}");
 
-        // Two wires that merely cross: no dot anywhere.
+        // Two wires that merely cross, at that same point: no dot anywhere.
         let wires = vec![wire("R1.1", "R2.1"), wire("U1.1", "R3.1")];
         assert!(junctions(&parts, &wires).is_empty());
 
         // And two wires meeting at one pin is a dot: the pin is a conductor
         // too, so three things meet there.
         let wires = vec![wire("U1.1", "R1.1"), wire("U1.1", "R2.1")];
-        assert_eq!(junctions(&parts, &wires).len(), 1);
+        let dots = junctions(&parts, &wires);
+        assert!(has(&dots, u), "the pin: {dots:?}");
+        assert!(has(&dots, parting), "where they part: {dots:?}");
+        assert_eq!(dots.len(), 2, "{dots:?}");
+    }
+
+    /// A branch runs along the wire it was dropped on to that wire's pin, so
+    /// where it forks off is one of its bends, not an end — and that fork
+    /// is a join, drawn with no dot until a user put a red box round it
+    /// beside a crossing that looked the same. The corner the two wires
+    /// share turns rather than forks, and gets none.
+    #[test]
+    fn a_branch_leaving_the_wire_it_ran_along_is_a_join() {
+        let parts = vec![
+            fake("U1", 0.0, 0.0),
+            fake("SW1", 150.0, 0.0),
+            fake("D1", 300.0, 0.0),
+        ];
+        let (u, sw, d) = (
+            pin_at(&parts, "U1.1"),
+            pin_at(&parts, "SW1.1"),
+            pin_at(&parts, "D1.1"),
+        );
+        let bottom = 200.0;
+        // Down from U1, along the bottom, up to D1 — and the branch, down
+        // from SW1 onto that line and along it to U1.
+        let mut trunk = wire("U1.1", "D1.1");
+        trunk.bends = vec![(u.0, bottom), (d.0, bottom)];
+        let mut branch = wire("SW1.1", "U1.1");
+        branch.bends = vec![(sw.0, bottom), (u.0, bottom)];
+
+        let dots = junctions(&parts, &[trunk, branch]);
+        let has = |at: (f64, f64)| dots.iter().any(|p| same_point(*p, at));
+        assert!(has((sw.0, bottom)), "the fork: {dots:?}");
+        assert!(has(u), "the pin both end at: {dots:?}");
+        assert!(!has((u.0, bottom)), "not the corner they share: {dots:?}");
+        assert_eq!(dots.len(), 2, "{dots:?}");
+    }
+
+    /// The same shape between two nets is a line laid over another, which is
+    /// a drawing fault — and a dot on it would make it a connection that the
+    /// board does not have.
+    #[test]
+    fn a_corner_on_another_nets_line_is_no_join() {
+        let parts = vec![
+            fake("U1", 0.0, 0.0),
+            fake("X1", 150.0, 0.0),
+            fake("D1", 300.0, 0.0),
+        ];
+        let (u, d) = (pin_at(&parts, "U1.1"), pin_at(&parts, "D1.1"));
+        let (x1, x2) = (pin_at(&parts, "X1.1"), pin_at(&parts, "X1.2"));
+        let bottom = 200.0;
+        let mut trunk = wire("U1.1", "D1.1");
+        trunk.bends = vec![(u.0, bottom), (d.0, bottom)];
+        // X1's two pins joined by a loop whose corners sit on the trunk.
+        let mut stranger = wire("X1.1", "X1.2");
+        stranger.bends = vec![(x1.0, bottom), (x2.0, bottom)];
+        let dots = junctions(&parts, &[trunk, stranger]);
+        assert!(dots.is_empty(), "{dots:?}");
     }
 
     /// Arranging puts the parts in the order of the pins they reach, which
@@ -1203,5 +1357,10 @@ mod tests {
             to: PinRef::parse(to).unwrap(),
             bends: Vec::new(),
         }
+    }
+
+    /// Where a pin is on the sheet, as a wire to it would start.
+    fn pin_at(parts: &[EditPart], pin: &str) -> (f64, f64) {
+        wire_ends(parts, &wire(pin, pin)).expect("a pin on the sheet")[0].0
     }
 }
