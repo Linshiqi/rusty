@@ -2027,12 +2027,18 @@ pub struct Sim {
     /// names.
     pub gpio: RwSignal<HashMap<u8, bool>>,
     /// Duty cycles for the board view, from `[rusty:pwm]` — the analogue
-    /// half of [`Self::gpio`], and what a motor turns on.
+    /// half of [`Self::gpio`], and what a motor turns on and a lamp dims by.
     ///
     /// **Absent is not zero.** A pin with no entry has never been reported,
     /// and a motor on it says so rather than showing a commanded stop; a pin
     /// mapped to `0.0` was told to stop. The two look the same on a dial and
     /// mean opposite things when a motor will not start.
+    ///
+    /// **A pin is in this map or in `gpio`, never both**, and the newer
+    /// report decides which. A pad the LED controller drives has no level —
+    /// a level left from before it took the pin would light a lamp at full
+    /// that the firmware is dimming — and one given back to GPIO has no duty,
+    /// or a lamp would stay at the last duty whatever the pin did next.
     pub pwm: RwSignal<HashMap<u8, rusty_embed::Duty>>,
     /// Sensors the firmware has declared it wants fed, newest wins by name.
     ///

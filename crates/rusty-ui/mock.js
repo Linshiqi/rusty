@@ -94,6 +94,20 @@
         { kind: "rectangle", start: [-5.08, 3.81], end: [5.08, -3.81], width: 0.254, fill: "background" },
       ],
     },
+    // A lens that mixes three duties, so a colour set by PWM can be watched:
+    // its pins where the shipped library puts them.
+    {
+      library: "rusty", name: "RGB_LED", reference: "D", value: "RGB",
+      pins: [
+        { number: "1", name: "R", kind: "passive", at: [-7.62, 2.54], length: 2.54, angle: 0 },
+        { number: "2", name: "G", kind: "passive", at: [-7.62, 0], length: 2.54, angle: 0 },
+        { number: "3", name: "B", kind: "passive", at: [-7.62, -2.54], length: 2.54, angle: 0 },
+        { number: "4", name: "COM", kind: "passive", at: [7.62, 0], length: 2.54, angle: 180 },
+      ],
+      graphics: [
+        { kind: "rectangle", start: [-5.08, 3.81], end: [5.08, -3.81], width: 0.254, fill: "background" },
+      ],
+    },
   ];
 
   const RS = [
@@ -340,7 +354,7 @@
       window.__mock.opened = true;
       return { project: projectOf(a.chip) };
     },
-    reset_playground: () => { window.__mock.saved = {}; window.__mock.resets += 1; return null; },
+    reset_playground: () => { window.__mock.saved = {}; window.__mock.savedBoard = null; window.__mock.resets += 1; return null; },
     keep_playground: (a) => { window.__mock.kept = a; return a.dest; },
     project_status: () => projectOf(window.__mock.playground),
     // Nothing held before anything is opened, as the backend answers at a
@@ -477,10 +491,16 @@
       window.__mock.replaced = a;
       return { changed, replaced: changed.length * 2, skipped, error: null };
     },
+    // The sheet as it was last saved, like `.rusty/sim.toml` is: Run saves
+    // the board and plans again, and a plan that answered with the example
+    // every time put a resistor changed to 1k straight back to 220. The
+    // symbols come from the library on the way back, as the planner's do —
+    // what is saved is the file, and the file carries none.
     plan_simulation: () => window.__mock.playground ? ({
       supported: true, reason: null, missing: [],
       steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
-      board: playgroundBoard(window.__mock.playground),
+      board: (window.__mock.savedBoard && window.__mock.savedBoard.chip === window.__mock.playground)
+        ? { ...window.__mock.savedBoard, symbols: MOCK_SYMBOLS } : playgroundBoard(window.__mock.playground),
       library: MOCK_SYMBOLS,
       parts: [],
       debug: { gdbCommand: "echo mock-gdb", elf: "target/x/playground", port: 1234 },
@@ -552,15 +572,25 @@
       // line is what starts the in-app debugger.
       if (a.debug) setTimeout(() => a.onLine.send({ stream: "stdout", text: "[rusty:debug] frozen at reset", level: null }), 40);
       // A playground's firmware says hello and blinks its LED, so the board
-      // beside the code has something to show.
+      // beside the code has something to show. With `__mock.breathe` set it
+      // breathes the LED instead, through the LED controller's report — the
+      // line rusty's QEMU writes for LEDC, carrier and all — so the glow a
+      // duty draws can be watched without an emulator.
       if (m.playground && !a.debug) {
         const pin = m.playground === "esp32" ? 2 : 0;
         let on = false;
+        let step = 0;
         a.onLine.send({ stream: "stdout", text: "Hello from the playground!", level: null });
         m.simTimer = setInterval(() => {
+          if (m.breathe) {
+            step = (step + 1) % 60;
+            const duty = (1 - Math.cos((step / 60) * 2 * Math.PI)) / 2;
+            a.onLine.send({ stream: "stdout", text: `[rusty:pwm@${step * 50000}] ${pin}=${duty.toFixed(4)}@24000.0`, level: null });
+            return;
+          }
           on = !on;
           a.onLine.send({ stream: "stdout", text: `[rusty:gpio] ${pin}=${on ? 1 : 0}`, level: null });
-        }, 400);
+        }, m.breathe ? 50 : 400);
       }
       // QEMU runs until something stops it, so this resolves only when
       // something does — the Stop button, or the debugger going away.

@@ -14,6 +14,9 @@ pub mod model;
 // The plant is arithmetic and no IO, like `protocol` — the frontend runs
 // it on a timer, so it compiles to wasm with the model types.
 pub mod nets;
+// The sheet averaged over a PWM period — the rules and the solver read at
+// each moment of it. Wasm-safe with both: the board view is its reader.
+pub mod period;
 pub mod plant;
 pub mod protocol;
 // A sensor's registers from the readings a slider sets — the backend encodes

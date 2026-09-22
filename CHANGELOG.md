@@ -9,6 +9,22 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.58
+
+**LEDs on the board glow as brightly as their current.** A lamp was either
+on or off. It is now brighter with a smaller resistor and dimmer with a
+larger one, the way the part on the desk is — hover it while the board runs
+to see the current that decides it.
+
+**PWM dims them.** A pin driven by the LED controller (LEDC) now shows on
+the board the way the firmware drives it: a breathing LED breathes, a lamp
+set to 30% glows at 30%, an RGB LED shows the colour its three duties mix
+to, and a digit dims. The wire from a PWM pin is drawn in green dashes, and
+hovering it says how much of each period it is high and what it averages;
+hovering the lamp shows its average current and voltage, marked as
+averages — what a meter would read. A pin that was an ordinary output
+before the LED controller took it no longer keeps showing its old level.
+
 ## v0.6.57
 
 **A button wired to a GND symbol now works.** A push button connected to a

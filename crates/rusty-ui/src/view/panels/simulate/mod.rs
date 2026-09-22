@@ -19,13 +19,14 @@
 //! library from the corner's `+`, the inspector while something is selected
 //! — rather than taking two columns out of a pane that is only a column.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 use leptos::{ev, prelude::*};
 
 mod art;
 mod edit;
 mod geometry;
+mod glow;
 mod layout;
 mod library;
 mod readout;
@@ -33,7 +34,8 @@ mod readout;
 use geometry::*;
 use library::Library;
 use rusty_embed::circuit;
-use rusty_embed::nets::{self, Behaviour, Evaluation, Row, Warning, behaviour_of};
+use rusty_embed::nets::{self, Behaviour, Row, Warning, behaviour_of};
+use rusty_embed::period::{self, Period};
 use rusty_embed::{PinRef, Sheet, Symbol, Wire};
 
 use rusty_i18n::t;
@@ -370,6 +372,28 @@ fn limit_text(limit: &rusty_embed::SimLimit) -> String {
         "cpu-fpu-off" => t!("simulate.limit-cpu-fpu-off"),
         "s3-unproven" => t!("simulate.limit-s3-unproven"),
         _ => limit.text.clone(),
+    }
+}
+
+/// A net's colour while the board runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Tone {
+    High,
+    Low,
+    /// Under PWM: high for part of every period, drawn as the pulses it is.
+    Switching,
+}
+
+/// What a net is doing, in words: its level, or how much of every period it
+/// is high while a PWM pin drives it.
+fn level_word(level: Option<period::Level>) -> String {
+    match level {
+        Some(period::Level::High) => t!("simulate.net-high"),
+        Some(period::Level::Low) => t!("simulate.net-low"),
+        Some(period::Level::Switching(high)) => {
+            t!("simulate.net-pwm", share = format!("{:.0}", high * 100.0))
+        }
+        None => t!("simulate.net-floating"),
     }
 }
 
@@ -710,51 +734,84 @@ fn BoardEditor(
             &no_connect.get_untracked(),
         )
     };
-    // Everything the rules say about the sheet at this moment: which lamps
-    // are lit, what level every pin sits at, what is wrong. One reading for
-    // every part, recomputed when the sheet, the firmware's levels or a
-    // held button change.
-    let eval: Memo<Evaluation> = {
+    // Everything the rules and the solver say about the sheet — which lamps
+    // are lit, what level every pin sits at, what is wrong, and what every
+    // part is at in volts — read over one period of whatever the firmware
+    // drives with PWM (`rusty_embed::period`). With nothing on PWM that is
+    // the sheet as it stands, read once. The same parts, the same wires, the
+    // same held switches and the same levels the firmware has reported, so
+    // on-and-off and the numbers are two readings of one drawing rather than
+    // two drawings.
+    //
+    // Four memos rather than one, and the split is the cost. Which pins are
+    // on PWM, and the order their duties fall in, decide what has to be read
+    // (`period`); the duties themselves only decide how long each reading
+    // lasts (`weights`). A breathing lamp moves its duty a hundred times a
+    // second, and that has to be a hundred re-weightings, not a hundred
+    // readings of the whole sheet.
+    //
+    // The solver's half is the operating point and not a transient: a sheet
+    // nobody is running has no instant to be at, and where it settles is
+    // what a probe on a schematic is asking. It is an `Err` far more often
+    // than it is an answer, and that is the design rather than a
+    // shortcoming: a lamp with no `vf` and a rail called `VCC` are ordinary
+    // states of a sheet somebody is still drawing, and each names the
+    // property that would answer it.
+    let wired: Memo<BTreeSet<u8>> =
+        Memo::new(move |_| wires.with(|all| period::wired_gpios(all, &rows.get())));
+    let order: Memo<Vec<u8>> = Memo::new(move |_| {
+        state
+            .sim
+            .pwm
+            .with(|pwm| wired.with(|wired| period::ranking(pwm, wired)))
+    });
+    let period: Memo<Period> = {
         let chip = chip.clone();
         Memo::new(move |_| {
             let sheet = sheet_with_symbols(&chip, &parts.get(), &wires.get(), &no_connect.get());
-            let rows = rows.get();
-            let gpio = state.sim.gpio.get();
-            let held = pressed.get();
-            nets::evaluate(nets::Inputs {
-                sheet: &sheet,
-                rows: &rows,
-                gpio: &gpio,
-                pressed: &held,
-            })
+            Period::read(
+                &sheet,
+                &rows.get(),
+                &pressed.get(),
+                &state.sim.gpio.get(),
+                order.get(),
+            )
         })
     };
-    // And what the same sheet is at, in volts.
-    //
-    // `eval` says on and off; this says numbers, and they are two readings
-    // of one drawing rather than two drawings — the same parts, the same
-    // wires, the same held switches and the same levels the firmware has
-    // reported. The operating point and not a transient: a sheet nobody is
-    // running has no instant to be at, and where it settles is what a probe
-    // on a schematic is asking. While a session *is* running the levels
-    // move, so this moves with them.
-    //
-    // It is an `Err` far more often than it is an answer, and that is the
-    // design rather than a shortcoming: a lamp with no `vf` and a rail
-    // called `VCC` are ordinary states of a sheet somebody is still
-    // drawing, and each names the property that would answer it.
-    let solved: Memo<Result<circuit::Solved, circuit::Unsolved>> = {
-        let chip = chip.clone();
-        Memo::new(move |_| {
-            let sheet = sheet_with_symbols(&chip, &parts.get(), &wires.get(), &no_connect.get());
-            // `nets` keys its levels by hash and the bridge by order,
-            // because the element order decides the node numbering and a
-            // circuit that renumbered itself between two identical sheets
-            // would be a memo that never settles.
-            let gpio: BTreeMap<u8, bool> = state.sim.gpio.get().into_iter().collect();
-            circuit::operating_point(&sheet, &rows.get(), &pressed.get(), &gpio)
-        })
+    let weights: Memo<Vec<f64>> =
+        Memo::new(move |_| state.sim.pwm.with(|pwm| period.with(|p| p.weights(pwm))));
+    // The period, asked in the shapes the board's readers want.
+    let lit_share = move |reference: &str, pin: &str| {
+        period.with(|p| weights.with(|w| p.pin_lit(w, reference, pin)))
     };
+    let level_of = move |pin: &PinRef| period.with(|p| weights.with(|w| p.level(w, pin)));
+    let measured = move |reference: &str| {
+        period.with(|p| weights.with(|w| p.reading(w, reference).ok().flatten()))
+    };
+    let volts_of =
+        move |pin: &PinRef| period.with(|p| weights.with(|w| p.volts_at(w, pin).ok().flatten()));
+    // What the rules found at any moment of the period — a memo of its own,
+    // so the list redraws when a finding comes or goes and not with every
+    // change of duty.
+    let findings: Memo<Vec<Warning>> =
+        Memo::new(move |_| period.with(|p| weights.with(|w| p.warnings(w))));
+    // What each wire's net does, as its colour says it. A memo of its own
+    // for the same reason: the colour changes when a net starts or stops
+    // switching, and a breathing lamp must not redraw every wire on the
+    // sheet a hundred times a second.
+    let tones: Memo<Vec<Option<Tone>>> = Memo::new(move |_| {
+        wires.with(|all| {
+            all.iter()
+                .map(|wire| {
+                    level_of(&wire.from).map(|level| match level {
+                        period::Level::High => Tone::High,
+                        period::Level::Low => Tone::Low,
+                        period::Level::Switching(_) => Tone::Switching,
+                    })
+                })
+                .collect()
+        })
+    });
     // The GPIO a part's pin reaches through the wires — what a knob, a
     // source or a motor is *on*, in the firmware's terms.
     let gpio_for = move |reference: &str, pin: &str| -> Option<u8> {
@@ -2115,9 +2172,22 @@ fn BoardEditor(
                                             Signal::derive(move || selected.get() == Some(index));
                                         let is_marked =
                                             Signal::derive(move || marked.with(|m| m.contains(&index)));
-                                        let is_lit = Memo::new(move |_| {
+                                        // How brightly its light is drawn,
+                                        // 0 to 1: from the current the solver
+                                        // says it carries over the period
+                                        // when it can say, and otherwise from
+                                        // how much of it the rules call the
+                                        // part lit — as though lit meant
+                                        // fully, which is how every lamp was
+                                        // drawn before there were numbers.
+                                        let glow = Memo::new(move |_| {
                                             let reference = reference.get();
-                                            eval.with(|e| e.is_lit(&reference))
+                                            period.with(|p| {
+                                                weights.with(|w| match p.reading(w, &reference) {
+                                                    Ok(Some(read)) => glow::of_current(read.through),
+                                                    _ => glow::of_share(p.lit(w, &reference)),
+                                                })
+                                            })
                                         });
                                         let is_pressed = Memo::new(move |_| {
                                             let reference = reference.get();
@@ -2400,42 +2470,62 @@ fn BoardEditor(
                                                         return ().into_any();
                                                     };
                                                     let (cx, cy) = turned((lx, ly));
-                                                    let reference = reference.get();
                                                     let rgb = behaviour.get() == Some(Behaviour::Rgb);
-                                                    let (colour, lit) = if rgb {
-                                                        let channel = |name: &str| {
-                                                            eval.with(|e| e.is_pin_lit(&reference, name))
-                                                        };
-                                                        let (r, g, b) =
-                                                            (channel("R"), channel("G"), channel("B"));
-                                                        (rgb_color(r, g, b), r || g || b)
-                                                    } else {
-                                                        let (on, off) = lamp_colors(&value.get());
-                                                        let lit = is_lit.get();
-                                                        (if lit { on } else { off }, lit)
-                                                    };
                                                     // A dark lamp is its own
                                                     // colour dimmed, not grey:
                                                     // a red LED is red on the
                                                     // desk with the power off.
-                                                    let glow = if lit {
-                                                        format!(
-                                                            "filter: drop-shadow(0 0 5px {colour}) drop-shadow(0 0 13px {colour}); pointer-events: none",
-                                                        )
-                                                    } else {
-                                                        "pointer-events: none".to_string()
-                                                    };
+                                                    let (on, dark) = lamp_colors(&value.get());
+                                                    let dark = if rgb { rgb_color(false, false, false) } else { dark };
+                                                    // And the light over it, as
+                                                    // a colour and how much of
+                                                    // it: the two attributes a
+                                                    // duty moves, so a breathing
+                                                    // lamp redraws those and not
+                                                    // the lamp.
+                                                    let light = Memo::new(move |_| {
+                                                        if rgb {
+                                                            let reference = reference.get();
+                                                            let share = |name: &str| lit_share(&reference, name);
+                                                            glow::lens(share("R"), share("G"), share("B"))
+                                                        } else {
+                                                            (on.to_string(), glow.get())
+                                                        }
+                                                    });
                                                     view! {
                                                         <circle
                                                             cx=cx
                                                             cy=cy
                                                             r=r
-                                                            fill=colour
-                                                            fill-opacity=if lit { "0.95" } else { "0.5" }
+                                                            fill=dark
+                                                            fill-opacity="0.5"
                                                             stroke="#0b0e12"
                                                             stroke-opacity="0.55"
                                                             stroke-width="0.9"
-                                                            style=glow
+                                                            style="pointer-events: none"
+                                                        />
+                                                        // The glow is cast by the
+                                                        // light itself, so it fades
+                                                        // with it: a drop shadow
+                                                        // takes the element's own
+                                                        // opacity.
+                                                        <circle
+                                                            cx=cx
+                                                            cy=cy
+                                                            r=r
+                                                            fill=move || light.with(|(colour, _)| colour.clone())
+                                                            fill-opacity=move || light.with(|(_, level)| format!("{:.3}", 0.95 * level))
+                                                            style=move || {
+                                                                light.with(|(colour, level)| {
+                                                                    if *level > 0.0 {
+                                                                        format!(
+                                                                            "filter: drop-shadow(0 0 5px {colour}) drop-shadow(0 0 13px {colour}); pointer-events: none",
+                                                                        )
+                                                                    } else {
+                                                                        "pointer-events: none".to_string()
+                                                                    }
+                                                                })
+                                                            }
                                                         />
                                                         <ellipse
                                                             cx=cx - r * 0.3
@@ -2443,7 +2533,7 @@ fn BoardEditor(
                                                             rx=r * 0.28
                                                             ry=r * 0.42
                                                             fill="#ffffff"
-                                                            fill-opacity=if lit { "0.5" } else { "0.16" }
+                                                            fill-opacity=move || light.with(|(_, level)| format!("{:.3}", 0.16 + 0.34 * level))
                                                             style="pointer-events: none"
                                                         />
                                                     }
@@ -2455,12 +2545,14 @@ fn BoardEditor(
                                                     };
                                                     let (cx, cy) =
                                                         turned((fx + fw / 2.0, fy + fh / 2.0));
-                                                    let reference = reference.get();
-                                                    let seg = move |name: &str| {
-                                                        if eval.with(|e| e.is_pin_lit(&reference, name)) {
-                                                            "#ff5c5c"
-                                                        } else {
-                                                            "#3a2323"
+                                                    // Each segment lit for its
+                                                    // own share of the period,
+                                                    // so a digit dimmed by PWM
+                                                    // is a dim digit.
+                                                    let seg = move |name: &'static str| {
+                                                        move || {
+                                                            let share = lit_share(&reference.get(), name);
+                                                            glow::mix("#3a2323", "#ff5c5c", glow::of_share(share))
                                                         }
                                                     };
                                                     let transform =
@@ -2694,7 +2786,7 @@ fn BoardEditor(
                                                         return ().into_any();
                                                     };
                                                     let (cx, cy) = turned((lx, ly));
-                                                    let on = is_lit.get();
+                                                    let on = glow.get() > 0.0;
                                                     view! {
                                                         <circle
                                                             cx=cx
@@ -3411,7 +3503,14 @@ fn BoardEditor(
                                             };
                                             let drive = move || {
                                                 let reference = reference.get();
-                                                let level = |pin: &str| eval.with(|e| e.level(&reference, pin));
+                                                // A direction pin under PWM has
+                                                // no one level, and reads as
+                                                // none rather than as either.
+                                                let level = |pin: &str| match level_of(&PinRef::new(reference.as_str(), pin)) {
+                                                    Some(period::Level::High) => Some(true),
+                                                    Some(period::Level::Low) => Some(false),
+                                                    _ => None,
+                                                };
                                                 // A fan has no direction pins,
                                                 // and reading two unwired inputs
                                                 // as two lows would call it
@@ -3490,21 +3589,25 @@ fn BoardEditor(
                                             // A net's level colours its wires
                                             // while the firmware runs: high is
                                             // green, low is dim, unknown is the
-                                            // sheet's grey.
-                                            let level = powered
-                                                .then(|| eval.with(|e| e.levels.get(&wire.from).copied().flatten()))
+                                            // sheet's grey — and a net under
+                                            // PWM is green in pulses, because
+                                            // it is high for part of every
+                                            // period and has no one level.
+                                            let tone = powered
+                                                .then(|| tones.with(|all| all.get(wire_index).copied().flatten()))
                                                 .flatten();
                                             let stroke = if is_picked {
                                                 "#e05d38"
                                             } else if is_hovered {
                                                 "#b7c0cc"
                                             } else {
-                                                match level {
-                                                    Some(true) => "#5ecf7a",
-                                                    Some(false) => "#5b6472",
+                                                match tone {
+                                                    Some(Tone::High | Tone::Switching) => "#5ecf7a",
+                                                    Some(Tone::Low) => "#5b6472",
                                                     None => "#7d8694",
                                                 }
                                             };
+                                            let dashes = if tone == Some(Tone::Switching) { "7 4" } else { "none" };
                                             let width = if is_picked {
                                                 "2.4"
                                             } else if is_hovered {
@@ -3664,6 +3767,7 @@ fn BoardEditor(
                                                     fill="none"
                                                     stroke=stroke
                                                     stroke-width=width
+                                                    stroke-dasharray=dashes
                                                     style="pointer-events: none"
                                                 />
                                                 <circle cx=from.0 cy=from.1 r="2.2" fill="#c9a227" style="pointer-events: none" />
@@ -3968,7 +4072,7 @@ fn BoardEditor(
                     // because both are claims about what you are looking at.
                     <div class="pointer-events-none absolute bottom-2 left-3 flex max-w-[calc(100%-1.5rem)] flex-col gap-1">
                         {move || {
-                            let findings = eval.with(|e| e.warnings.clone());
+                            let findings = findings.get();
                             (!findings.is_empty()).then(|| {
                                 view! {
                                     <div class="pointer-events-auto flex max-w-[60ch] flex-col gap-0.5 rounded-[6px] bg-amber-fill/90 px-2 py-1.5 ring-1 ring-line">
@@ -3994,30 +4098,25 @@ fn BoardEditor(
                             let text = if let Some(index) = hover_part.get() {
                                 let reference = parts
                                     .with(|list| list.get(index).map(|p| p.inst.reference.clone()))?;
-                                let reading = solved.with(|answer| {
-                                    answer.as_ref().ok().and_then(|found| found.reading(&reference))
-                                })?;
-                                format!(
-                                    "{reference} · {} · {}",
-                                    readout::volts(reading.across),
-                                    readout::amps(reading.through)
-                                )
+                                let reading = measured(&reference)?;
+                                let (volts, amps) =
+                                    (readout::volts(reading.across), readout::amps(reading.through));
+                                // An average no instant has — a lamp under
+                                // PWM never sits at its average voltage —
+                                // says that it is one.
+                                if reading.steady {
+                                    format!("{reference} · {volts} · {amps}")
+                                } else {
+                                    format!(
+                                        "{reference} · {}",
+                                        t!("simulate.reading-average", volts = volts, amps = amps)
+                                    )
+                                }
                             } else {
                                 let index = hover_wire.get()?;
                                 let from = wires.with(|all| all.get(index).map(|w| w.from.clone()))?;
-                                let word = match eval.with(|e| e.levels.get(&from).copied().flatten()) {
-                                    Some(true) => t!("simulate.net-high"),
-                                    Some(false) => t!("simulate.net-low"),
-                                    None => t!("simulate.net-floating"),
-                                };
-                                let volts = solved.with(|answer| {
-                                    answer
-                                        .as_ref()
-                                        .ok()
-                                        .and_then(|found| found.volts_at(&from))
-                                        .map(readout::volts)
-                                });
-                                match volts {
+                                let word = level_word(level_of(&from));
+                                match volts_of(&from).map(readout::volts) {
                                     Some(volts) => format!("{word} · {volts}"),
                                     None => word,
                                 }
@@ -4284,25 +4383,24 @@ fn BoardEditor(
                                     // — and the answer was only ever the
                                     // colour of the line while it ran.
                                     {move || {
-                                        let reading = eval.get();
-                                        let Some(net) = reading.net_of(&wire.from) else {
+                                        let Some(members) = period.with(|p| {
+                                            let nets = p.nets();
+                                            nets.net_of(&wire.from).map(|net| {
+                                                nets.members(net)
+                                                    .iter()
+                                                    .map(PinRef::to_string)
+                                                    .collect::<Vec<String>>()
+                                            })
+                                        }) else {
                                             return ().into_any();
                                         };
-                                        let level = reading
-                                            .levels
-                                            .get(&wire.from)
-                                            .copied()
-                                            .flatten();
-                                        let (word, tone) = match level {
-                                            Some(true) => (t!("simulate.net-high"), "text-[#5ecf7a]"),
-                                            Some(false) => (t!("simulate.net-low"), "text-label-2"),
-                                            None => (t!("simulate.net-floating"), "text-label-4"),
+                                        let level = level_of(&wire.from);
+                                        let tone = match level {
+                                            Some(period::Level::High | period::Level::Switching(_)) => "text-[#5ecf7a]",
+                                            Some(period::Level::Low) => "text-label-2",
+                                            None => "text-label-4",
                                         };
-                                        let members: Vec<String> = reading
-                                            .members(net)
-                                            .iter()
-                                            .map(PinRef::to_string)
-                                            .collect();
+                                        let word = level_word(level);
                                         // And what it is *at*. High and low
                                         // are the rules' reading; this is
                                         // the solver's, and on a divider
@@ -4318,9 +4416,11 @@ fn BoardEditor(
                                         // them — a probe that silently
                                         // showed nothing would read as a
                                         // feature that does not work.
-                                        let at = solved.with(|answer| match answer {
-                                            Ok(found) => Ok(found.volts_at(&wire.from).map(readout::volts)),
-                                            Err(why) => Err(unsolved_text(why)),
+                                        let at = period.with(|p| {
+                                            weights.with(|w| match p.volts_at(w, &wire.from) {
+                                                Ok(volts) => Ok(volts.map(readout::volts)),
+                                                Err(why) => Err(unsolved_text(why)),
+                                            })
                                         });
                                         view! {
                                             <div class="flex flex-col gap-1 border-t border-line pt-2">
@@ -4461,8 +4561,8 @@ fn BoardEditor(
                                 (label, ends.join(", "))
                             })
                             .collect();
-                        let own_warnings: Vec<String> = eval.with(|e| {
-                            e.warnings
+                        let own_warnings: Vec<String> = findings.with(|found| {
+                            found
                                 .iter()
                                 .filter(|w| match w {
                                     Warning::LedWithoutResistor { part } | Warning::SwitchDrivesNothing { part } => {
@@ -4936,26 +5036,31 @@ fn BoardEditor(
                                 {
                                     let reference = reference.clone();
                                     move || {
-                                        solved
-                                            .with(|answer| match answer {
-                                                Ok(found) => found
-                                                    .reading(&reference)
-                                                    .map(|read| {
+                                        period
+                                            .with(|p| {
+                                                weights.with(|w| match p.reading(w, &reference) {
+                                                    Ok(found) => found.map(|read| {
                                                         Ok((
                                                             readout::volts(read.across),
                                                             readout::amps(read.through),
-                                                            readout::watts(read.watts()),
+                                                            readout::watts(read.watts),
+                                                            read.steady,
                                                         ))
                                                     }),
-                                                Err(why) => (why.part() == Some(reference.as_str()))
-                                                    .then(|| Err(unsolved_text(why))),
+                                                    Err(why) => (why.part() == Some(reference.as_str()))
+                                                        .then(|| Err(unsolved_text(why))),
+                                                })
                                             })
                                             .map(|reading| match reading {
-                                                Ok((across, through, watts)) => {
+                                                Ok((across, through, watts, steady)) => {
                                                     view! {
                                                         <div class="flex flex-col gap-0.5">
                                                             <span class="text-caption text-label-4">
-                                                                {t!("simulate.measured")}
+                                                                {if steady {
+                                                                    t!("simulate.measured")
+                                                                } else {
+                                                                    t!("simulate.measured-average")
+                                                                }}
                                                             </span>
                                                             // One line at this column's width:
                                                             // three significant figures caps

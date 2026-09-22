@@ -51,7 +51,9 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # streaming commands like lsp_start must return a never-resolving promise —
 # a resolved stream reads as "server exited" and flips LSP Ready back off;
 # and save/open must be stateful like the disk is, or every save-then-reread
-# flow (format-on-save) looks broken in the mock while correct in the app.
+# flow (format-on-save) looks broken in the mock while correct in the app —
+# the sheet included: Run saves it and plans again, and a plan that answered
+# with the example put a resistor changed to 1k straight back to 220.
 # A fourth, learned late: **a stub that has not kept up with the model is a
 # panel nobody can drive.** `plan_simulation` answered with the *first*
 # board's `leds`/`buttons` for two format changes; serde ignored every key
@@ -59,10 +61,12 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # exercised here at all — and the chips carried no `gpio`, which draws a
 # devkit with rails and no header and makes every wire to a pin a finding.
 # It is a divider on a C3 now: two resistors, both rails, a tap on GPIO4,
-# and 1.10 V at the middle for anyone to check. Two switches: set
+# and 1.10 V at the middle for anyone to check. Three switches: set
 # `mock.norecents` in localStorage to start on the welcome screen (a launch
-# that reopens the last project never shows it), and `__mock.pickFolder` to
-# answer the folder picker instead of cancelling it.
+# that reopens the last project never shows it), `__mock.pickFolder` to
+# answer the folder picker instead of cancelling it, and `__mock.breathe`
+# before Run to have the playground breathe its LED through `[rusty:pwm]`
+# reports instead of blinking it.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -4300,6 +4304,51 @@ hand, and every bug below was caught that way and by nothing else.
   from `log10(0)` reads as an instrument fault; and anything not finite is
   a dash rather than `inf V` beside a resistor somebody would then go and
   check.
+- **A lamp is as bright as its current, and a PWM pin is read over a
+  period.** The glow was on or off, so a resistor changed the reading and
+  not the lamp, and a lamp the firmware was breathing through LEDC sat dark:
+  its pin had a duty and no level, and the rules read only levels.
+  `rusty_embed::period` reads the sheet — the rules and the solver both — at
+  each *moment* of one PWM period in which a different set of pins is high,
+  and weights each reading by how long its moment lasts. The pins are
+  ranked by duty, so `n` pins are `n + 1` moments; that assumes they rise
+  together, as one LEDC timer's channels do, and a lamp on one pin does not
+  depend on the assumption at all. **Everything the board says goes through
+  it, PWM or not**: with nothing on PWM it is one moment and answers exactly
+  what `nets::evaluate` and `operating_point` answer, which a test holds, so
+  a lamp on a PWM pin and one on an ordinary pin are never two code paths.
+  **The split between `period` and `weights` is the cost.** Which pins, and
+  in what order, decide what is read; the duties decide only the weights.
+  A breathing lamp is a hundred re-weightings a second, not a hundred
+  solves, and the wire colours and the findings are memos of their own for
+  the same reason. A pin no wire reaches is never ranked, or a quad's four
+  motors would cost five readings of a sheet they are not on.
+- **What a meter shows over a period is three averages, not two and a
+  product** (`period::Measured`): a lamp lit half the time dissipates half
+  its power, and its average volts times its average amps is a quarter. A
+  reading that differs between moments is `steady: false` and says
+  *average* on screen — a lamp under PWM never sits at its average voltage,
+  and `0.59 V` beside a lit LED with nothing saying why is a number somebody
+  would go and check. A net under PWM is drawn green in dashes and read as
+  `PWM, high 30% of the time`, never as floating.
+- **The glow is the current to the power 1/2.2** (`simulate/glow.rs`). A
+  pixel's value is its light to that power, so drawn this way the light
+  leaving the screen is in proportion to the lamp's and the eye does the
+  rest: a duty ramped in a straight line brightens fast and then barely,
+  here as on the desk. Full is 10 mA, where `vf` is quoted. Where the solver
+  refuses, the rules' lit share stands in at full current — what every lamp
+  was drawn as before there were numbers. An RGB lens mixes its channels'
+  shares through the eight colours it was always drawn in, and a digit's
+  segments dim the same way. The lamp's light is two reactive attributes
+  over a dark body, so a duty changing a hundred times a second redraws an
+  opacity and not the part.
+- **A pin is in `sim.gpio` or in `sim.pwm`, never both, and the newer
+  report decides** (`controller::session::forget`). A level left from before
+  LEDC took a pin lit at full a lamp the firmware was dimming, and a duty
+  left after GPIO took the pin back would hold the lamp at its last
+  brightness whatever the pin did next. One edge is the emulator's: a pad
+  given back to GPIO reports its level *before* the channel's idle line, so
+  the idle level stands until the pin next moves.
 
 ## Meeting C
 

@@ -165,7 +165,9 @@ pub(super) fn clear_capture(state: AppState) {
 /// interruption. Which lines reveal which tab is decided here, beside the
 /// reading, because the tabs are about the protocol and this is the one
 /// place it is read. A `[rusty:pwm]` line reveals nothing on purpose: a servo
-/// or a dimmed lamp is a duty too, and the board sheet already shows those.
+/// or a dimmed lamp is a duty too, and the board sheet already shows both —
+/// the horn where the pulse puts it, the lamp at the brightness the duty
+/// gives it (`rusty_embed::period`).
 pub(super) fn absorb(state: AppState, line: LogLine) {
     follow_activity(state, &line.text);
     if let Some(sample) = rusty_embed::protocol::parse_telemetry(&line.text) {
@@ -205,6 +207,7 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
                 gpio.insert(*pin, *level);
             }
         });
+        forget(state.sim.pwm, report.pins.iter().map(|(pin, _)| *pin));
         record_trace(state, report);
     } else if let Some(report) = rusty_embed::parse_pwm_report(&line.text) {
         // The analogue half of the arm above. Not folded into it: a level and
@@ -215,6 +218,7 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
                 pwm.insert(*pin, *drive);
             }
         });
+        forget(state.sim.gpio, report.pins.iter().map(|(pin, _)| *pin));
     } else if let Some(report) = rusty_embed::parse_rmt_report(&line.text) {
         // What a chain of addressable LEDs was sent, whole: one transmission
         // sets every pixel, so keeping anything less would light a strip one
@@ -302,6 +306,25 @@ fn host_now_us() -> u64 {
 /// systimer, unstamped ones on the host's arrival time — never both, because
 /// a trace that mixes time bases is a trace that lies. Capped so an hour of
 /// simulation cannot eat the tab.
+/// Take pins out of one of the two pin maps, because the other has just
+/// heard about them: a pin is in one or the other, never both (see
+/// `Sim::pwm`). Touched only when one of them is there — `update` wakes
+/// every reader whether or not anything changed, and a level is reported a
+/// thousand times for every time a duty is.
+fn forget<T: Send + Sync + 'static>(
+    map: RwSignal<std::collections::HashMap<u8, T>>,
+    pins: impl Iterator<Item = u8>,
+) {
+    let pins: Vec<u8> = pins.collect();
+    if map.with_untracked(|known| pins.iter().any(|pin| known.contains_key(pin))) {
+        map.update(|known| {
+            for pin in &pins {
+                known.remove(pin);
+            }
+        });
+    }
+}
+
 fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
     const CAP: usize = 200_000;
 
