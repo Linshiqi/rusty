@@ -95,6 +95,33 @@ pub fn defaults() -> Vec<Binding> {
             default: "Ctrl+Shift+F5".into(),
             action: Action::Restart,
         },
+        // The debugger's, on VS Code's keys. The transport's tooltips said
+        // F10, F11 and Shift+F11 from the day it was drawn, and nothing was
+        // bound to any of them: a step was a click or nothing.
+        Binding {
+            id: "debug.pause".into(),
+            label: t!("debugger.pause"),
+            default: "F6".into(),
+            action: Action::Pause,
+        },
+        Binding {
+            id: "debug.step-over".into(),
+            label: t!("debugger.step-over"),
+            default: "F10".into(),
+            action: Action::StepOver,
+        },
+        Binding {
+            id: "debug.step-into".into(),
+            label: t!("debugger.step-into"),
+            default: "F11".into(),
+            action: Action::StepInto,
+        },
+        Binding {
+            id: "debug.step-out".into(),
+            label: t!("debugger.step-out"),
+            default: "Shift+F11".into(),
+            action: Action::StepOut,
+        },
         Binding {
             id: "device.flash".into(),
             label: t!("menu.device.flash"),
@@ -230,6 +257,16 @@ pub fn effective(state: AppState) -> Vec<(Binding, String)> {
             (binding, chord)
         })
         .collect()
+}
+
+/// A control's tooltip with the key that does the same, read off the
+/// bindings as they stand — so a rebound key is the key shown, and a tooltip
+/// never names a key that does nothing.
+pub fn with_chord(state: AppState, action: Action, label: String) -> String {
+    effective(state)
+        .into_iter()
+        .find(|(binding, _)| binding.action == action)
+        .map_or(label.clone(), |(_, chord)| format!("{label} ({chord})"))
 }
 
 /// A key event as a canonical chord string, or None for anything that is
@@ -479,6 +516,54 @@ pub fn Palette(open: RwSignal<bool>, chrome: Chrome) -> impl IntoView {
                 </div>
             </div>
         </Show>
+    }
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+
+    fn default_of(action: Action) -> Option<String> {
+        defaults()
+            .into_iter()
+            .find(|b| b.action == action)
+            .map(|b| b.default)
+    }
+
+    /// The debugger's keys are VS Code's, and bound: the transport's
+    /// tooltips said F10, F11 and Shift+F11 for as long as it existed while
+    /// nothing answered any of them.
+    #[test]
+    fn the_debugger_has_its_keys() {
+        assert_eq!(default_of(Action::StepOver).as_deref(), Some("F10"));
+        assert_eq!(default_of(Action::StepInto).as_deref(), Some("F11"));
+        assert_eq!(default_of(Action::StepOut).as_deref(), Some("Shift+F11"));
+        assert_eq!(default_of(Action::Pause).as_deref(), Some("F6"));
+        // Each one spelled the way a key press is read, or it is a binding
+        // that no key can ever reach.
+        for (key, shift) in [("F10", false), ("F11", false), ("F11", true), ("F6", false)] {
+            let chord = chord_of(false, shift, false, key).expect("a function key is a chord");
+            assert!(
+                defaults().iter().any(|b| b.default == chord),
+                "{chord} reaches no binding"
+            );
+        }
+    }
+
+    /// The handler takes the first binding a key matches, so a second
+    /// default on the same key is a command that can never be reached.
+    #[test]
+    fn no_two_defaults_share_a_key() {
+        let all = defaults();
+        for (i, one) in all.iter().enumerate() {
+            for two in &all[i + 1..] {
+                assert_ne!(one.default, two.default, "{} and {}", one.id, two.id);
+                assert_ne!(
+                    one.id, two.id,
+                    "an id is what an override is stored against"
+                );
+            }
+        }
     }
 }
 

@@ -2019,6 +2019,23 @@ their board-and-port box, Xcode's destination picker and activity view,
   they type characters, which is why this binding system leaves Alt letters
   alone. Every verb is also a menu row and a palette entry — the same
   `Action`.
+- **The debugger's keys are VS Code's too** — F6 pauses, F10, F11 and
+  Shift+F11 step over, into and out — **and for as long as the transport
+  existed its tooltips named them while nothing was bound to any.** "Step
+  over (F10)" was written into the catalogue, so a user pressed F10, got
+  nothing, and asked whether Vim had eaten it; Vim passes every F-key and
+  the terminal sends none, so the key reached the window's listener and
+  matched no binding. A tooltip takes its key from the bindings now
+  (`palette::with_chord`, the title bar's helper moved to where the
+  bindings are), never from the catalogue, so a rebound key is the key
+  shown and an unbound one is not shown at all. The steps are live when
+  `DebugState::stopped` says — attached, at rest, not exited — for the
+  button, the key (`controller::debug_verb`) and the Project menu's row
+  alike; the buttons used to be live whenever the target was not running,
+  which included the second or two gdb spends attaching. F10 is a system
+  key on Windows, and WebView2 still gives it to the page: the host's
+  `AcceleratorKeyPressed` runs first, wry does not subscribe to it, and F10
+  is none of WebView2's browser keys.
 
 ## The playground
 

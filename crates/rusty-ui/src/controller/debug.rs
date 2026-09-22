@@ -252,6 +252,25 @@ pub fn debug_control(state: AppState, action: &'static str) {
     );
 }
 
+/// A debugger verb from a key or a menu row — F6, F10, F11, Shift+F11 —
+/// doing what the transport's button does, and only when that button is
+/// live: a pause while the target runs, a step once it has stopped. Anything
+/// else is a request gdb would refuse, so it is not sent.
+pub fn debug_verb(state: AppState, action: &'static str) {
+    let ready = state.debug.session.with_untracked(|session| {
+        session.as_ref().is_some_and(|s| {
+            if action == "pause" {
+                s.running
+            } else {
+                s.stopped()
+            }
+        })
+    });
+    if ready {
+        debug_control(state, action);
+    }
+}
+
 /// Select a stack frame and read its variables.
 pub fn debug_frame(state: AppState, level: u32) {
     #[derive(serde::Serialize)]

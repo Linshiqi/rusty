@@ -857,11 +857,11 @@ close = "Close"
 copy = "Copy"
 
 [debugger]
-step-over = "Step over (F10)"
-step-into = "Step into (F11)"
-step-out = "Step out (Shift+F11)"
-pause = "Pause the target"
-continue = "Continue (F5)"
+step-over = "Step over"
+step-into = "Step into"
+step-out = "Step out"
+pause = "Pause"
+continue = "Continue"
 stop = "Stop debugging and the run it started"
 
 [terminal]

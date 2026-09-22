@@ -44,6 +44,13 @@ pub enum Action {
     /// The running simulation stopped and started again with the code on
     /// screen — Run does the same while one runs.
     Restart,
+    /// The debugger's own verbs, the transport's buttons on VS Code's keys:
+    /// F6, F10, F11 and Shift+F11. Continue is Debug's F5, which resumes a
+    /// session that has stopped.
+    Pause,
+    StepOver,
+    StepInto,
+    StepOut,
     /// A chip's playground, opened: code beside the board, no project to
     /// make first. The chip as `rusty_embed::PLAYGROUND_CHIPS` spells it.
     OpenPlayground(&'static str),
@@ -244,6 +251,10 @@ pub fn all(state: AppState) -> Vec<Command> {
         (Action::Debug, t!("menu.project.debug")),
         (Action::Stop, t!("menu.project.stop")),
         (Action::Restart, t!("menu.project.restart")),
+        (Action::Pause, t!("debugger.pause")),
+        (Action::StepOver, t!("debugger.step-over")),
+        (Action::StepInto, t!("debugger.step-into")),
+        (Action::StepOut, t!("debugger.step-out")),
         (Action::Flash, t!("menu.device.flash")),
         (Action::FlashOnly, t!("menu.device.flash-only")),
         (Action::Monitor, t!("menu.device.monitor")),
@@ -398,6 +409,10 @@ pub enum Requires {
     NavForward,
     /// A playground open: its example and keeping it mean nothing elsewhere.
     Playground,
+    /// A debug session stopped, for the steps; one running, for Pause —
+    /// exactly when the transport's own buttons are live.
+    DebugStopped,
+    DebugRunning,
 }
 
 impl Requires {
@@ -406,6 +421,14 @@ impl Requires {
             Requires::Nothing => true,
             Requires::Project => state.has_project(),
             Requires::Playground => state.playground().is_some(),
+            Requires::DebugStopped => state
+                .debug
+                .session
+                .with(|s| s.as_ref().is_some_and(rusty_dbg::DebugState::stopped)),
+            Requires::DebugRunning => state
+                .debug
+                .session
+                .with(|s| s.as_ref().is_some_and(|s| s.running)),
             Requires::NavBack => state.editor.nav.with(|nav| nav.can_go_back()),
             Requires::NavForward => state.editor.nav.with(|nav| nav.can_go_forward()),
         }
@@ -605,64 +628,7 @@ pub fn menus(state: AppState) -> Vec<Menu> {
         },
         Menu {
             title: t!("menu.bar.project"),
-            items: vec![
-                // The verbs first, as a Build menu leads with Build: they are
-                // what the menu is opened for.
-                project_entry(
-                    Action::Build,
-                    &t!("menu.project.build"),
-                    chord(Action::Build),
-                ),
-                project_entry(Action::Test, &t!("menu.project.test"), chord(Action::Test)),
-                Item::Separator,
-                project_entry(Action::Run, &t!("menu.project.run"), chord(Action::Run)),
-                project_entry(
-                    Action::Debug,
-                    &t!("menu.project.debug"),
-                    chord(Action::Debug),
-                ),
-                project_entry(Action::Stop, &t!("menu.project.stop"), chord(Action::Stop)),
-                project_entry(
-                    Action::Restart,
-                    &t!("menu.project.restart"),
-                    chord(Action::Restart),
-                ),
-                Item::Separator,
-                project_entry(
-                    Action::RefreshProject,
-                    &t!("menu.project.recheck"),
-                    chord(Action::RefreshProject),
-                ),
-                entry(
-                    Action::RefreshToolchain,
-                    &t!("menu.project.rescan-toolchain"),
-                    None,
-                ),
-                entry(
-                    Action::ReloadCatalog,
-                    &t!("menu.project.reload-catalogue"),
-                    None,
-                ),
-                Item::Separator,
-                // The two directions people actually need, named as
-                // directions rather than as tool names: nobody thinks
-                // "I need cc", they think "I have this C driver".
-                Item::Submenu {
-                    label: t!("menu.project.c-interop"),
-                    items: vec![
-                        project_entry(
-                            Action::ScaffoldC("rust-calls-c"),
-                            &t!("menu.project.rust-calls-c"),
-                            None,
-                        ),
-                        project_entry(
-                            Action::ScaffoldC("c-calls-rust"),
-                            &t!("menu.project.c-calls-rust"),
-                            None,
-                        ),
-                    ],
-                },
-            ],
+            items: project_menu(&chord),
         },
         Menu {
             title: t!("menu.bar.view"),
@@ -723,6 +689,99 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                 // reported as "it did not work" or not at all.
                 entry(Action::OpenUrl(ISSUES), &t!("menu.help.report"), None),
                 entry(Action::OpenUrl(RELEASES), &t!("menu.help.releases"), None),
+            ],
+        },
+    ]
+}
+
+/// The Project menu: the verbs, the debugger's, and the project's upkeep.
+///
+/// A function of the shortcut lookup alone, like the View menu, so a test
+/// can hold the debugger's rows to their keys.
+fn project_menu(chord: &dyn Fn(Action) -> Option<String>) -> Vec<Item> {
+    vec![
+        // The verbs first, as a Build menu leads with Build: they are
+        // what the menu is opened for.
+        project_entry(
+            Action::Build,
+            &t!("menu.project.build"),
+            chord(Action::Build),
+        ),
+        project_entry(Action::Test, &t!("menu.project.test"), chord(Action::Test)),
+        Item::Separator,
+        project_entry(Action::Run, &t!("menu.project.run"), chord(Action::Run)),
+        project_entry(
+            Action::Debug,
+            &t!("menu.project.debug"),
+            chord(Action::Debug),
+        ),
+        project_entry(Action::Stop, &t!("menu.project.stop"), chord(Action::Stop)),
+        project_entry(
+            Action::Restart,
+            &t!("menu.project.restart"),
+            chord(Action::Restart),
+        ),
+        Item::Separator,
+        // The transport's verbs, where VS Code's Run menu lists them
+        // — and the one place their keys are written down for
+        // anybody who has not hovered a button.
+        entry_when(
+            Requires::DebugRunning,
+            Action::Pause,
+            &t!("debugger.pause"),
+            chord(Action::Pause),
+        ),
+        entry_when(
+            Requires::DebugStopped,
+            Action::StepOver,
+            &t!("debugger.step-over"),
+            chord(Action::StepOver),
+        ),
+        entry_when(
+            Requires::DebugStopped,
+            Action::StepInto,
+            &t!("debugger.step-into"),
+            chord(Action::StepInto),
+        ),
+        entry_when(
+            Requires::DebugStopped,
+            Action::StepOut,
+            &t!("debugger.step-out"),
+            chord(Action::StepOut),
+        ),
+        Item::Separator,
+        project_entry(
+            Action::RefreshProject,
+            &t!("menu.project.recheck"),
+            chord(Action::RefreshProject),
+        ),
+        entry(
+            Action::RefreshToolchain,
+            &t!("menu.project.rescan-toolchain"),
+            None,
+        ),
+        entry(
+            Action::ReloadCatalog,
+            &t!("menu.project.reload-catalogue"),
+            None,
+        ),
+        Item::Separator,
+        // The two directions people actually need, named as
+        // directions rather than as tool names: nobody thinks
+        // "I need cc", they think "I have this C driver".
+        Item::Submenu {
+            label: t!("menu.project.c-interop"),
+            items: vec![
+                project_entry(
+                    Action::ScaffoldC("rust-calls-c"),
+                    &t!("menu.project.rust-calls-c"),
+                    None,
+                ),
+                project_entry(
+                    Action::ScaffoldC("c-calls-rust"),
+                    &t!("menu.project.c-calls-rust"),
+                    None,
+                ),
             ],
         },
     ]
@@ -945,6 +1004,10 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
                 controller::restart_simulation(state);
             }
         }
+        Action::Pause => controller::debug_verb(state, "pause"),
+        Action::StepOver => controller::debug_verb(state, "over"),
+        Action::StepInto => controller::debug_verb(state, "into"),
+        Action::StepOut => controller::debug_verb(state, "out"),
         Action::OpenPlayground(chip) => controller::open_playground(state, chip),
         Action::ResetPlayground => controller::reset_playground(state),
         Action::KeepPlayground => controller::keep_playground(state),
@@ -1251,6 +1314,44 @@ mod menu_tests {
         for action in wanted {
             assert!(reached.contains(&action), "{action:?} fell out of View");
         }
+    }
+
+    /// The debugger's verbs are in the Project menu with their keys, live
+    /// exactly when the transport's buttons are: the steps while stopped,
+    /// Pause while running. A step there with no condition would be a row
+    /// that sends gdb something it refuses.
+    #[test]
+    fn the_project_menu_carries_the_debugger_with_its_keys() {
+        let keys = |action| match action {
+            Action::Pause => Some("F6".to_string()),
+            Action::StepOver => Some("F10".to_string()),
+            Action::StepInto => Some("F11".to_string()),
+            Action::StepOut => Some("Shift+F11".to_string()),
+            _ => None,
+        };
+        let menu = project_menu(&keys);
+        let row = |wanted: Action| {
+            menu.iter()
+                .find_map(|item| match item {
+                    Item::Entry {
+                        action,
+                        shortcut,
+                        requires,
+                        ..
+                    } if *action == wanted => Some((shortcut.clone(), *requires)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{wanted:?} is not in the Project menu"))
+        };
+        for step in [Action::StepOver, Action::StepInto, Action::StepOut] {
+            let (shortcut, requires) = row(step);
+            assert_eq!(shortcut, keys(step), "{step:?} shows its key");
+            assert_eq!(requires, Requires::DebugStopped, "{step:?}");
+        }
+        assert_eq!(
+            row(Action::Pause),
+            (keys(Action::Pause), Requires::DebugRunning)
+        );
     }
 
     /// The Vim switch stays on the top level. It was in a submenu once, and

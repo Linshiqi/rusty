@@ -28,20 +28,14 @@ use crate::{
     command::Action,
     controller,
     state::{AppState, DeviceAction},
-    view::icon::{Icon, IconView},
+    view::{
+        icon::{Icon, IconView},
+        palette::with_chord,
+    },
 };
 
 const BUTTON: &str = "grid size-7 place-items-center rounded-[6px] transition-colors \
                       hover:bg-sunken disabled:pointer-events-none disabled:opacity-40";
-
-/// A tooltip with the key that does the same, as the menu writes it — so
-/// the chord is learnt from the button, and a rebound one is what is shown.
-fn with_chord(state: AppState, action: Action, label: String) -> String {
-    crate::view::palette::effective(state)
-        .into_iter()
-        .find(|(binding, _)| binding.action == action)
-        .map_or(label.clone(), |(_, chord)| format!("{label} ({chord})"))
-}
 
 #[component]
 pub fn RunControls() -> impl IntoView {

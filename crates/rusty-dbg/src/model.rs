@@ -128,3 +128,44 @@ pub struct DebugState {
     #[serde(default)]
     pub output: Vec<String>,
 }
+
+impl DebugState {
+    /// Attached, not executing, and not over: where a step or a continue
+    /// can start. The transport's buttons, the menu's rows and the keys all
+    /// ask this, so a key cannot do what its button is greyed out for — and
+    /// a step sent to a gdb still attaching is one it refuses.
+    pub fn stopped(&self) -> bool {
+        self.attached && !self.running && self.exited.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_step_starts_only_from_a_stopped_target() {
+        let live = DebugState {
+            attached: true,
+            ..DebugState::default()
+        };
+        assert!(live.stopped(), "attached and at rest");
+        assert!(!DebugState::default().stopped(), "still attaching");
+        assert!(
+            !DebugState {
+                running: true,
+                ..live.clone()
+            }
+            .stopped(),
+            "executing: that is Pause's turn"
+        );
+        assert!(
+            !DebugState {
+                exited: Some(0),
+                ..live
+            }
+            .stopped(),
+            "a program that has ended has nothing to step"
+        );
+    }
+}

@@ -9,6 +9,15 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.62
+
+**The debugger's keys work.** F10 steps over, F11 steps into, Shift+F11
+steps out and F6 pauses, as in VS Code; F5 continues, as before. The step
+buttons' tooltips named F10, F11 and Shift+F11 all along, but nothing was
+bound to them, so only clicking did anything. The keys are also in the
+Project menu, and can be changed in Settings like any other shortcut —
+the tooltips show whatever key is set.
+
 ## v0.6.61
 
 **Where a wire branches off another, the sheet draws a dot.** A branch

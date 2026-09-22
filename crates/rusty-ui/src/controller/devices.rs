@@ -183,7 +183,7 @@ pub fn simulate(state: AppState, debug: bool) {
         && state
             .debug
             .session
-            .with_untracked(|s| s.as_ref().is_some_and(|s| s.attached && !s.running))
+            .with_untracked(|s| s.as_ref().is_some_and(rusty_dbg::DebugState::stopped))
     {
         debug_control(state, "resume");
         return;

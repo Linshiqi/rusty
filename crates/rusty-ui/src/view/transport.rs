@@ -14,9 +14,13 @@ use leptos::prelude::*;
 use rusty_i18n::t;
 
 use crate::{
+    command::Action,
     controller,
     state::AppState,
-    view::icon::{Icon, IconView},
+    view::{
+        icon::{Icon, IconView},
+        palette::with_chord,
+    },
 };
 
 const BUTTON: &str = "grid size-7 place-items-center rounded-[6px] transition-colors \
@@ -24,6 +28,10 @@ const BUTTON: &str = "grid size-7 place-items-center rounded-[6px] transition-co
 
 /// Continue/pause, the three steps, and stop — or nothing at all when no
 /// session is live.
+///
+/// Every tooltip carries its key as the bindings have it. They were written
+/// into the text once — "Step over (F10)" — over keys nothing was bound to,
+/// which is how somebody pressed F10 and concluded the debugger ignored it.
 #[component]
 pub fn DebugTransport() -> impl IntoView {
     let state = AppState::expect();
@@ -31,12 +39,14 @@ pub fn DebugTransport() -> impl IntoView {
     move || {
         let debug = state.debug.session.get()?;
         let running = debug.running;
-        let step = move |action: &'static str, icon, title: String| {
+        // What the keys ask too, so a button and its key cannot disagree.
+        let unready = !debug.stopped();
+        let step = move |action: &'static str, verb: Action, icon, title: String| {
             view! {
                 <button
                     type="button"
-                    title=title
-                    disabled=running
+                    title=with_chord(state, verb, title)
+                    disabled=unready
                     on:click=move |_| controller::debug_control(state, action)
                     class=format!("{BUTTON} text-label-2 hover:text-label")
                 >
@@ -50,7 +60,7 @@ pub fn DebugTransport() -> impl IntoView {
                     view! {
                         <button
                             type="button"
-                            title=t!("debugger.pause")
+                            title=with_chord(state, Action::Pause, t!("debugger.pause"))
                             on:click=move |_| controller::debug_control(state, "pause")
                             class=format!("{BUTTON} text-amber")
                         >
@@ -62,7 +72,8 @@ pub fn DebugTransport() -> impl IntoView {
                     view! {
                         <button
                             type="button"
-                            title=t!("debugger.continue")
+                            title=with_chord(state, Action::Debug, t!("debugger.continue"))
+                            disabled=unready
                             on:click=move |_| controller::debug_control(state, "resume")
                             class=format!("{BUTTON} text-patina")
                         >
@@ -71,16 +82,16 @@ pub fn DebugTransport() -> impl IntoView {
                     }
                         .into_any()
                 }}
-                {step("over", Icon::StepOver, t!("debugger.step-over"))}
-                {step("into", Icon::StepInto, t!("debugger.step-into"))}
-                {step("out", Icon::StepOut, t!("debugger.step-out"))}
+                {step("over", Action::StepOver, Icon::StepOver, t!("debugger.step-over"))}
+                {step("into", Action::StepInto, Icon::StepInto, t!("debugger.step-into"))}
+                {step("out", Action::StepOut, Icon::StepOut, t!("debugger.step-out"))}
                 <span class="mx-0.5 h-4 w-px bg-line" />
                 // Named for what it actually does. The debug run is what booted
                 // the target, so stopping it stops that too — the alternative was
                 // an orphaned QEMU nothing in the window could reach.
                 <button
                     type="button"
-                    title=t!("debugger.stop")
+                    title=with_chord(state, Action::Stop, t!("debugger.stop"))
                     on:click=move |_| controller::debug_stop(state)
                     class=format!("{BUTTON} text-crimson")
                 >
