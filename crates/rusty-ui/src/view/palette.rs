@@ -263,10 +263,20 @@ pub fn effective(state: AppState) -> Vec<(Binding, String)> {
 /// bindings as they stand — so a rebound key is the key shown, and a tooltip
 /// never names a key that does nothing.
 pub fn with_chord(state: AppState, action: Action, label: String) -> String {
-    effective(state)
-        .into_iter()
-        .find(|(binding, _)| binding.action == action)
-        .map_or(label.clone(), |(_, chord)| format!("{label} ({chord})"))
+    chords(state)(action).map_or(label.clone(), |chord| format!("{label} ({chord})"))
+}
+
+/// What each action's key actually is right now — overrides included, so
+/// nothing advertises a chord that stopped working. Read once and asked
+/// many times: a menu of sixty rows does not read the overrides sixty times.
+pub fn chords(state: AppState) -> impl Fn(Action) -> Option<String> {
+    let bound = effective(state);
+    move |action| {
+        bound
+            .iter()
+            .find(|(binding, _)| binding.action == action)
+            .map(|(_, chord)| chord.clone())
+    }
 }
 
 /// A key event as a canonical chord string, or None for anything that is
