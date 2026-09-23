@@ -640,6 +640,8 @@ impl Fnv {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Output;
+
     use super::*;
 
     /// A real repository, made for the test: two commits on `main`, a
@@ -648,28 +650,21 @@ mod tests {
     /// suite.
     fn repository() -> Option<tempfile::TempDir> {
         let dir = tempfile::tempdir().ok()?;
-        let git = |args: &[&str]| {
-            let mut command = Command::new("git");
-            command.args(args).current_dir(dir.path());
-            command
-                .env("GIT_AUTHOR_NAME", "Test")
-                .env("GIT_AUTHOR_EMAIL", "t@x")
-                .env("GIT_COMMITTER_NAME", "Test")
-                .env("GIT_COMMITTER_EMAIL", "t@x");
-            command.output().ok().filter(|o| o.status.success())
-        };
-        git(&["init", "-q", "-b", "main"])?;
+        git_ok(dir.path(), &["init", "-q", "-b", "main"])?;
         std::fs::write(dir.path().join("a.txt"), "one\n").ok()?;
-        git(&["add", "a.txt"])?;
-        git(&["commit", "-q", "-m", "first"])?;
-        git(&["checkout", "-q", "-b", "feature"])?;
+        git_ok(dir.path(), &["add", "a.txt"])?;
+        git_ok(dir.path(), &["commit", "-q", "-m", "first"])?;
+        git_ok(dir.path(), &["checkout", "-q", "-b", "feature"])?;
         std::fs::write(dir.path().join("b.txt"), "two\n").ok()?;
-        git(&["add", "b.txt"])?;
-        git(&["commit", "-q", "-m", "add b"])?;
-        git(&["checkout", "-q", "main"])?;
+        git_ok(dir.path(), &["add", "b.txt"])?;
+        git_ok(dir.path(), &["commit", "-q", "-m", "add b"])?;
+        git_ok(dir.path(), &["checkout", "-q", "main"])?;
         std::fs::write(dir.path().join("a.txt"), "one\nmore\n").ok()?;
-        git(&["commit", "-q", "-am", "grow a"])?;
-        git(&["merge", "-q", "--no-ff", "-m", "merge feature", "feature"])?;
+        git_ok(dir.path(), &["commit", "-q", "-am", "grow a"])?;
+        git_ok(
+            dir.path(),
+            &["merge", "-q", "--no-ff", "-m", "merge feature", "feature"],
+        )?;
         Some(dir)
     }
 
@@ -738,16 +733,10 @@ mod tests {
         };
         std::fs::write(dir.path().join("new.txt"), "fresh\n").unwrap();
         std::fs::write(dir.path().join("a.txt"), "one\nmore\nagain\n").unwrap();
-        let stashed = Command::new("git")
-            .args(["stash", "push", "--include-untracked", "-m", "wip"])
-            .current_dir(dir.path())
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "t@x")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "t@x")
-            .output()
-            .expect("git runs");
-        assert!(stashed.status.success(), "{stashed:?}");
+        git_in(
+            dir.path(),
+            &["stash", "push", "--include-untracked", "-m", "wip"],
+        );
 
         let stashes = stashes(dir.path()).expect("stash list");
         assert_eq!(stashes.len(), 1);
@@ -798,28 +787,20 @@ mod tests {
         let Some(dir) = tempfile::tempdir().ok() else {
             return;
         };
-        let git = |args: &[&str]| {
-            Command::new("git")
-                .args(args)
-                .current_dir(dir.path())
-                .env("GIT_AUTHOR_NAME", "Test")
-                .env("GIT_AUTHOR_EMAIL", "t@x")
-                .env("GIT_COMMITTER_NAME", "Test")
-                .env("GIT_COMMITTER_EMAIL", "t@x")
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-        };
-        if git(&["init", "-q", "-b", "master"]).is_none() {
+        if git_ok(dir.path(), &["init", "-q", "-b", "master"]).is_none() {
             eprintln!("skipping: git is not available on this machine");
             return;
         }
         std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
-        git(&["add", "Cargo.toml"]).expect("add");
-        git(&["commit", "-q", "-m", "init"]).expect("commit");
+        git_ok(dir.path(), &["add", "Cargo.toml"]).expect("add");
+        git_ok(dir.path(), &["commit", "-q", "-m", "init"]).expect("commit");
         std::fs::create_dir_all(dir.path().join("test")).unwrap();
         std::fs::write(dir.path().join("test/led.rs"), "fn led() {}\n").unwrap();
-        git(&["stash", "push", "--include-untracked", "--", "test/led.rs"]).expect("stash");
+        git_ok(
+            dir.path(),
+            &["stash", "push", "--include-untracked", "--", "test/led.rs"],
+        )
+        .expect("stash");
 
         let detail = commit(dir.path(), "stash@{0}").expect("the stash opens");
         assert_eq!(detail.files.len(), 1, "{:?}", detail.files);
@@ -836,6 +817,27 @@ mod tests {
         assert_eq!(history.lanes, 1);
     }
 
+    /// `git` in `dir` as the tests' author. The identity rides on every
+    /// call: a runner has no `user.email`, and a commit, a merge or a stash
+    /// without one is refused for a reason that has nothing to do with the
+    /// test.
+    fn git(dir: &Path, args: &[&str]) -> std::io::Result<Output> {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+    }
+
+    /// [`git`] that succeeded, or `None` where there is no git to run or it
+    /// refused — which a fixture turns into a skip rather than a failure.
+    fn git_ok(dir: &Path, args: &[&str]) -> Option<Output> {
+        git(dir, args).ok().filter(|o| o.status.success())
+    }
+
     /// Run git in `dir` as the tests' author, succeeding or panicking.
     fn git_in(dir: &Path, args: &[&str]) {
         let output = git_out(dir, args);
@@ -845,16 +847,8 @@ mod tests {
     /// `git`, with an identity, answering rather than asserting — for the
     /// calls that are *expected* to fail, which still need the identity or
     /// they fail for the wrong reason.
-    fn git_out(dir: &Path, args: &[&str]) -> std::process::Output {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "t@x")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "t@x")
-            .output()
-            .expect("git runs")
+    fn git_out(dir: &Path, args: &[&str]) -> Output {
+        git(dir, args).expect("git runs")
     }
 
     /// The bug the full decorations fix: a local branch with a slash in its
