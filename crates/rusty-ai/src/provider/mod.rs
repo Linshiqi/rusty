@@ -15,10 +15,12 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures_util::Stream;
+use serde::de::DeserializeOwned;
 
 use crate::{
     error::{Error, Result},
-    model::{ChatEvent, Content, Message, ToolDef},
+    http,
+    model::{ChatEvent, Message, ProviderKind, ToolDef},
 };
 
 /// One turn's worth of input.
@@ -36,16 +38,56 @@ pub struct ChatRequest {
 
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<ChatEvent>> + Send>>;
 
+/// A request as `kind`'s API expects it to arrive: a bearer token in the
+/// OpenAI dialect, Anthropic's own key header beside its pinned version.
+/// With no key — a local server — only what the dialect always sends.
+///
+/// Shared by both dialects' chat and by the model listing, so a request
+/// cannot be authorised one way to chat and another to list.
+pub(crate) fn authorize(
+    kind: ProviderKind,
+    request: reqwest::RequestBuilder,
+    key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match kind {
+        ProviderKind::OpenAiCompatible => match key {
+            Some(key) => request.bearer_auth(key),
+            None => request,
+        },
+        ProviderKind::Anthropic => {
+            let request = request.header("anthropic-version", anthropic::API_VERSION);
+            match key {
+                Some(key) => request.header("x-api-key", key),
+                None => request,
+            }
+        }
+    }
+}
+
+/// Send a request to `endpoint` — once more on a 429 or a 5xx, as
+/// [`http::send_retrying`] decides — and turn a refusal into the error it
+/// means. Every request either dialect makes goes this way.
+pub(crate) async fn send(
+    request: reqwest::RequestBuilder,
+    endpoint: &str,
+    profile: &str,
+) -> Result<reqwest::Response> {
+    let response = http::send_retrying(request, endpoint).await?;
+    check_status(response, profile).await
+}
+
+/// One streamed event's data as `T`, or the error naming the line. A line
+/// that does not parse ends the stream in both dialects rather than being
+/// skipped — see [`openai::decode`] for why.
+pub(crate) fn parse_data<T: DeserializeOwned>(data: &str, profile: &str) -> Result<T> {
+    serde_json::from_str(data).map_err(|e| Error::protocol(profile, format!("{e}: {data}")))
+}
+
 /// A non-2xx before the stream starts, as the error it means.
 ///
 /// 401 and 403 are the key, and say so. Everything else carries the body,
 /// because a provider's 400 is the only place it explains what it disliked.
-/// Shared by both dialects and by the model listing, so the three cannot
-/// disagree about what a status means.
-pub(crate) async fn check_status(
-    response: reqwest::Response,
-    profile: &str,
-) -> Result<reqwest::Response> {
+async fn check_status(response: reqwest::Response, profile: &str) -> Result<reqwest::Response> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -66,9 +108,6 @@ pub(crate) async fn check_status(
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// The user-facing profile name, e.g. `deepseek` or `local-ollama`.
-    fn id(&self) -> &str;
-    fn model(&self) -> &str;
     /// Whether this provider can call tools. A model without tool support can
     /// still chat, but the workbench's analyses will be unavailable to it, so
     /// the UI warns rather than silently degrading.
@@ -76,43 +115,4 @@ pub trait Provider: Send + Sync {
         true
     }
     async fn chat(&self, request: ChatRequest) -> Result<EventStream>;
-}
-
-/// Accumulates streaming tool-call fragments into finished calls.
-///
-/// Both wire formats deliver tool arguments as partial JSON across many events,
-/// so every provider needs this and none of them should reimplement it.
-#[derive(Debug, Default)]
-pub struct ToolCallAccumulator {
-    calls: Vec<(String, String, String)>, // id, name, partial json
-}
-
-impl ToolCallAccumulator {
-    pub fn start(&mut self, id: String, name: String) {
-        self.calls.push((id, name, String::new()));
-    }
-
-    pub fn push(&mut self, id: &str, fragment: &str) {
-        if let Some(call) = self.calls.iter_mut().find(|c| c.0 == id) {
-            call.2.push_str(fragment);
-        }
-    }
-
-    /// Finished calls, with arguments parsed. A call whose JSON never became
-    /// valid is returned with a null input so the caller can report a tool
-    /// error rather than silently dropping the model's intent.
-    pub fn finish(self) -> Vec<Content> {
-        self.calls
-            .into_iter()
-            .map(|(id, name, json)| Content::ToolUse {
-                id,
-                name,
-                input: serde_json::from_str(&json).unwrap_or(serde_json::Value::Null),
-            })
-            .collect()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.calls.is_empty()
-    }
 }

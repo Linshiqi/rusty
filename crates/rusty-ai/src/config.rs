@@ -16,11 +16,7 @@ use crate::{
     error::{Error, Result},
     http::{self, Http},
     model::{NotCheckedReason, ProviderCheck, ProviderConfig, ProviderKind},
-    provider::{
-        self, Provider,
-        anthropic::{API_VERSION, Anthropic},
-        openai::OpenAiCompatible,
-    },
+    provider::{self, Provider, anthropic::Anthropic, openai::OpenAiCompatible},
 };
 
 /// The key a request will carry, or why none can be made.
@@ -87,29 +83,12 @@ pub async fn list_models(
     let client = http::client(http, http::PROBE_TOTAL)?;
     let base = config.base_url.trim_end_matches('/');
 
-    let (endpoint, request) = match config.kind {
-        ProviderKind::OpenAiCompatible => {
-            let endpoint = format!("{base}/models");
-            let mut request = client.get(&endpoint);
-            if let Some(key) = &key {
-                request = request.bearer_auth(key);
-            }
-            (endpoint, request)
-        }
-        ProviderKind::Anthropic => {
-            let endpoint = format!("{base}/models?limit=1000");
-            let mut request = client
-                .get(&endpoint)
-                .header("anthropic-version", API_VERSION);
-            if let Some(key) = &key {
-                request = request.header("x-api-key", key);
-            }
-            (endpoint, request)
-        }
+    let endpoint = match config.kind {
+        ProviderKind::OpenAiCompatible => format!("{base}/models"),
+        ProviderKind::Anthropic => format!("{base}/models?limit=1000"),
     };
-
-    let response = http::send_retrying(request, &endpoint).await?;
-    let response = provider::check_status(response, &config.profile).await?;
+    let request = provider::authorize(config.kind, client.get(&endpoint), key.as_deref());
+    let response = provider::send(request, &endpoint, &config.profile).await?;
 
     #[derive(Deserialize)]
     struct Models {
@@ -177,6 +156,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::provider::anthropic::API_VERSION;
 
     fn profile(base_url: &str, kind: ProviderKind) -> ProviderConfig {
         ProviderConfig {

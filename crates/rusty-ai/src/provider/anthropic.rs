@@ -15,8 +15,7 @@ use serde_json::{Value, json};
 use super::{ChatRequest, EventStream, Provider};
 use crate::{
     error::{Error, Result},
-    http,
-    model::{ChatEvent, Content, Role, StopReason},
+    model::{ChatEvent, Content, ProviderKind, Role, StopReason},
 };
 
 /// Wire version pinned deliberately: Anthropic requires the header and a
@@ -59,14 +58,6 @@ impl Anthropic {
 
 #[async_trait]
 impl Provider for Anthropic {
-    fn id(&self) -> &str {
-        &self.profile
-    }
-
-    fn model(&self) -> &str {
-        &self.model
-    }
-
     async fn chat(&self, request: ChatRequest) -> Result<EventStream> {
         let endpoint = self.endpoint();
         let profile = self.profile.clone();
@@ -99,14 +90,13 @@ impl Provider for Anthropic {
             );
         }
 
-        let request = self
-            .http
-            .post(&endpoint)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", API_VERSION)
-            .json(&body);
-        let response = http::send_retrying(request, &endpoint).await?;
-        let response = super::check_status(response, &profile).await?;
+        let request = super::authorize(
+            ProviderKind::Anthropic,
+            self.http.post(&endpoint),
+            Some(&self.api_key),
+        )
+        .json(&body);
+        let response = super::send(request, &endpoint, &profile).await?;
 
         Ok(decode(response.bytes_stream(), profile))
     }
@@ -138,8 +128,7 @@ where
 
         while let Some(event) = events.next().await {
             let event = event.map_err(|e| Error::protocol(&profile, e.to_string()))?;
-            let parsed: StreamEvent = serde_json::from_str(&event.data)
-                .map_err(|e| Error::protocol(&profile, format!("{e}: {}", event.data)))?;
+            let parsed: StreamEvent = super::parse_data(&event.data, &profile)?;
 
             match parsed {
                 StreamEvent::MessageStart { message } => {

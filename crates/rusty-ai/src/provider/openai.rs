@@ -17,8 +17,7 @@ use serde_json::{Value, json};
 use super::{ChatRequest, EventStream, Provider};
 use crate::{
     error::{Error, Result},
-    http,
-    model::{ChatEvent, Content, Role, StopReason},
+    model::{ChatEvent, Content, ProviderKind, Role, StopReason},
 };
 
 pub struct OpenAiCompatible {
@@ -59,14 +58,6 @@ impl OpenAiCompatible {
 
 #[async_trait]
 impl Provider for OpenAiCompatible {
-    fn id(&self) -> &str {
-        &self.profile
-    }
-
-    fn model(&self) -> &str {
-        &self.model
-    }
-
     fn supports_tools(&self) -> bool {
         self.supports_tools
     }
@@ -106,13 +97,13 @@ impl Provider for OpenAiCompatible {
             );
         }
 
-        let request = self
-            .http
-            .post(&endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&body);
-        let response = http::send_retrying(request, &endpoint).await?;
-        let response = super::check_status(response, &profile).await?;
+        let request = super::authorize(
+            ProviderKind::OpenAiCompatible,
+            self.http.post(&endpoint),
+            Some(&self.api_key),
+        )
+        .json(&body);
+        let response = super::send(request, &endpoint, &profile).await?;
 
         Ok(decode(response.bytes_stream(), profile))
     }
@@ -154,8 +145,7 @@ where
                 break;
             }
 
-            let chunk: Chunk = serde_json::from_str(&event.data)
-                .map_err(|e| Error::protocol(&profile, format!("{e}: {}", event.data)))?;
+            let chunk: Chunk = super::parse_data(&event.data, &profile)?;
 
             if let Some(error) = chunk.error {
                 Err(Error::Upstream {
@@ -189,28 +179,23 @@ where
             }
 
             for call in choice.delta.tool_calls {
-                let id = match call.id {
-                    Some(id) => {
-                        ids_by_index.insert(call.index, id.clone());
-                        if let Some(name) = call.function.name.clone() {
-                            yield ChatEvent::ToolCallStart { id: id.clone(), name };
-                        }
-                        id
-                    }
+                // A fragment carrying an id starts a call, and so does the
+                // first fragment at an index nobody has named.
+                let (id, starts) = match call.id {
+                    Some(id) => (id, true),
                     None => match ids_by_index.get(&call.index) {
-                        Some(id) => id.clone(),
+                        Some(id) => (id.clone(), false),
                         // Some servers omit the id entirely and rely on
                         // index. Synthesize one so the call is still usable.
-                        None => {
-                            let id = format!("call_{}", call.index);
-                            ids_by_index.insert(call.index, id.clone());
-                            if let Some(name) = call.function.name.clone() {
-                                yield ChatEvent::ToolCallStart { id: id.clone(), name };
-                            }
-                            id
-                        }
+                        None => (format!("call_{}", call.index), true),
                     },
                 };
+                if starts {
+                    ids_by_index.insert(call.index, id.clone());
+                    if let Some(name) = call.function.name {
+                        yield ChatEvent::ToolCallStart { id: id.clone(), name };
+                    }
+                }
                 if let Some(partial_json) = call.function.arguments.filter(|a| !a.is_empty()) {
                     yield ChatEvent::ToolCallDelta { id, partial_json };
                 }
