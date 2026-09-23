@@ -9,6 +9,17 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.63
+
+**Nothing you use should behave differently.** This release tidies rusty's
+own code: the largest files and functions — the board editor, the code
+editor's text surface, the window's state, the Git and language-server
+panels' logic, the app's list of commands and the command-line tool — are
+split into parts that each do one thing, and logic that had been written out
+several times over is written once. What the workbench does, what it prints
+and the files it writes are unchanged; the board editor and the code editor,
+the two parts touched most, were tried by hand before this was released.
+
 ## v0.6.62
 
 **The debugger's keys work.** F10 steps over, F11 steps into, Shift+F11
