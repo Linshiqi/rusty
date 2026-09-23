@@ -28,7 +28,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -195,46 +195,8 @@ impl DapSession {
     /// Start the adapter, launch the program, and place the standing
     /// breakpoints before it runs.
     pub fn start(launch: &DapLaunch) -> Result<(Self, Events)> {
-        // A port of our own. Bound and released so the adapter can take it:
-        // a race with another process is possible in principle and has never
-        // been the failure worth engineering against, while "ask the adapter
-        // which port it chose" is not something both adapters agree on.
-        let port = {
-            let probe = TcpListener::bind(("127.0.0.1", 0)).map_err(|source| Error::Spawn {
-                gdb: "a local port".to_string(),
-                source,
-            })?;
-            probe
-                .local_addr()
-                .map_err(|source| Error::Spawn {
-                    gdb: "a local port".to_string(),
-                    source,
-                })?
-                .port()
-        };
-
-        let mut command = Command::new(&launch.adapter);
-        command
-            .arg("--port")
-            .arg(port.to_string())
-            .current_dir(&launch.root)
-            .stdin(Stdio::null())
-            // The debuggee's own console. Read on its own thread and forwarded
-            // as `output`, which is the whole reason for driving the protocol
-            // over a socket instead of this pipe.
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        command.env_remove("RUSTUP_TOOLCHAIN");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        let mut child = command.spawn().map_err(|source| Error::Spawn {
-            gdb: launch.adapter.display().to_string(),
-            source,
-        })?;
-
+        let port = free_port()?;
+        let mut child = spawn_adapter(launch, port)?;
         let socket = connect(port, &mut child, &launch.adapter)?;
         let reader_half = socket.try_clone().map_err(|source| Error::Spawn {
             gdb: launch.adapter.display().to_string(),
@@ -298,48 +260,7 @@ impl DapSession {
             root: launch.root.clone(),
             running,
         };
-
-        session.wire.send(
-            "initialize",
-            json!({
-                "adapterID": "lldb",
-                "clientID": "rusty",
-                "linesStartAt1": true,
-                "columnsStartAt1": true,
-                "pathFormat": "path",
-                // Not declared, deliberately: with it the adapter asks the
-                // client to open a terminal for the debuggee, and there is no
-                // terminal here to open. Without it the adapter runs the
-                // program itself, which is what the console thread reads.
-                "supportsRunInTerminalRequest": false,
-            }),
-        )?;
-        session.wire.send(
-            "launch",
-            json!({
-                "program": launch.program.to_string_lossy(),
-                "args": launch.args,
-                "cwd": launch.root.to_string_lossy(),
-                "stopOnEntry": false,
-            }),
-        )?;
-
-        // `initialized` is the adapter saying it will take configuration now.
-        // Its `launch` reply does not come until after `configurationDone`, so
-        // waiting on that instead would deadlock the handshake.
-        if ready_rx.recv_timeout(READY_TIMEOUT).is_err() {
-            session.stop();
-            return Err(Error::Spawn {
-                gdb: launch.adapter.display().to_string(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "the debug adapter never reported itself ready",
-                ),
-            });
-        }
-
-        session.place_all(&launch.breakpoints)?;
-        session.wire.send("configurationDone", json!({}))?;
+        session.handshake(launch, &ready_rx)?;
 
         // Attached, and running: the program starts the moment configuration
         // is done. The panel's first resume is therefore a no-op rather than
@@ -354,6 +275,54 @@ impl DapSession {
         let _ = sender.send(snapshot);
 
         Ok((session, Events::new(receiver)))
+    }
+
+    /// `initialize` and `launch`, then — once the adapter says it will take
+    /// configuration — the standing breakpoints and `configurationDone`. An
+    /// adapter that never says so is stopped before the error returns.
+    fn handshake(&self, launch: &DapLaunch, ready: &Receiver<()>) -> Result<()> {
+        self.wire.send(
+            "initialize",
+            json!({
+                "adapterID": "lldb",
+                "clientID": "rusty",
+                "linesStartAt1": true,
+                "columnsStartAt1": true,
+                "pathFormat": "path",
+                // Not declared, deliberately: with it the adapter asks the
+                // client to open a terminal for the debuggee, and there is no
+                // terminal here to open. Without it the adapter runs the
+                // program itself, which is what the console thread reads.
+                "supportsRunInTerminalRequest": false,
+            }),
+        )?;
+        self.wire.send(
+            "launch",
+            json!({
+                "program": launch.program.to_string_lossy(),
+                "args": launch.args,
+                "cwd": launch.root.to_string_lossy(),
+                "stopOnEntry": false,
+            }),
+        )?;
+
+        // `initialized` is the adapter saying it will take configuration now.
+        // Its `launch` reply does not come until after `configurationDone`, so
+        // waiting on that instead would deadlock the handshake.
+        if ready.recv_timeout(READY_TIMEOUT).is_err() {
+            self.stop();
+            return Err(Error::Spawn {
+                gdb: launch.adapter.display().to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the debug adapter never reported itself ready",
+                ),
+            });
+        }
+
+        self.place_all(&launch.breakpoints)?;
+        self.wire.send("configurationDone", json!({}))?;
+        Ok(())
     }
 
     /// The state as it stands, for a caller that missed the last push.
@@ -517,6 +486,44 @@ impl DapSession {
             let _ = child.wait();
         }
     }
+}
+
+/// A port of our own. Bound and released so the adapter can take it: a race
+/// with another process is possible in principle and has never been the
+/// failure worth engineering against, while "ask the adapter which port it
+/// chose" is not something both adapters agree on.
+fn free_port() -> Result<u16> {
+    let refused = |source| Error::Spawn {
+        gdb: "a local port".to_string(),
+        source,
+    };
+    let probe = TcpListener::bind(("127.0.0.1", 0)).map_err(refused)?;
+    Ok(probe.local_addr().map_err(refused)?.port())
+}
+
+/// The adapter, told to listen on `port`.
+fn spawn_adapter(launch: &DapLaunch, port: u16) -> Result<Child> {
+    let mut command = Command::new(&launch.adapter);
+    command
+        .arg("--port")
+        .arg(port.to_string())
+        .current_dir(&launch.root)
+        .stdin(Stdio::null())
+        // The debuggee's own console. Read on its own thread and forwarded
+        // as `output`, which is the whole reason for driving the protocol
+        // over a socket instead of this pipe.
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    command.env_remove("RUSTUP_TOOLCHAIN");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command.spawn().map_err(|source| Error::Spawn {
+        gdb: launch.adapter.display().to_string(),
+        source,
+    })
 }
 
 /// Connect to the adapter, retrying while it starts listening.
