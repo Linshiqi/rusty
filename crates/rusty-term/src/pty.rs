@@ -90,16 +90,9 @@ impl Terminal {
         rows: u16,
         shell: Option<&[String]>,
     ) -> Result<(Terminal, Updates)> {
-        let size = PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
-
         let pair = native_pty_system()
-            .openpty(size)
-            .map_err(|e| Error::Pty(e.to_string()))?;
+            .openpty(pty_size(cols, rows))
+            .map_err(Error::pty)?;
 
         let mut command = match shell {
             Some([program, args @ ..]) => {
@@ -116,24 +109,15 @@ impl Terminal {
         // file and turn off colour — which is most of the Rust toolchain.
         command.env("TERM", "xterm-256color");
 
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|e| Error::Pty(e.to_string()))?;
+        let child = pair.slave.spawn_command(command).map_err(Error::pty)?;
         // Released as soon as the child owns it. On Unix this is what lets the
         // pty report end-of-file at all; on Windows the master keeps the
         // pseudoconsole alive regardless, which is why the exit is watched for
         // separately rather than inferred from the reader.
         drop(pair.slave);
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| Error::Pty(e.to_string()))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| Error::Pty(e.to_string()))?;
+        let reader = pair.master.try_clone_reader().map_err(Error::pty)?;
+        let writer = pair.master.take_writer().map_err(Error::pty)?;
 
         let emulator = Arc::new(Mutex::new(Emulator {
             parser: vt100::Parser::new(rows, cols, SCROLLBACK),
@@ -192,13 +176,8 @@ impl Terminal {
         self.master
             .lock()
             .expect("terminal master")
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| Error::Pty(e.to_string()))?;
+            .resize(pty_size(cols, rows))
+            .map_err(Error::pty)?;
         self.emulator
             .lock()
             .expect("terminal emulator")
@@ -239,6 +218,17 @@ impl Terminal {
         let mut child = self.child.lock().expect("terminal child");
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+/// A size in character cells. The pixel size is left at zero: nothing here
+/// knows it.
+fn pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
     }
 }
 

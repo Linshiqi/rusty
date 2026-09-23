@@ -20,3 +20,10 @@ pub enum Error {
     #[error("no terminal is open")]
     NotOpen,
 }
+
+impl Error {
+    /// The pseudo-terminal's refusal, in its own words.
+    pub(crate) fn pty(error: impl std::fmt::Display) -> Self {
+        Error::Pty(error.to_string())
+    }
+}
