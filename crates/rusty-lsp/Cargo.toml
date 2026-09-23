@@ -23,6 +23,25 @@ toml = { version = "1.1.4", optional = true }
 default = ["backend"]
 backend = ["dep:serde_json", "dep:thiserror", "dep:toml"]
 
+# The probes and the end-to-end test all start a real rust-analyzer, so they
+# need the half of this crate that spawns one. Without this, `--all-targets`
+# builds them with default features off and stops on a missing `LspClient`.
+[[example]]
+name = "probe"
+required-features = ["backend"]
+
+[[example]]
+name = "diag_probe"
+required-features = ["backend"]
+
+[[example]]
+name = "complete_probe"
+required-features = ["backend"]
+
+[[test]]
+name = "analyzer"
+required-features = ["backend"]
+
 [lints]
 workspace = true
 

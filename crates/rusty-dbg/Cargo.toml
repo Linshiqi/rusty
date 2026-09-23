@@ -31,5 +31,12 @@ rusty-embed = { path = "../rusty-embed" }
 default = ["backend"]
 backend = ["dep:thiserror", "dep:serde_json"]
 
+# The probe drives a real debug adapter, so it needs the half of this crate
+# that starts one. Without this, `--all-targets` builds it with default
+# features off and stops on a missing `DapSession`.
+[[example]]
+name = "dap_probe"
+required-features = ["backend"]
+
 [lints]
 workspace = true
