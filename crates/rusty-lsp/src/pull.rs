@@ -25,7 +25,7 @@ use crate::{
     convert,
     error::{Error, Result},
     model::FileDiagnostic,
-    uri::{path_to_uri, uri_to_relative},
+    uri::uri_to_relative,
 };
 
 /// How long to wait between attempts while the server is busy.
@@ -92,7 +92,7 @@ pub(crate) fn pull_loop(poke: Receiver<String>, shared: Weak<Shared>) {
 
 /// One `textDocument/diagnostic` round trip.
 fn pull(shared: &Shared, path: &str) -> Result<Vec<FileDiagnostic>> {
-    let uri = path_to_uri(&shared.root.join(path));
+    let uri = shared.uri(path);
     let report = shared.request(
         "textDocument/diagnostic",
         json!({ "textDocument": { "uri": uri } }),

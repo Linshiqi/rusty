@@ -90,7 +90,7 @@ impl LspClient {
     pub fn document_symbols(&self, path: &str) -> Result<Vec<Symbol>> {
         let result = self.shared.request(
             "textDocument/documentSymbol",
-            json!({ "textDocument": { "uri": self.uri(path) } }),
+            json!({ "textDocument": { "uri": self.shared.uri(path) } }),
         )?;
         let text = self.shared.text_of(path).unwrap_or_default();
         let lines: Vec<&str> = text.split('\n').collect();
@@ -224,13 +224,6 @@ impl LspClient {
                 name: result["name"].as_str().unwrap_or_default().to_string(),
                 expansion: expansion.to_string(),
             }))
-    }
-
-    fn position_params(&self, path: &str, line: u32, col: u32) -> Value {
-        json!({
-            "textDocument": { "uri": self.uri(path) },
-            "position": self.protocol_position(path, line, col),
-        })
     }
 
     /// Protocol locations as places. A reply is a `Location`, a list of

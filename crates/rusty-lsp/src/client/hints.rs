@@ -29,7 +29,7 @@ impl LspClient {
         let result = self.shared.request(
             "textDocument/inlayHint",
             json!({
-                "textDocument": { "uri": self.uri(path) },
+                "textDocument": { "uri": self.shared.uri(path) },
                 "range": { "start": { "line": from.min(last), "character": 0 }, "end": end },
             }),
         )?;

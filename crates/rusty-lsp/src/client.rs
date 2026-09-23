@@ -289,7 +289,7 @@ impl LspClient {
             "textDocument/didOpen",
             json!({
                 "textDocument": {
-                    "uri": self.uri(path),
+                    "uri": self.shared.uri(path),
                     "languageId": language,
                     "version": 1,
                     "text": text,
@@ -328,7 +328,7 @@ impl LspClient {
         self.shared.notify(
             "textDocument/didChange",
             json!({
-                "textDocument": { "uri": self.uri(path), "version": version },
+                "textDocument": { "uri": self.shared.uri(path), "version": version },
                 "contentChanges": [{
                     "range": {
                         "start": { "line": start.0, "character": start.1 },
@@ -349,7 +349,7 @@ impl LspClient {
     pub fn did_save(&self, path: &str) -> Result<()> {
         self.shared.notify(
             "textDocument/didSave",
-            json!({ "textDocument": { "uri": self.uri(path) } }),
+            json!({ "textDocument": { "uri": self.shared.uri(path) } }),
         )
     }
 
@@ -363,7 +363,7 @@ impl LspClient {
         }
         let changes: Vec<Value> = events
             .iter()
-            .map(|(path, change)| json!({ "uri": self.uri(path), "type": *change as u8 }))
+            .map(|(path, change)| json!({ "uri": self.shared.uri(path), "type": *change as u8 }))
             .collect();
         self.shared.notify(
             "workspace/didChangeWatchedFiles",
@@ -397,7 +397,7 @@ impl LspClient {
         self.shared.pulled.lock().expect("lsp pulled").remove(path);
         self.shared.notify(
             "textDocument/didClose",
-            json!({ "textDocument": { "uri": self.uri(path) } }),
+            json!({ "textDocument": { "uri": self.shared.uri(path) } }),
         )?;
         self.shared.emit_diagnostics(path);
         Ok(())
@@ -406,13 +406,9 @@ impl LspClient {
     /// What could complete at this position. Columns are scalars, as
     /// everywhere on the frontend side.
     pub fn completion(&self, path: &str, line: u32, col: u32) -> Result<CompletionList> {
-        let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/completion",
-            json!({
-                "textDocument": { "uri": self.uri(path) },
-                "position": position,
-            }),
+            self.position_params(path, line, col),
         )?;
         let text = self.shared.open_text(path).unwrap_or_default();
         let raw: Vec<Value> = result
@@ -478,14 +474,9 @@ impl LspClient {
     /// answer covers — the range is what lets a tooltip stay up while the
     /// pointer moves within the same token.
     pub fn hover(&self, path: &str, line: u32, col: u32) -> Result<Option<HoverInfo>> {
-        let position = self.protocol_position(path, line, col);
-        let result = self.shared.request(
-            "textDocument/hover",
-            json!({
-                "textDocument": { "uri": self.uri(path) },
-                "position": position,
-            }),
-        )?;
+        let result = self
+            .shared
+            .request("textDocument/hover", self.position_params(path, line, col))?;
         let text = self.shared.open_text(path);
         Ok(convert::hover_info(
             &result,
@@ -497,13 +488,9 @@ impl LspClient {
     /// The signature of the call around this position, if the caret is inside
     /// one.
     pub fn signature_help(&self, path: &str, line: u32, col: u32) -> Result<Option<SignatureInfo>> {
-        let position = self.protocol_position(path, line, col);
         let result = self.shared.request(
             "textDocument/signatureHelp",
-            json!({
-                "textDocument": { "uri": self.uri(path) },
-                "position": position,
-            }),
+            self.position_params(path, line, col),
         )?;
         Ok(convert::signature_info(&result))
     }
@@ -524,7 +511,7 @@ impl LspClient {
         let result = self.shared.request(
             "textDocument/codeAction",
             json!({
-                "textDocument": { "uri": self.uri(path) },
+                "textDocument": { "uri": self.shared.uri(path) },
                 "range": { "start": position, "end": position },
                 // Empty is fine: rust-analyzer matches its own diagnostics by
                 // range rather than trusting the client's copy.
@@ -532,7 +519,7 @@ impl LspClient {
             }),
         )?;
 
-        let ours = self.uri(path);
+        let ours = self.shared.uri(path);
         let text = self.shared.open_text(path).unwrap_or_default();
         let encoding = self.shared.encoding();
         let mut fixes = Vec::new();
@@ -644,7 +631,7 @@ impl LspClient {
         let Some(edit) = edit else {
             return Ok(Vec::new());
         };
-        let ours = self.uri(path);
+        let ours = self.shared.uri(path);
         let Some((_, theirs)) = convert::split_edits(&edit, &ours) else {
             return Ok(Vec::new());
         };
@@ -667,15 +654,9 @@ impl LspClient {
     /// stale bytes on the next save. Returns the paths that changed, newest
     /// knowledge for whoever has them open.
     pub fn rename(&self, path: &str, line: u32, col: u32, new_name: &str) -> Result<Vec<String>> {
-        let position = self.protocol_position(path, line, col);
-        let result = self.shared.request(
-            "textDocument/rename",
-            json!({
-                "textDocument": { "uri": self.uri(path) },
-                "position": position,
-                "newName": new_name,
-            }),
-        )?;
+        let mut params = self.position_params(path, line, col);
+        params["newName"] = json!(new_name);
+        let result = self.shared.request("textDocument/rename", params)?;
 
         let Some(by_file) = convert::edits_by_file(&result) else {
             return Err(Error::Server {
@@ -746,7 +727,7 @@ impl LspClient {
         path: &str,
         lines: Option<(u32, u32)>,
     ) -> Result<Vec<SemanticSpan>> {
-        let document = json!({ "uri": self.uri(path) });
+        let document = json!({ "uri": self.shared.uri(path) });
         let result = match lines {
             Some((from, to)) => self.shared.request(
                 "textDocument/semanticTokens/range",
@@ -793,10 +774,7 @@ impl LspClient {
     pub fn definition(&self, path: &str, line: u32, col: u32) -> Result<Option<Location>> {
         let result = self.shared.request(
             "textDocument/definition",
-            json!({
-                "textDocument": { "uri": self.uri(path) },
-                "position": self.protocol_position(path, line, col),
-            }),
+            self.position_params(path, line, col),
         )?;
         // The first of the places, read the way references and
         // implementations are: one reading of a location, not two.
@@ -805,10 +783,6 @@ impl LspClient {
             .into_iter()
             .next()
             .map(|place| place.location))
-    }
-
-    fn uri(&self, path: &str) -> String {
-        path_to_uri(&self.shared.root.join(path))
     }
 
     /// A frontend scalar column as a protocol position.
@@ -821,6 +795,14 @@ impl LspClient {
             .map(|line_text| scalar_to_character(line_text, col, encoding))
             .unwrap_or(col);
         json!({ "line": line, "character": character })
+    }
+
+    /// A document and a position in it, as most requests are asked.
+    fn position_params(&self, path: &str, line: u32, col: u32) -> Value {
+        json!({
+            "textDocument": { "uri": self.shared.uri(path) },
+            "position": self.protocol_position(path, line, col),
+        })
     }
 }
 
@@ -856,6 +838,11 @@ impl Drop for LspClient {
 }
 
 impl Shared {
+    /// A project-relative path as the URI the server knows it by.
+    pub(crate) fn uri(&self, path: &str) -> String {
+        path_to_uri(&self.root.join(path))
+    }
+
     /// Tell the frontend what is wrong in `path`, from both sources at once.
     pub(crate) fn emit_diagnostics(&self, path: &str) {
         let pulled = self
@@ -2186,6 +2173,47 @@ mod tests {
             ),
             "{outcome:?}",
         );
+    }
+
+    /// A rename is asked the way every positional request is — the document
+    /// and the position, the position in the server's units — with the new
+    /// name beside them. After a `中` the editor's column and the server's
+    /// differ, so a column passed through unconverted cannot pass.
+    #[test]
+    fn a_rename_is_asked_with_its_position_and_the_new_name() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server(|message, writer| {
+            if method(message) == "textDocument/rename" {
+                reply(writer, message, json!({ "changes": {} }));
+                return true;
+            }
+            default_handle(message, writer)
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client
+            .did_open("src/main.rs", "fn 中() { radio(); }\n")
+            .unwrap();
+
+        let changed = client.rename("src/main.rs", 0, 9, "tuner").expect("rename");
+        assert!(changed.is_empty(), "an empty answer changes nothing");
+        let asked = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|m| method(m) == "textDocument/rename")
+            .map(|m| m["params"].clone())
+            .expect("a rename was asked");
+        assert_eq!(
+            asked["textDocument"]["uri"],
+            json!(path_to_uri(&root.path().join("src/main.rs")))
+        );
+        assert_eq!(
+            asked["position"],
+            json!({ "line": 0, "character": 11 }),
+            "scalar 9 is byte 11 after the 中"
+        );
+        assert_eq!(asked["newName"], json!("tuner"));
     }
 
     /// A rename naming a file that cannot be read refuses the whole rename
