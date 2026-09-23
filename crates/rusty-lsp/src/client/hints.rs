@@ -6,11 +6,7 @@
 use serde_json::{Value, json};
 
 use super::LspClient;
-use crate::{
-    error::Result,
-    model::InlayHint,
-    positions::{Encoding, character_to_scalar},
-};
+use crate::{convert::Lines, error::Result, model::InlayHint};
 
 impl LspClient {
     /// The hints over lines `from..to` of a file, in scalar columns. `to` past
@@ -18,11 +14,10 @@ impl LspClient {
     /// since a position past it is one the server may refuse.
     pub fn inlay_hints(&self, path: &str, from: u32, to: u32) -> Result<Vec<InlayHint>> {
         let text = self.shared.text_of(path).unwrap_or_default();
-        let lines: Vec<&str> = text.split('\n').collect();
-        let encoding = self.shared.encoding();
-        let last = lines.len().saturating_sub(1) as u32;
+        let lines = Lines::new(&text, self.shared.encoding());
+        let (last, last_units) = lines.end();
         let end = if to > last {
-            json!({ "line": last, "character": units(lines[last as usize], encoding) })
+            json!({ "line": last, "character": last_units })
         } else {
             json!({ "line": to, "character": 0 })
         };
@@ -40,12 +35,9 @@ impl LspClient {
             .filter_map(|hint| {
                 let line = hint["position"]["line"].as_u64()? as u32;
                 let character = hint["position"]["character"].as_u64()? as u32;
-                let col = lines.get(line as usize).map_or(character, |text| {
-                    character_to_scalar(text, character, encoding)
-                });
                 Some(InlayHint {
                     line,
-                    col,
+                    col: lines.scalar(line, character),
                     label: label(&hint["label"])?,
                     parameter: hint["kind"].as_u64() == Some(2),
                     pad_left: hint["paddingLeft"].as_bool() == Some(true),
@@ -69,14 +61,6 @@ fn label(label: &Value) -> Option<String> {
                 .collect(),
         ),
         _ => None,
-    }
-}
-
-/// How long a line is in the negotiated units.
-fn units(line: &str, encoding: Encoding) -> usize {
-    match encoding {
-        Encoding::Utf8 => line.len(),
-        Encoding::Utf16 => line.encode_utf16().count(),
     }
 }
 

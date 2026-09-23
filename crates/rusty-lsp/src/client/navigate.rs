@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::LspClient;
 use crate::{
+    convert::Lines,
     error::Result,
     model::{Call, CallItem, EditRange, Location, MacroExpansion, Place, Symbol},
     positions::character_to_scalar,
@@ -60,28 +61,12 @@ impl LspClient {
             self.position_params(path, line, col),
         )?;
         let text = self.shared.text_of(path).unwrap_or_default();
-        let lines: Vec<&str> = text.split('\n').collect();
-        let encoding = self.shared.encoding();
-        let scalar = |line: u32, character: u32| {
-            lines.get(line as usize).map_or(character, |text| {
-                character_to_scalar(text, character, encoding)
-            })
-        };
+        let lines = Lines::new(&text, self.shared.encoding());
         Ok(result
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|item| {
-                let range = &item["range"];
-                let start_line = range["start"]["line"].as_u64()? as u32;
-                let end_line = range["end"]["line"].as_u64()? as u32;
-                Some(EditRange {
-                    start_line,
-                    start_col: scalar(start_line, range["start"]["character"].as_u64()? as u32),
-                    end_line,
-                    end_col: scalar(end_line, range["end"]["character"].as_u64()? as u32),
-                })
-            })
+            .filter_map(|item| lines.range(&item["range"]))
             .collect())
     }
 
@@ -93,10 +78,10 @@ impl LspClient {
             json!({ "textDocument": { "uri": self.shared.uri(path) } }),
         )?;
         let text = self.shared.text_of(path).unwrap_or_default();
-        let lines: Vec<&str> = text.split('\n').collect();
+        let lines = Lines::new(&text, self.shared.encoding());
         let mut out = Vec::new();
         for item in result.as_array().into_iter().flatten() {
-            self.outline(item, path, &lines, 0, None, &mut out);
+            outline(item, path, &lines, 0, None, &mut out);
         }
         Ok(out)
     }
@@ -315,55 +300,51 @@ impl LspClient {
                 .collect(),
         })
     }
+}
 
-    /// One `DocumentSymbol` and everything under it, depth first. A server
-    /// that answers with flat `SymbolInformation` instead still lands, every
-    /// item at the top.
-    fn outline(
-        &self,
-        item: &Value,
-        path: &str,
-        lines: &[&str],
-        depth: u32,
-        container: Option<&str>,
-        out: &mut Vec<Symbol>,
-    ) {
-        let Some(name) = item["name"].as_str() else {
-            return;
-        };
-        let range = item
-            .get("selectionRange")
-            .or_else(|| item.get("range"))
-            .or_else(|| item["location"].get("range"));
-        let Some((line, character)) = range.and_then(|range| {
-            Some((
-                range["start"]["line"].as_u64()? as u32,
-                range["start"]["character"].as_u64()? as u32,
-            ))
-        }) else {
-            return;
-        };
-        let col = lines.get(line as usize).map_or(character, |text| {
-            character_to_scalar(text, character, self.shared.encoding())
-        });
-        out.push(Symbol {
-            name: name.to_string(),
-            kind: symbol_kind(&item["kind"]),
-            container: container
-                .map(str::to_string)
-                .or_else(|| item["containerName"].as_str().map(str::to_string))
-                .filter(|name| !name.is_empty()),
-            depth,
-            location: Location {
-                path: path.to_string(),
-                line,
-                col,
-                external: false,
-            },
-        });
-        for child in item["children"].as_array().into_iter().flatten() {
-            self.outline(child, path, lines, depth + 1, Some(name), out);
-        }
+/// One `DocumentSymbol` and everything under it, depth first. A server
+/// that answers with flat `SymbolInformation` instead still lands, every
+/// item at the top.
+fn outline(
+    item: &Value,
+    path: &str,
+    lines: &Lines,
+    depth: u32,
+    container: Option<&str>,
+    out: &mut Vec<Symbol>,
+) {
+    let Some(name) = item["name"].as_str() else {
+        return;
+    };
+    let range = item
+        .get("selectionRange")
+        .or_else(|| item.get("range"))
+        .or_else(|| item["location"].get("range"));
+    let Some((line, character)) = range.and_then(|range| {
+        Some((
+            range["start"]["line"].as_u64()? as u32,
+            range["start"]["character"].as_u64()? as u32,
+        ))
+    }) else {
+        return;
+    };
+    out.push(Symbol {
+        name: name.to_string(),
+        kind: symbol_kind(&item["kind"]),
+        container: container
+            .map(str::to_string)
+            .or_else(|| item["containerName"].as_str().map(str::to_string))
+            .filter(|name| !name.is_empty()),
+        depth,
+        location: Location {
+            path: path.to_string(),
+            line,
+            col: lines.scalar(line, character),
+            external: false,
+        },
+    });
+    for child in item["children"].as_array().into_iter().flatten() {
+        outline(child, path, lines, depth + 1, Some(name), out);
     }
 }
 

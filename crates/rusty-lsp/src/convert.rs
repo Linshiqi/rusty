@@ -14,39 +14,67 @@ use crate::{
         ActionEdit, CompletionItem, CompletionList, DiagSeverity, EditRange, FileDiagnostic,
         HoverInfo, SemanticSpan, SignatureInfo,
     },
-    positions::{Encoding, byte_of_character, character_to_scalar},
+    positions::{Encoding, byte_of_character, character_to_scalar, scalar_to_character},
     uri::same_file_uri,
 };
 
-/// A protocol column on `line` of `text`, as a scalar column.
+/// A document's text, split into lines once for converting many of the
+/// server's positions against it — a completion answer carries a range per
+/// item.
 ///
-/// A line the text does not have — the document moved under the reply —
-/// answers with the column unconverted. Clamping is what every other
-/// conversion does when the server and the client disagree by a version, and
-/// a column is more use to the caller than nothing.
-pub(crate) fn scalar_at(text: &str, line: u32, character: u32, encoding: Encoding) -> u32 {
-    text.split('\n')
-        .nth(line as usize)
-        .map_or(character, |line_text| {
-            character_to_scalar(line_text, character, encoding)
-        })
+/// Split at `\n`, as everywhere else: a text that ends in a newline has an
+/// empty last line.
+pub(crate) struct Lines<'a> {
+    lines: Vec<&'a str>,
+    encoding: Encoding,
 }
 
-/// A protocol `Range` as scalar columns, or `None` when it is not one.
-pub(crate) fn edit_range(text: &str, range: &Value, encoding: Encoding) -> Option<EditRange> {
-    let position = |which: &str| -> Option<(u32, u32)> {
-        let line = range[which]["line"].as_u64()? as u32;
-        let character = range[which]["character"].as_u64()? as u32;
-        Some((line, scalar_at(text, line, character, encoding)))
-    };
-    let (start_line, start_col) = position("start")?;
-    let (end_line, end_col) = position("end")?;
-    Some(EditRange {
-        start_line,
-        start_col,
-        end_line,
-        end_col,
-    })
+impl<'a> Lines<'a> {
+    pub(crate) fn new(text: &'a str, encoding: Encoding) -> Self {
+        Lines {
+            lines: text.split('\n').collect(),
+            encoding,
+        }
+    }
+
+    /// A protocol column on `line`, as a scalar column.
+    ///
+    /// A line the text does not have — the document moved under the reply —
+    /// answers with the column unconverted. Clamping is what every other
+    /// conversion does when the server and the client disagree by a version,
+    /// and a column is more use to the caller than nothing.
+    pub(crate) fn scalar(&self, line: u32, character: u32) -> u32 {
+        self.lines
+            .get(line as usize)
+            .map_or(character, |line_text| {
+                character_to_scalar(line_text, character, self.encoding)
+            })
+    }
+
+    /// A protocol `Range` as scalar columns, or `None` when it is not one.
+    pub(crate) fn range(&self, range: &Value) -> Option<EditRange> {
+        let position = |which: &str| -> Option<(u32, u32)> {
+            let line = range[which]["line"].as_u64()? as u32;
+            let character = range[which]["character"].as_u64()? as u32;
+            Some((line, self.scalar(line, character)))
+        };
+        let (start_line, start_col) = position("start")?;
+        let (end_line, end_col) = position("end")?;
+        Some(EditRange {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        })
+    }
+
+    /// Where the text ends, as a protocol position: the last line, and how
+    /// long it is in the negotiated units.
+    pub(crate) fn end(&self) -> (u32, u32) {
+        let last = self.lines.len().saturating_sub(1);
+        let units = scalar_to_character(self.lines[last], u32::MAX, self.encoding);
+        (last as u32, units)
+    }
 }
 
 /// How many completion items cross the bridge, after sorting. The popup
@@ -88,6 +116,7 @@ pub(crate) fn completion_items(result: &Value, text: &str, encoding: Encoding) -
         let sort = item["sortText"].as_str().unwrap_or(label);
         (sort.to_string(), label.to_string())
     });
+    let lines = Lines::new(text, encoding);
     let items = items
         .into_iter()
         .take(MAX_COMPLETIONS)
@@ -106,7 +135,7 @@ pub(crate) fn completion_items(result: &Value, text: &str, encoding: Encoding) -
                 .to_string();
             let range = edit
                 .and_then(|e| e.get("range"))
-                .and_then(|range| edit_range(text, range, encoding));
+                .and_then(|range| lines.range(range));
             CompletionItem {
                 label,
                 kind: item["kind"].as_u64().map(kind_name).map(str::to_string),
@@ -171,7 +200,7 @@ pub(crate) fn hover_info(
         })
         .filter(|t| !t.is_empty())?;
     let range = match (result.get("range"), text) {
-        (Some(range), Some(text)) => edit_range(text, range, encoding),
+        (Some(range), Some(text)) => Lines::new(text, encoding).range(range),
         _ => None,
     };
     Some(HoverInfo { text: prose, range })
@@ -292,8 +321,11 @@ pub(crate) fn diagnostics(
     text: Option<&str>,
     encoding: Encoding,
 ) -> Vec<FileDiagnostic> {
+    let lines = text.map(|text| Lines::new(text, encoding));
     let scalar = |line: u32, character: u32| -> u32 {
-        text.map_or(character, |text| scalar_at(text, line, character, encoding))
+        lines
+            .as_ref()
+            .map_or(character, |lines| lines.scalar(line, character))
     };
 
     let mut out: Vec<FileDiagnostic> = items
@@ -402,11 +434,12 @@ pub(crate) fn action_edits(
     text: &str,
     encoding: Encoding,
 ) -> Option<Vec<ActionEdit>> {
+    let lines = Lines::new(text, encoding);
     edits
         .iter()
         .map(|edit| {
             Some(ActionEdit {
-                range: edit_range(text, &edit["range"], encoding)?,
+                range: lines.range(&edit["range"])?,
                 new_text: edit["newText"].as_str().unwrap_or("").to_string(),
             })
         })
@@ -625,13 +658,27 @@ mod tests {
         let text = "// 中文\nlet a = 1;";
         // Line 0, utf-16 unit 5 is after `// 中文` → scalar 5; in utf-8 the
         // same scalar column is unit 9.
-        assert_eq!(scalar_at(text, 0, 9, Encoding::Utf8), 5);
-        assert_eq!(scalar_at(text, 0, 5, Encoding::Utf16), 5);
+        assert_eq!(Lines::new(text, Encoding::Utf8).scalar(0, 9), 5);
+        assert_eq!(Lines::new(text, Encoding::Utf16).scalar(0, 5), 5);
         assert_eq!(
-            scalar_at(text, 7, 3, Encoding::Utf8),
+            Lines::new(text, Encoding::Utf8).scalar(7, 3),
             3,
             "no line 7: unconverted"
         );
+    }
+
+    /// A range asked for up to the end of a document ends at the end of its
+    /// last line, counted the way the server counts — and a text ending in a
+    /// newline ends on the empty line after it, at column zero.
+    #[test]
+    fn a_document_ends_where_the_server_counts_its_last_line_to() {
+        // `// ` is three units either way, 中文 six bytes or two units, and
+        // the crab four bytes or a surrogate pair.
+        let text = "fn a() {}\n// 中文🦀";
+        assert_eq!(Lines::new(text, Encoding::Utf8).end(), (1, 3 + 6 + 4));
+        assert_eq!(Lines::new(text, Encoding::Utf16).end(), (1, 3 + 2 + 2));
+        assert_eq!(Lines::new("fn a() {}\n", Encoding::Utf16).end(), (1, 0));
+        assert_eq!(Lines::new("", Encoding::Utf8).end(), (0, 0));
     }
 
     /// `ParameterInformation.label` offsets are UTF-16 by spec, whatever
