@@ -81,25 +81,6 @@ impl Current {
         current
     }
 
-    /// A yardstick built by hand — tests, and the CLI when no workspace can
-    /// be loaded but a scan is still wanted (nothing is then stale except
-    /// idle incremental caches).
-    pub fn new(
-        versions: impl IntoIterator<Item = (String, String)>,
-        local: impl IntoIterator<Item = String>,
-    ) -> Self {
-        let mut current = Current::default();
-        for (name, version) in versions {
-            current.names.insert(name.clone());
-            current.versions.insert((name, version));
-        }
-        for name in local {
-            current.names.insert(name.clone());
-            current.local.insert(crate_name(&name));
-        }
-        current
-    }
-
     /// Whether nothing at all is known — a scan with an empty yardstick would
     /// judge every dependency gone, so it judges none.
     fn is_empty(&self) -> bool {
@@ -1268,14 +1249,19 @@ mod tests {
 
     const REGISTRY: &str = "C:\\Users\\me\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f";
 
+    /// The graph the fixture's lockfile resolves: two registry packages at
+    /// the versions it holds, and the workspace's own crate.
     fn current() -> Current {
-        Current::new(
-            [
-                ("serde".to_string(), "1.0.229".to_string()),
-                ("windows-sys".to_string(), "0.52.0".to_string()),
-            ],
-            ["my-app".to_string()],
-        )
+        let mut current = Current::default();
+        for (name, version) in [("serde", "1.0.229"), ("windows-sys", "0.52.0")] {
+            current.names.insert(name.to_string());
+            current
+                .versions
+                .insert((name.to_string(), version.to_string()));
+        }
+        current.names.insert("my-app".to_string());
+        current.local.insert(crate_name("my-app"));
+        current
     }
 
     fn lay_out(fixture: &Fixture) {
