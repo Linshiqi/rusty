@@ -626,12 +626,7 @@ impl Reader {
             }
             "continued" => {
                 self.running.store(true, Ordering::SeqCst);
-                let mut state = self.state.lock().expect("dap state");
-                state.running = true;
-                // A stack read while the program runs is a lie.
-                state.stack.clear();
-                state.variables.clear();
-                state.reason = None;
+                self.state.lock().expect("dap state").resumed();
                 true
             }
             "exited" => {
@@ -798,12 +793,12 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
         .and_then(Value::as_str)
         .map(|path| relative(path, root));
 
-    let existing = state
+    let previous = state
         .breakpoints
         .iter()
-        .position(|b| b.number.is_some() && b.number == number);
-    let previous = existing.map(|at| state.breakpoints[at].clone());
-    let entry = Breakpoint {
+        .find(|b| b.number.is_some() && b.number == number)
+        .cloned();
+    state.record_breakpoint(Breakpoint {
         number,
         file: file
             .or_else(|| previous.as_ref().map(|b| b.file.clone()))
@@ -827,11 +822,7 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
             .and_then(Value::as_str)
             .map(str::to_string),
         enabled: true,
-    };
-    match existing {
-        Some(at) => state.breakpoints[at] = entry,
-        None => state.breakpoints.push(entry),
-    }
+    });
 }
 
 #[cfg(test)]

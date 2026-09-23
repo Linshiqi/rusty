@@ -137,6 +137,30 @@ impl DebugState {
     pub fn stopped(&self) -> bool {
         self.attached && !self.running && self.exited.is_none()
     }
+
+    /// The target is executing again. A stack read while it runs is a lie, so
+    /// what the last stop read is dropped rather than left on the panel as if
+    /// it were current.
+    pub fn resumed(&mut self) {
+        self.running = true;
+        self.stack.clear();
+        self.variables.clear();
+        self.reason = None;
+    }
+
+    /// A breakpoint as the debugger reported it: in place of the one carrying
+    /// its number, or added. One the debugger has not numbered is always
+    /// added — there is nothing to know it again by.
+    pub fn record_breakpoint(&mut self, entry: Breakpoint) {
+        match self
+            .breakpoints
+            .iter_mut()
+            .find(|existing| existing.number == entry.number && entry.number.is_some())
+        {
+            Some(existing) => *existing = entry,
+            None => self.breakpoints.push(entry),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -166,6 +190,72 @@ mod tests {
             }
             .stopped(),
             "a program that has ended has nothing to step"
+        );
+    }
+
+    /// Both debuggers say the target is going again in their own words, and
+    /// both mean this: running, and nothing read at the last stop left over.
+    #[test]
+    fn resuming_forgets_what_the_last_stop_read() {
+        let mut state = DebugState {
+            attached: true,
+            reason: Some(StopReason::Breakpoint),
+            stack: vec![StackFrame {
+                level: 0,
+                function: "main".into(),
+                file: None,
+                line: Some(3),
+                address: "0x0".into(),
+            }],
+            variables: vec![Variable {
+                name: "n".into(),
+                value: "3".into(),
+                kind: None,
+                handle: None,
+                children: 0,
+            }],
+            frame: 1,
+            ..DebugState::default()
+        };
+        state.resumed();
+        assert!(state.running);
+        assert!(state.stack.is_empty() && state.variables.is_empty());
+        assert_eq!(state.reason, None);
+        assert!(state.attached, "attached is not resuming's to change");
+        assert_eq!(state.frame, 1, "nor is the selected frame");
+    }
+
+    /// A breakpoint reported again under its number replaces the one it was;
+    /// one the debugger has not numbered is another every time.
+    #[test]
+    fn a_breakpoint_is_known_again_by_its_number() {
+        let at = |number: Option<u32>, line: u32| Breakpoint {
+            number,
+            file: "src/main.rs".into(),
+            line,
+            requested: None,
+            verified: true,
+            reason: None,
+            enabled: true,
+        };
+        let mut state = DebugState::default();
+        for (number, line) in [
+            (Some(1), 10),
+            (Some(2), 20),
+            (Some(1), 12),
+            (None, 30),
+            (None, 30),
+        ] {
+            state.record_breakpoint(at(number, line));
+        }
+        let placed: Vec<(Option<u32>, u32)> = state
+            .breakpoints
+            .iter()
+            .map(|b| (b.number, b.line))
+            .collect();
+        assert_eq!(
+            placed,
+            [(Some(1), 12), (Some(2), 20), (None, 30), (None, 30)]
         );
     }
 }

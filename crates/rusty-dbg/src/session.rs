@@ -420,14 +420,8 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
         Record::Exec { class, fields } => {
             let value = Value::Tuple(fields.clone());
             if class == "running" {
-                state.running = true;
                 state.attached = true;
-                // A stack read while the target runs is a lie; drop it
-                // rather than leave the panel showing a stale frame as if
-                // it were current.
-                state.stack.clear();
-                state.variables.clear();
-                state.reason = None;
+                state.resumed();
                 return true;
             }
             if class == "stopped" {
@@ -609,7 +603,7 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
         .and_then(|(_, line)| line.parse::<u32>().ok())
         .map(|line| line.saturating_sub(1));
 
-    let entry = Breakpoint {
+    state.record_breakpoint(Breakpoint {
         number,
         file,
         line,
@@ -619,15 +613,7 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
         verified: true,
         reason: None,
         enabled: bkpt.field("enabled") != Some("n"),
-    };
-    match state
-        .breakpoints
-        .iter_mut()
-        .find(|existing| existing.number == entry.number && entry.number.is_some())
-    {
-        Some(existing) => *existing = entry,
-        None => state.breakpoints.push(entry),
-    }
+    });
 }
 
 /// One spelling of a separator.
