@@ -277,7 +277,7 @@ pub fn volume_of(path: &Path) -> Option<Volume> {
 /// Whether a build holds this tree's lock right now. Cargo takes
 /// `<tree>/.cargo-lock` for the whole of a build, and so does rust-analyzer's
 /// check; nothing in a locked tree is removed.
-pub fn tree_locked(tree: &Path) -> bool {
+fn tree_locked(tree: &Path) -> bool {
     use fs4::fs_std::FileExt;
     let Ok(file) = fs::OpenOptions::new()
         .read(true)
@@ -431,7 +431,7 @@ pub fn remove_tree(target_dir: &Path, path: &Path) -> Result<SweepReport> {
 }
 
 /// Remove one of cargo's own caches, named by its label from
-/// [`cargo_home_items`]. Only the removable ones; the index and the git
+/// `cargo_home_items`. Only the removable ones; the index and the git
 /// object databases stay.
 pub fn remove_cargo_cache(label: &str) -> Result<SweepReport> {
     let item = cargo_home_items()
@@ -452,7 +452,7 @@ pub fn remove_cargo_cache(label: &str) -> Result<SweepReport> {
 /// re-extracted from the downloaded archives on demand and the archives and
 /// git checkouts are re-fetched, so those three are removable; the index and
 /// the git object databases are not offered.
-pub fn cargo_home_items() -> Vec<DiskItem> {
+fn cargo_home_items() -> Vec<DiskItem> {
     let Some(home) = cargo_home() else {
         return Vec::new();
     };
@@ -867,7 +867,7 @@ fn verdict_of(dep_info: &Path, current: &Current) -> std::result::Result<Verdict
 /// The source paths a dep-info file names: everything after the first
 /// `output: ` on its first line. Windows paths carry `:\`, never `: `, so the
 /// first colon-space is the separator.
-pub fn dep_info_sources(text: &str) -> Option<Vec<String>> {
+fn dep_info_sources(text: &str) -> Option<Vec<String>> {
     let line = text.lines().find(|l| !l.trim().is_empty())?;
     let (_, rest) = line.split_once(": ")?;
     Some(
@@ -880,7 +880,7 @@ pub fn dep_info_sources(text: &str) -> Option<Vec<String>> {
 
 /// Where a unit's sources come from, read off the first path that says.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Origin {
+enum Origin {
     /// `<registry>/src/<index>/<name>-<version>/…`
     Registry { dir: String },
     /// `<cargo home>/git/checkouts/<repo>-<hash>/<rev>/…`
@@ -889,7 +889,7 @@ pub enum Origin {
     Local,
 }
 
-pub fn origin_of(sources: &[String]) -> Origin {
+fn origin_of(sources: &[String]) -> Origin {
     for source in sources {
         let segments: Vec<&str> = source.split(['\\', '/']).collect();
         for (index, window) in segments.windows(2).enumerate() {
@@ -969,7 +969,7 @@ fn judge_sources(sources: &[String], current: &Current) -> Verdict {
 /// contain dashes and versions may too (`1.0.0-beta.1`), so each dash is
 /// tried and kept when what follows parses as a semver version — for
 /// `windows-sys-0.52.0` that is one reading, for `sha-1-0.10.1` it is two.
-pub fn split_package_dir(dir: &str) -> Vec<(String, String)> {
+fn split_package_dir(dir: &str) -> Vec<(String, String)> {
     dir.match_indices('-')
         .filter_map(|(at, _)| {
             let (name, version) = (&dir[..at], &dir[at + 1..]);
@@ -981,7 +981,7 @@ pub fn split_package_dir(dir: &str) -> Vec<(String, String)> {
 
 /// The 16-hex-digit unit hash cargo suffixes every artifact and fingerprint
 /// directory with, when the name carries one.
-pub fn unit_hash(file_name: &str) -> Option<&str> {
+fn unit_hash(file_name: &str) -> Option<&str> {
     let stem = file_name
         .split_once('.')
         .map_or(file_name, |(stem, _)| stem);
@@ -1044,7 +1044,7 @@ fn run_script_hash(fingerprint_dir: &Path, package: &str, hash: &str) -> Option<
 // ─── the filesystem ──────────────────────────────────────────────────────────
 
 /// Bytes and files under `path`, symlinks not followed.
-pub fn measure(path: &Path) -> (u64, u64) {
+fn measure(path: &Path) -> (u64, u64) {
     let mut bytes = 0;
     let mut files = 0;
     let mut pending = vec![path.to_path_buf()];
