@@ -49,6 +49,14 @@ pub(crate) fn project_walk(root: &Path) -> WalkBuilder {
     walk
 }
 
+/// `path` relative to `root` with every backslash made a forward slash: the
+/// name search and the module scan give what the walk finds. `None` outside
+/// the root; the root itself is the empty string.
+pub(crate) fn relative_slashed(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    Some(relative.to_string_lossy().replace('\\', "/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +69,18 @@ mod tests {
         for shown in ["src", "Cargo.toml", "target", "a.b.c"] {
             assert!(!hidden_entry(shown), "{shown}");
         }
+    }
+
+    /// The name search and the module scan give a file: forward slashes on
+    /// every platform, and nothing for a path outside the root.
+    #[test]
+    fn a_walked_path_is_named_from_the_root_with_forward_slashes() {
+        let root = Path::new("project");
+        assert_eq!(
+            relative_slashed(root, &root.join("src").join("main.rs")).as_deref(),
+            Some("src/main.rs")
+        );
+        assert_eq!(relative_slashed(root, Path::new("elsewhere/main.rs")), None);
+        assert_eq!(relative_slashed(root, root).as_deref(), Some(""));
     }
 }

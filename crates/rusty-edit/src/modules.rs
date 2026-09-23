@@ -207,10 +207,9 @@ pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
 
     for found in walk.flatten() {
         let path = found.path();
-        let Ok(relative) = path.strip_prefix(root) else {
+        let Some(relative) = crate::hidden::relative_slashed(root, path) else {
             continue;
         };
-        let relative = relative.to_string_lossy().replace('\\', "/");
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         match name.as_deref() {
             Some("Cargo.toml") => {

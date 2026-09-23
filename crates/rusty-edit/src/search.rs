@@ -31,7 +31,7 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 use ignore::overrides::{Override, OverrideBuilder};
 use ignore::{DirEntry, WalkState};
 
-use crate::hidden::project_walk;
+use crate::hidden::{project_walk, relative_slashed};
 use crate::model::{ReplaceOutcome, SearchHit, SearchResults, Skipped};
 
 /// Stop after this many hits. The panel says so when it happens.
@@ -252,8 +252,7 @@ fn searchable(entry: Result<DirEntry, ignore::Error>, root: &Path) -> Option<(Di
     if entry.metadata().map(|m| m.len() > MAX_FILE).unwrap_or(true) {
         return None;
     }
-    let relative = entry.path().strip_prefix(root).ok()?;
-    let relative = relative.to_string_lossy().replace('\\', "/");
+    let relative = relative_slashed(root, entry.path())?;
     Some((entry, relative))
 }
 
