@@ -10,7 +10,10 @@ use std::sync::Arc;
 use rusty_lsp::{CompletionList, HoverInfo, Location, LspClient, LspEvent};
 use tauri::{State, ipc::Channel};
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    error::CommandError,
+    state::{AppState, blocking},
+};
 
 /// Start rust-analyzer for the open project and stream what it says.
 ///
@@ -55,15 +58,14 @@ pub async fn lsp_start(
     let named = tokio::task::spawn_blocking(|| rusty_embed::config::workbench().rust_analyzer)
         .await
         .unwrap_or_default();
-    let spawned = tokio::task::spawn_blocking(move || {
+    let spawned = blocking("the language server task", move || {
         LspClient::spawn(
             &root,
             hint.as_deref(),
             named.as_deref().map(std::path::Path::new),
         )
     })
-    .await
-    .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))?;
+    .await?;
 
     let (client, events) = match spawned {
         Ok(pair) => pair,
@@ -389,9 +391,7 @@ async fn on_blocking<T: Send + 'static>(
     client: Arc<LspClient>,
     question: impl FnOnce(&LspClient) -> rusty_lsp::Result<T> + Send + 'static,
 ) -> Result<T, CommandError> {
-    Ok(tokio::task::spawn_blocking(move || question(&client))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
+    Ok(blocking("the language server task", move || question(&client)).await??)
 }
 
 /// Rename the symbol at this position across the whole project.

@@ -48,12 +48,11 @@ pub async fn debug_start(
              hands the debugger the exact binary it booted.",
         )
     })?;
-    let project = tokio::task::spawn_blocking({
+    let project = blocking("project detection", {
         let root = root.clone();
         move || rusty_embed::project::detect(&root)
     })
-    .await
-    .map_err(|e| CommandError::new(format!("project detection panicked: {e}")))??;
+    .await??;
 
     // Which gdb: the chip's architecture decides, and refusing beats
     // guessing — an Xtensa gdb cannot debug a RISC-V image, and the
@@ -362,13 +361,12 @@ pub async fn register_map(
     let Some(chip) = state.chip().await else {
         return Ok(None);
     };
-    tokio::task::spawn_blocking(move || {
+    blocking("reading the SVD", move || {
         let path = rusty_embed::svd::find(&chip, root.as_deref())?;
         let xml = std::fs::read_to_string(path).ok()?;
         Some(rusty_embed::svd::parse(&xml))
     })
     .await
-    .map_err(|e| CommandError::new(format!("reading the SVD panicked: {e}")))
 }
 
 /// Fetch the chip's SVD, streaming progress like every other download.
@@ -381,7 +379,7 @@ pub async fn fetch_svd(
         .chip()
         .await
         .ok_or_else(|| CommandError::new("The chip is unknown, so rusty cannot pick an SVD."))?;
-    tokio::task::spawn_blocking(move || {
+    blocking("the SVD download", move || {
         rusty_embed::svd::fetch(&chip, |line| {
             let _ = on_line.send(rusty_embed::LogLine {
                 stream: rusty_embed::LogStream::Stdout,
@@ -390,8 +388,7 @@ pub async fn fetch_svd(
             });
         })
     })
-    .await
-    .map_err(|e| CommandError::new(format!("the SVD download panicked: {e}")))?
+    .await?
     .map(|_| ())
     .map_err(CommandError::from)
 }

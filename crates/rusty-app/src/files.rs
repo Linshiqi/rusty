@@ -256,11 +256,7 @@ pub async fn open_external(
     state: State<'_, AppState>,
 ) -> Result<Document, CommandError> {
     let files = state.files();
-    Ok(
-        tokio::task::spawn_blocking(move || files.open_external(&path))
-            .await
-            .map_err(|e| CommandError::new(format!("opening panicked: {e}")))??,
-    )
+    Ok(blocking("opening", move || files.open_external(&path)).await??)
 }
 
 /// Repaint an unsaved buffer against the painting the editor holds — `base`
@@ -274,9 +270,10 @@ pub async fn repaint_text(
     state: State<'_, AppState>,
 ) -> Result<rusty_edit::Repaint, CommandError> {
     let files = state.files();
-    tokio::task::spawn_blocking(move || files.repaint(&path, &text, base, stale))
-        .await
-        .map_err(|e| CommandError::new(format!("highlighting panicked: {e}")))
+    blocking("highlighting", move || {
+        files.repaint(&path, &text, base, stale)
+    })
+    .await
 }
 
 /// Highlight a fenced code block by the language its fence names, for the
@@ -289,9 +286,10 @@ pub async fn highlight_snippet(
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_edit::Line>, CommandError> {
     let files = state.files();
-    tokio::task::spawn_blocking(move || files.highlight_snippet(&lang, &text))
-        .await
-        .map_err(|e| CommandError::new(format!("highlighting panicked: {e}")))
+    blocking("highlighting", move || {
+        files.highlight_snippet(&lang, &text)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -315,11 +313,10 @@ pub async fn format_text(
     state: State<'_, AppState>,
 ) -> Result<rusty_edit::Formatted, CommandError> {
     let root = state.root().await.ok_or_else(CommandError::no_project)?;
-    Ok(
-        tokio::task::spawn_blocking(move || rusty_edit::format_rust(&root, &path, &text))
-            .await
-            .map_err(|e| CommandError::new(format!("formatting panicked: {e}")))??,
-    )
+    Ok(blocking("formatting", move || {
+        rusty_edit::format_rust(&root, &path, &text)
+    })
+    .await??)
 }
 
 /// Every place the query appears in the project's files.
@@ -342,9 +339,7 @@ pub async fn search_project(
         include,
         exclude,
     };
-    tokio::task::spawn_blocking(move || rusty_edit::search(&root, &spec))
-        .await
-        .map_err(|e| CommandError::new(format!("search panicked: {e}")))
+    blocking("search", move || rusty_edit::search(&root, &spec)).await
 }
 
 /// Rewrite every match the search would have listed.
@@ -383,9 +378,10 @@ pub async fn replace_in_project(
     };
     let replacement = args.replacement;
     let drafts = args.drafts;
-    tokio::task::spawn_blocking(move || rusty_edit::replace(&root, &spec, &replacement, &drafts))
-        .await
-        .map_err(|e| CommandError::new(format!("replace panicked: {e}")))
+    blocking("replace", move || {
+        rusty_edit::replace(&root, &spec, &replacement, &drafts)
+    })
+    .await
 }
 
 /// Watch the project and stream a batch every time it settles.
