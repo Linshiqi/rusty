@@ -177,12 +177,7 @@ impl Live {
     /// is worth the solves: a settled circuit answers the same counts for
     /// ever, and stepping it is arithmetic nobody reads.
     pub fn settling(&self) -> bool {
-        self.bridged.circuit.elements.iter().any(|element| {
-            matches!(
-                element,
-                Element::Capacitor { .. } | Element::Inductor { .. }
-            )
-        })
+        self.bridged.circuit.elements.iter().any(Element::remembers)
     }
 
     /// What the firmware reported: a pin it is driving, at the instant it

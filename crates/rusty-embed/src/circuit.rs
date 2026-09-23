@@ -376,8 +376,7 @@ pub fn of(
             ))
         };
         let two = || -> Option<(usize, usize)> {
-            let mut pins = symbol.pins.iter().filter(|p| !p.hidden);
-            let (a, b) = (pins.next()?, pins.next()?);
+            let (a, b) = symbol.two_terminals()?;
             ends(&a.number, &b.number)
         };
         let placed = match behaviour_of(symbol) {
@@ -484,7 +483,13 @@ pub fn of(
     // nothing is attached to is not *in* the circuit, which is a different
     // thing from a node that is attached and cannot reach ground — the
     // second is a finding and the first is a header pin nobody used.
-    let mut used: BTreeSet<usize> = elements.iter().flat_map(touches).collect();
+    let mut used: BTreeSet<usize> = elements
+        .iter()
+        .flat_map(|element| {
+            let (a, b) = element.ends();
+            [a, b]
+        })
+        .collect();
     used.insert(0);
     let renumber: BTreeMap<usize, usize> = std::iter::once((0usize, 0usize))
         .chain(
@@ -496,7 +501,7 @@ pub fn of(
         .collect();
     let elements: Vec<Element> = elements
         .into_iter()
-        .map(|element| moved(element, &renumber))
+        .map(|element| element.map_nodes(|node| renumber.get(&node).copied().unwrap_or(0)))
         .collect();
 
     Ok(Bridged {
@@ -518,71 +523,13 @@ pub fn of(
 /// them, so asked first it answered for the other row as well.
 fn kit_net<'a>(solid: &'a BTreeMap<PinRef, usize>, row: usize, spec: &Row) -> Option<&'a usize> {
     solid
-        .get(&PinRef::new(
-            crate::model::KIT_REFERENCE,
-            (row + 1).to_string(),
-        ))
+        .get(&PinRef::kit(row))
         .or_else(|| solid.get(&PinRef::new(crate::model::KIT_REFERENCE, &spec.name)))
-}
-
-/// The nodes an element is attached to.
-fn touches(element: &Element) -> [usize; 2] {
-    match *element {
-        Element::Resistor { a, b, .. } | Element::Short { a, b } => [a, b],
-        Element::Source { plus, minus, .. } => [plus, minus],
-        Element::Current { from, into, .. } => [from, into],
-        Element::Diode { anode, cathode, .. } => [anode, cathode],
-        Element::Capacitor { a, b, .. } | Element::Inductor { a, b, .. } => [a, b],
-    }
-}
-
-/// The same element with its nodes renumbered.
-fn moved(element: Element, to: &BTreeMap<usize, usize>) -> Element {
-    let at = |node: usize| to.get(&node).copied().unwrap_or(0);
-    match element {
-        Element::Resistor { a, b, ohms } => Element::Resistor {
-            a: at(a),
-            b: at(b),
-            ohms,
-        },
-        Element::Short { a, b } => Element::Short { a: at(a), b: at(b) },
-        Element::Source { plus, minus, volts } => Element::Source {
-            plus: at(plus),
-            minus: at(minus),
-            volts,
-        },
-        Element::Current { from, into, amps } => Element::Current {
-            from: at(from),
-            into: at(into),
-            amps,
-        },
-        Element::Diode {
-            anode,
-            cathode,
-            saturation,
-            ideality,
-        } => Element::Diode {
-            anode: at(anode),
-            cathode: at(cathode),
-            saturation,
-            ideality,
-        },
-        Element::Capacitor { a, b, farads } => Element::Capacitor {
-            a: at(a),
-            b: at(b),
-            farads,
-        },
-        Element::Inductor { a, b, henries } => Element::Inductor {
-            a: at(a),
-            b: at(b),
-            henries,
-        },
-    }
 }
 
 /// The saturation current that makes a lamp drop `forward` at [`LAMP_AT`].
 fn lamp_saturation(forward: f64) -> f64 {
-    let thermal = LAMP_IDEALITY * 0.025_865;
+    let thermal = LAMP_IDEALITY * crate::solve::THERMAL;
     (LAMP_AT / (forward / thermal).exp()).max(1e-300)
 }
 

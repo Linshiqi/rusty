@@ -12,36 +12,17 @@
 /// resistor drawn as 10k and computed as nothing is two answers to one
 /// question.
 pub fn ohms(value: &str) -> Option<f64> {
-    let text: String = value
-        .trim()
+    let text: String = compact(value)
         .chars()
-        .filter(|c| !c.is_whitespace() && *c != 'Ω' && *c != 'ω')
+        .filter(|c| *c != 'Ω' && *c != 'ω')
         .collect();
-    let text = text.trim_end_matches(['R', 'r']).to_string();
-    if text.is_empty() {
-        return None;
-    }
-    let scale = |c: char| match c {
+    multiplied(text.trim_end_matches(['R', 'r']), |c| match c {
         'k' | 'K' => Some(1e3),
         'M' => Some(1e6),
         'G' => Some(1e9),
         'R' | 'r' => Some(1.0),
         _ => None,
-    };
-    // `4k7` — the multiplier standing in for the decimal point.
-    if let Some((index, letter)) = text.char_indices().find(|(_, c)| scale(*c).is_some()) {
-        let (head, rest) = text.split_at(index);
-        let tail = &rest[letter.len_utf8()..];
-        let head: f64 = head.parse().ok()?;
-        let factor = scale(letter)?;
-        if tail.is_empty() {
-            return Some(head * factor);
-        }
-        let digits: f64 = tail.parse().ok()?;
-        let places = 10f64.powi(tail.len() as i32);
-        return Some((head + digits / places) * factor);
-    }
-    text.parse().ok()
+    })
 }
 
 /// A capacitance the way people write one: `100n`, `100nF`, `10u`, `10µF`,
@@ -54,34 +35,13 @@ pub fn ohms(value: &str) -> Option<f64> {
 /// behind, and a transient computed from an invented one is a settling time
 /// that looks measured and is not.
 pub fn farads(value: &str) -> Option<f64> {
-    let text: String = value
-        .trim()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    let text = text.trim_end_matches(['F', 'f']);
-    if text.is_empty() {
-        return None;
-    }
-    let scale = |c: char| match c {
+    multiplied(compact(value).trim_end_matches(['F', 'f']), |c| match c {
         'p' | 'P' => Some(1e-12),
         'n' | 'N' => Some(1e-9),
         'u' | 'U' | 'µ' | 'μ' => Some(1e-6),
         'm' => Some(1e-3),
         _ => None,
-    };
-    if let Some((index, letter)) = text.char_indices().find(|(_, c)| scale(*c).is_some()) {
-        let (head, rest) = text.split_at(index);
-        let tail = &rest[letter.len_utf8()..];
-        let head: f64 = head.parse().ok()?;
-        let factor = scale(letter)?;
-        if tail.is_empty() {
-            return Some(head * factor);
-        }
-        let digits: f64 = tail.parse().ok()?;
-        return Some((head + digits / 10f64.powi(tail.len() as i32)) * factor);
-    }
-    text.parse().ok()
+    })
 }
 
 /// A voltage from the way people write one on a rail: `3V3`, `3.3V`,
@@ -93,21 +53,31 @@ pub fn farads(value: &str) -> Option<f64> {
 /// and a solver that read it as five volts would be inventing the number
 /// every answer downstream depends on.
 pub fn volts(value: &str) -> Option<f64> {
-    let text: String = value
-        .trim()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    let text = text.strip_prefix('+').unwrap_or(text.as_str());
-    if let Some(at) = text.find(['V', 'v']) {
-        let (head, rest) = text.split_at(at);
-        let tail = &rest[1..];
-        let head: f64 = head.parse().ok()?;
-        if tail.is_empty() {
-            return Some(head);
-        }
-        let digits: f64 = tail.parse().ok()?;
-        return Some(head + digits / 10f64.powi(tail.len() as i32));
+    let text = compact(value);
+    multiplied(text.strip_prefix('+').unwrap_or(&text), |c| {
+        matches!(c, 'V' | 'v').then_some(1.0)
+    })
+}
+
+/// The value with its whitespace taken out: `4.7 k` reads as `4.7k`.
+fn compact(value: &str) -> String {
+    value.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// A number with a multiplier after it (`4.7k`), in place of its decimal
+/// point (`4k7`), or none at all (`4700`). The first letter `scale` knows
+/// is the multiplier; anything else in the text leaves it unreadable.
+fn multiplied(text: &str, scale: impl Fn(char) -> Option<f64>) -> Option<f64> {
+    let Some((index, letter)) = text.char_indices().find(|(_, c)| scale(*c).is_some()) else {
+        return text.parse().ok();
+    };
+    let (head, rest) = text.split_at(index);
+    let tail = &rest[letter.len_utf8()..];
+    let head: f64 = head.parse().ok()?;
+    let factor = scale(letter)?;
+    if tail.is_empty() {
+        return Some(head * factor);
     }
-    text.parse().ok()
+    let digits: f64 = tail.parse().ok()?;
+    Some((head + digits / 10f64.powi(tail.len() as i32)) * factor)
 }

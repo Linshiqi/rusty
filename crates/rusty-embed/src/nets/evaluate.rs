@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::graph::{Drivers, Graph, Node, UnionFind};
-use super::{Behaviour, Row, Warning, button_drives, kit_pin};
+use super::{Behaviour, Row, Warning, button_drives};
 use crate::model::{KIT_REFERENCE, Pin, PinKind, PinRef, Sheet};
 
 /// The whole reading of one sheet at one moment.
@@ -112,9 +112,8 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
         }
     }
     for (row, spec) in inputs.rows.iter().enumerate() {
-        let by_number = PinRef::new(KIT_REFERENCE, (row + 1).to_string());
         let by_name = PinRef::new(KIT_REFERENCE, &spec.name);
-        if let Some(level) = levels.get(&by_number)
+        if let Some(level) = levels.get(&PinRef::kit(row))
             && !levels.contains_key(&by_name)
             && !aliases.iter().any(|(p, _)| *p == by_name)
         {
@@ -130,11 +129,7 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
     // between it and the lamp.
     let gpio_directly_on = |uf: &mut UnionFind, node: Node| -> bool {
         let root = uf.find(node);
-        graph.nodes.iter().enumerate().any(|(other, pin)| {
-            pin.part == KIT_REFERENCE
-                && uf.find(other) == root
-                && kit_pin(graph.rows, &pin.pin).is_some_and(|row| graph.rows[row].gpio.is_some())
-        })
+        graph.gpio_in(uf, root).is_some()
     };
 
     for part in &inputs.sheet.parts {
@@ -230,9 +225,8 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
         }
     }
     for (row, spec) in inputs.rows.iter().enumerate() {
-        let by_number = PinRef::new(KIT_REFERENCE, (row + 1).to_string());
         let by_name = PinRef::new(KIT_REFERENCE, &spec.name);
-        if let Some(net) = nets.get(&by_number)
+        if let Some(net) = nets.get(&PinRef::kit(row))
             && !nets.contains_key(&by_name)
             && !net_aliases.iter().any(|(p, _)| *p == by_name)
         {
@@ -290,19 +284,10 @@ pub fn evaluate(inputs: Inputs<'_>) -> Evaluation {
             {
                 continue;
             }
-            // Named as a wire would name it: the name when it is one and
-            // no other pin of the symbol shares it, the number otherwise —
-            // the same rule the sheet spells a wire's ends by.
-            let named = pin.name != "~"
-                && !pin.name.is_empty()
-                && symbol.pins.iter().filter(|p| p.name == pin.name).count() == 1;
+            // Named as a wire would name it.
             warnings.push(Warning::PinReachesNothing {
                 part: part.reference.clone(),
-                pin: if named {
-                    pin.name.clone()
-                } else {
-                    pin.number.clone()
-                },
+                pin: symbol.wire_key(pin),
             });
         }
     }

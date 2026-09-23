@@ -1,10 +1,8 @@
 //! What pressing a switch does: drive a GPIO to a rail's level, or join
 //! two GPIOs.
 
-use std::collections::HashSet;
-
-use super::graph::{Graph, Node};
-use super::{Rail, Row, gpio_of, kit_pin, power_rail};
+use super::graph::Graph;
+use super::{Rail, Row, gpio_of, power_rail};
 use crate::model::{KIT_REFERENCE, Sheet};
 
 /// What pressing a switch does: the GPIO it reaches on one side, and the
@@ -12,32 +10,17 @@ use crate::model::{KIT_REFERENCE, Sheet};
 /// changes nothing the firmware could read — no GPIO, no rail, or a switch
 /// with one side unwired — which is a warning rather than a guess.
 pub fn button_drives(sheet: &Sheet, rows: &[Row], part: &str) -> Option<(u8, bool)> {
-    let mut graph = Graph::new(sheet, rows);
-    let wired = graph.wired();
-    let solid = graph.solid(&wired, &HashSet::new());
-    let mut dc = graph.conducting(&solid);
-    let symbol = sheet.symbol_of(part)?;
+    let (graph, mut dc) = Graph::conducting_of(sheet, rows);
     let mut sides: Vec<(Option<u8>, Option<Rail>)> = Vec::new();
-    let mut seen_roots: Vec<Node> = Vec::new();
-    for pin in &symbol.pins {
-        let Some(node) = graph.pin_node(part, &pin.number) else {
-            continue;
-        };
-        let root = dc.find(node);
-        if seen_roots.contains(&root) {
-            continue;
-        }
-        seen_roots.push(root);
+    for root in graph.sides(&mut dc, part) {
         let mut gpio = None;
         let mut rail = None;
-        for (other, other_pin) in graph.nodes.iter().enumerate() {
-            if dc.find(other) != root {
-                continue;
-            }
+        for other in graph.members(&mut dc, root) {
+            let other_pin = &graph.nodes[other];
             if other_pin.part == KIT_REFERENCE {
-                if let Some(row) = kit_pin(rows, &other_pin.pin) {
-                    gpio = gpio.or(rows[row].gpio);
-                    rail = rail.or(rows[row].rail);
+                if let Some(row) = graph.row_of(other) {
+                    gpio = gpio.or(row.gpio);
+                    rail = rail.or(row.rail);
                 }
             } else {
                 // A power symbol is a rail wherever it is drawn, as
@@ -85,33 +68,12 @@ pub fn keypad_tie(
 /// Both sides must reach a GPIO and they must be different ones; anything
 /// else is `None` and the caller falls back to the rail reading.
 pub fn switch_tie(sheet: &Sheet, rows: &[Row], part: &str) -> Option<(u8, u8)> {
-    let mut graph = Graph::new(sheet, rows);
-    let wired = graph.wired();
-    let solid = graph.solid(&wired, &HashSet::new());
-    let mut dc = graph.conducting(&solid);
-    let symbol = sheet.symbol_of(part)?;
-    let mut sides: Vec<u8> = Vec::new();
-    let mut seen_roots: Vec<Node> = Vec::new();
-
-    for pin in &symbol.pins {
-        let Some(node) = graph.pin_node(part, &pin.number) else {
-            continue;
-        };
-        let root = dc.find(node);
-        if seen_roots.contains(&root) {
-            continue;
-        }
-        seen_roots.push(root);
-        for (other, other_pin) in graph.nodes.iter().enumerate() {
-            if other_pin.part != KIT_REFERENCE || dc.find(other) != root {
-                continue;
-            }
-            if let Some(gpio) = kit_pin(rows, &other_pin.pin).and_then(|row| rows[row].gpio) {
-                sides.push(gpio);
-                break;
-            }
-        }
-    }
+    let (graph, mut dc) = Graph::conducting_of(sheet, rows);
+    let mut sides: Vec<u8> = graph
+        .sides(&mut dc, part)
+        .into_iter()
+        .filter_map(|root| graph.gpio_in(&mut dc, root))
+        .collect();
     sides.sort_unstable();
     sides.dedup();
     (sides.len() == 2).then(|| (sides[0], sides[1]))

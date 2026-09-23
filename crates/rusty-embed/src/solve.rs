@@ -76,7 +76,7 @@ pub enum Element {
 
 impl Element {
     /// The two nodes it touches.
-    fn ends(&self) -> (usize, usize) {
+    pub(crate) fn ends(&self) -> (usize, usize) {
         match *self {
             Element::Resistor { a, b, .. } | Element::Short { a, b } => (a, b),
             Element::Source { plus, minus, .. } => (plus, minus),
@@ -98,8 +98,52 @@ impl Element {
 
     /// Does it hold energy — and so carry something from one step to the
     /// next, and behave differently at DC than in a transient?
-    fn remembers(&self) -> bool {
+    pub(crate) fn remembers(&self) -> bool {
         matches!(self, Element::Capacitor { .. } | Element::Inductor { .. })
+    }
+
+    /// The same element with each of its nodes put through `to` — what
+    /// renumbering a circuit's nodes does to every element in it.
+    pub(crate) fn map_nodes(self, to: impl Fn(usize) -> usize) -> Element {
+        match self {
+            Element::Resistor { a, b, ohms } => Element::Resistor {
+                a: to(a),
+                b: to(b),
+                ohms,
+            },
+            Element::Short { a, b } => Element::Short { a: to(a), b: to(b) },
+            Element::Source { plus, minus, volts } => Element::Source {
+                plus: to(plus),
+                minus: to(minus),
+                volts,
+            },
+            Element::Current { from, into, amps } => Element::Current {
+                from: to(from),
+                into: to(into),
+                amps,
+            },
+            Element::Diode {
+                anode,
+                cathode,
+                saturation,
+                ideality,
+            } => Element::Diode {
+                anode: to(anode),
+                cathode: to(cathode),
+                saturation,
+                ideality,
+            },
+            Element::Capacitor { a, b, farads } => Element::Capacitor {
+                a: to(a),
+                b: to(b),
+                farads,
+            },
+            Element::Inductor { a, b, henries } => Element::Inductor {
+                a: to(a),
+                b: to(b),
+                henries,
+            },
+        }
     }
 
     /// The current its own curve has at `across`, first terminal to second,
@@ -390,7 +434,7 @@ impl Transient {
 }
 
 /// The thermal voltage at room temperature, `kT/q` at 300.15 K.
-const THERMAL: f64 = 0.025_865;
+pub(crate) const THERMAL: f64 = 0.025_865;
 
 /// How close two successive guesses must be before the answer is taken:
 /// SPICE's own shape — a relative part for large voltages and a floor for

@@ -142,6 +142,26 @@ impl Symbol {
             .or_else(|| self.pins.iter().find(|p| p.name == key))
     }
 
+    /// How a wire spells one of this symbol's pins: its name when it has one
+    /// that no other pin shares, its number otherwise — `D1.K` and
+    /// `U1.GPIO2`, and `U1.9` only where `GND` repeats.
+    pub fn wire_key(&self, pin: &Pin) -> String {
+        let named = pin.name != "~" && !pin.name.is_empty();
+        let unique = self.pins.iter().filter(|p| p.name == pin.name).count() == 1;
+        if named && unique {
+            pin.name.clone()
+        } else {
+            pin.number.clone()
+        }
+    }
+
+    /// The two ends of a two-terminal part, in pin order. A hidden pin is
+    /// not an end.
+    pub fn two_terminals(&self) -> Option<(&Pin, &Pin)> {
+        let mut pins = self.pins.iter().filter(|p| !p.hidden);
+        Some((pins.next()?, pins.next()?))
+    }
+
     /// The box every graphic and pin fits in, `(min x, min y, max x, max y)`
     /// in the symbol's own units — what placement and hit-testing use.
     /// `None` for a symbol with nothing to draw.

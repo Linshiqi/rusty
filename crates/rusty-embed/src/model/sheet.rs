@@ -71,6 +71,12 @@ impl PinRef {
         }
     }
 
+    /// A devkit row by its position, spelled by its 1-based number — how the
+    /// rules key a row, whichever name a wire used for it.
+    pub fn kit(row: usize) -> Self {
+        PinRef::new(KIT_REFERENCE, (row + 1).to_string())
+    }
+
     /// `D1.K` → `D1`, `K`. The pin may itself carry a dot (`U1.3V3` does
     /// not, but a library could), so the split is at the first one.
     pub fn parse(text: &str) -> Option<Self> {

@@ -19,9 +19,7 @@ pub fn solid_nets(
     rows: &[Row],
     pressed: &HashSet<String>,
 ) -> BTreeMap<PinRef, usize> {
-    let mut graph = Graph::new(sheet, rows);
-    let wired = graph.wired();
-    let mut solid = graph.solid(&wired, pressed);
+    let (graph, mut solid) = Graph::solid_of(sheet, rows, pressed);
     let mut out = BTreeMap::new();
     for node in 0..graph.nodes.len() {
         out.insert(graph.nodes[node].clone(), solid.find(node));
@@ -40,9 +38,8 @@ pub fn solid_nets(
         }
     }
     for (row, spec) in rows.iter().enumerate() {
-        let by_number = PinRef::new(KIT_REFERENCE, (row + 1).to_string());
         let by_name = PinRef::new(KIT_REFERENCE, &spec.name);
-        if let Some(node) = out.get(&by_number)
+        if let Some(node) = out.get(&PinRef::kit(row))
             && !out.contains_key(&by_name)
         {
             aliases.push((by_name, *node));
@@ -122,9 +119,29 @@ impl<'a> Graph<'a> {
             }
         }
         for row in 0..rows.len() {
-            graph.node(PinRef::new(KIT_REFERENCE, (row + 1).to_string()));
+            graph.node(PinRef::kit(row));
         }
         graph
+    }
+
+    /// The graph and its solid partition, with `pressed` held.
+    pub(super) fn solid_of(
+        sheet: &'a Sheet,
+        rows: &'a [Row],
+        pressed: &HashSet<String>,
+    ) -> (Self, UnionFind) {
+        let mut graph = Graph::new(sheet, rows);
+        let wired = graph.wired();
+        let solid = graph.solid(&wired, pressed);
+        (graph, solid)
+    }
+
+    /// The graph and its conducting partition with nothing held: what a
+    /// question about where a pin *reaches* is asked of.
+    pub(super) fn conducting_of(sheet: &'a Sheet, rows: &'a [Row]) -> (Self, UnionFind) {
+        let (mut graph, solid) = Graph::solid_of(sheet, rows, &HashSet::new());
+        let conducting = graph.conducting(&solid);
+        (graph, conducting)
     }
 
     fn node(&mut self, pin: PinRef) -> Node {
@@ -142,10 +159,7 @@ impl<'a> Graph<'a> {
     fn resolve(&self, end: &PinRef) -> Option<Node> {
         if end.part == KIT_REFERENCE {
             let row = kit_pin(self.rows, &end.pin)?;
-            return self
-                .index
-                .get(&PinRef::new(KIT_REFERENCE, (row + 1).to_string()))
-                .copied();
+            return self.index.get(&PinRef::kit(row)).copied();
         }
         let symbol = self.sheet.symbol_of(&end.part)?;
         let pin = symbol.pin(&end.pin)?;
@@ -161,14 +175,54 @@ impl<'a> Graph<'a> {
 
     /// The two ends of a two-terminal part, in pin order.
     pub(super) fn terminals(&self, part: &str) -> Option<(Node, Node)> {
-        let symbol = self.sheet.symbol_of(part)?;
-        let mut pins = symbol.pins.iter().filter(|p| !p.hidden);
-        let a = pins.next()?;
-        let b = pins.next()?;
+        let (a, b) = self.sheet.symbol_of(part)?.two_terminals()?;
         Some((
             self.pin_node(part, &a.number)?,
             self.pin_node(part, &b.number)?,
         ))
+    }
+
+    /// The devkit row a node stands for, or `None` for a part's pin.
+    pub(super) fn row_of(&self, node: Node) -> Option<&'a Row> {
+        let pin = &self.nodes[node];
+        if pin.part != KIT_REFERENCE {
+            return None;
+        }
+        kit_pin(self.rows, &pin.pin).map(|row| &self.rows[row])
+    }
+
+    /// Every node in the net `root` heads, in node order.
+    pub(super) fn members<'u>(
+        &self,
+        uf: &'u mut UnionFind,
+        root: Node,
+    ) -> impl Iterator<Item = Node> + 'u {
+        (0..self.nodes.len()).filter(move |node| uf.find(*node) == root)
+    }
+
+    /// The first GPIO row in the net `root` heads.
+    pub(super) fn gpio_in(&self, uf: &mut UnionFind, root: Node) -> Option<u8> {
+        self.members(uf, root)
+            .find_map(|node| self.row_of(node).and_then(|row| row.gpio))
+    }
+
+    /// The distinct nets a part's pins sit in, in pin order: one per side of
+    /// a switch, however many pins that side has.
+    pub(super) fn sides(&self, uf: &mut UnionFind, part: &str) -> Vec<Node> {
+        let Some(symbol) = self.sheet.symbol_of(part) else {
+            return Vec::new();
+        };
+        let mut roots: Vec<Node> = Vec::new();
+        for pin in &symbol.pins {
+            let Some(node) = self.pin_node(part, &pin.number) else {
+                continue;
+            };
+            let root = uf.find(node);
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        roots
     }
 
     /// The nets the wires alone make.
@@ -314,15 +368,12 @@ impl<'a> Graph<'a> {
             rail_nodes.entry(root).or_default().push((rail, node));
         }
         for (node, pin) in self.nodes.iter().enumerate() {
-            if pin.part != KIT_REFERENCE {
-                continue;
-            }
-            let Some(row) = kit_pin(self.rows, &pin.pin) else {
+            let Some(row) = self.row_of(node) else {
                 continue;
             };
             let root = uf.find(node);
             let drivers = out.entry(root).or_default();
-            match (&self.rows[row].rail, self.rows[row].gpio) {
+            match (&row.rail, row.gpio) {
                 (Some(rail), _) => {
                     drivers.rails.push((*rail, pin.clone()));
                     rail_nodes.entry(root).or_default().push((*rail, node));

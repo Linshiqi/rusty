@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use super::graph::{Graph, Node, UnionFind};
-use super::{Behaviour, Rail, Row, behaviour_of, kit_pin, ohms, power_rail};
+use super::{Behaviour, Rail, Row, behaviour_of, ohms, power_rail};
 use crate::model::{KIT_REFERENCE, PinRef, Sheet};
 
 /// Where a pin sits between the rails, as a fraction: 0.0 at ground, 1.0 at
@@ -37,20 +37,16 @@ pub struct Divider {
 /// answer: a solver that guessed at the rest would put a number under an
 /// ADC reading that nobody could check.
 pub fn divider_at(sheet: &Sheet, rows: &[Row], pin: &PinRef) -> Option<Divider> {
-    let mut graph = Graph::new(sheet, rows);
-    let wired = graph.wired();
-    let mut solid = graph.solid(&wired, &HashSet::new());
+    let (graph, mut solid) = Graph::solid_of(sheet, rows, &HashSet::new());
     let here = solid.find(graph.pin_node(&pin.part, &pin.pin)?);
 
     // What a solid node sits on directly, with no resistance in the way.
     let rail_of = |solid: &mut UnionFind, root: Node| -> Option<Rail> {
         let mut found = None;
-        for (node, at) in graph.nodes.iter().enumerate() {
-            if solid.find(node) != root {
-                continue;
-            }
+        for node in graph.members(solid, root) {
+            let at = &graph.nodes[node];
             let rail = if at.part == KIT_REFERENCE {
-                kit_pin(rows, &at.pin).and_then(|row| rows[row].rail)
+                graph.row_of(node).and_then(|row| row.rail)
             } else {
                 sheet.symbol_of(&at.part).and_then(power_rail)
             };
@@ -196,20 +192,7 @@ impl PotSpan {
 /// The GPIO a part's pin reaches through the wires and the resistors — what
 /// a pot's wiper or a motor's duty pin is *on*, in the firmware's terms.
 pub fn gpio_of(sheet: &Sheet, rows: &[Row], part: &str, pin: &str) -> Option<u8> {
-    let mut graph = Graph::new(sheet, rows);
-    let wired = graph.wired();
-    let solid = graph.solid(&wired, &HashSet::new());
-    let mut dc = graph.conducting(&solid);
-    let node = graph.pin_node(part, pin)?;
-    let root = dc.find(node);
-    graph
-        .nodes
-        .iter()
-        .enumerate()
-        .find_map(|(other, other_pin)| {
-            (other_pin.part == KIT_REFERENCE && dc.find(other) == root)
-                .then(|| kit_pin(rows, &other_pin.pin))
-                .flatten()
-                .and_then(|row| rows[row].gpio)
-        })
+    let (graph, mut dc) = Graph::conducting_of(sheet, rows);
+    let root = dc.find(graph.pin_node(part, pin)?);
+    graph.gpio_in(&mut dc, root)
 }
