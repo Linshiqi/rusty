@@ -16,7 +16,7 @@
 
 use serde_json::{Value, json};
 
-use super::{Tool, ToolContext, read_only, required_str};
+use super::{Tool, ToolContext, bool_arg, read_only, required_str};
 use crate::{
     error::{Error, Result},
     model::ToolDef,
@@ -84,16 +84,13 @@ impl Tool for ReadFile {
     fn call(&self, args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         let root = ctx.require_root()?;
         let path = required_str(args, "path", "read_file")?;
-        let bytes =
-            rusty_edit::read_bytes(root, &path).map_err(|error| Error::BadToolArguments {
-                name: "read_file".into(),
-                detail: error.to_string(),
-            })?;
+        let bytes = rusty_edit::read_bytes(root, &path)
+            .map_err(|error| Error::bad_args("read_file", error.to_string()))?;
         let Ok(text) = String::from_utf8(bytes) else {
-            return Err(Error::BadToolArguments {
-                name: "read_file".into(),
-                detail: format!("`{path}` is not a text file"),
-            });
+            return Err(Error::bad_args(
+                "read_file",
+                format!("`{path}` is not a text file"),
+            ));
         };
         let lines: Vec<&str> = text.lines().collect();
         let total = lines.len();
@@ -167,9 +164,9 @@ impl Tool for SearchProject {
         let root = ctx.require_root()?;
         let query = rusty_edit::SearchQuery {
             text: required_str(args, "query", "search_project")?,
-            case_sensitive: flag(args, "case_sensitive"),
+            case_sensitive: bool_arg(args, "case_sensitive", false),
             whole_word: false,
-            regex: flag(args, "regex"),
+            regex: bool_arg(args, "regex", false),
             include: args
                 .get("include")
                 .and_then(Value::as_str)
@@ -179,10 +176,7 @@ impl Tool for SearchProject {
         };
         let results = rusty_edit::search(root, &query);
         if let Some(error) = results.error {
-            return Err(Error::BadToolArguments {
-                name: "search_project".into(),
-                detail: error,
-            });
+            return Err(Error::bad_args("search_project", error));
         }
         let capped = results.hits.len() > MAX_HITS;
         let hits: Vec<Value> = results
@@ -203,10 +197,6 @@ impl Tool for SearchProject {
             "truncated": results.truncated || capped,
         }))
     }
-}
-
-fn flag(args: &Value, key: &str) -> bool {
-    args.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,10 +232,8 @@ impl Tool for ListFiles {
 
     fn call(&self, args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         let root = ctx.require_root()?;
-        let tree = rusty_edit::read_tree(root).map_err(|error| Error::BadToolArguments {
-            name: "list_files".into(),
-            detail: error.to_string(),
-        })?;
+        let tree = rusty_edit::read_tree(root)
+            .map_err(|error| Error::bad_args("list_files", error.to_string()))?;
         let prefix = args
             .get("dir")
             .and_then(Value::as_str)

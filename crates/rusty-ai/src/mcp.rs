@@ -258,7 +258,7 @@ impl Server {
                 "`name` is required and must be a string".into(),
             ));
         };
-        if !self.registry.defs().iter().any(|def| def.name == name) {
+        if !self.registry.knows(name) {
             return Err((INVALID_PARAMS, format!("Unknown tool: {name}")));
         }
         let arguments = match params.get("arguments") {

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use rusty_core::FeatureSelection;
 
-use super::{Tool, ToolContext, no_arguments, read_only, required_str, string_list};
+use super::{Tool, ToolContext, bool_arg, no_arguments, read_only, required_str, string_list};
 use crate::{error::Result, model::ToolDef};
 
 pub(super) fn tools() -> Vec<Box<dyn Tool>> {
@@ -26,10 +26,7 @@ fn selection(args: &Value, tool: &str) -> Result<FeatureSelection> {
     Ok(FeatureSelection {
         package: required_str(args, "package", tool)?,
         features: string_list(args, "features"),
-        default_features: args
-            .get("defaultFeatures")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+        default_features: bool_arg(args, "defaultFeatures", true),
     })
 }
 

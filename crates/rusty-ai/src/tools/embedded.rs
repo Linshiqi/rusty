@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use rusty_embed::{memory, project, toolchain};
 
-use super::{Tool, ToolContext, no_arguments, read_only};
+use super::{Tool, ToolContext, bool_arg, no_arguments, read_only};
 use crate::{error::Result, model::ToolDef};
 
 pub(super) fn tools() -> Vec<Box<dyn Tool>> {
@@ -81,8 +81,9 @@ impl Tool for ToolchainStatus {
     fn call(&self, _args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         // Deliberately works without a project: "is my machine set up?" is a
         // reasonable question before anything is open.
-        let detected = ctx.root.and_then(|root| project::detect(root).ok());
-        Ok(serde_json::to_value(toolchain::report(detected.as_ref()))?)
+        Ok(serde_json::to_value(toolchain::report(
+            ctx.project().as_ref(),
+        ))?)
     }
 }
 
@@ -115,10 +116,7 @@ impl Tool for MemoryReport {
 
     fn call(&self, _args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         let firmware = ctx.require_firmware()?;
-        let chip_id = ctx
-            .root
-            .and_then(|root| project::detect(root).ok())
-            .and_then(|p| p.chip);
+        let chip_id = ctx.project().and_then(|p| p.chip);
         Ok(serde_json::to_value(memory::analyze(
             firmware,
             chip_id.as_deref(),
@@ -168,7 +166,7 @@ impl Tool for ChipCatalogue {
 
     fn call(&self, args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         let catalog = ctx.catalog();
-        let want_boards = args.get("boards").and_then(Value::as_bool).unwrap_or(false);
+        let want_boards = bool_arg(args, "boards", false);
 
         let Some(wanted) = args.get("chip").and_then(Value::as_str) else {
             let mut out = json!({ "chips": catalog.chips() });

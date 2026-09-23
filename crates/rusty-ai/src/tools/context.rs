@@ -98,6 +98,14 @@ impl<'a> ToolContext<'a> {
         }
     }
 
+    /// The open project as detection reads it, for a tool that answers
+    /// without one and says more with it. `None` with no project open, or
+    /// one detection cannot read.
+    pub(crate) fn project(&self) -> Option<rusty_embed::EmbeddedProject> {
+        self.root
+            .and_then(|root| rusty_embed::project::detect(root).ok())
+    }
+
     pub fn require_root(&self) -> Result<&Path> {
         self.root.ok_or_else(|| Error::MissingContext {
             needed: "an open project".into(),

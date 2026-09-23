@@ -35,16 +35,23 @@ pub trait Tool: Send + Sync {
 }
 
 pub struct ToolRegistry {
-    tools: Vec<Box<dyn Tool>>,
+    /// Each tool beside its definition, under the name it answers to —
+    /// read once, when it is registered.
+    tools: Vec<(ToolDef, Box<dyn Tool>)>,
 }
 
 impl ToolRegistry {
     /// The built-in set: everything the workbench can currently answer.
     pub fn workbench() -> Self {
-        let mut tools = cargo::tools();
-        tools.extend(embedded::tools());
-        tools.extend(files::tools());
-        Self { tools }
+        let mut registry = Self { tools: Vec::new() };
+        for tool in cargo::tools()
+            .into_iter()
+            .chain(embedded::tools())
+            .chain(files::tools())
+        {
+            registry.register(tool);
+        }
+        registry
     }
 
     /// The built-in set, plus the tools that run commands: what the MCP
@@ -69,26 +76,27 @@ impl ToolRegistry {
     /// the integration tests are its caller, and they are what keep the
     /// namespacing rule true rather than intended.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.tools.push(tool);
+        let mut def = tool.def();
+        def.name = qualified_name(&def);
+        self.tools.push((def, tool));
     }
 
     pub fn defs(&self) -> Vec<ToolDef> {
-        self.tools
-            .iter()
-            .map(|t| {
-                let mut def = t.def();
-                def.name = qualified_name(&def);
-                def
-            })
-            .collect()
+        self.tools.iter().map(|(def, _)| def.clone()).collect()
+    }
+
+    /// Whether a tool answers to `name`.
+    pub fn knows(&self, name: &str) -> bool {
+        self.tools.iter().any(|(def, _)| def.name == name)
     }
 
     pub fn call(&self, name: &str, args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
-        self.tools
+        let (_, tool) = self
+            .tools
             .iter()
-            .find(|t| qualified_name(&t.def()) == name)
-            .ok_or_else(|| Error::UnknownTool(name.to_string()))?
-            .call(args, ctx)
+            .find(|(def, _)| def.name == name)
+            .ok_or_else(|| Error::UnknownTool(name.to_string()))?;
+        tool.call(args, ctx)
     }
 
     /// True when nothing in the registry needs user approval, which is what
@@ -101,7 +109,7 @@ impl ToolRegistry {
     pub fn is_read_only(&self) -> bool {
         self.tools
             .iter()
-            .all(|t| !t.def().capabilities.needs_approval())
+            .all(|(def, _)| !def.capabilities.needs_approval())
     }
 }
 
@@ -125,10 +133,12 @@ pub(crate) fn required_str(args: &Value, key: &str, tool: &str) -> Result<String
     args.get(key)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| Error::BadToolArguments {
-            name: tool.to_string(),
-            detail: format!("`{key}` is required and must be a string"),
-        })
+        .ok_or_else(|| Error::bad_args(tool, format!("`{key}` is required and must be a string")))
+}
+
+/// A boolean argument, or `default` where it is absent or not a boolean.
+pub(crate) fn bool_arg(args: &Value, key: &str, default: bool) -> bool {
+    args.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
 pub(crate) fn string_list(args: &Value, key: &str) -> Vec<String> {

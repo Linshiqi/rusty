@@ -98,15 +98,11 @@ impl Tool for Simulate {
 
     fn call(&self, args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         let root = ctx.require_root()?;
-        let mut scenario: Scenario =
-            serde_json::from_value(args.clone()).map_err(|error| Error::BadToolArguments {
-                name: "simulate".to_string(),
-                detail: error.to_string(),
-            })?;
-        scenario.check().map_err(|detail| Error::BadToolArguments {
-            name: "simulate".to_string(),
-            detail,
-        })?;
+        let mut scenario: Scenario = serde_json::from_value(args.clone())
+            .map_err(|error| Error::bad_args("simulate", error.to_string()))?;
+        scenario
+            .check()
+            .map_err(|detail| Error::bad_args("simulate", detail))?;
         scenario.timeout = Some(
             scenario
                 .timeout

@@ -93,4 +93,12 @@ impl Error {
             detail: detail.into(),
         }
     }
+
+    /// `tool`'s arguments refused, with what was wrong with them.
+    pub(crate) fn bad_args(tool: &str, detail: impl Into<String>) -> Self {
+        Error::BadToolArguments {
+            name: tool.to_string(),
+            detail: detail.into(),
+        }
+    }
 }
