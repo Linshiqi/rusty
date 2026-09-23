@@ -166,6 +166,10 @@ impl Terminal {
 
     /// Send keystrokes to the program.
     ///
+    /// Bytes, not key names. Terminals are a byte protocol — `Ctrl C` is `0x03`
+    /// and Up is `ESC [ A` — and translating in the frontend keeps the backend
+    /// from having to model every keyboard layout in the world.
+    ///
     /// Any input scrolls back to the live screen, which is what every terminal
     /// does — typing into history would put the characters somewhere the cursor
     /// is not.

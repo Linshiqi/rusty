@@ -84,17 +84,6 @@ pub struct Screen {
     pub exited: Option<i32>,
 }
 
-/// What the frontend sends back when a key is pressed.
-///
-/// Bytes, not key names. Terminals are a byte protocol — `Ctrl C` is `0x03`
-/// and Up is `ESC [ A` — and translating in the frontend keeps the backend
-/// from having to model every keyboard layout in the world.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Input {
-    pub bytes: Vec<u8>,
-}
-
 /// What shell the terminal will start, and what choices exist.
 ///
 /// Here rather than in `rusty-embed`, where it sat for a while beside the chip
