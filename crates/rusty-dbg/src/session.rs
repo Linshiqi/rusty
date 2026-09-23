@@ -70,31 +70,6 @@ fn resume_command(first_host_run: bool) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod launch_tests {
-    use super::*;
-
-    #[test]
-    fn arguments_with_spaces_or_quotes_are_quoted_and_plain_ones_are_not() {
-        let args = vec![
-            "tests::it_works".to_string(),
-            "--nocapture".to_string(),
-            "a b".to_string(),
-            "say \"hi\"".to_string(),
-        ];
-        assert_eq!(
-            exec_arguments(&args),
-            r#"tests::it_works --nocapture "a b" "say \"hi\"""#
-        );
-    }
-
-    #[test]
-    fn a_host_program_is_run_once_and_continued_after() {
-        assert_eq!(resume_command(true), "-exec-run");
-        assert_eq!(resume_command(false), "-exec-continue");
-    }
-}
-
 /// A session's inputs: which gdb, which ELF, what to connect to.
 #[derive(Debug, Clone)]
 pub struct Launch {
@@ -672,6 +647,26 @@ mod tests {
 
     fn root() -> PathBuf {
         PathBuf::from(r"E:\embeded\blinky")
+    }
+
+    #[test]
+    fn arguments_with_spaces_or_quotes_are_quoted_and_plain_ones_are_not() {
+        let args = vec![
+            "tests::it_works".to_string(),
+            "--nocapture".to_string(),
+            "a b".to_string(),
+            "say \"hi\"".to_string(),
+        ];
+        assert_eq!(
+            exec_arguments(&args),
+            r#"tests::it_works --nocapture "a b" "say \"hi\"""#
+        );
+    }
+
+    #[test]
+    fn a_host_program_is_run_once_and_continued_after() {
+        assert_eq!(resume_command(true), "-exec-run");
+        assert_eq!(resume_command(false), "-exec-continue");
     }
 
     /// The records the tests below feed are from Windows sessions, and the
