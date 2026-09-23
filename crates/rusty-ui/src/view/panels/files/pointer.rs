@@ -115,7 +115,7 @@ pub(super) fn grown(anchor: (u32, u32), at: (u32, u32)) -> (u32, u32, bool) {
 /// A point in client pixels, from the text column's corner.
 ///
 /// From the column, not the textarea: the textarea is shifted while an
-/// input method composes (`surface.rs`), and a point read off it would be
+/// input method composes (`surface/mod.rs`), and a point read off it would be
 /// off by the shift.
 pub(super) fn point_in_column(area: &HtmlTextAreaElement, client: (f64, f64)) -> (f64, f64) {
     match area.parent_element() {

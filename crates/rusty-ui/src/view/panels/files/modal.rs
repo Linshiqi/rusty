@@ -201,7 +201,7 @@ pub(super) fn vim_key(
     };
 
     // Visual mode selects a range; normal mode selects nothing, and its
-    // cursor is drawn over the textarea (`surface.rs`) where this collapsed
+    // cursor is drawn over the textarea (`surface/cursor.rs`) where this collapsed
     // caret is. Both take this one path rather than two that can disagree
     // about where the cursor is.
     let (start, end) = match step.selection {

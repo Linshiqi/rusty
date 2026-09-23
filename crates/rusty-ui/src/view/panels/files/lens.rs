@@ -8,7 +8,7 @@
 //! no attribute above it.
 
 /// The document line the lens is drawn on, after everything drawn there —
-/// the text and any inlay hint in it (`surface.rs` measures that) — for the
+/// the text and any inlay hint in it (`surface/lenses.rs` measures that) — for the
 /// runnable declared on `item_line`. `lines` is the draft split on
 /// newlines. `None` only when the item line is not in the text at all.
 pub(super) fn lens_line(lines: &[&str], item_line: u32) -> Option<u32> {
