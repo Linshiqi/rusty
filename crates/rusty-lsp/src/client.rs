@@ -31,7 +31,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 mod hints;
 mod navigate;
@@ -998,9 +998,112 @@ impl Shared {
     }
 }
 
-/// The `initialize` round trip.
-fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<()> {
-    let mut cargo = serde_json::Map::new();
+/// What this client can do, declared as the protocol asks for it.
+fn capabilities() -> Value {
+    json!({
+        // Offer utf-8 first: rust-analyzer takes it, and then "character"
+        // means bytes, which is the cheap direction for a Rust client.
+        "general": { "positionEncodings": ["utf-8", "utf-16"] },
+        // Ask rust-analyzer to say how it is getting on. Without this it
+        // reports a failure to load the workspace to nobody, and a
+        // server that can only parse is indistinguishable from one that
+        // answers everything: the squiggles arrive, the completions are
+        // empty, and nothing on screen says which of the two it is.
+        "experimental": { "serverStatusNotification": true },
+        "textDocument": {
+            "synchronization": { "didSave": true },
+            "publishDiagnostics": {},
+            // Pull, not just push. After the build-data workspace switch,
+            // rust-analyzer stops recomputing pushed diagnostics for open
+            // files — they get wiped and stay gone. Under the pull model it
+            // asks the client to re-request instead, and freshness becomes
+            // this client's job, which it can actually do.
+            "diagnostic": { "relatedDocumentSupport": false },
+            // Snippets on: a function arrives as `name($0)` and a macro
+            // as `println!($0)`, parentheses placed and the caret between
+            // them, as VS Code has it, and postfix templates (`.if`,
+            // `.match`) exist at all. The editor expands the placeholders
+            // itself. `labelDetailsSupport` keeps the label a bare name:
+            // without it rust-analyzer glues ` (use …)` onto the label,
+            // and the row cannot set the note apart from the name.
+            // `resolveSupport` for `additionalTextEdits` is what turns on
+            // rust-analyzer's imports-on-the-fly: it will not offer an
+            // item that is not yet in scope unless the client can fetch
+            // the `use` line lazily, because computing one per candidate
+            // is too slow to do eagerly. Without this, typing `Out` in a
+            // file that does not import `esp_hal::gpio` offered nothing —
+            // no `Output`, no import — while VS Code offered both.
+            "completion": {
+                "completionItem": {
+                    "snippetSupport": true,
+                    "labelDetailsSupport": true,
+                    "resolveSupport": { "properties": ["additionalTextEdits"] },
+                },
+            },
+            "hover": { "contentFormat": ["plaintext", "markdown"] },
+            "definition": {},
+            "references": {},
+            "implementation": {},
+            "typeDefinition": {},
+            "documentHighlight": {},
+            // Nested, so an outline has its impl blocks' methods under
+            // them rather than beside them with a container name.
+            "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+            "inlayHint": {},
+            // Actions come back as literals with lazily-resolved edits;
+            // both halves are declared or rust-analyzer sends commands
+            // this client cannot execute.
+            "codeAction": {
+                "codeActionLiteralSupport": {
+                    "codeActionKind": {
+                        "valueSet": ["", "quickfix", "refactor", "refactor.rewrite"],
+                    },
+                },
+                "resolveSupport": { "properties": ["edit"] },
+            },
+            // Semantic tokens — the colours only the compiler's view can
+            // produce. `formats: ["relative"]` is mandatory; the token
+            // types listed are the standard set, and the server's own
+            // legend (captured below) is what decodes the reply.
+            "semanticTokens": {
+                "requests": { "full": true, "range": true },
+                "tokenTypes": [
+                    "namespace", "type", "class", "enum", "interface", "struct",
+                    "typeParameter", "parameter", "variable", "property",
+                    "enumMember", "event", "function", "method", "macro",
+                    "keyword", "modifier", "comment", "string", "number",
+                    "regexp", "operator", "decorator",
+                ],
+                "tokenModifiers": [],
+                "formats": ["relative"],
+            },
+        },
+        // On, so the server narrates its indexing: without it a fresh
+        // project shows "rust-analyzer" as ready while every completion
+        // for the next minute comes back empty, and the user concludes
+        // there is no completion.
+        "window": { "workDoneProgress": true },
+        "workspace": {
+            "workspaceFolders": false,
+            "configuration": false,
+            "diagnostics": { "refreshSupport": true },
+            // Told when to ask again: what was asked while the workspace
+            // was still loading came back thin, and no edit is coming to
+            // ask twice.
+            "inlayHint": { "refreshSupport": true },
+            "semanticTokens": { "refreshSupport": true },
+            // The client watches the disk, so the server does not — and
+            // on Windows a server watching for itself holds the
+            // workspace's directories open, which no rename or move of
+            // one survives. See `watched.rs`.
+            "didChangeWatchedFiles": { "dynamicRegistration": true },
+        },
+    })
+}
+
+/// rust-analyzer's own settings for this project.
+fn initialization_options(root: &Path, target: Option<&str>) -> Map<String, Value> {
+    let mut cargo = Map::new();
     // Tests and benches do not build in `no_std` — there is no test harness —
     // so the default of checking `--all-targets` buries every real diagnostic
     // under "can't find crate for `test`".
@@ -1012,7 +1115,7 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
     // Named only when there is something to name. An empty `linkedProjects`
     // is not the same as an absent one — it tells rust-analyzer the set of
     // projects is exactly nothing, and the root workspace stops loading.
-    let mut options = serde_json::Map::new();
+    let mut options = Map::new();
     let linked = discover::linked_projects(root);
     if !linked.is_empty() {
         let mut all = vec![root.join("Cargo.toml").to_string_lossy().into_owned()];
@@ -1052,109 +1155,16 @@ fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<
         "workspace".into(),
         json!({ "symbol": { "search": { "kind": "all_symbols" } } }),
     );
+    options
+}
 
+/// The `initialize` round trip.
+fn handshake(shared: &Arc<Shared>, root: &Path, target: Option<&str>) -> Result<()> {
+    let options = initialization_options(root, target);
     let params = json!({
         "processId": std::process::id(),
         "rootUri": path_to_uri(root),
-        "capabilities": {
-            // Offer utf-8 first: rust-analyzer takes it, and then "character"
-            // means bytes, which is the cheap direction for a Rust client.
-            "general": { "positionEncodings": ["utf-8", "utf-16"] },
-            // Ask rust-analyzer to say how it is getting on. Without this it
-            // reports a failure to load the workspace to nobody, and a
-            // server that can only parse is indistinguishable from one that
-            // answers everything: the squiggles arrive, the completions are
-            // empty, and nothing on screen says which of the two it is.
-            "experimental": { "serverStatusNotification": true },
-            "textDocument": {
-                "synchronization": { "didSave": true },
-                "publishDiagnostics": {},
-                // Pull, not just push. After the build-data workspace switch,
-                // rust-analyzer stops recomputing pushed diagnostics for open
-                // files — they get wiped and stay gone. Under the pull model it
-                // asks the client to re-request instead, and freshness becomes
-                // this client's job, which it can actually do.
-                "diagnostic": { "relatedDocumentSupport": false },
-                // Snippets on: a function arrives as `name($0)` and a macro
-                // as `println!($0)`, parentheses placed and the caret between
-                // them, as VS Code has it, and postfix templates (`.if`,
-                // `.match`) exist at all. The editor expands the placeholders
-                // itself. `labelDetailsSupport` keeps the label a bare name:
-                // without it rust-analyzer glues ` (use …)` onto the label,
-                // and the row cannot set the note apart from the name.
-                // `resolveSupport` for `additionalTextEdits` is what turns on
-                // rust-analyzer's imports-on-the-fly: it will not offer an
-                // item that is not yet in scope unless the client can fetch
-                // the `use` line lazily, because computing one per candidate
-                // is too slow to do eagerly. Without this, typing `Out` in a
-                // file that does not import `esp_hal::gpio` offered nothing —
-                // no `Output`, no import — while VS Code offered both.
-                "completion": {
-                    "completionItem": {
-                        "snippetSupport": true,
-                        "labelDetailsSupport": true,
-                        "resolveSupport": { "properties": ["additionalTextEdits"] },
-                    },
-                },
-                "hover": { "contentFormat": ["plaintext", "markdown"] },
-                "definition": {},
-                "references": {},
-                "implementation": {},
-                "typeDefinition": {},
-                "documentHighlight": {},
-                // Nested, so an outline has its impl blocks' methods under
-                // them rather than beside them with a container name.
-                "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
-                "inlayHint": {},
-                // Actions come back as literals with lazily-resolved edits;
-                // both halves are declared or rust-analyzer sends commands
-                // this client cannot execute.
-                "codeAction": {
-                    "codeActionLiteralSupport": {
-                        "codeActionKind": {
-                            "valueSet": ["", "quickfix", "refactor", "refactor.rewrite"],
-                        },
-                    },
-                    "resolveSupport": { "properties": ["edit"] },
-                },
-                // Semantic tokens — the colours only the compiler's view can
-                // produce. `formats: ["relative"]` is mandatory; the token
-                // types listed are the standard set, and the server's own
-                // legend (captured below) is what decodes the reply.
-                "semanticTokens": {
-                    "requests": { "full": true, "range": true },
-                    "tokenTypes": [
-                        "namespace", "type", "class", "enum", "interface", "struct",
-                        "typeParameter", "parameter", "variable", "property",
-                        "enumMember", "event", "function", "method", "macro",
-                        "keyword", "modifier", "comment", "string", "number",
-                        "regexp", "operator", "decorator",
-                    ],
-                    "tokenModifiers": [],
-                    "formats": ["relative"],
-                },
-            },
-            // On, so the server narrates its indexing: without it a fresh
-            // project shows "rust-analyzer" as ready while every completion
-            // for the next minute comes back empty, and the user concludes
-            // there is no completion.
-            "window": { "workDoneProgress": true },
-            "workspace": {
-                "workspaceFolders": false,
-                "configuration": false,
-                "diagnostics": { "refreshSupport": true },
-                // Told when to ask again: what was asked while the workspace
-                // was still loading came back thin, and no edit is coming to
-                // ask twice.
-                "inlayHint": { "refreshSupport": true },
-                "semanticTokens": { "refreshSupport": true },
-                // The client watches the disk, so the server does not — and
-                // on Windows a server watching for itself holds the
-                // workspace's directories open, which no rename or move of
-                // one survives. See `watched.rs`.
-                "didChangeWatchedFiles": { "dynamicRegistration": true },
-            },
-        },
+        "capabilities": capabilities(),
         "initializationOptions": Value::Object(options),
     });
 
