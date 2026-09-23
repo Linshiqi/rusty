@@ -144,21 +144,7 @@ impl Catalog {
 
     fn absorb_dir(&mut self, dir: &Path, source: CatalogSource) {
         for subdir in ["chips", "boards"] {
-            let path = dir.join(subdir);
-            let Ok(entries) = std::fs::read_dir(&path) else {
-                continue;
-            };
-            let mut files: Vec<PathBuf> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-                .collect();
-            // Sorted so a directory of files layers deterministically; without
-            // this, which of two conflicting definitions wins depends on the
-            // filesystem.
-            files.sort();
-
-            for file in files {
+            for file in crate::layers::files_in(&dir.join(subdir), "toml") {
                 let label = file.display().to_string();
                 match std::fs::read_to_string(&file) {
                     Ok(text) if subdir == "chips" => self.absorb_chips(&text, &label),
@@ -209,17 +195,11 @@ impl Catalog {
     }
 
     fn replace_chip(&mut self, chip: Chip) {
-        match self.chips.iter_mut().find(|c| c.id == chip.id) {
-            Some(existing) => *existing = chip,
-            None => self.chips.push(chip),
-        }
+        crate::layers::replace_or_push(&mut self.chips, chip, |held, chip| held.id == chip.id);
     }
 
     fn replace_board(&mut self, board: Board) {
-        match self.boards.iter_mut().find(|b| b.id == board.id) {
-            Some(existing) => *existing = board,
-            None => self.boards.push(board),
-        }
+        crate::layers::replace_or_push(&mut self.boards, board, |held, board| held.id == board.id);
     }
 }
 

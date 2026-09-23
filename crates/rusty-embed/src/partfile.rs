@@ -64,26 +64,12 @@ pub fn load(root: Option<&Path>) -> Parts {
 
 impl Parts {
     fn push(&mut self, spec: Spec) {
-        match self.specs.iter_mut().find(|held| held.id == spec.id) {
-            Some(held) => *held = spec,
-            None => self.specs.push(spec),
-        }
+        crate::layers::replace_or_push(&mut self.specs, spec, |held, spec| held.id == spec.id);
     }
 }
 
 fn read_dir(dir: &Path, parts: &mut Parts) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut files: Vec<_> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-        .collect();
-    // Read in a fixed order, so two files declaring one id resolve the same
-    // way on every machine rather than however the filesystem listed them.
-    files.sort();
-    for path in files {
+    for path in crate::layers::files_in(dir, "toml") {
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
         let shown = path.display().to_string();
         match std::fs::read_to_string(&path) {

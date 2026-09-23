@@ -140,10 +140,9 @@ fn cache(symbol: &Symbol) -> Result<std::path::PathBuf> {
         },
         Err(_) => Vec::new(),
     };
-    match symbols.iter_mut().find(|s| s.name == symbol.name) {
-        Some(slot) => *slot = symbol.clone(),
-        None => symbols.push(symbol.clone()),
-    }
+    crate::layers::replace_or_push(&mut symbols, symbol.clone(), |held, symbol| {
+        held.name == symbol.name
+    });
     crate::config::write_atomically(&path, &kicad_sym::write(&symbols))?;
     Ok(path)
 }

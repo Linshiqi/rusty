@@ -62,26 +62,15 @@ impl Library {
     /// Add `symbols`, each replacing an earlier one with the same id.
     fn extend(&mut self, symbols: Vec<Symbol>) {
         for symbol in symbols {
-            let id = symbol.id();
-            match self.symbols.iter_mut().find(|s| s.id() == id) {
-                Some(slot) => *slot = symbol,
-                None => self.symbols.push(symbol),
-            }
+            crate::layers::replace_or_push(&mut self.symbols, symbol, |held, symbol| {
+                held.id() == symbol.id()
+            });
         }
     }
 
     /// Read every `*.kicad_sym` in `dir`, the file stem naming the library.
     fn read_dir(&mut self, dir: &Path) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        let mut files: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "kicad_sym"))
-            .collect();
-        files.sort();
-        for file in files {
+        for file in crate::layers::files_in(dir, "kicad_sym") {
             let library = file
                 .file_stem()
                 .and_then(|s| s.to_str())
