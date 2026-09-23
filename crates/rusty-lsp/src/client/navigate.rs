@@ -410,32 +410,8 @@ fn symbol_kind(kind: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::tests::{Seen, fake_server, method, reply};
+    use crate::client::tests::{client_with, method};
     use crate::uri::path_to_uri;
-
-    /// A client over a fake server that answers `handle`'s requests, in a
-    /// project holding `files`, and every message the server received.
-    fn client_with(
-        files: &[(&str, &str)],
-        handle: impl Fn(&Value, &std::path::Path) -> Option<Value> + Send + 'static,
-    ) -> (LspClient, tempfile::TempDir, Seen) {
-        let root = tempfile::tempdir().unwrap();
-        for (path, text) in files {
-            let file = root.path().join(path);
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, text).unwrap();
-        }
-        let at = root.path().to_path_buf();
-        let (reader, writer, seen) = fake_server(move |message, writer| {
-            if let Some(result) = handle(message, &at) {
-                reply(writer, message, result);
-            }
-            true
-        });
-        let (client, _events) =
-            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
-        (client, root, seen)
-    }
 
     fn range(line: u32, start: u32, end: u32) -> Value {
         json!({ "start": { "line": line, "character": start },

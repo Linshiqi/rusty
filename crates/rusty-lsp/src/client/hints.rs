@@ -67,41 +67,23 @@ fn label(label: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::tests::{Seen, fake_server, method, reply};
-
-    fn client_with(files: &[(&str, &str)], answer: Value) -> (LspClient, tempfile::TempDir, Seen) {
-        let root = tempfile::tempdir().unwrap();
-        for (path, text) in files {
-            let file = root.path().join(path);
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, text).unwrap();
-        }
-        let (reader, writer, seen) = fake_server(move |message, writer| {
-            if method(message) == "textDocument/inlayHint" {
-                reply(writer, message, answer.clone());
-            }
-            true
-        });
-        let (client, _events) =
-            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
-        (client, root, seen)
-    }
+    use crate::client::tests::{client_with, method};
 
     /// Labels come as a string or as parts, and a column after a `中` is
     /// counted in characters — the server counts bytes.
     #[test]
     fn hints_arrive_with_their_labels_read_and_their_columns_in_characters() {
         let text = "fn main() {\n    let 中 = 1;\n    v.iter()\n}\n";
-        let (client, _root, seen) = client_with(
-            &[("src/main.rs", text)],
-            json!([
-                { "position": { "line": 1, "character": 11 }, "label": ": i32", "kind": 1 },
-                { "position": { "line": 2, "character": 12 },
-                  "label": [{ "value": "impl " }, { "value": "Iterator", "location": {} }], "kind": 1 },
-                { "position": { "line": 1, "character": 15 }, "label": "x:", "kind": 2,
-                  "paddingRight": true },
-            ]),
-        );
+        let answer = json!([
+            { "position": { "line": 1, "character": 11 }, "label": ": i32", "kind": 1 },
+            { "position": { "line": 2, "character": 12 },
+              "label": [{ "value": "impl " }, { "value": "Iterator", "location": {} }], "kind": 1 },
+            { "position": { "line": 1, "character": 15 }, "label": "x:", "kind": 2,
+              "paddingRight": true },
+        ]);
+        let (client, _root, seen) = client_with(&[("src/main.rs", text)], move |message, _| {
+            (method(message) == "textDocument/inlayHint").then(|| answer.clone())
+        });
         let hints = client.inlay_hints("src/main.rs", 0, 99).unwrap();
         assert_eq!(hints.len(), 3);
         assert_eq!(

@@ -8,6 +8,7 @@
 
 use std::{
     io::{BufReader, PipeWriter, Read, Write},
+    path::Path,
     sync::{
         Arc, Mutex,
         mpsc::{self, RecvTimeoutError},
@@ -35,7 +36,7 @@ pub(super) fn method(message: &Value) -> &str {
 }
 
 /// Answer a request with `result`.
-pub(super) fn reply(writer: &mut dyn Write, request: &Value, result: Value) {
+fn reply(writer: &mut dyn Write, request: &Value, result: Value) {
     let _ = rpc::write_message(
         writer,
         &json!({ "jsonrpc": "2.0", "id": request["id"], "result": result }),
@@ -66,7 +67,7 @@ fn default_handle(message: &Value, writer: &mut PipeWriter) -> bool {
 /// lifecycle — `initialize`, `shutdown` and `exit` are answered here —
 /// and returns `false` to hang up, which is what a crashed server looks
 /// like from the client's side: end of stream, no answer.
-pub(super) fn fake_server(
+fn fake_server(
     mut handle: impl FnMut(&Value, &mut PipeWriter) -> bool + Send + 'static,
 ) -> (Box<dyn Read + Send>, Box<dyn Write + Send>, Seen) {
     let (client_reads, server_writes) = std::io::pipe().expect("a pipe");
@@ -97,6 +98,30 @@ pub(super) fn fake_server(
         }
     });
     (Box::new(client_reads), Box::new(client_writes), seen)
+}
+
+/// A client over a fake server that answers `handle`'s requests, in a
+/// project holding `files`, and every message the server received.
+pub(super) fn client_with(
+    files: &[(&str, &str)],
+    handle: impl Fn(&Value, &Path) -> Option<Value> + Send + 'static,
+) -> (LspClient, tempfile::TempDir, Seen) {
+    let root = tempfile::tempdir().unwrap();
+    for (path, text) in files {
+        let file = root.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let at = root.path().to_path_buf();
+    let (reader, writer, seen) = fake_server(move |message, writer| {
+        if let Some(result) = handle(message, &at) {
+            reply(writer, message, result);
+        }
+        true
+    });
+    let (client, _events) =
+        LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+    (client, root, seen)
 }
 
 fn methods(seen: &Seen) -> Vec<String> {
