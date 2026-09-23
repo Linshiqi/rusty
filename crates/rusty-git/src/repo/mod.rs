@@ -61,7 +61,7 @@ pub fn history(root: &Path, rev: Option<&str>, limit: usize) -> Result<History> 
         "log".to_string(),
         "--topo-order".to_string(),
         // Full ref names in `%D`, so a local `feature/x` is not read as a
-        // remote branch — see `parse::decorations`.
+        // remote branch — see `parse::log::decorations`.
         "--decorate=full".to_string(),
         format!("--format={}", parse::LOG_FORMAT),
         // One more than asked, so "there are older commits" is a fact seen
