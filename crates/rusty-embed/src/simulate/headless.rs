@@ -496,7 +496,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
                             }
                         }
                     };
-                    let text = format!("B{gpio}={}", u8::from(*down));
+                    let text = crate::protocol::button_line(u32::from(gpio), *down);
                     input.send_line(&text);
                     if let Some(pins) = &pins {
                         pins.follow(&text);

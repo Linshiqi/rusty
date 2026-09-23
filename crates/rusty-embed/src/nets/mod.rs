@@ -28,7 +28,7 @@ mod warning;
 
 pub use analog::{Divider, PotSpan, divider_at, gpio_of, pot_span};
 pub use behaviour::{Behaviour, Rail, behaviour_of, power_rail};
-pub use bus::{BusDevice, WireDevice, bus_devices, sensor_model, wire_devices};
+pub use bus::{BusDevice, WireDevice, bus_devices, hex_address, sensor_model, wire_devices};
 pub use evaluate::{Evaluation, Inputs, evaluate};
 pub use graph::solid_nets;
 pub use kit::{Row, bind_to_kit, gpio_named, kit_pin, kit_rows};

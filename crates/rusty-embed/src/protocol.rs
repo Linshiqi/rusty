@@ -40,6 +40,43 @@ fn split_stamp(rest: &str) -> Option<(Option<u64>, &str)> {
     }
 }
 
+/// Hex pairs as bytes — `00ae` is `[0x00, 0xae]` — or nothing when the
+/// count is odd or a pair is not hex. Empty is empty, not a refusal: a
+/// transfer with no data and a device that answers nothing both say so by
+/// saying nothing.
+pub fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect()
+}
+
+/// Bytes as the hex pairs every line here carries, in lowercase.
+pub fn hex_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The shape both buses report a transfer in, after the tag: who it was
+/// with, the verb, and the bytes — `@1234] 3c w 00ae`. Who is left as text
+/// because the two buses spell it differently: an address in hex, a chip
+/// select in decimal.
+fn transfer<'a>(line: &'a str, tag: &str) -> Option<(Option<u64>, &'a str, String, Vec<u8>)> {
+    let rest = line.trim().strip_prefix(tag)?;
+    let (at_us, rest) = split_stamp(rest)?;
+    let mut parts = rest.split_whitespace();
+    let who = parts.next()?;
+    let verb = parts.next()?.to_string();
+    let bytes = hex_bytes(parts.next().unwrap_or(""))?;
+    Some((at_us, who, verb, bytes))
+}
+
 /// Parse one serial line of the firmware's pin reports.
 ///
 /// Two spellings: `[rusty:gpio] 26=1,27=0` and `[rusty:gpio@12345] 26=1` —
@@ -111,19 +148,8 @@ pub struct I2cReport {
 
 /// Parse `[rusty:i2c@1234] 3c w 00ae`.
 pub fn parse_i2c_report(line: &str) -> Option<I2cReport> {
-    let rest = line.trim().strip_prefix("[rusty:i2c")?;
-    let (at_us, rest) = split_stamp(rest)?;
-    let mut parts = rest.split_whitespace();
-    let address = u8::from_str_radix(parts.next()?, 16).ok()?;
-    let verb = parts.next()?.to_string();
-    let hex = parts.next().unwrap_or("");
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for pair in hex.as_bytes().chunks(2) {
-        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
-    }
+    let (at_us, address, verb, bytes) = transfer(line, "[rusty:i2c")?;
+    let address = u8::from_str_radix(address, 16).ok()?;
     Some(I2cReport {
         at_us,
         address,
@@ -148,19 +174,8 @@ pub struct SpiReport {
 
 /// Parse `[rusty:spi@1234] 0 w aea501`.
 pub fn parse_spi_report(line: &str) -> Option<SpiReport> {
-    let rest = line.trim().strip_prefix("[rusty:spi")?;
-    let (at_us, rest) = split_stamp(rest)?;
-    let mut parts = rest.split_whitespace();
-    let select = parts.next()?.parse().ok()?;
-    let verb = parts.next()?.to_string();
-    let hex = parts.next().unwrap_or("");
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for pair in hex.as_bytes().chunks(2) {
-        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
-    }
+    let (at_us, select, verb, bytes) = transfer(line, "[rusty:spi")?;
+    let select = select.parse().ok()?;
     Some(SpiReport {
         at_us,
         select,
@@ -327,14 +342,7 @@ pub fn parse_rmt_report(line: &str) -> Option<RmtReport> {
     let (at_us, rest) = split_stamp(rest)?;
     let mut parts = rest.split_whitespace();
     let pin: u8 = parts.next()?.parse().ok()?;
-    let hex = parts.next()?;
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for pair in hex.as_bytes().chunks(2) {
-        bytes.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
-    }
+    let bytes = hex_bytes(parts.next()?)?;
     let dropped = parts
         .next()
         .and_then(|more| more.strip_prefix('+'))
@@ -635,6 +643,18 @@ pub fn analog_line(pin: u8, count: u16) -> String {
     format!("A{pin}={count}")
 }
 
+/// The line a board's button sends while it is held or let go —
+/// `B14=1` — which [`button_press`] reads back.
+pub fn button_line(pin: u32, pressed: bool) -> String {
+    format!("B{pin}={}", u8::from(pressed))
+}
+
+/// The line a potentiometer's knob sends: rusty's own eight-bit position,
+/// `P34=128`, and not counts — see [`analog_set`] for why.
+pub fn pot_line(pin: u32, turn: u8) -> String {
+    format!("P{pin}={turn}")
+}
+
 /// The line that sets a parameter, for writing into the firmware's serial
 /// input — `Spid_roll_p=12.5`.
 ///
@@ -670,14 +690,7 @@ pub fn analog_pin_line(pin: u32, count: u16) -> String {
 /// device — what a sensor's moving reading writes.
 pub fn bus_register_lines(address: u8, runs: &[(u8, Vec<u8>)]) -> Vec<String> {
     runs.iter()
-        .map(|(at, bytes)| {
-            let mut line = format!("i2c {address:02x}:{at:02x}=");
-            for byte in bytes {
-                line.push_str(&format!("{byte:02x}"));
-            }
-            line.push('\n');
-            line
-        })
+        .map(|(at, bytes)| format!("i2c {address:02x}:{at:02x}={}\n", hex_string(bytes)))
         .collect()
 }
 
@@ -697,15 +710,12 @@ pub fn bus_lines(address: u8, runs: &[(u8, Vec<u8>)]) -> Vec<String> {
 /// nothing to say still needs a token the model can read: `-` is not hex,
 /// and anything that is not hex clears the buffer.
 pub fn wire_line(select: u8, miso: &[u8]) -> String {
-    let mut line = format!("spi {select}=");
-    for byte in miso {
-        line.push_str(&format!("{byte:02x}"));
-    }
-    if miso.is_empty() {
-        line.push('-');
-    }
-    line.push('\n');
-    line
+    let answer = if miso.is_empty() {
+        "-".to_string()
+    } else {
+        hex_string(miso)
+    };
+    format!("spi {select}={answer}\n")
 }
 
 /// `B<pin>=<pressed>` — the board's button message, and nothing else.

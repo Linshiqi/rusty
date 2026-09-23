@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Row, Warning, gpio_of};
 use crate::model::{Instance, Sheet};
+use crate::protocol::hex_bytes;
 
 /// A part the sheet puts on a chip select, and the bytes it answers with.
 ///
@@ -44,7 +45,7 @@ pub fn wire_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<WireDevice>, Vec<Warnin
             continue;
         }
         let miso = part.props.get("miso").map(String::as_str).unwrap_or("");
-        let bytes = parse_hex(miso.trim());
+        let bytes = hex_bytes(miso.trim());
         let Some((select, bytes)) = select
             .parse::<u8>()
             .ok()
@@ -72,22 +73,6 @@ pub fn wire_devices(sheet: &Sheet, rows: &[Row]) -> (Vec<WireDevice>, Vec<Warnin
         });
     }
     (devices, warnings)
-}
-
-/// A run of hex pairs, or nothing when it is not one. Empty is empty, not a
-/// refusal: a display answers with nothing and says so by saying nothing.
-fn parse_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| {
-            std::str::from_utf8(pair)
-                .ok()
-                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-        })
-        .collect()
 }
 
 /// A part the sheet puts on the I2C bus: an address and what it answers.
@@ -119,7 +104,7 @@ fn parse_regs(text: &str) -> Option<Vec<(u8, Vec<u8>)>> {
     for run in text.split(',').map(str::trim).filter(|r| !r.is_empty()) {
         let (at, bytes) = run.split_once('=')?;
         let at = u8::from_str_radix(at.trim(), 16).ok()?;
-        runs.push((at, parse_hex(bytes.trim())?));
+        runs.push((at, hex_bytes(bytes.trim())?));
     }
     Some(runs)
 }
@@ -137,6 +122,12 @@ pub fn sensor_model<'a>(
             .map(Some)
             .ok_or_else(|| text.to_string()),
     }
+}
+
+/// A part's `addr` prop as a number: hex, with or without its `0x`. Whether
+/// the number is an address the bus can carry is the caller's to judge.
+pub fn hex_address(text: &str) -> Option<u8> {
+    u8::from_str_radix(text.trim().trim_start_matches("0x"), 16).ok()
 }
 
 /// Every device the sheet puts on the bus, and what it wants said about the
@@ -163,10 +154,7 @@ pub fn bus_devices(
         if address.is_empty() {
             continue;
         }
-        let Some(parsed) = u8::from_str_radix(address.trim_start_matches("0x"), 16)
-            .ok()
-            .filter(|a| *a <= 0x7f)
-        else {
+        let Some(parsed) = hex_address(address).filter(|a| *a <= 0x7f) else {
             warnings.push(Warning::BusAddressUnreadable {
                 part: part.reference.clone(),
                 value: address.to_string(),
