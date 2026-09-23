@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use super::graph::{Graph, Node};
 use super::{Behaviour, Rail, Row, behaviour_of, ohms, power_rail};
-use crate::model::{KIT_REFERENCE, PinRef, Sheet};
+use crate::model::{Instance, KIT_REFERENCE, PinRef, Sheet};
 use crate::union_find::UnionFind;
 
 /// Where a pin sits between the rails, as a fraction: 0.0 at ground, 1.0 at
@@ -138,6 +138,38 @@ pub fn divider_at(sheet: &Sheet, rows: &[Row], pin: &PinRef) -> Option<Divider> 
         }),
         (false, false) => None,
     }
+}
+
+/// The converter's own resolution when the sheet does not say.
+///
+/// Twelve bits, which is the ESP32 family's SAR converter. It has a default
+/// where the full-scale voltage does not, and the difference is the point:
+/// the resolution is a fact about the chip rusty already knows, and the
+/// voltage is a fact about how the firmware configured it, which only the
+/// firmware knows.
+pub const ADC_MAX: u16 = 4095;
+
+/// Where a potentiometer's knob rests when the sheet does not say: the
+/// middle of rusty's eight-bit turn.
+pub const POT_REST: u8 = 128;
+
+// What an analog part's props say, at their defaults. The backend reads them
+// to send a run's first counts and the panel to place its sliders, and the
+// two have to agree before anybody drags anything.
+
+/// The counts at full scale, from `max`.
+pub fn adc_max(part: &Instance) -> u16 {
+    part.prop("max").unwrap_or(ADC_MAX)
+}
+
+/// Where a knob starts, from `start`.
+pub fn pot_start(part: &Instance) -> u8 {
+    part.prop("start").unwrap_or(POT_REST)
+}
+
+/// Where an analog source's counts start, from `start`.
+pub fn analog_start(part: &Instance) -> u16 {
+    part.prop("start").unwrap_or(0)
 }
 
 /// A potentiometer as the converter sees it: the GPIO its wiper reaches,

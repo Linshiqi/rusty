@@ -60,15 +60,6 @@ impl Default for Pace {
     }
 }
 
-/// The converter's own resolution when the sheet does not say.
-///
-/// Twelve bits, which is the ESP32 family's SAR converter. It has a default
-/// where the full-scale voltage does not, and the difference is the point:
-/// the resolution is a fact about the chip rusty already knows, and the
-/// voltage is a fact about how the firmware configured it, which only the
-/// firmware knows.
-const DEFAULT_COUNTS: u16 = 4095;
-
 /// What a converter turns volts into, as the sheet states it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Scale {
@@ -319,7 +310,7 @@ impl Live {
             });
             touches.then_some(Scale {
                 full_volts,
-                max: part.prop::<u16>("max").unwrap_or(DEFAULT_COUNTS),
+                max: crate::nets::adc_max(part),
             })
         })
     }
@@ -647,7 +638,7 @@ mod tests {
         live.advance_to(1_000).expect("advanced");
         assert_eq!(
             live.counts_at(3),
-            Some(DEFAULT_COUNTS),
+            Some(crate::nets::ADC_MAX),
             "1.1 V against a 1.1 V full scale is the top of the range"
         );
     }

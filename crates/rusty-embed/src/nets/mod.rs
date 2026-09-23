@@ -26,7 +26,10 @@ mod switch;
 mod value;
 mod warning;
 
-pub use analog::{Divider, PotSpan, divider_at, gpio_of, pot_span};
+pub use analog::{
+    ADC_MAX, Divider, POT_REST, PotSpan, adc_max, analog_start, divider_at, gpio_of, pot_span,
+    pot_start,
+};
 pub use behaviour::{Behaviour, Rail, behaviour_of, power_rail};
 pub use bus::{BusDevice, WireDevice, bus_devices, hex_address, sensor_model, wire_devices};
 pub use evaluate::{Evaluation, Inputs, evaluate};

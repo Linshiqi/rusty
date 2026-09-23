@@ -76,16 +76,17 @@ pub fn start_of(sheet: &Sheet, rows: &[Row], specs: &[sensor::Spec]) -> Start {
         .filter(|part| behaviour(&part.reference) == Some(Behaviour::Analog))
         .filter_map(|part| {
             let gpio = nets::gpio_of(sheet, rows, &part.reference, "OUT")?;
-            Some((u32::from(gpio), part.prop::<u16>("start").unwrap_or(0)))
+            Some((u32::from(gpio), nets::analog_start(part)))
         });
     // A pot the sheet has not committed to sends nothing here and stays
     // what it always was — a `P<pin>=` line for firmware that reads rusty's
     // own text protocol.
     let pots = sheet.parts.iter().filter_map(|part| {
         let span = nets::pot_span(sheet, rows, &part.reference)?;
-        let turn = part.prop::<u8>("start").unwrap_or(128);
-        let max = part.prop::<u16>("max").unwrap_or(4095);
-        Some((u32::from(span.gpio), span.counts(turn, max)))
+        Some((
+            u32::from(span.gpio),
+            span.counts(nets::pot_start(part), nets::adc_max(part)),
+        ))
     });
     let analog = sources.chain(pots).collect();
 
