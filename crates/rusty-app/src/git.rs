@@ -32,7 +32,7 @@ pub async fn git_history(
     limit: Option<usize>,
     state: State<'_, AppState>,
 ) -> Answer<History> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let limit = limit.unwrap_or(rusty_git::repo::LIMIT).clamp(1, 10_000);
     Ok(blocking("git log", move || {
         rusty_git::repo::history(&root, rev.as_deref(), limit)
@@ -43,14 +43,14 @@ pub async fn git_history(
 /// One commit: message, files, each file's patch.
 #[tauri::command]
 pub async fn git_commit(id: String, state: State<'_, AppState>) -> Answer<CommitDetail> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git show", move || rusty_git::repo::commit(&root, &id)).await??)
 }
 
 /// Every branch, local and remote-tracking, and every tag.
 #[tauri::command]
 pub async fn git_refs(state: State<'_, AppState>) -> Answer<Refs> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git for-each-ref", move || rusty_git::repo::refs(&root)).await??)
 }
 
@@ -58,7 +58,7 @@ pub async fn git_refs(state: State<'_, AppState>) -> Answer<Refs> {
 /// anything, to read again. No `git` runs for it after the first call.
 #[tauri::command]
 pub async fn git_stamp(state: State<'_, AppState>) -> Answer<GitStamp> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("reading the repository's stamp", move || {
         rusty_git::repo::stamp(&root)
     })
@@ -68,7 +68,7 @@ pub async fn git_stamp(state: State<'_, AppState>) -> Answer<GitStamp> {
 /// Where the working tree stands.
 #[tauri::command]
 pub async fn git_status(state: State<'_, AppState>) -> Answer<Status> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git status", move || rusty_git::repo::status(&root)).await??)
 }
 
@@ -76,14 +76,14 @@ pub async fn git_status(state: State<'_, AppState>) -> Answer<Status> {
 /// refuses with "Author identity unknown".
 #[tauri::command]
 pub async fn git_identity(state: State<'_, AppState>) -> Answer<GitIdentity> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git config", move || rusty_git::repo::identity(&root)).await??)
 }
 
 /// Every stash, newest first.
 #[tauri::command]
 pub async fn git_stashes(state: State<'_, AppState>) -> Answer<Vec<Stash>> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git stash list", move || rusty_git::repo::stashes(&root)).await??)
 }
 
@@ -91,7 +91,7 @@ pub async fn git_stashes(state: State<'_, AppState>) -> Answer<Vec<Stash>> {
 /// from yet, which the refs cannot show.
 #[tauri::command]
 pub async fn git_remotes(state: State<'_, AppState>) -> Answer<Vec<Remote>> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git config", move || rusty_git::repo::remotes(&root)).await??)
 }
 
@@ -109,7 +109,7 @@ pub async fn git_remotes(state: State<'_, AppState>) -> Answer<Vec<Remote>> {
 /// `firmware/` holding an empty `.git`.
 #[tauri::command]
 pub async fn git_include_nested(path: String, state: State<'_, AppState>) -> Answer<()> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let folder = path.trim_end_matches('/').to_string();
     let git = format!("{folder}/.git");
     blocking("include repository", {
@@ -142,7 +142,7 @@ pub async fn git_diff(
     untracked: bool,
     state: State<'_, AppState>,
 ) -> Answer<String> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git diff", move || {
         rusty_git::repo::diff_file(&root, &path, staged, untracked)
     })
@@ -152,7 +152,7 @@ pub async fn git_diff(
 /// Stage paths (`on`), or take them back out of the index.
 #[tauri::command]
 pub async fn git_stage(paths: Vec<String>, on: bool, state: State<'_, AppState>) -> Answer<()> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("git add", move || {
         if on {
             rusty_git::repo::stage(&root, &paths)
@@ -173,7 +173,7 @@ pub async fn git_blob(
     path: String,
     state: State<'_, AppState>,
 ) -> Answer<String> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let bytes = blocking("git show", move || {
         rusty_git::repo::blob(&root, spec.as_deref(), &path)
     })

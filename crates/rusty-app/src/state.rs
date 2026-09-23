@@ -276,6 +276,12 @@ impl AppState {
         self.inner.lock().await.root.clone()
     }
 
+    /// The open project's directory, or the refusal every command that needs
+    /// one gives.
+    pub async fn require_root(&self) -> Result<PathBuf, CommandError> {
+        self.root().await.ok_or_else(CommandError::no_project)
+    }
+
     /// Where cargo, espflash and the emulator run.
     ///
     /// The opened directory for every ordinary project. The exception is the
@@ -296,6 +302,14 @@ impl AppState {
         .await
         .ok()
         .or(Some(root))
+    }
+
+    /// [`Self::firmware_root`], or the refusal every command that builds
+    /// gives without a project.
+    pub async fn require_firmware_root(&self) -> Result<PathBuf, CommandError> {
+        self.firmware_root()
+            .await
+            .ok_or_else(CommandError::no_project)
     }
 
     /// The open project's chip, when detection found one — what picks an

@@ -77,10 +77,7 @@ pub async fn plan_migration(
     chip: String,
     state: State<'_, AppState>,
 ) -> Answer<rusty_embed::Migration> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     let catalog = state.catalog().await;
     blocking("planning the migration", move || {
         let detected = project::detect(&root)?;
@@ -113,10 +110,7 @@ pub async fn apply_migration(
     plan: rusty_embed::Migration,
     state: State<'_, AppState>,
 ) -> Answer<Vec<String>> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     blocking("the migration", move || {
         rusty_embed::migrate::apply(&root, &plan)
     })
@@ -144,10 +138,7 @@ pub async fn toolchain_report(state: State<'_, AppState>) -> Answer<ToolchainRep
 /// clothes.
 #[tauri::command]
 pub async fn firmware_list(state: State<'_, AppState>) -> Answer<Vec<Firmware>> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     blocking("listing the firmware", move || {
         let configured = project::detect(&root)
             .ok()

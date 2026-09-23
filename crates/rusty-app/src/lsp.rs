@@ -25,9 +25,7 @@ pub async fn lsp_start(
     on_event: Channel<LspEvent>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let Some(root) = state.root().await else {
-        return Err(CommandError::no_project());
-    };
+    let root = state.require_root().await?;
 
     // What the firmware builds for, so cfg resolution matches the chip rather
     // than the host. Detection already worked this out; not passing it along

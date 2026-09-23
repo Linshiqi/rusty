@@ -13,7 +13,7 @@ use crate::{
 /// A walk of the whole project, so off the async thread.
 #[tauri::command]
 pub async fn file_tree(state: State<'_, AppState>) -> Result<Vec<Entry>, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("reading the tree", move || rusty_edit::read_tree(&root)).await??)
 }
 
@@ -43,7 +43,7 @@ pub async fn create_entry(
     dir: bool,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("creating the entry", move || {
         rusty_edit::create(&root, &path, dir)
     })
@@ -58,7 +58,7 @@ pub async fn move_entry(
     into: String,
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("moving the entry", move || {
         rusty_edit::move_entry(&root, &from, &into)
     })
@@ -73,7 +73,7 @@ pub async fn copy_entry(
     into: String,
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("copying the entry", move || {
         rusty_edit::copy_entry(&root, &from, &into)
     })
@@ -87,7 +87,7 @@ pub async fn rename_entry(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("renaming the entry", move || {
         rusty_edit::rename_entry(&root, &from, &name)
     })
@@ -97,7 +97,7 @@ pub async fn rename_entry(
 /// Move an entry to the recycle bin.
 #[tauri::command]
 pub async fn delete_entry(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("deleting the entry", move || {
         rusty_edit::delete_entry(&root, &path)
     })
@@ -109,7 +109,7 @@ pub async fn delete_entry(path: String, state: State<'_, AppState>) -> Result<()
 /// where no file manager takes a selection portably.
 #[tauri::command]
 pub async fn reveal_entry(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     blocking("revealing the entry", move || {
         // A library's source, open where a definition led, is held by its
         // absolute path; everything else is under the project.
@@ -226,7 +226,7 @@ pub async fn reattach_editor_window(
 /// One file, highlighted.
 #[tauri::command]
 pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Document, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     // The grammars are parsed from a bundled dump and take long enough that
     // doing it per file is noticeable, so the set is built once and kept.
     // Highlighting a large file is still work worth a blocking thread.
@@ -240,7 +240,7 @@ pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Docum
 /// the read is confined to the project and capped, in `rusty_edit`.
 #[tauri::command]
 pub async fn read_blob(path: String, state: State<'_, AppState>) -> Result<String, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let bytes = blocking("reading the picture", move || {
         rusty_edit::read_bytes(&root, &path)
     })
@@ -298,7 +298,7 @@ pub async fn save_file(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("saving the file", move || {
         rusty_edit::save(&root, &path, &text)
     })
@@ -312,7 +312,7 @@ pub async fn format_text(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<rusty_edit::Formatted, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("formatting", move || {
         rusty_edit::format_rust(&root, &path, &text)
     })
@@ -330,7 +330,7 @@ pub async fn search_project(
     exclude: String,
     state: State<'_, AppState>,
 ) -> Result<rusty_edit::SearchResults, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let spec = rusty_edit::SearchQuery {
         text: query,
         case_sensitive,
@@ -367,7 +367,7 @@ pub async fn replace_in_project(
     args: ReplaceArgs,
     state: State<'_, AppState>,
 ) -> Result<rusty_edit::ReplaceOutcome, CommandError> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let spec = rusty_edit::SearchQuery {
         text: args.query,
         case_sensitive: args.case_sensitive,
@@ -410,7 +410,7 @@ pub async fn watch_project(
 ) -> Result<(), CommandError> {
     use tauri::Manager;
 
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
 
     let watched = root.clone();
     let started = blocking("the file watcher", move || rusty_edit::watch(&watched)).await?;

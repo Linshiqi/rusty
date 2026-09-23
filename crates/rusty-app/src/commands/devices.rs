@@ -49,10 +49,7 @@ pub async fn plan_flash(
     baud: Option<u32>,
     state: State<'_, AppState>,
 ) -> Answer<CommandPlan> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     let catalog = state.catalog().await;
     blocking("planning the flash", move || {
         let chip_id = project::detect(&root)?.chip.ok_or_else(|| {

@@ -8,10 +8,7 @@ use rusty_embed::config as storage;
 use tauri::State;
 
 use super::Answer;
-use crate::{
-    error::CommandError,
-    state::{AppState, blocking},
-};
+use crate::state::{AppState, blocking};
 
 /// The project's build directory as a scan sees it: the target directory
 /// `cargo metadata` names, and the yardstick from the resolved graph. A
@@ -30,7 +27,7 @@ pub async fn disk_report(
     idle_days: Option<u32>,
     state: State<'_, AppState>,
 ) -> Answer<rusty_core::DiskReport> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     blocking("measuring the build directory", move || {
         let (target_dir, current) = disk_context(&root);
         rusty_core::disk::scan(
@@ -53,7 +50,7 @@ pub async fn disk_sweep(
     policy: rusty_core::SweepPolicy,
     state: State<'_, AppState>,
 ) -> Answer<rusty_core::SweepReport> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("sweeping the build directory", move || {
         let (target_dir, current) = disk_context(&root);
         rusty_core::disk::sweep(&target_dir, &root, &current, &policy)
@@ -68,7 +65,7 @@ pub async fn disk_remove(
     path: String,
     state: State<'_, AppState>,
 ) -> Answer<rusty_core::SweepReport> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     Ok(blocking("removing a build tree", move || {
         let (target_dir, _) = disk_context(&root);
         rusty_core::disk::remove_tree(&target_dir, Path::new(&path))

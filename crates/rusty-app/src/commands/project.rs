@@ -73,7 +73,7 @@ async fn open_at(root: PathBuf, state: &AppState) -> Answer<OpenResult> {
 /// subdirectory" is exactly that kind of fact.
 #[tauri::command]
 pub async fn project_status(state: State<'_, AppState>) -> Answer<EmbeddedProject> {
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
     let firmware = state.firmware_root().await.unwrap_or_else(|| root.clone());
     blocking("detection", move || detected_at(&root, &firmware)).await?
 }

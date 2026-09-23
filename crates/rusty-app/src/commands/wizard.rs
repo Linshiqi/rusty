@@ -41,10 +41,7 @@ pub async fn scaffold_c_interop(
 ) -> Answer<rusty_embed::ScaffoldReport> {
     use rusty_embed::scaffold::Direction;
 
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
 
     let direction = match direction.as_str() {
         "rust-calls-c" => Direction::RustCallsC,

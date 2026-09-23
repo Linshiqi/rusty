@@ -25,10 +25,7 @@ pub(crate) fn note(on_line: &Channel<LogLine>, text: impl Into<String>) {
 /// Persist the board editor's sheet into the project's `.rusty/sim.toml`.
 #[tauri::command]
 pub async fn save_sim_board(board: Sheet, state: State<'_, AppState>) -> Result<(), CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     blocking("saving the board", move || {
         simulate::save_board(&root, &board)
     })
@@ -48,10 +45,7 @@ pub async fn sim_import_kicad(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<Sheet, CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     let chip = state.chip().await.unwrap_or_else(|| "esp32c3".to_string());
     blocking("importing the schematic", move || {
         rusty_embed::schematic::import(&root, Path::new(&path), &chip)
@@ -68,10 +62,7 @@ pub async fn sim_import_wokwi(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<Sheet, CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     let chip = state.chip().await.unwrap_or_else(|| "esp32c3".to_string());
     blocking("importing the diagram", move || {
         rusty_embed::schematic::import_wokwi(&root, Path::new(&path), &chip)
@@ -110,10 +101,7 @@ pub async fn sim_import_symbol(number: String) -> Result<Symbol, CommandError> {
 /// How this project would be simulated, or exactly why it cannot be.
 #[tauri::command]
 pub async fn plan_simulation(state: State<'_, AppState>) -> Result<SimPlan, CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     // Detection reads the project; the plan probes PATH and the data directory
     // for every tool it names.
     Ok(blocking("planning the simulation", move || {
@@ -214,10 +202,7 @@ pub async fn save_sim_trace(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<String, CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     blocking("saving the trace", move || {
         let dir = root.join("target/rusty-sim");
         std::fs::create_dir_all(&dir)
@@ -409,10 +394,7 @@ pub async fn run_simulation(
     on_line: Channel<LogLine>,
     state: State<'_, AppState>,
 ) -> Result<Option<i32>, CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     let plan = {
         let root = root.clone();
         blocking("planning the simulation", move || {

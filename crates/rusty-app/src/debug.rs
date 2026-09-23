@@ -34,10 +34,7 @@ pub async fn debug_start(
     on_state: Channel<DebugState>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let root = state
-        .firmware_root()
-        .await
-        .ok_or_else(CommandError::no_project)?;
+    let root = state.require_firmware_root().await?;
     // Refusing beats attaching to whatever happens to be built. gdb reading a
     // different compilation from the one executing is the worst kind of wrong:
     // it answers every question, fluently, about another binary.
@@ -100,7 +97,7 @@ pub async fn debug_test(
 
     // The opened project, not `firmware_root`: a host test is built and run
     // for this machine, and the firmware crate has no test harness to link.
-    let root = state.root().await.ok_or_else(CommandError::no_project)?;
+    let root = state.require_root().await?;
 
     let host = blocking("rustc", {
         let root = root.clone();
