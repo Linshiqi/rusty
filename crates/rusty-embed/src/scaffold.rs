@@ -20,7 +20,8 @@ use std::path::Path;
 
 use crate::{
     error::{Error, Result},
-    model::CommandPlan,
+    model::{Chip, CommandPlan},
+    toolchain,
 };
 
 /// Which way the calls go.
@@ -43,6 +44,40 @@ pub struct Scaffold {
     /// What to do next, in one sentence: scaffolding that leaves someone
     /// guessing at the next step has not finished the job.
     pub next: String,
+}
+
+/// The C-compiler precondition for scaffolding, pure: which compiler a chip's
+/// C is compiled by, and the refusal when it is missing or unknown.
+///
+/// [`c_interop`] already refuses rather than lay half a scaffold over
+/// somebody's code; this is the same rule applied to the other precondition,
+/// which is not about the files at all: `cc` shells out to a cross compiler,
+/// and four correct new files whose build cannot find one is a worse answer
+/// than a refusal that names it. `on_path` is passed in so the rule is a
+/// test.
+pub fn c_compiler_gate(
+    chip: Option<&Chip>,
+    on_path: impl Fn(&str) -> bool,
+) -> std::result::Result<(), String> {
+    let Some(chip) = chip else {
+        // No chip means no cross compiler to require; the host's `cc` is
+        // whatever it is and not rusty's to judge.
+        return Ok(());
+    };
+    match toolchain::c_compiler(chip.arch) {
+        Some((binary, install)) if !on_path(binary) => Err(format!(
+            "This project builds for {}, so C in it is compiled by `{binary}`, and that is \
+             not on PATH. Nothing has been written. Install it — {install} — and the \
+             Environment page will show it before you try again.",
+            chip.name,
+        )),
+        None => Err(format!(
+            "rusty does not know which C compiler a {} project uses, so it will not scaffold \
+             C it cannot say how to build. Nothing has been written.",
+            chip.arch.label(),
+        )),
+        Some(_) => Ok(()),
+    }
 }
 
 /// Write the scaffolding for one direction.
@@ -206,6 +241,49 @@ pub extern "C" fn rust_tick() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gate refuses with the compiler's name and its install route, and
+    /// says in as many words that nothing was written.
+    #[test]
+    fn scaffolding_refuses_before_writing_when_the_cross_compiler_is_missing() {
+        let xtensa = crate::chip::by_id("esp32").expect("the classic ESP32 is catalogued");
+        let riscv = crate::chip::by_id("esp32c3").expect("the C3 is catalogued");
+        let cortex = crate::chip::by_id("stm32f103").expect("an STM32 is catalogued");
+
+        let missing = c_compiler_gate(Some(&xtensa), |_| false).unwrap_err();
+        assert!(missing.contains("xtensa-esp-elf-gcc"), "{missing}");
+        assert!(
+            missing.contains("espup"),
+            "the install route travels with the refusal: {missing}"
+        );
+        assert!(missing.contains("Nothing has been written"), "{missing}");
+
+        let missing = c_compiler_gate(Some(&riscv), |_| false).unwrap_err();
+        assert!(missing.contains("riscv32-esp-elf-gcc"), "{missing}");
+
+        assert_eq!(
+            c_compiler_gate(Some(&xtensa), |binary| binary == "xtensa-esp-elf-gcc"),
+            Ok(()),
+            "the right compiler on PATH is all it asks",
+        );
+        assert!(
+            c_compiler_gate(Some(&riscv), |binary| binary == "xtensa-esp-elf-gcc").is_err(),
+            "the other architecture's compiler does not count",
+        );
+
+        let unknown = c_compiler_gate(Some(&cortex), |_| true).unwrap_err();
+        assert!(
+            unknown.contains("does not know which C compiler"),
+            "a part whose compiler rusty has not verified is refused, not guessed: {unknown}",
+        );
+        assert!(unknown.contains("Nothing has been written"), "{unknown}");
+
+        assert_eq!(
+            c_compiler_gate(None, |_| false),
+            Ok(()),
+            "no chip, no cross compiler to require"
+        );
+    }
 
     #[test]
     fn rust_calling_c_lands_a_build_script_and_a_declaration() {

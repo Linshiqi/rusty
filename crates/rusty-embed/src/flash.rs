@@ -13,9 +13,10 @@
 //! knowledge — and their existing bug reports — still apply.
 
 use crate::{
+    catalog::Catalog,
     chip,
     error::{Error, Result},
-    model::{CommandPlan, FlashAction, Transport},
+    model::{CommandPlan, FlashAction, SerialPort, Transport},
 };
 
 /// Everything needed to decide on a command.
@@ -79,6 +80,34 @@ pub fn chip_mismatch(project_chip: &str, candidates: &[String]) -> Option<String
          different chip. Switch this project's chip from the status bar — \
          click `chip {project_chip}` — or pick another port.",
     ))
+}
+
+/// [`chip_mismatch`] for the device a flash is about to go to, when the port
+/// says so.
+///
+/// The device row already knows the port names boards; the plan knowing it
+/// too is the difference between "espflash failed on a chip magic mismatch"
+/// and a sentence naming both chips. A probe reports its own target — it is
+/// not a bridge chip that could belong to several boards — so it warns of
+/// nothing.
+pub fn port_warning(
+    chip_id: &str,
+    transport: &Transport,
+    ports: &[SerialPort],
+    catalog: &Catalog,
+) -> Option<String> {
+    let candidates = match transport {
+        Transport::Serial { port } => {
+            let names = ports
+                .iter()
+                .find(|found| &found.name == port)
+                .map(|found| found.boards.clone())
+                .unwrap_or_default();
+            chips_behind(catalog, &names)
+        }
+        Transport::Probe { .. } => Vec::new(),
+    };
+    chip_mismatch(chip_id, &candidates)
 }
 
 /// Decide what to run. Pure — no process is started.
@@ -225,6 +254,65 @@ fn quote_if_needed(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn port(name: &str, boards: &[&str]) -> SerialPort {
+        SerialPort {
+            name: name.to_string(),
+            bridge: None,
+            boards: boards.iter().map(|b| b.to_string()).collect(),
+            likely_board: true,
+            usb: None,
+        }
+    }
+
+    fn serial_on(port: &str) -> Transport {
+        Transport::Serial {
+            port: port.to_string(),
+        }
+    }
+
+    /// The warning names both chips when the port's boards all carry another
+    /// part, and says nothing when the evidence is thinner than that.
+    #[test]
+    fn a_port_that_cannot_carry_the_projects_chip_is_named_before_the_flash() {
+        let catalog = Catalog::builtin();
+        let ports = vec![
+            port("COM3", &["ESP32-C3-DevKitM-1"]),
+            port("COM4", &["ESP32-C3-DevKitM-1", "ESP32-DevKitC V4"]),
+            port("COM5", &[]),
+        ];
+
+        let warning = port_warning("esp32", &serial_on("COM3"), &ports, &catalog)
+            .expect("a C3 board is not an esp32 project's board");
+        assert!(warning.contains("esp32c3"), "{warning}");
+        assert!(warning.contains("esp32"), "{warning}");
+
+        assert_eq!(
+            port_warning("esp32", &serial_on("COM4"), &ports, &catalog),
+            None,
+            "one of the candidates is the project's chip — no evidence of a mismatch",
+        );
+        assert_eq!(
+            port_warning("esp32", &serial_on("COM5"), &ports, &catalog),
+            None,
+            "an adapter rusty does not recognise is not evidence of anything",
+        );
+        assert_eq!(
+            port_warning("esp32", &serial_on("COM9"), &ports, &catalog),
+            None,
+            "a port that is not in the list is not in the list",
+        );
+        assert_eq!(
+            port_warning(
+                "esp32",
+                &Transport::Probe { identifier: None },
+                &ports,
+                &catalog
+            ),
+            None,
+            "a probe reports its own target; it is not a bridge chip",
+        );
+    }
 
     /// The mismatch names both chips and a way out — and stays quiet when
     /// the evidence does not support it, which is most of the time.

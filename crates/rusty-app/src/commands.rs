@@ -20,8 +20,8 @@ use rusty_ai::{Preset, ProviderCheck, ProviderConfig, ToolDef, ToolRegistry, sec
 use rusty_core::{FeatureImpact, FeatureRow, FeatureSelection, Workspace, WorkspaceReport};
 use rusty_embed::{
     Board, Chip, CommandPlan, EmbeddedProject, Explanation, Firmware, FlashAction, MemoryReport,
-    Probe, SerialPort, ToolchainReport, Transport, WizardChoice, WizardOption, catalog::Catalog,
-    device, firmware, flash, memory, project, toolchain, wizard,
+    Probe, SerialPort, ToolchainReport, Transport, WizardChoice, WizardOption, device, firmware,
+    flash, memory, project, toolchain, wizard,
 };
 // The storage layer goes by its own name so it cannot be confused with
 // rusty_ai's `config` at a call site.
@@ -704,34 +704,6 @@ pub async fn debug_probes() -> Answer<Vec<Probe>> {
     blocking("listing the probes", device::list_probes).await
 }
 
-/// "This cannot be the chip you are building for", when the port says so.
-///
-/// Pure: the device row already knows the port names boards; the plan knowing
-/// it too is the difference between "espflash failed on a chip magic mismatch"
-/// and a sentence naming both chips. A probe reports its own target — it is
-/// not a bridge chip that could belong to several boards — so it warns of
-/// nothing. Belongs in `rusty_embed::flash` beside `chip_mismatch`; kept here
-/// with a test so the move is mechanical.
-fn flash_warning(
-    chip_id: &str,
-    transport: &Transport,
-    ports: &[SerialPort],
-    catalog: &Catalog,
-) -> Option<String> {
-    let candidates = match transport {
-        Transport::Serial { port } => {
-            let names = ports
-                .iter()
-                .find(|found| &found.name == port)
-                .map(|found| found.boards.clone())
-                .unwrap_or_default();
-            flash::chips_behind(catalog, &names)
-        }
-        Transport::Probe { .. } => Vec::new(),
-    };
-    flash::chip_mismatch(chip_id, &candidates)
-}
-
 /// Work out the command without running it.
 ///
 /// The UI shows this before the user commits, and the assistant can quote it.
@@ -766,7 +738,7 @@ pub async fn plan_flash(
             Transport::Serial { .. } => device::list_serial_ports(&catalog),
             Transport::Probe { .. } => Vec::new(),
         };
-        let warning = flash_warning(&chip_id, &transport, &ports, &catalog);
+        let warning = flash::port_warning(&chip_id, &transport, &ports, &catalog);
 
         let mut plan = flash::plan(&flash::FlashRequest {
             chip_id,
@@ -780,38 +752,6 @@ pub async fn plan_flash(
         Ok(plan)
     })
     .await?
-}
-
-/// The C-compiler precondition for scaffolding, pure: which compiler a chip's
-/// C is compiled by, and the refusal when it is missing or unknown.
-///
-/// `scaffold` already refuses rather than lay half a scaffold over somebody's
-/// code; this is the same rule applied to the other precondition, which is not
-/// about the files at all: `cc` shells out to a cross compiler, and four
-/// correct new files whose build cannot find one is a worse answer than a
-/// refusal that names it. `on_path` is passed in so the rule is a test. It
-/// belongs in `rusty_embed::scaffold` beside the file check; kept here so the
-/// move is mechanical.
-fn c_compiler_gate(chip: Option<&Chip>, on_path: impl Fn(&str) -> bool) -> Result<(), String> {
-    let Some(chip) = chip else {
-        // No chip means no cross compiler to require; the host's `cc` is
-        // whatever it is and not rusty's to judge.
-        return Ok(());
-    };
-    match toolchain::c_compiler(chip.arch) {
-        Some((binary, install)) if !on_path(binary) => Err(format!(
-            "This project builds for {}, so C in it is compiled by `{binary}`, and that is \
-             not on PATH. Nothing has been written. Install it — {install} — and the \
-             Environment page will show it before you try again.",
-            chip.name,
-        )),
-        None => Err(format!(
-            "rusty does not know which C compiler a {} project uses, so it will not scaffold \
-             C it cannot say how to build. Nothing has been written.",
-            chip.arch.label(),
-        )),
-        Some(_) => Ok(()),
-    }
 }
 
 /// Write the C-interop scaffolding, in whichever direction.
@@ -844,7 +784,7 @@ pub async fn scaffold_c_interop(
         // Before anything is written — see `c_compiler_gate`.
         let detected = project::detect(&root)?;
         let chip = detected.chip.as_deref().and_then(rusty_embed::chip::by_id);
-        c_compiler_gate(chip.as_ref(), |binary| {
+        rusty_embed::scaffold::c_compiler_gate(chip.as_ref(), |binary| {
             rusty_embed::tools::find(binary).is_some()
         })
         .map_err(CommandError::new)?;
@@ -1039,108 +979,6 @@ pub async fn ai_check_provider(config: ProviderConfig) -> Answer<ProviderCheck> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn port(name: &str, boards: &[&str]) -> SerialPort {
-        SerialPort {
-            name: name.to_string(),
-            bridge: None,
-            boards: boards.iter().map(|b| b.to_string()).collect(),
-            likely_board: true,
-            usb: None,
-        }
-    }
-
-    fn serial(port: &str) -> Transport {
-        Transport::Serial {
-            port: port.to_string(),
-        }
-    }
-
-    /// The warning names both chips when the port's boards all carry another
-    /// part, and says nothing when the evidence is thinner than that.
-    #[test]
-    fn a_port_that_cannot_carry_the_projects_chip_is_named_before_the_flash() {
-        let catalog = Catalog::builtin();
-        let ports = vec![
-            port("COM3", &["ESP32-C3-DevKitM-1"]),
-            port("COM4", &["ESP32-C3-DevKitM-1", "ESP32-DevKitC V4"]),
-            port("COM5", &[]),
-        ];
-
-        let warning = flash_warning("esp32", &serial("COM3"), &ports, &catalog)
-            .expect("a C3 board is not an esp32 project's board");
-        assert!(warning.contains("esp32c3"), "{warning}");
-        assert!(warning.contains("esp32"), "{warning}");
-
-        assert_eq!(
-            flash_warning("esp32", &serial("COM4"), &ports, &catalog),
-            None,
-            "one of the candidates is the project's chip — no evidence of a mismatch",
-        );
-        assert_eq!(
-            flash_warning("esp32", &serial("COM5"), &ports, &catalog),
-            None,
-            "an adapter rusty does not recognise is not evidence of anything",
-        );
-        assert_eq!(
-            flash_warning("esp32", &serial("COM9"), &ports, &catalog),
-            None,
-            "a port that is not in the list is not in the list",
-        );
-        assert_eq!(
-            flash_warning(
-                "esp32",
-                &Transport::Probe { identifier: None },
-                &ports,
-                &catalog
-            ),
-            None,
-            "a probe reports its own target; it is not a bridge chip",
-        );
-    }
-
-    /// The gate refuses with the compiler's name and its install route, and
-    /// says in as many words that nothing was written.
-    #[test]
-    fn scaffolding_refuses_before_writing_when_the_cross_compiler_is_missing() {
-        let xtensa = rusty_embed::chip::by_id("esp32").expect("the classic ESP32 is catalogued");
-        let riscv = rusty_embed::chip::by_id("esp32c3").expect("the C3 is catalogued");
-        let cortex = rusty_embed::chip::by_id("stm32f103").expect("an STM32 is catalogued");
-
-        let missing = c_compiler_gate(Some(&xtensa), |_| false).unwrap_err();
-        assert!(missing.contains("xtensa-esp-elf-gcc"), "{missing}");
-        assert!(
-            missing.contains("espup"),
-            "the install route travels with the refusal: {missing}"
-        );
-        assert!(missing.contains("Nothing has been written"), "{missing}");
-
-        let missing = c_compiler_gate(Some(&riscv), |_| false).unwrap_err();
-        assert!(missing.contains("riscv32-esp-elf-gcc"), "{missing}");
-
-        assert_eq!(
-            c_compiler_gate(Some(&xtensa), |binary| binary == "xtensa-esp-elf-gcc"),
-            Ok(()),
-            "the right compiler on PATH is all it asks",
-        );
-        assert!(
-            c_compiler_gate(Some(&riscv), |binary| binary == "xtensa-esp-elf-gcc").is_err(),
-            "the other architecture's compiler does not count",
-        );
-
-        let unknown = c_compiler_gate(Some(&cortex), |_| true).unwrap_err();
-        assert!(
-            unknown.contains("does not know which C compiler"),
-            "a part whose compiler rusty has not verified is refused, not guessed: {unknown}",
-        );
-        assert!(unknown.contains("Nothing has been written"), "{unknown}");
-
-        assert_eq!(
-            c_compiler_gate(None, |_| false),
-            Ok(()),
-            "no chip, no cross compiler to require"
-        );
-    }
 
     /// The URL rule, pure: https only, RFC 3986's alphabet only, and every `%`
     /// a complete escape.
