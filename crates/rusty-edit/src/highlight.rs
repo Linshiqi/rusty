@@ -502,8 +502,7 @@ fn token_for(scope: Scope) -> Option<Token> {
             || name.starts_with("entity.name.struct")
             || name.starts_with("entity.name.enum")
             || name.starts_with("entity.name.trait")
-            || name.starts_with("support.type")
-            || name.starts_with("storage.type") =>
+            || name.starts_with("support.type") =>
         {
             Token::Type
         }
