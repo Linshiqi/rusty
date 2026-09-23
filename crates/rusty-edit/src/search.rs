@@ -27,9 +27,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use grep_matcher::{Captures, LineTerminator, Matcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::sinks::Lossy;
-use grep_searcher::{BinaryDetection, SearcherBuilder};
-use ignore::WalkState;
-use ignore::overrides::OverrideBuilder;
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
+use ignore::overrides::{Override, OverrideBuilder};
+use ignore::{DirEntry, WalkState};
 
 use crate::hidden::project_walk;
 use crate::model::{ReplaceOutcome, SearchHit, SearchResults, Skipped};
@@ -62,18 +62,8 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
         return SearchResults::default();
     }
 
-    let matcher = match build_matcher(query) {
-        Ok(matcher) => matcher,
-        Err(error) => {
-            return SearchResults {
-                error: Some(error),
-                ..SearchResults::default()
-            };
-        }
-    };
-
-    let overrides = match build_overrides(root, query) {
-        Ok(overrides) => overrides,
+    let (matcher, overrides) = match prepare(root, query) {
+        Ok(prepared) => prepared,
         Err(error) => {
             return SearchResults {
                 error: Some(error),
@@ -102,50 +92,16 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
                 .build();
             let hits = &hits;
             let count = &count;
-            let root = root.to_path_buf();
 
             Box::new(move |entry| {
                 if count.load(Ordering::Relaxed) >= MAX_HITS {
                     return WalkState::Quit;
                 }
-                let Ok(entry) = entry else {
+                let Some((entry, relative)) = searchable(entry, root) else {
                     return WalkState::Continue;
                 };
-                if !entry.file_type().is_some_and(|t| t.is_file()) {
-                    return WalkState::Continue;
-                }
-                if entry.metadata().map(|m| m.len() > MAX_FILE).unwrap_or(true) {
-                    return WalkState::Continue;
-                }
-                let Ok(relative) = entry.path().strip_prefix(&root) else {
-                    return WalkState::Continue;
-                };
-                let relative = relative.to_string_lossy().replace('\\', "/");
 
-                let mut file_hits: Vec<SearchHit> = Vec::new();
-                let _ = searcher.search_path(
-                    &matcher,
-                    entry.path(),
-                    Lossy(|line_number, line| {
-                        // The sink hands over whole matching lines; the
-                        // matcher re-runs on the line for exact spans —
-                        // several per line when the text repeats.
-                        let line = line.strip_suffix('\n').unwrap_or(line);
-                        let line = line.strip_suffix('\r').unwrap_or(line);
-                        let _ = matcher.find_iter(line.as_bytes(), |found| {
-                            file_hits.push(windowed(
-                                &relative,
-                                (line_number as u32).saturating_sub(1),
-                                line,
-                                found.start(),
-                                found.end() - found.start(),
-                            ));
-                            true
-                        });
-                        Ok(true)
-                    }),
-                );
-
+                let file_hits = hits_in(&mut searcher, &matcher, entry.path(), &relative);
                 if file_hits.is_empty() {
                     return WalkState::Continue;
                 }
@@ -210,17 +166,8 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
         return ReplaceOutcome::default();
     }
 
-    let matcher = match build_matcher(query) {
-        Ok(matcher) => matcher,
-        Err(error) => {
-            return ReplaceOutcome {
-                error: Some(error),
-                ..ReplaceOutcome::default()
-            };
-        }
-    };
-    let overrides = match build_overrides(root, query) {
-        Ok(overrides) => overrides,
+    let (matcher, overrides) = match prepare(root, query) {
+        Ok(prepared) => prepared,
         Err(error) => {
             return ReplaceOutcome {
                 error: Some(error),
@@ -237,8 +184,6 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
         .run(|| {
             let matcher = matcher.clone();
             let outcome = &outcome;
-            let root = root.to_path_buf();
-            let replacement = replacement.to_string();
             // Only a *regex* search promises `$1`. In literal mode the
             // replacement is text somebody typed, and expanding it turned
             // `$1` — or `$100`, or `$HOME` — into nothing at all, deleting
@@ -246,19 +191,9 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
             let expand = query.regex;
 
             Box::new(move |entry| {
-                let Ok(entry) = entry else {
+                let Some((entry, relative)) = searchable(entry, root) else {
                     return WalkState::Continue;
                 };
-                if !entry.file_type().is_some_and(|t| t.is_file()) {
-                    return WalkState::Continue;
-                }
-                if entry.metadata().map(|m| m.len() > MAX_FILE).unwrap_or(true) {
-                    return WalkState::Continue;
-                }
-                let Ok(relative) = entry.path().strip_prefix(&root) else {
-                    return WalkState::Continue;
-                };
-                let relative = relative.to_string_lossy().replace('\\', "/");
 
                 // Read as bytes and decode. A file that is not UTF-8 is passed
                 // over in silence, exactly as the search's binary detection
@@ -271,7 +206,7 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
                     return WalkState::Continue;
                 };
 
-                let (replaced, count) = replace_lines(&matcher, &text, &replacement, expand);
+                let (replaced, count) = replace_lines(&matcher, &text, replacement, expand);
                 if count == 0 {
                     return WalkState::Continue;
                 }
@@ -303,6 +238,57 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
     outcome.changed.sort();
     outcome.skipped.sort_by(|a, b| a.path.cmp(&b.path));
     outcome
+}
+
+/// A walked entry worth reading, with the project-relative name the panel
+/// knows it by: a file, and not one over [`MAX_FILE`]. The one filter for
+/// [`search`] and [`replace`], so a replace reads exactly the files a search
+/// would have.
+fn searchable(entry: Result<DirEntry, ignore::Error>, root: &Path) -> Option<(DirEntry, String)> {
+    let entry = entry.ok()?;
+    if !entry.file_type().is_some_and(|t| t.is_file()) {
+        return None;
+    }
+    if entry.metadata().map(|m| m.len() > MAX_FILE).unwrap_or(true) {
+        return None;
+    }
+    let relative = entry.path().strip_prefix(root).ok()?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    Some((entry, relative))
+}
+
+/// Every match in one file, each with its line cut to a window for the
+/// panel.
+fn hits_in(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    path: &Path,
+    relative: &str,
+) -> Vec<SearchHit> {
+    let mut hits = Vec::new();
+    let _ = searcher.search_path(
+        matcher,
+        path,
+        Lossy(|line_number, line| {
+            // The sink hands over whole matching lines; the matcher re-runs
+            // on the line for exact spans — several per line when the text
+            // repeats.
+            let line = line.strip_suffix('\n').unwrap_or(line);
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let _ = matcher.find_iter(line.as_bytes(), |found| {
+                hits.push(windowed(
+                    relative,
+                    (line_number as u32).saturating_sub(1),
+                    line,
+                    found.start(),
+                    found.end() - found.start(),
+                ));
+                true
+            });
+            Ok(true)
+        }),
+    );
+    hits
 }
 
 /// One file's text with every match replaced, and how many there were.
@@ -351,12 +337,19 @@ fn replace_lines(
     (out, count)
 }
 
+/// The matcher and the scope, built once for [`search`] and [`replace`]
+/// alike. A pattern that does not parse is named before a glob that does
+/// not.
+fn prepare(root: &Path, query: &Query) -> Result<(RegexMatcher, Override), String> {
+    Ok((build_matcher(query)?, build_overrides(root, query)?))
+}
+
 /// Which files are in scope, as override globs.
 ///
 /// Shared with [`replace`] deliberately: search and replace disagreeing about
 /// what `*.rs` covers would mean rewriting a file the panel never listed, and
 /// two copies of this is exactly how that happens.
-fn build_overrides(root: &Path, query: &Query) -> Result<ignore::overrides::Override, String> {
+fn build_overrides(root: &Path, query: &Query) -> Result<Override, String> {
     // The same matcher gitignore uses, so `*.rs` and `src/**` mean what they
     // mean there.
     let mut overrides = OverrideBuilder::new(root);
