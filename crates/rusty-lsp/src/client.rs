@@ -1210,6 +1210,7 @@ fn pump(reader: Box<dyn Read + Send>, shared: Arc<Shared>) {
     });
 }
 
+/// One message from the server, whatever it is.
 fn dispatch(shared: &Shared, message: Value) {
     let id = message.get("id").cloned();
     let method = message
@@ -1217,47 +1218,8 @@ fn dispatch(shared: &Shared, message: Value) {
         .and_then(Value::as_str)
         .map(str::to_string);
 
-    match (id, method) {
-        // A server-to-client request. Everything rust-analyzer sends with our
-        // declared capabilities is satisfied by an empty answer — but it must
-        // *get* one, or it waits forever and the session silently stalls.
-        (Some(id), Some(method)) => {
-            if method == "workspace/diagnostic/refresh" {
-                // The server just switched workspaces (build data arrived, a
-                // dependency changed) and wants every diagnostic re-requested.
-                // This is the moment the push model silently wiped instead.
-                let _ = shared.respond(id, Value::Null);
-                shared.poke_all_open();
-                return;
-            }
-            if method == "workspace/inlayHint/refresh"
-                || method == "workspace/semanticTokens/refresh"
-            {
-                // The same for what the editor draws over the text: asked for
-                // before the workspace loaded, it came back thin.
-                let _ = shared.respond(id, Value::Null);
-                let _ = shared.events.send(LspEvent::Refresh {});
-                return;
-            }
-            if method == "client/registerCapability" {
-                let watches = message["params"]["registrations"]
-                    .as_array()
-                    .is_some_and(|all| {
-                        all.iter()
-                            .any(|r| r["method"] == "workspace/didChangeWatchedFiles")
-                    });
-                if watches {
-                    shared.watching.store(true, Ordering::Release);
-                }
-            }
-            let result = if method == "workspace/configuration" {
-                let asked = message["params"]["items"].as_array().map_or(0, Vec::len);
-                Value::Array(vec![Value::Null; asked])
-            } else {
-                Value::Null
-            };
-            let _ = shared.respond(id, result);
-        }
+    match (id, method.as_deref()) {
+        (Some(id), Some(method)) => answer(shared, id, method, &message["params"]),
         (Some(id), None) => {
             if let Some(id) = id.as_i64()
                 && let Some(waiter) = shared.pending.lock().expect("lsp pending").remove(&id)
@@ -1265,17 +1227,17 @@ fn dispatch(shared: &Shared, message: Value) {
                 let _ = waiter.send(Some(message));
             }
         }
-        (None, Some(method)) if method == "textDocument/publishDiagnostics" => {
+        (None, Some("textDocument/publishDiagnostics")) => {
             pull::publish(shared, &message["params"]);
         }
-        (None, Some(method)) if method == "$/progress" => {
+        (None, Some("$/progress")) => {
             shared.progress(&message["params"]);
         }
         // The server's own health — see [`LspEvent::Health`]. `quiescent` is
         // not carried: what the editor needs to say is whether the workspace
         // loaded, and a health of `ok` while still indexing is already told
         // by the progress line.
-        (None, Some(method)) if method == "experimental/serverStatus" => {
+        (None, Some("experimental/serverStatus")) => {
             let params = &message["params"];
             // Settled after loading: run the check. rust-analyzer runs it on
             // a save and at no other time, and a reload clears its results —
@@ -1307,7 +1269,7 @@ fn dispatch(shared: &Shared, message: Value) {
         }
         // A message the server asked to have shown. Only the two that name a
         // failure travel; `info` and `log` are narration.
-        (None, Some(method)) if method == "window/showMessage" => {
+        (None, Some("window/showMessage")) => {
             let params = &message["params"];
             let level = match params["type"].as_u64() {
                 Some(1) => HealthLevel::Error,
@@ -1321,6 +1283,44 @@ fn dispatch(shared: &Shared, message: Value) {
         }
         // Logs: narration, not state.
         _ => {}
+    }
+}
+
+/// A server-to-client request. Everything rust-analyzer sends with our
+/// declared capabilities is satisfied by an empty answer — but it must *get*
+/// one, or it waits forever and the session silently stalls.
+fn answer(shared: &Shared, id: Value, method: &str, params: &Value) {
+    match method {
+        "workspace/diagnostic/refresh" => {
+            // The server just switched workspaces (build data arrived, a
+            // dependency changed) and wants every diagnostic re-requested.
+            // This is the moment the push model silently wiped instead.
+            let _ = shared.respond(id, Value::Null);
+            shared.poke_all_open();
+        }
+        "workspace/inlayHint/refresh" | "workspace/semanticTokens/refresh" => {
+            // The same for what the editor draws over the text: asked for
+            // before the workspace loaded, it came back thin.
+            let _ = shared.respond(id, Value::Null);
+            let _ = shared.events.send(LspEvent::Refresh {});
+        }
+        "client/registerCapability" => {
+            let watches = params["registrations"].as_array().is_some_and(|all| {
+                all.iter()
+                    .any(|r| r["method"] == "workspace/didChangeWatchedFiles")
+            });
+            if watches {
+                shared.watching.store(true, Ordering::Release);
+            }
+            let _ = shared.respond(id, Value::Null);
+        }
+        "workspace/configuration" => {
+            let asked = params["items"].as_array().map_or(0, Vec::len);
+            let _ = shared.respond(id, Value::Array(vec![Value::Null; asked]));
+        }
+        _ => {
+            let _ = shared.respond(id, Value::Null);
+        }
     }
 }
 
@@ -2127,6 +2127,74 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert!(answered, "workspace/inlayHint/refresh went unanswered");
+    }
+
+    /// Every request the server makes is answered, or it waits for ever:
+    /// `workspace/configuration` with one null per item it asked about, a
+    /// request this client has nothing to say to with a null, and a
+    /// diagnostic refresh with a null and then a fresh pull of every open
+    /// document — the moment the push model used to wipe them instead.
+    #[test]
+    fn every_request_from_the_server_is_answered() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, writer, seen) = fake_server({
+            let mut pulls = 0;
+            move |message, writer| {
+                if method(message) != "textDocument/diagnostic" {
+                    return default_handle(message, writer);
+                }
+                pulls += 1;
+                reply(writer, message, json!({ "kind": "full", "items": [] }));
+                if pulls == 1 {
+                    for request in [
+                        json!({ "jsonrpc": "2.0", "id": 61, "method": "workspace/configuration",
+                                "params": { "items": [{ "section": "a" }, { "section": "b" }] } }),
+                        json!({ "jsonrpc": "2.0", "id": 62, "method": "experimental/unheardOf" }),
+                        json!({ "jsonrpc": "2.0", "id": 63, "method": "workspace/diagnostic/refresh" }),
+                    ] {
+                        rpc::write_message(writer, &request).unwrap();
+                    }
+                }
+                true
+            }
+        });
+        let (client, _events) =
+            LspClient::connect(reader, writer, None, root.path(), None).expect("handshake");
+        client.did_open("a.rs", "fn a() {}\n").unwrap();
+
+        let answer = |id: u64| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let found = seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|m| m.get("id") == Some(&json!(id)) && m.get("method").is_none())
+                    .map(|m| m["result"].clone());
+                if let Some(result) = found {
+                    break result;
+                }
+                assert!(Instant::now() < deadline, "request {id} went unanswered");
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        assert_eq!(answer(61), json!([null, null]));
+        assert_eq!(answer(62), Value::Null);
+        assert_eq!(answer(63), Value::Null);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while methods(&seen)
+            .iter()
+            .filter(|m| *m == "textDocument/diagnostic")
+            .count()
+            < 2
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the refresh pulled nothing: {:?}",
+                methods(&seen)
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Settling after a load asks the editor to ask again, as a refresh
