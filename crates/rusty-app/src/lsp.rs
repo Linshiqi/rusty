@@ -103,13 +103,7 @@ pub async fn lsp_open(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(());
-    };
-    tokio::task::spawn_blocking(move || client.did_open(&path, &text))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??;
-    Ok(())
+    ask(&state, move |client| client.did_open(&path, &text)).await
 }
 
 #[tauri::command]
@@ -118,35 +112,17 @@ pub async fn lsp_change(
     text: String,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(());
-    };
-    tokio::task::spawn_blocking(move || client.did_change(&path, &text))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??;
-    Ok(())
+    ask(&state, move |client| client.did_change(&path, &text)).await
 }
 
 #[tauri::command]
 pub async fn lsp_saved(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(());
-    };
-    tokio::task::spawn_blocking(move || client.did_save(&path))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??;
-    Ok(())
+    ask(&state, move |client| client.did_save(&path)).await
 }
 
 #[tauri::command]
 pub async fn lsp_close(path: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(());
-    };
-    tokio::task::spawn_blocking(move || client.did_close(&path))
-        .await
-        .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??;
-    Ok(())
+    ask(&state, move |client| client.did_close(&path)).await
 }
 
 #[tauri::command]
@@ -156,14 +132,7 @@ pub async fn lsp_complete(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<CompletionList, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(CompletionList::default());
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.completion(&path, line, col))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| client.completion(&path, line, col)).await
 }
 
 /// The edits an accepted completion makes besides the insertion — the
@@ -176,14 +145,10 @@ pub async fn lsp_resolve_completion(
     index: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::ActionEdit>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(Vec::new());
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.resolve_completion(&path, reply, index))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| {
+        client.resolve_completion(&path, reply, index)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -193,14 +158,7 @@ pub async fn lsp_hover(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Option<HoverInfo>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(None);
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.hover(&path, line, col))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| client.hover(&path, line, col)).await
 }
 
 /// Quick fixes and refactorings at the caret, edits pre-resolved.
@@ -211,14 +169,7 @@ pub async fn lsp_code_actions(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<rusty_lsp::CodeActions, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(rusty_lsp::CodeActions::default());
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.code_actions(&path, line, col))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| client.code_actions(&path, line, col)).await
 }
 
 /// The part of an accepted quick fix that lands in other files, written
@@ -230,14 +181,10 @@ pub async fn lsp_apply_action(
     index: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(Vec::new());
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.apply_action_elsewhere(&path, reply, index))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| {
+        client.apply_action_elsewhere(&path, reply, index)
+    })
+    .await
 }
 
 /// The document's semantic colouring — the colours only the compiler's view
@@ -248,14 +195,7 @@ pub async fn lsp_semantic(
     lines: Option<(u32, u32)>,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::SemanticSpan>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(Vec::new());
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.semantic_tokens(&path, lines))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| client.semantic_tokens(&path, lines)).await
 }
 
 /// The signature of the call the caret is inside, for parameter hints.
@@ -266,14 +206,10 @@ pub async fn lsp_signature(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_lsp::SignatureInfo>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(None);
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.signature_help(&path, line, col))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| {
+        client.signature_help(&path, line, col)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -283,14 +219,7 @@ pub async fn lsp_definition(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Option<Location>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(None);
-    };
-    Ok(
-        tokio::task::spawn_blocking(move || client.definition(&path, line, col))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    ask(&state, move |client| client.definition(&path, line, col)).await
 }
 
 /// Every use of the symbol at this position, its declaration included.
@@ -301,7 +230,7 @@ pub async fn lsp_references(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Place>, CommandError> {
-    places(state, move |client| client.references(&path, line, col)).await
+    ask(&state, move |client| client.references(&path, line, col)).await
 }
 
 /// What implements the trait or method at this position, or the impls of
@@ -313,7 +242,7 @@ pub async fn lsp_implementations(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Place>, CommandError> {
-    places(state, move |client| {
+    ask(&state, move |client| {
         client.implementations(&path, line, col)
     })
     .await
@@ -327,7 +256,7 @@ pub async fn lsp_type_definition(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Place>, CommandError> {
-    places(state, move |client| {
+    ask(&state, move |client| {
         client.type_definition(&path, line, col)
     })
     .await
@@ -341,7 +270,7 @@ pub async fn lsp_highlights(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::EditRange>, CommandError> {
-    places(state, move |client| {
+    ask(&state, move |client| {
         client.document_highlights(&path, line, col)
     })
     .await
@@ -353,7 +282,7 @@ pub async fn lsp_document_symbols(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Symbol>, CommandError> {
-    places(state, move |client| client.document_symbols(&path)).await
+    ask(&state, move |client| client.document_symbols(&path)).await
 }
 
 /// Symbols across the workspace whose names match `query`.
@@ -362,7 +291,7 @@ pub async fn lsp_workspace_symbols(
     query: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Symbol>, CommandError> {
-    places(state, move |client| client.workspace_symbols(&query)).await
+    ask(&state, move |client| client.workspace_symbols(&query)).await
 }
 
 /// The function at this position, where a call hierarchy starts.
@@ -373,7 +302,10 @@ pub async fn lsp_call_hierarchy(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::CallItem>, CommandError> {
-    places(state, move |client| client.call_hierarchy(&path, line, col)).await
+    ask(&state, move |client| {
+        client.call_hierarchy(&path, line, col)
+    })
+    .await
 }
 
 /// The inlay hints over lines `from..to` of a file.
@@ -384,7 +316,7 @@ pub async fn lsp_inlay_hints(
     to: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::InlayHint>, CommandError> {
-    places(state, move |client| client.inlay_hints(&path, from, to)).await
+    ask(&state, move |client| client.inlay_hints(&path, from, to)).await
 }
 
 /// Who calls the function `item` names, or what it calls: `item` is the
@@ -395,7 +327,7 @@ pub async fn lsp_calls(
     incoming: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<rusty_lsp::Call>, CommandError> {
-    places(state, move |client| {
+    ask(&state, move |client| {
         if incoming {
             client.incoming_calls(&item)
         } else {
@@ -419,11 +351,8 @@ pub async fn lsp_expand_macro(
     col: u32,
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_edit::Document>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(None);
-    };
     let files = state.files();
-    Ok(tokio::task::spawn_blocking(move || {
+    ask(&state, move |client| {
         let Some(expanded) = client.expand_macro(&path, line, col)? else {
             return Ok::<_, rusty_lsp::Error>(None);
         };
@@ -439,20 +368,28 @@ pub async fn lsp_expand_macro(
         Ok(Some(files.virtual_document(&shown, "expansion.rs", text)))
     })
     .await
-    .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
 }
 
-/// Ask the server on the blocking pool, and answer with nothing when there
-/// is no server: a list that is empty while rust-analyzer starts is the
-/// warm-up talking, as a definition that finds nothing is.
-async fn places<T: Send + 'static>(
-    state: State<'_, AppState>,
-    ask: impl FnOnce(&rusty_lsp::LspClient) -> rusty_lsp::Result<Vec<T>> + Send + 'static,
-) -> Result<Vec<T>, CommandError> {
-    let Some(client) = state.lsp().await else {
-        return Ok(Vec::new());
-    };
-    Ok(tokio::task::spawn_blocking(move || ask(&client))
+/// Ask the server, on the blocking pool — the client waits on a pipe — and
+/// answer with nothing when there is no server. The editor works without
+/// one: a list that is empty while rust-analyzer starts is the warm-up
+/// talking, as a definition that finds nothing is.
+async fn ask<T: Default + Send + 'static>(
+    state: &AppState,
+    question: impl FnOnce(&LspClient) -> rusty_lsp::Result<T> + Send + 'static,
+) -> Result<T, CommandError> {
+    match state.lsp().await {
+        Some(client) => on_blocking(client, question).await,
+        None => Ok(T::default()),
+    }
+}
+
+/// `question`, asked of `client` on the blocking pool.
+async fn on_blocking<T: Send + 'static>(
+    client: Arc<LspClient>,
+    question: impl FnOnce(&LspClient) -> rusty_lsp::Result<T> + Send + 'static,
+) -> Result<T, CommandError> {
+    Ok(tokio::task::spawn_blocking(move || question(&client))
         .await
         .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??)
 }
@@ -475,9 +412,8 @@ pub async fn lsp_rename(
             "rust-analyzer is not running, so nothing knows where this symbol is used",
         ));
     };
-    Ok(
-        tokio::task::spawn_blocking(move || client.rename(&path, line, col, &new_name))
-            .await
-            .map_err(|e| CommandError::new(format!("the language server task panicked: {e}")))??,
-    )
+    on_blocking(client, move |client| {
+        client.rename(&path, line, col, &new_name)
+    })
+    .await
 }
