@@ -1,6 +1,6 @@
 //! Running a flash or monitor session.
 //!
-//! Separate from `commands.rs` for the same reason `ai.rs` is: this is
+//! Separate from `commands/` for the same reason `ai.rs` is: this is
 //! long-running and streams, and everything else is request/response.
 //!
 //! Every session here is registered in `AppState`'s session slot and released

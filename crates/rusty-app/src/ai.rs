@@ -1,6 +1,6 @@
 //! The assistant command.
 //!
-//! Streaming lives here rather than in `commands.rs` because it is the only
+//! Streaming lives here rather than in `commands/` because it is the only
 //! command that is long-running, and the shape it needs — a channel out, a
 //! conversation back — is unlike everything else.
 
