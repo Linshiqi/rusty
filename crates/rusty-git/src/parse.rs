@@ -19,11 +19,15 @@ pub const LOG_FORMAT: &str = "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1e";
 
 /// Commits out of `git log --format=LOG_FORMAT`.
 pub fn log(text: &str) -> Vec<Commit> {
+    records(text).filter_map(commit).collect()
+}
+
+/// The records of an answer asked for with `%x1e` after each: trimmed, and
+/// with the empty ones — the tail after the last separator — dropped.
+fn records(text: &str) -> impl Iterator<Item = &str> {
     text.split('\x1e')
         .map(str::trim)
         .filter(|record| !record.is_empty())
-        .filter_map(commit)
-        .collect()
 }
 
 fn commit(record: &str) -> Option<Commit> {
@@ -491,9 +495,7 @@ pub const STASH_FORMAT: &str = "%gd%x1f%s%x1f%at%x1e";
 
 /// Stashes out of `git stash list --format=STASH_FORMAT`, newest first.
 pub fn stashes(text: &str) -> Vec<Stash> {
-    text.split('\x1e')
-        .map(str::trim)
-        .filter(|record| !record.is_empty())
+    records(text)
         .filter_map(|record| {
             let mut fields = record.split('\x1f');
             let label = fields.next()?.trim().to_string();
