@@ -294,26 +294,11 @@ fn read_line(
                     let _ = stdout.flush();
                 }
             }
-            // ESC: an arrow or another CSI. Consume the whole sequence —
-            // parameter bytes (`0x30..=0x3F`, so `3` and `1;5`), then
-            // intermediates, then the one final byte — and act only on the
-            // arrows; everything else is dropped rather than echoed as
-            // garbage. Taking exactly one byte after `[` left Delete's `~`
-            // and Ctrl+Arrow's `;5C` sitting in the command line.
+            // ESC: an arrow or another CSI. The whole sequence is consumed
+            // (`read_csi`) and only the arrows are acted on; everything else
+            // is dropped rather than echoed as garbage.
             0x1b => {
-                let Some(Ok(b'[')) = bytes.next() else {
-                    continue;
-                };
-                let mut params: Vec<u8> = Vec::new();
-                let code = loop {
-                    match bytes.next() {
-                        Some(Ok(byte @ 0x30..=0x3F)) => params.push(byte),
-                        Some(Ok(0x20..=0x2F)) => {}
-                        Some(Ok(byte)) => break Some(byte),
-                        _ => break None,
-                    }
-                };
-                let Some(code) = code else {
+                let Some((params, code)) = read_csi(bytes) else {
                     continue;
                 };
                 // A modified arrow (`1;5A`) is not a history walk.
@@ -336,12 +321,7 @@ fn read_line(
                     _ => None,
                 };
                 if let Some(next) = replacement {
-                    // Repaint: wipe the current line, write the new one.
-                    for _ in 0..line.chars().count() {
-                        let _ = write!(stdout, "\x08 \x08");
-                    }
-                    let _ = write!(stdout, "{next}");
-                    let _ = stdout.flush();
+                    repaint_line(stdout, &line, &next);
                     line = next;
                 }
             }
@@ -359,6 +339,38 @@ fn read_line(
             }
         }
     }
+}
+
+/// The rest of a CSI sequence whose `ESC` has just been read: its parameter
+/// bytes and its final byte. The whole sequence is consumed — parameter bytes
+/// (`0x30..=0x3F`, so `3` and `1;5`), then intermediates, then the one final
+/// byte. Taking exactly one byte after `[` left Delete's `~` and Ctrl+Arrow's
+/// `;5C` sitting in the command line.
+///
+/// `None` when the byte after `ESC` is not `[`, or when the input ends or
+/// fails before the final byte; what was read is dropped either way.
+fn read_csi(bytes: &mut impl Iterator<Item = std::io::Result<u8>>) -> Option<(Vec<u8>, u8)> {
+    let Some(Ok(b'[')) = bytes.next() else {
+        return None;
+    };
+    let mut params: Vec<u8> = Vec::new();
+    loop {
+        match bytes.next() {
+            Some(Ok(byte @ 0x30..=0x3F)) => params.push(byte),
+            Some(Ok(0x20..=0x2F)) => {}
+            Some(Ok(byte)) => return Some((params, byte)),
+            _ => return None,
+        }
+    }
+}
+
+/// Repaint: wipe the line as it stands, write `next` in its place.
+fn repaint_line(stdout: &mut impl Write, line: &str, next: &str) {
+    for _ in 0..line.chars().count() {
+        let _ = write!(stdout, "\x08 \x08");
+    }
+    let _ = write!(stdout, "{next}");
+    let _ = stdout.flush();
 }
 
 /// Accumulate the rest of a UTF-8 scalar whose lead byte just arrived, then
