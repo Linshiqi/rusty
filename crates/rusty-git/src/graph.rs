@@ -25,19 +25,7 @@ pub fn lay_out(commits: Vec<Commit>) -> History {
 
     for commit in commits {
         // The lane waiting for this commit, or a free one, or a new one.
-        let lane = match lanes
-            .iter()
-            .position(|slot| slot.as_deref() == Some(&commit.id))
-        {
-            Some(at) => at,
-            None => match lanes.iter().position(Option::is_none) {
-                Some(free) => free,
-                None => {
-                    lanes.push(None);
-                    lanes.len() - 1
-                }
-            },
-        };
+        let lane = waiting_for(&lanes, &commit.id).unwrap_or_else(|| free_lane(&mut lanes));
 
         // Every other lane that was also waiting for this commit has
         // converged here. Its line, drawn from the row above, was aimed at
@@ -76,10 +64,7 @@ pub fn lay_out(commits: Vec<Commit>) -> History {
         // keep it straight and bend the branch back in.
         match parents.next() {
             None => lanes[lane] = None,
-            Some(first) => match lanes
-                .iter()
-                .position(|slot| slot.as_deref() == Some(first.as_str()))
-            {
+            Some(first) => match waiting_for(&lanes, first) {
                 Some(other) if other < lane => {
                     lanes[lane] = None;
                     edges.push(Edge {
@@ -100,16 +85,10 @@ pub fn lay_out(commits: Vec<Commit>) -> History {
         // Every further parent is a line leaving this dot: into the lane
         // already waiting for it, or into a new one.
         for parent in parents {
-            let to = match lanes
-                .iter()
-                .position(|slot| slot.as_deref() == Some(parent.as_str()))
-            {
+            let to = match waiting_for(&lanes, parent) {
                 Some(at) => at,
                 None => {
-                    let at = lanes.iter().position(Option::is_none).unwrap_or_else(|| {
-                        lanes.push(None);
-                        lanes.len() - 1
-                    });
+                    let at = free_lane(&mut lanes);
                     lanes[at] = Some(parent.clone());
                     at
                 }
@@ -144,6 +123,20 @@ pub fn lay_out(commits: Vec<Commit>) -> History {
         truncated: false,
         head: None,
     }
+}
+
+/// The leftmost lane waiting for `id`.
+fn waiting_for(lanes: &[Option<String>], id: &str) -> Option<usize> {
+    lanes.iter().position(|slot| slot.as_deref() == Some(id))
+}
+
+/// The leftmost free lane, or a new one on the right when every lane is
+/// taken.
+fn free_lane(lanes: &mut Vec<Option<String>>) -> usize {
+    lanes.iter().position(Option::is_none).unwrap_or_else(|| {
+        lanes.push(None);
+        lanes.len() - 1
+    })
 }
 
 #[cfg(test)]
