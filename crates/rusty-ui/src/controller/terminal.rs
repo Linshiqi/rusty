@@ -380,6 +380,45 @@ pub fn test_project(state: AppState) {
     run_test(state, String::new());
 }
 
+/// The shells the picker can offer. Loaded once; a machine does not grow
+/// shells mid-session often enough to poll for.
+pub fn load_shell_choices(state: AppState) {
+    if state.term.choices.with_untracked(|c| !c.is_empty()) {
+        return;
+    }
+    track(
+        state,
+        async move { ipc::get::<Vec<rusty_term::ShellChoice>>(cmd::terminal::SHELLS).await },
+        move |choices| state.term.choices.set(choices),
+    );
+}
+
+/// What shell the terminal will start, and where the choice came from.
+pub fn load_shell_info(state: AppState) {
+    track(
+        state,
+        async move { ipc::call::<_, rusty_term::ShellInfo>(cmd::terminal::SHELL_INFO, &()).await },
+        move |info| state.term.info.set(Some(info)),
+    );
+}
+
+/// Store the shell preference and restart the shell so it takes effect —
+/// a preference that waits for the next launch reads as a broken setting.
+pub fn set_terminal_shell(state: AppState, value: Option<String>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        value: Option<String>,
+    }
+    track(
+        state,
+        async move { ipc::call::<_, ()>(cmd::terminal::SET_SHELL, &Args { value }).await },
+        move |()| {
+            close_terminal(state);
+            load_shell_info(state);
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::shell_word;
