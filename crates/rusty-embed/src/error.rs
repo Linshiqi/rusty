@@ -6,6 +6,8 @@
 //! how to fail. The strings were already actionable sentences, so the two
 //! variants that absorbed them carry the sentence and nothing else.
 
+use std::path::Path;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("`{path}` could not be read")]
@@ -109,6 +111,19 @@ impl Error {
         Error::Refused {
             detail: detail.into(),
         }
+    }
+
+    /// What a failed write to `path` becomes, in the shape `map_err` takes:
+    /// `fs::write(&file, text).map_err(Error::writing(&file))`.
+    pub(crate) fn writing(path: &Path) -> impl FnOnce(std::io::Error) -> Error {
+        let path = path.display().to_string();
+        move |source| Error::Write { path, source }
+    }
+
+    /// The same for a read.
+    pub(crate) fn reading(path: &Path) -> impl FnOnce(std::io::Error) -> Error {
+        let path = path.display().to_string();
+        move |source| Error::Read { path, source }
     }
 }
 

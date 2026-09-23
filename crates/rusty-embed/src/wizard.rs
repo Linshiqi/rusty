@@ -375,12 +375,10 @@ fn valid_name(name: &str) -> Result<&str> {
     if crate::model::crate_name_problem(name).is_none() {
         Ok(name)
     } else {
-        Err(Error::Refused {
-            detail: format!(
-                "`{name}` is not a name cargo accepts for a crate — use letters, digits, `-` \
-                 and `_`, starting with a letter or a digit."
-            ),
-        })
+        Err(Error::refused(format!(
+            "`{name}` is not a name cargo accepts for a crate — use letters, digits, `-` and \
+             `_`, starting with a letter or a digit."
+        )))
     }
 }
 
@@ -391,25 +389,16 @@ fn write_new(path: &Path, text: &str) -> Result<()> {
         });
     }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
-            path: parent.display().to_string(),
-            source,
-        })?;
+        std::fs::create_dir_all(parent).map_err(Error::writing(parent))?;
     }
-    std::fs::write(path, text).map_err(|source| Error::Write {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::write(path, text).map_err(Error::writing(path))
 }
 
 /// `core = { path = "../core" }` under the firmware's `[dependencies]`,
 /// inserted textually so everything the generator wrote — comments, order,
 /// version specs — survives byte for byte, as `migrate.rs` treats a manifest.
 fn add_dependency(manifest: &Path, core: &str) -> Result<()> {
-    let text = std::fs::read_to_string(manifest).map_err(|source| Error::Read {
-        path: manifest.display().to_string(),
-        source,
-    })?;
+    let text = std::fs::read_to_string(manifest).map_err(Error::reading(manifest))?;
     let line = format!("{core} = {{ path = \"../core\" }}\n");
     if text.contains(&line) {
         return Ok(());
@@ -421,10 +410,7 @@ fn add_dependency(manifest: &Path, core: &str) -> Result<()> {
         }
         None => format!("{}\n[dependencies]\n{line}", text.trim_end_matches('\n')),
     };
-    std::fs::write(manifest, patched).map_err(|source| Error::Write {
-        path: manifest.display().to_string(),
-        source,
-    })
+    std::fs::write(manifest, patched).map_err(Error::writing(manifest))
 }
 
 fn root_manifest(name: &str, chip: &str) -> String {

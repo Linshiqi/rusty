@@ -26,10 +26,7 @@ use crate::{
 
 /// Analyse a linked ELF.
 pub fn analyze(elf_path: &Path, chip_id: Option<&str>) -> Result<MemoryReport> {
-    let bytes = std::fs::read(elf_path).map_err(|source| Error::Read {
-        path: elf_path.display().to_string(),
-        source,
-    })?;
+    let bytes = std::fs::read(elf_path).map_err(Error::reading(elf_path))?;
     let file = object::File::parse(&*bytes).map_err(|e| Error::Elf {
         path: elf_path.display().to_string(),
         detail: e.to_string(),

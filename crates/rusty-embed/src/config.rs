@@ -106,10 +106,7 @@ pub fn relocate(new_dir: &Path, take_existing: bool) -> Result<RelocateReport> {
                 ),
             });
         }
-        std::fs::create_dir_all(new_dir).map_err(|source| Error::Write {
-            path: new_dir.display().to_string(),
-            source,
-        })?;
+        std::fs::create_dir_all(new_dir).map_err(Error::writing(new_dir))?;
         copied = copy_tree(&current, new_dir, &anchor)?;
     }
 
@@ -545,10 +542,7 @@ pub fn save_workbench(state: &WorkbenchState) -> Result<()> {
 
 fn save_workbench_at(path: &Path, state: &WorkbenchState) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
-            path: parent.display().to_string(),
-            source,
-        })?;
+        std::fs::create_dir_all(parent).map_err(Error::writing(parent))?;
     }
     let body =
         toml::to_string_pretty(&file::Workbench::from(state)).expect("plain fields serialise");
@@ -556,14 +550,8 @@ fn save_workbench_at(path: &Path, state: &WorkbenchState) -> Result<()> {
     // `workbench.toml.tmp` shared by two windows saving at once was written
     // by both, renamed by one, and the file that landed was neither's.
     let temp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
-    std::fs::write(&temp, body).map_err(|source| Error::Write {
-        path: temp.display().to_string(),
-        source,
-    })?;
-    std::fs::rename(&temp, path).map_err(|source| Error::Write {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::write(&temp, body).map_err(Error::writing(&temp))?;
+    std::fs::rename(&temp, path).map_err(Error::writing(path))
 }
 
 /// Read, change, write — as one step, under the writers' lock. The one way
@@ -623,10 +611,7 @@ fn resolve_pointer(anchor: &Path) -> Option<PathBuf> {
 /// Written atomically: temp file, then rename. A pointer half-written at the
 /// moment of a crash would silently strand the data directory.
 fn write_pointer(anchor: &Path, data: &Path) -> Result<()> {
-    std::fs::create_dir_all(anchor).map_err(|source| Error::Write {
-        path: anchor.display().to_string(),
-        source,
-    })?;
+    std::fs::create_dir_all(anchor).map_err(Error::writing(anchor))?;
     let body = toml::to_string_pretty(&Pointer {
         data_dir: data.display().to_string(),
     })
@@ -634,14 +619,8 @@ fn write_pointer(anchor: &Path, data: &Path) -> Result<()> {
 
     let path = pointer_path(anchor);
     let temp = path.with_extension("toml.tmp");
-    std::fs::write(&temp, body).map_err(|source| Error::Write {
-        path: temp.display().to_string(),
-        source,
-    })?;
-    std::fs::rename(&temp, &path).map_err(|source| Error::Write {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::write(&temp, body).map_err(Error::writing(&temp))?;
+    std::fs::rename(&temp, &path).map_err(Error::writing(&path))
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -653,10 +632,7 @@ fn copy_tree(from: &Path, to: &Path, anchor: &Path) -> Result<usize> {
     if !from.exists() {
         return Ok(0);
     }
-    let entries = std::fs::read_dir(from).map_err(|source| Error::Read {
-        path: from.display().to_string(),
-        source,
-    })?;
+    let entries = std::fs::read_dir(from).map_err(Error::reading(from))?;
     for entry in entries.flatten() {
         let source_path = entry.path();
         let name = entry.file_name();
@@ -665,16 +641,10 @@ fn copy_tree(from: &Path, to: &Path, anchor: &Path) -> Result<usize> {
         }
         let target_path = to.join(&name);
         if source_path.is_dir() {
-            std::fs::create_dir_all(&target_path).map_err(|source| Error::Write {
-                path: target_path.display().to_string(),
-                source,
-            })?;
+            std::fs::create_dir_all(&target_path).map_err(Error::writing(&target_path))?;
             copied += copy_tree(&source_path, &target_path, anchor)?;
         } else {
-            std::fs::copy(&source_path, &target_path).map_err(|source| Error::Write {
-                path: target_path.display().to_string(),
-                source,
-            })?;
+            std::fs::copy(&source_path, &target_path).map_err(Error::writing(&target_path))?;
             copied += 1;
         }
     }

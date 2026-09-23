@@ -179,10 +179,7 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<()> {
         source,
     };
     let entries = std::fs::read_dir(from).map_err(unreadable)?;
-    std::fs::create_dir_all(to).map_err(|source| Error::Write {
-        path: to.display().to_string(),
-        source,
-    })?;
+    std::fs::create_dir_all(to).map_err(Error::writing(to))?;
     for entry in entries {
         let entry = entry.map_err(unreadable)?;
         let kind = entry.file_type().map_err(unreadable)?;
@@ -193,10 +190,7 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<()> {
             }
             copy_tree(&entry.path(), &target, false)?;
         } else if kind.is_file() {
-            std::fs::copy(entry.path(), &target).map_err(|source| Error::Write {
-                path: target.display().to_string(),
-                source,
-            })?;
+            std::fs::copy(entry.path(), &target).map_err(Error::writing(&target))?;
         }
     }
     Ok(())

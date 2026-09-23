@@ -284,10 +284,7 @@ pub fn fetch(chip: &str, progress: impl FnMut(String)) -> Result<std::path::Path
         ))
     })?;
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
-            path: parent.display().to_string(),
-            source,
-        })?;
+        std::fs::create_dir_all(parent).map_err(Error::writing(parent))?;
     }
     crate::install::download(&[url], &dest, progress)?;
     Ok(dest)

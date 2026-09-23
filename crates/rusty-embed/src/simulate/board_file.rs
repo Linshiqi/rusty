@@ -626,14 +626,8 @@ pub fn save(root: &Path, sheet: &Sheet) -> Result<()> {
         path: path.display().to_string(),
         detail: error.to_string(),
     })?;
-    std::fs::create_dir_all(&dir).map_err(|source| Error::Write {
-        path: dir.display().to_string(),
-        source,
-    })?;
-    std::fs::write(&path, text).map_err(|source| Error::Write {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::create_dir_all(&dir).map_err(Error::writing(&dir))?;
+    std::fs::write(&path, text).map_err(Error::writing(&path))
 }
 
 #[cfg(test)]

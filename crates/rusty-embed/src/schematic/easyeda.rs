@@ -101,7 +101,7 @@ pub fn fetch(lcsc: &str) -> Result<String> {
 pub fn import(lcsc: &str) -> Result<Imported> {
     let lcsc = part_number(lcsc)?;
     let body = fetch(&lcsc)?;
-    let mut imported = parse(&lcsc, &body).map_err(|e| Error::Refused { detail: e.detail })?;
+    let mut imported = parse(&lcsc, &body).map_err(|e| Error::refused(e.detail))?;
     match cache(&imported.symbol) {
         Ok(path) => imported.warnings.push(format!(
             "kept as {}:{} in {}",
@@ -122,10 +122,7 @@ fn cache(symbol: &Symbol) -> Result<std::path::PathBuf> {
     let dir = super::cache_dir().ok_or_else(|| Error::Config {
         detail: "no data directory to keep the imported symbol in".to_string(),
     })?;
-    std::fs::create_dir_all(&dir).map_err(|source| Error::Write {
-        path: dir.display().to_string(),
-        source,
-    })?;
+    std::fs::create_dir_all(&dir).map_err(Error::writing(&dir))?;
     let path = dir.join(format!("{LIBRARY}.kicad_sym"));
     let mut symbols = match std::fs::read_to_string(&path) {
         Ok(text) => match kicad_sym::parse(LIBRARY, &text) {
@@ -137,10 +134,7 @@ fn cache(symbol: &Symbol) -> Result<std::path::PathBuf> {
                     path.display(),
                     broken.display()
                 );
-                std::fs::rename(&path, &broken).map_err(|source| Error::Write {
-                    path: broken.display().to_string(),
-                    source,
-                })?;
+                std::fs::rename(&path, &broken).map_err(Error::writing(&broken))?;
                 Vec::new()
             }
         },
@@ -151,14 +145,8 @@ fn cache(symbol: &Symbol) -> Result<std::path::PathBuf> {
         None => symbols.push(symbol.clone()),
     }
     let tmp = dir.join(format!("{LIBRARY}.kicad_sym.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, kicad_sym::write(&symbols)).map_err(|source| Error::Write {
-        path: tmp.display().to_string(),
-        source,
-    })?;
-    std::fs::rename(&tmp, &path).map_err(|source| Error::Write {
-        path: path.display().to_string(),
-        source,
-    })?;
+    std::fs::write(&tmp, kicad_sym::write(&symbols)).map_err(Error::writing(&tmp))?;
+    std::fs::rename(&tmp, &path).map_err(Error::writing(&path))?;
     Ok(path)
 }
 

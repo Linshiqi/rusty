@@ -411,10 +411,7 @@ fn diagnose(project: &EmbeddedProject) -> Vec<Problem> {
 /// rejects every real manifest at the first `[section]` header. `Table` is the
 /// document type.
 pub(crate) fn read_toml(path: &Path) -> Result<toml::Table> {
-    let text = std::fs::read_to_string(path).map_err(|source| Error::Read {
-        path: path.display().to_string(),
-        source,
-    })?;
+    let text = std::fs::read_to_string(path).map_err(Error::reading(path))?;
     text.parse::<toml::Table>().map_err(|source| Error::Toml {
         path: path.display().to_string(),
         source,
@@ -545,10 +542,7 @@ fn read_toolchain_channel(root: &Path, evidence: &mut Vec<String>) -> Result<Opt
         evidence.push(name.to_string());
         // The extension-less form is sometimes a bare channel name rather than
         // TOML, which is why this does not just parse and index.
-        let text = std::fs::read_to_string(&path).map_err(|source| Error::Read {
-            path: path.display().to_string(),
-            source,
-        })?;
+        let text = std::fs::read_to_string(&path).map_err(Error::reading(&path))?;
         if let Ok(value) = text.parse::<toml::Table>()
             && let Some(channel) = value
                 .get("toolchain")

@@ -24,6 +24,7 @@ pub mod wokwi;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::Error;
 use crate::model::Symbol;
 
 /// The built-in library, one file per KiCad library name.
@@ -140,13 +141,12 @@ pub fn import_wokwi(
 ) -> crate::error::Result<crate::model::Sheet> {
     let text = read_file(file)?;
     let rows = crate::simulate::kit_rows_for(root, chip);
-    let mut sheet =
-        wokwi::read(&text, chip, &rows).map_err(|error| crate::error::Error::Refused {
-            detail: format!(
-                "{} is not a Wokwi diagram rusty can read: {error}",
-                file.display()
-            ),
-        })?;
+    let mut sheet = wokwi::read(&text, chip, &rows).map_err(|error| {
+        Error::refused(format!(
+            "{} is not a Wokwi diagram rusty can read: {error}",
+            file.display()
+        ))
+    })?;
     crate::simulate::resolve_symbols(&mut sheet, &load(Some(root)));
     Ok(sheet)
 }
@@ -164,11 +164,11 @@ pub fn import_wokwi(
 /// unknown boxes the next time the project was opened.
 pub fn import(root: &Path, file: &Path, chip: &str) -> crate::error::Result<crate::model::Sheet> {
     let text = read_file(file)?;
-    let read = kicad_sch::parse(&text, chip).map_err(|error| crate::error::Error::Refused {
-        detail: format!(
+    let read = kicad_sch::parse(&text, chip).map_err(|error| {
+        Error::refused(format!(
             "{} is not a schematic rusty can read: {error}",
             file.display()
-        ),
+        ))
     })?;
     // Everything the crossing could not carry goes in the sheet's own
     // `notes`, which is already the channel for "what loading wanted read"
@@ -242,24 +242,15 @@ pub fn export(file: &Path, sheet: &crate::model::Sheet) -> crate::error::Result<
 }
 
 fn read_file(path: &Path) -> crate::error::Result<String> {
-    std::fs::read_to_string(path).map_err(|source| crate::error::Error::Read {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::read_to_string(path).map_err(Error::reading(path))
 }
 
 fn write_file(path: &Path, text: &str) -> crate::error::Result<()> {
-    std::fs::write(path, text).map_err(|source| crate::error::Error::Write {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::write(path, text).map_err(Error::writing(path))
 }
 
 fn make_dir(path: &Path) -> crate::error::Result<()> {
-    std::fs::create_dir_all(path).map_err(|source| crate::error::Error::Write {
-        path: path.display().to_string(),
-        source,
-    })
+    std::fs::create_dir_all(path).map_err(Error::writing(path))
 }
 
 #[cfg(test)]

@@ -79,15 +79,9 @@ pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold> {
     for (path, contents) in files {
         let full = root.join(path);
         if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| Error::Write {
-                path: (*path).to_string(),
-                source,
-            })?;
+            std::fs::create_dir_all(parent).map_err(Error::writing(Path::new(path)))?;
         }
-        std::fs::write(&full, contents).map_err(|source| Error::Write {
-            path: (*path).to_string(),
-            source,
-        })?;
+        std::fs::write(&full, contents).map_err(Error::writing(Path::new(path)))?;
         written.push((*path).to_string());
     }
 

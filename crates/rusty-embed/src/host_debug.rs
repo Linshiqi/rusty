@@ -94,22 +94,18 @@ pub fn binary_holding(built: &[PathBuf], filter: &str) -> Result<PathBuf> {
     }
     match holding.len() {
         1 => Ok(holding.remove(0)),
-        0 => Err(Error::Refused {
-            detail: format!(
-                "No test binary lists a test matching `{filter}`. `cargo test {filter}` would \
-                 exit successfully having run nothing, so nothing is started. Check that the \
-                 test compiles into one of: {}.",
-                names(built),
-            ),
-        }),
-        _ => Err(Error::Refused {
-            detail: format!(
-                "`{filter}` matches tests in {} binaries ({}), and running one would silently \
-                 skip the others. Qualify the name with its module so exactly one holds it.",
-                holding.len(),
-                names(&holding),
-            ),
-        }),
+        0 => Err(Error::refused(format!(
+            "No test binary lists a test matching `{filter}`. `cargo test {filter}` would exit \
+             successfully having run nothing, so nothing is started. Check that the test \
+             compiles into one of: {}.",
+            names(built),
+        ))),
+        _ => Err(Error::refused(format!(
+            "`{filter}` matches tests in {} binaries ({}), and running one would silently skip \
+             the others. Qualify the name with its module so exactly one holds it.",
+            holding.len(),
+            names(&holding),
+        ))),
     }
 }
 
@@ -141,16 +137,14 @@ fn names(paths: &[PathBuf]) -> String {
 /// get one rather than describing a limitation.
 pub fn gdb_reads(host: &str) -> Result<()> {
     if host.ends_with("-msvc") {
-        return Err(Error::Refused {
-            detail: format!(
-                "Nothing on this machine can debug a {host} build. gdb cannot: this target's \
-                 debug information is a PDB and gdb reads DWARF, so every breakpoint would \
-                 land nowhere and every stop would show a bare address. LLDB can, and rusty \
-                 drives it through a debug adapter — install one and this works: `lldb-dap` \
-                 ships with LLVM, and CodeLLDB's adapter is the other. Running tests needs \
-                 none of this and works already."
-            ),
-        });
+        return Err(Error::refused(format!(
+            "Nothing on this machine can debug a {host} build. gdb cannot: this target's \
+             debug information is a PDB and gdb reads DWARF, so every breakpoint would land \
+             nowhere and every stop would show a bare address. LLDB can, and rusty drives it \
+             through a debug adapter — install one and this works: `lldb-dap` ships with \
+             LLVM, and CodeLLDB's adapter is the other. Running tests needs none of this and \
+             works already."
+        )));
     }
     Ok(())
 }
@@ -170,10 +164,11 @@ pub fn host_triple(root: &Path) -> Result<String> {
     text.lines()
         .find_map(|line| line.strip_prefix("host: "))
         .map(|host| host.trim().to_string())
-        .ok_or_else(|| Error::Refused {
-            detail: "`rustc -vV` did not report a host triple, so whether gdb can read \
-                     what it builds cannot be said."
-                .to_string(),
+        .ok_or_else(|| {
+            Error::refused(
+                "`rustc -vV` did not report a host triple, so whether gdb can read what it \
+                 builds cannot be said.",
+            )
         })
 }
 

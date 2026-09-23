@@ -97,10 +97,7 @@ fn data_tools_dir() -> Result<PathBuf> {
 /// Make the directory an archive is about to land in.
 fn prepare(plan: &ToolDownload) -> Result<()> {
     if let Some(parent) = plan.archive.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::Write {
-            path: parent.display().to_string(),
-            source,
-        })?;
+        std::fs::create_dir_all(parent).map_err(Error::writing(parent))?;
     }
     Ok(())
 }
@@ -360,10 +357,7 @@ pub fn codelldb_download() -> Result<ToolDownload> {
     // `tar -C` will not make its destination, and this one is a directory of
     // rusty's own choosing rather than something the archive brings.
     if let Some(into) = plan.extract.args.last() {
-        std::fs::create_dir_all(into).map_err(|source| Error::Write {
-            path: into.clone(),
-            source,
-        })?;
+        std::fs::create_dir_all(into).map_err(Error::writing(Path::new(into)))?;
     }
     Ok(plan)
 }
