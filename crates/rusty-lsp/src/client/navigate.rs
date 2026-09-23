@@ -1,7 +1,8 @@
-//! Finding your way around: where a thing is used, what implements it, what
-//! its type is, the outline of a file and the symbols of the workspace, the
-//! other places a name occurs in the file it is in, who calls a function and
-//! what it calls, and what a macro call expands to.
+//! Finding your way around: where a thing is defined and where it is used,
+//! what implements it, what its type is, the outline of a file and the
+//! symbols of the workspace, the other places a name occurs in the file it is
+//! in, who calls a function and what it calls, and what a macro call expands
+//! to.
 //!
 //! Every answer that names places answers with the line each place is on, as
 //! it reads now, because every consumer is a list somebody reads before
@@ -25,6 +26,26 @@ use crate::{
 const LINE_PREVIEW: usize = 1_000;
 
 impl LspClient {
+    /// Where the thing under this position is defined.
+    ///
+    /// A definition in a dependency or the sysroot comes back with `external`
+    /// set and an absolute path — most of what anyone Ctrl+clicks in firmware
+    /// lives in esp-hal or `core`, and answering `None` for all of it made the
+    /// gesture look broken.
+    pub fn definition(&self, path: &str, line: u32, col: u32) -> Result<Option<Location>> {
+        let result = self.shared.request(
+            "textDocument/definition",
+            self.position_params(path, line, col),
+        )?;
+        // The first of the places, read the way references and
+        // implementations are: one reading of a location, not two.
+        Ok(self
+            .places(&result)
+            .into_iter()
+            .next()
+            .map(|place| place.location))
+    }
+
     /// Everywhere the thing at this position is used, its declaration
     /// included — the list a rename is about to change.
     pub fn references(&self, path: &str, line: u32, col: u32) -> Result<Vec<Place>> {
@@ -215,7 +236,7 @@ impl LspClient {
     /// them, or a list of `LocationLink`s — rust-analyzer answers with links
     /// to a client that declares them and with locations to one that does
     /// not, and a server is free to change its mind — so all three are read.
-    pub(super) fn places(&self, result: &Value) -> Vec<Place> {
+    fn places(&self, result: &Value) -> Vec<Place> {
         let items: Vec<&Value> = match result {
             Value::Array(items) => items.iter().collect(),
             Value::Null => Vec::new(),
