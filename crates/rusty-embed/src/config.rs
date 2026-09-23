@@ -546,11 +546,20 @@ fn save_workbench_at(path: &Path, state: &WorkbenchState) -> Result<()> {
     }
     let body =
         toml::to_string_pretty(&file::Workbench::from(state)).expect("plain fields serialise");
-    // A temporary name of this process's own, then a rename: a fixed
-    // `workbench.toml.tmp` shared by two windows saving at once was written
-    // by both, renamed by one, and the file that landed was neither's.
-    let temp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
-    std::fs::write(&temp, body).map_err(Error::writing(&temp))?;
+    write_atomically(path, &body)
+}
+
+/// Write a file through a temporary of this process's own and a rename, so
+/// a reader never meets half of it. The temporary's name carries the process
+/// id: a fixed `workbench.toml.tmp` shared by two windows saving at once was
+/// written by both, renamed by one, and the file that landed was neither's.
+pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<()> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+    std::fs::write(&temp, text).map_err(Error::writing(&temp))?;
     std::fs::rename(&temp, path).map_err(Error::writing(path))
 }
 
@@ -608,8 +617,8 @@ fn resolve_pointer(anchor: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(pointer.data_dir))
 }
 
-/// Written atomically: temp file, then rename. A pointer half-written at the
-/// moment of a crash would silently strand the data directory.
+/// Written atomically: a pointer half-written at the moment of a crash would
+/// silently strand the data directory.
 fn write_pointer(anchor: &Path, data: &Path) -> Result<()> {
     std::fs::create_dir_all(anchor).map_err(Error::writing(anchor))?;
     let body = toml::to_string_pretty(&Pointer {
@@ -617,10 +626,7 @@ fn write_pointer(anchor: &Path, data: &Path) -> Result<()> {
     })
     .expect("two fields cannot fail to serialise");
 
-    let path = pointer_path(anchor);
-    let temp = path.with_extension("toml.tmp");
-    std::fs::write(&temp, body).map_err(Error::writing(&temp))?;
-    std::fs::rename(&temp, &path).map_err(Error::writing(&path))
+    write_atomically(&pointer_path(anchor), &body)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

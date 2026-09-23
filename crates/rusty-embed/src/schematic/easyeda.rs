@@ -144,9 +144,7 @@ fn cache(symbol: &Symbol) -> Result<std::path::PathBuf> {
         Some(slot) => *slot = symbol.clone(),
         None => symbols.push(symbol.clone()),
     }
-    let tmp = dir.join(format!("{LIBRARY}.kicad_sym.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, kicad_sym::write(&symbols)).map_err(Error::writing(&tmp))?;
-    std::fs::rename(&tmp, &path).map_err(Error::writing(&path))?;
+    crate::config::write_atomically(&path, &kicad_sym::write(&symbols))?;
     Ok(path)
 }
 
