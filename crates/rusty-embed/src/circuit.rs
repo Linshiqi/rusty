@@ -430,13 +430,9 @@ pub fn of(
                 };
                 Element::Capacitor { a, b, farads }
             }
-            Behaviour::Switch if pressed.contains(part.reference.as_str()) => {
-                // A closed switch is already one solid node, so there is
-                // nothing left to add; `solid_nets` joined it.
-                continue;
-            }
-            // A capacitor is an open circuit at DC, and that is not a gap
-            // in the model — it is the answer.
+            // Nothing else is an element. A closed switch is already one
+            // solid node — `solid_nets` joined it — and an open one is no
+            // path at all.
             _ => continue,
         };
         element_of.insert(part.reference.clone(), elements.len());

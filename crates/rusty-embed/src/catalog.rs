@@ -238,14 +238,10 @@ pub fn normalize(id: &str) -> String {
         .collect()
 }
 
-/// Where a user's own catalogue files live.
-///
-/// Resolved from the environment rather than a crate, to keep the dependency
-/// list short: this is two lookups, and a wrong answer degrades to "no user
-/// files" rather than breaking anything.
+/// Where a user's own catalogue files live: the configurable data
+/// directory, so pointing storage at a synced folder carries the board
+/// definitions along with everything else.
 fn user_catalog_dir() -> Option<PathBuf> {
-    // Through the configurable data directory, so pointing storage at a synced
-    // folder carries the board definitions along with everything else.
     crate::config::data_dir()
 }
 

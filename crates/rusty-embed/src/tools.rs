@@ -135,8 +135,9 @@ pub(crate) fn exe(name: &str) -> String {
 }
 
 /// Where a binary is, by the ladder in the module header, or `None` when this
-/// machine has none.
-pub(crate) fn find(name: &str) -> Option<PathBuf> {
+/// machine has none — the same lookup the tool probe uses, so nothing can
+/// check for a tool under one rule and find it under another.
+pub fn find(name: &str) -> Option<PathBuf> {
     let bundle = bundled_dir();
     let (early, late) = match bundle_wins(name) {
         true => (bundle, None),
@@ -164,9 +165,6 @@ pub(crate) fn find_in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
         .or_else(|| on_path(name))
 }
 
-/// The tools roots alone, in order, and nothing after them — the half of the
-/// ladder that answers "did rusty put this here", which the bundle needs to
-/// ask *after* PATH rather than before it.
 /// Every copy of `name` the ladder would consider, in its order: one per
 /// root, then cargo's bin, then PATH. For the one tool whose copies are told
 /// apart by what they can do rather than by where they are — the emulator.
@@ -181,6 +179,9 @@ pub(crate) fn candidates(name: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
     found
 }
 
+/// The tools roots alone, in order, and nothing after them — the half of the
+/// ladder that answers "did rusty put this here", which the bundle needs to
+/// ask *after* PATH rather than before it.
 fn in_roots(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let file = exe(name);
     for tools in roots {

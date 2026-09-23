@@ -98,22 +98,6 @@ pub enum Flasher {
     ProbeRs,
 }
 
-impl Flasher {
-    pub fn binary(self) -> &'static str {
-        match self {
-            Flasher::Espflash => "espflash",
-            Flasher::ProbeRs => "probe-rs",
-        }
-    }
-
-    pub fn install_command(self) -> &'static str {
-        match self {
-            Flasher::Espflash => "cargo install espflash",
-            Flasher::ProbeRs => "cargo install probe-rs-tools",
-        }
-    }
-}
-
 /// Whether the project links the ESP-IDF C framework and gets `std`, or runs
 /// bare-metal against `esp-hal`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

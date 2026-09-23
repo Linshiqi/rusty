@@ -216,16 +216,6 @@ fn tool(name: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|tool| tool.name == name)
 }
 
-/// Where a binary rusty drives is on this machine, by the one ladder in
-/// [`crate::tools`] — the data directory's `tools/`, then cargo's bin, then
-/// PATH, then the directories espup exports. The same lookup the tool probe
-/// uses, so a caller cannot check for a tool under one rule and find it under
-/// another — and the same directories a child's PATH carries, so a cross
-/// compiler reported present here is one the build will find.
-pub fn on_path_pub(name: &str) -> Option<PathBuf> {
-    tools::find(name)
-}
-
 /// Where the C++ build tools come from — the page, not an installer rusty
 /// could run: "Desktop development with C++" is a choice made in it.
 pub const MSVC_BUILD_TOOLS: &str = "https://visualstudio.microsoft.com/visual-cpp-build-tools/";
@@ -694,7 +684,6 @@ fn list_installed_targets(rustup: &RustupContext<'_>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// First line of `<tool> --version`, or `None` when it would not run.
 /// Where a rustup component's binary is and what it says it is — or nothing.
 ///
 /// The bare name on PATH is rustup's proxy, which exists on every machine
@@ -733,6 +722,7 @@ fn is_component_version(component: &str, said: &str) -> bool {
     said.trim_start().starts_with(component)
 }
 
+/// First line of `<tool> --version`, or `None` when it would not run.
 fn probe_version(tool: &Path) -> Option<String> {
     let out = run(tool, &["--version"], None)?;
     out.lines()

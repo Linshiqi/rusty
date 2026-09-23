@@ -259,12 +259,6 @@ impl Plant {
         self.attitude.euler()
     }
 
-    /// The orientation itself, for anything that would rather not go through
-    /// Euler angles — a drawing, most obviously.
-    pub fn orientation(&self) -> Quat {
-        self.attitude
-    }
-
     /// What an accelerometer bolted to this body would read, in g.
     ///
     /// **This is why attitude was worth adding.** With it the plant can hand

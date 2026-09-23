@@ -845,7 +845,7 @@ pub async fn scaffold_c_interop(
         let detected = project::detect(&root)?;
         let chip = detected.chip.as_deref().and_then(rusty_embed::chip::by_id);
         c_compiler_gate(chip.as_ref(), |binary| {
-            toolchain::on_path_pub(binary).is_some()
+            rusty_embed::tools::find(binary).is_some()
         })
         .map_err(CommandError::new)?;
 

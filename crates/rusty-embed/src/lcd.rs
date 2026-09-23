@@ -81,14 +81,6 @@ impl Chars {
         }
     }
 
-    pub fn cols(&self) -> usize {
-        self.cols
-    }
-
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
     pub fn is_on(&self) -> bool {
         self.on
     }

@@ -251,10 +251,6 @@ impl Device {
         }
     }
 
-    pub fn spec(&self) -> &Spec {
-        &self.spec
-    }
-
     pub fn value(&self, key: &str) -> Option<f64> {
         let index = self.index_of(key)?;
         self.values.get(index).copied()

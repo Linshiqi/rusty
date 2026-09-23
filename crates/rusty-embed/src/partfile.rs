@@ -16,7 +16,6 @@
 //! without anybody noticing: the three files below are the only parts this
 //! crate has, so a reader that cannot read them cannot read anything.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -382,18 +381,10 @@ impl RunFile {
     }
 }
 
-/// The props a part's channels rest at, for a sheet that has just placed
-/// one: what the sliders start on, written into the file so the board says
-/// what it is showing.
-pub fn resting(spec: &Spec) -> BTreeMap<String, String> {
-    spec.channels
-        .iter()
-        .map(|channel| (channel.key.clone(), channel.rest.to_string()))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     /// Every part rusty ships is read by the same reader a project's file

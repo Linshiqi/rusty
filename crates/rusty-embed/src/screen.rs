@@ -221,15 +221,6 @@ impl Screen {
         Screen::new(panel, width, height)
     }
 
-    /// A character module of this many characters across and down.
-    pub fn of_characters(cols: usize, rows: usize) -> Screen {
-        Screen::new(
-            Panel::Hd44780,
-            cols * crate::lcd::CELL_W,
-            rows * crate::lcd::CELL_H,
-        )
-    }
-
     /// A screen of a stated size.
     ///
     /// **The memory is the controller's and the glass is the module's.**
@@ -291,12 +282,6 @@ impl Screen {
         self.chars
             .as_ref()
             .map_or(self.written, |lcd| lcd.written())
-    }
-
-    /// The character module behind the glass, for anything that wants the
-    /// words rather than the dots.
-    pub fn characters(&self) -> Option<&crate::lcd::Chars> {
-        self.chars.as_ref()
     }
 
     /// A transaction's payload, control byte and all.
