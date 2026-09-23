@@ -26,11 +26,13 @@
 //! gate rather than a demonstration. It needs rusty's QEMU: the stock build
 //! has no converter to read and says so.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+use common::connect;
 use rusty_embed::live::{Live, Pace};
 use rusty_embed::parse_adc_report;
 
@@ -88,7 +90,8 @@ fn main() {
         }
     }
 
-    let port = free_port().unwrap_or_else(|| usage("no free port for the pin channel"));
+    let port = rusty_embed::simulate::free_port()
+        .unwrap_or_else(|| usage("no free port for the pin channel"));
     let total = plan.steps.len();
     let mut steps = std::mem::take(&mut plan.steps);
     if let Some(boot) = steps.last_mut() {
@@ -255,23 +258,6 @@ fn longest_climb(read: &[u16]) -> usize {
         }
     }
     best
-}
-
-fn connect(port: u16) -> Option<TcpStream> {
-    for _ in 0..100 {
-        if let Ok(socket) = TcpStream::connect(("127.0.0.1", port)) {
-            return Some(socket);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    None
-}
-
-fn free_port() -> Option<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
-    let port = listener.local_addr().ok()?.port();
-    drop(listener);
-    Some(port)
 }
 
 fn usage(why: &str) -> ! {

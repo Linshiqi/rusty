@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::{kit_rows_for, pins_args};
+use super::{free_port, kit_rows_for, pins_args};
 use crate::model::SimLimit;
 use crate::process;
 use crate::protocol;
@@ -668,15 +668,6 @@ fn waiting_for(actions: &[Action], next: usize, scenario: &Scenario, seen: &[boo
                 .join(", ")
         )
     }
-}
-
-/// A port nothing else is on, learned by binding and letting go. QEMU
-/// listens there and the channel connects.
-fn free_port() -> Option<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
-    let port = listener.local_addr().ok()?.port();
-    drop(listener);
-    Some(port)
 }
 
 #[cfg(test)]

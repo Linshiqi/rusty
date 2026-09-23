@@ -25,11 +25,13 @@
 //! It needs rusty's own QEMU. Espressif's build keeps no pin state, so there
 //! is nothing to read and the probe says so rather than failing the board.
 
+mod common;
+
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+use common::connect;
 use rusty_embed::nets::{self, Behaviour, Row, behaviour_of};
 use rusty_embed::{Sheet, parse_gpio_report};
 
@@ -118,8 +120,10 @@ fn main() {
         }
     }
 
-    let port = free_port().unwrap_or_else(|| usage("no free port for the pin channel"));
-    let monitor = free_port().unwrap_or_else(|| usage("no free port for the monitor"));
+    let port = rusty_embed::simulate::free_port()
+        .unwrap_or_else(|| usage("no free port for the pin channel"));
+    let monitor =
+        rusty_embed::simulate::free_port().unwrap_or_else(|| usage("no free port for the monitor"));
     let total = plan.steps.len();
     let mut steps = std::mem::take(&mut plan.steps);
     if let Some(boot) = steps.last_mut() {
@@ -527,23 +531,6 @@ fn wait_for(
 
 /// Connect to the pin channel once QEMU has opened it. Retried rather than
 /// assumed: the socket appears after argument parsing and machine creation.
-fn connect(port: u16) -> Option<TcpStream> {
-    for _ in 0..100 {
-        if let Ok(socket) = TcpStream::connect(("127.0.0.1", port)) {
-            return Some(socket);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    None
-}
-
-fn free_port() -> Option<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
-    let port = listener.local_addr().ok()?.port();
-    drop(listener);
-    Some(port)
-}
-
 fn usage(why: &str) -> ! {
     eprintln!("board_probe: {why}");
     eprintln!("usage: cargo run -p rusty-embed --example board_probe -- <project> [seconds]");

@@ -751,6 +751,15 @@ pub fn pins_args(port: u16) -> Vec<String> {
     ]
 }
 
+/// A port nothing else is on, learned by binding and letting go: where the
+/// emulator listens for the pin channel, the monitor or the gdbstub.
+pub fn free_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    drop(listener);
+    Some(port)
+}
+
 /// Where QEMU listens for its machine protocol, so a running simulation can
 /// be stopped and started again.
 ///
