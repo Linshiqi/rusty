@@ -20,10 +20,13 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::{free_port, kit_rows_for, pins_args};
-use crate::model::SimLimit;
+use super::{PinChannel, free_port, kit_rows_for, pins_args};
+use crate::live::Live;
+use crate::model::{CommandPlan, Sheet, SimLimit, SimPlan};
+use crate::nets::Row;
 use crate::process;
 use crate::protocol;
+use crate::sensor::Spec;
 
 /// How long a run may go when nobody said: long enough for a board to boot
 /// and say something, short enough that a hung firmware ends a CI job.
@@ -236,6 +239,12 @@ impl Outcome {
         }
     }
 
+    /// Said as the run goes, and kept with what it saw.
+    fn note(&mut self, text: String, on: &mut dyn FnMut(Event<'_>)) {
+        on(Event::Note(&text));
+        self.notes.push(text);
+    }
+
     /// The last level reported for each GPIO.
     pub fn levels(&self) -> BTreeMap<u8, bool> {
         let mut levels = BTreeMap::new();
@@ -265,40 +274,17 @@ enum Heard {
     Exited(Option<i32>),
 }
 
+/// The reports that carry what crossed a bus or a peripheral rather than a
+/// level: kept whole in [`Outcome::bus`].
+const BUS_REPORTS: [&str; 4] = ["[rusty:i2c", "[rusty:spi", "[rusty:pwm", "[rusty:rmt"];
+
 /// Build, image and boot the project at `root` (its firmware directory),
 /// and run `scenario` against it.
 pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> Outcome {
-    if let Err(reason) = scenario.check() {
-        return Outcome::unrunnable(reason);
-    }
-    let project = match crate::project::detect(root) {
-        Ok(project) => project,
-        Err(error) => {
-            return Outcome::unrunnable(format!(
-                "{} is not a project rusty can read: {error}",
-                root.display()
-            ));
-        }
+    let (chip, plan) = match ready(root, scenario) {
+        Ok(ready) => ready,
+        Err(reason) => return Outcome::unrunnable(reason),
     };
-    let chip = project.chip.clone().unwrap_or_default();
-    let plan = super::plan(&project, false);
-    if !plan.supported {
-        return Outcome::unrunnable(
-            plan.reason
-                .unwrap_or_else(|| "this project cannot be simulated".to_string()),
-        );
-    }
-    if !plan.missing.is_empty() {
-        let tools: Vec<String> = plan
-            .missing
-            .iter()
-            .map(|tool| format!("{} ({})", tool.name, tool.install))
-            .collect();
-        return Outcome::unrunnable(format!(
-            "the simulator needs tools that are not installed: {}",
-            tools.join("; ")
-        ));
-    }
     let mut outcome = Outcome::unrunnable("");
     outcome.limits = plan.limits.clone();
     outcome.notes = plan.notes.clone();
@@ -313,8 +299,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         let note = "this is an early build of rusty's QEMU: it models the pins but not the \
                     ADC, the I2C bus or SPI, so read_oneshot() and bus transactions wait for \
                     ever. The Simulate panel's Upgrade installs the current build.";
-        on(Event::Note(note));
-        outcome.notes.push(note.to_string());
+        outcome.note(note.to_string(), on);
     }
     if let Err(error) = super::prepare(root) {
         outcome.verdict =
@@ -327,25 +312,9 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         outcome.verdict = Verdict::Unrunnable("the plan has no emulator step".to_string());
         return outcome;
     };
-    for step in &steps {
-        on(Event::Command(&step.display));
-        let session = match process::spawn(step, Some(root)) {
-            Ok(session) => session,
-            Err(error) => {
-                outcome.verdict = Verdict::Unrunnable(error.to_string());
-                return outcome;
-            }
-        };
-        while let Some(line) = session.recv() {
-            on(Event::Output(&line.text));
-        }
-        let code = session.wait();
-        if code != Some(0) {
-            let code = code.map_or_else(|| "a signal".to_string(), |c| c.to_string());
-            outcome.verdict =
-                Verdict::Unrunnable(format!("`{}` failed (exit {code})", step.display));
-            return outcome;
-        }
+    if let Err(reason) = build(&steps, root, on) {
+        outcome.verdict = Verdict::Unrunnable(reason);
+        return outcome;
     }
 
     let pins_port = super::has_gpio_model(Path::new(&boot.program))
@@ -359,8 +328,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         let note = "the emulator keeps no pin state (Espressif's stock QEMU), so levels are only \
                     what the firmware prints about them and presses reach it only as B<pin>= \
                     console lines";
-        on(Event::Note(note));
-        outcome.notes.push(note.to_string());
+        outcome.note(note.to_string(), on);
     }
     on(Event::Command(&boot.display));
     let session = match process::spawn(&boot, Some(root)) {
@@ -374,7 +342,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     let stopper = session.stopper();
     let (tx, heard) = mpsc::channel::<Heard>();
 
-    let sheet = plan.board.clone();
+    let sheet = plan.board;
     let rows = sheet
         .as_ref()
         .map(|sheet| kit_rows_for(root, &sheet.chip))
@@ -382,31 +350,19 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     // The parts the sheet's `model` props name, read from the same three
     // layers the symbols are.
     let parts = crate::partfile::load(Some(root));
-    for warning in &parts.warnings {
-        on(Event::Note(warning));
-        outcome.notes.push(warning.clone());
+    for warning in parts.warnings {
+        outcome.note(warning, on);
     }
-    let specs = parts.specs;
     let pins = pins_port.map(|port| {
-        let start = sheet
-            .as_ref()
-            .map(|sheet| super::start_of(sheet, &rows, &specs))
-            .unwrap_or_default();
-        let live = sheet.as_ref().and_then(|sheet| {
-            match crate::live::Live::at_rest(sheet.clone(), rows.clone(), Default::default(), Default::default()) {
-                Ok(live) => Some(live),
-                Err(unstated) => {
-                    let note = format!("the sheet is not solved: {unstated}. Analog pins keep whatever the sheet declares.");
-                    on(Event::Note(&note));
-                    outcome.notes.push(note);
-                    None
-                }
-            }
-        });
-        let tx = tx.clone();
-        super::connect(port, start, live, move |line| {
-            let _ = tx.send(Heard::Pin(line));
-        })
+        pin_channel(
+            port,
+            sheet.as_ref(),
+            &rows,
+            &parts.specs,
+            tx.clone(),
+            &mut outcome,
+            on,
+        )
     });
     std::thread::spawn({
         let tx = tx.clone();
@@ -421,141 +377,32 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     });
     drop(tx);
 
-    let started = Instant::now();
-    let deadline = started + Duration::from_secs_f64(scenario.timeout.unwrap_or(DEFAULT_TIMEOUT));
-    let actions: Vec<Action> = scenario
-        .steps
-        .iter()
-        .filter_map(|step| step.action().ok())
-        .collect();
-    let mut next = 0usize;
-    let mut resume_at: Option<Instant> = None;
-    let mut seen = vec![false; scenario.expect.len()];
-    let mut levels: BTreeMap<u8, bool> = BTreeMap::new();
-    let micros = |at: Option<u64>| at.unwrap_or_else(|| started.elapsed().as_micros() as u64);
-
-    let verdict = 'run: loop {
-        // Every step that can be taken now, in order.
-        while next < actions.len() {
-            match &actions[next] {
-                Action::WaitSerial(_) => break,
-                Action::Delay(seconds) => match resume_at {
-                    None => {
-                        resume_at = Some(Instant::now() + Duration::from_secs_f64(*seconds));
-                        break;
-                    }
-                    Some(at) if Instant::now() < at => break,
-                    Some(_) => resume_at = None,
-                },
-                Action::WriteSerial(text) => {
-                    input.send_line(text);
-                    if let Some(pins) = &pins {
-                        pins.follow(text);
-                    }
-                }
-                Action::Press(target, down) => {
-                    let gpio = match target {
-                        Target::Gpio(gpio) => *gpio,
-                        Target::Part(part) => {
-                            let Some(sheet) = &sheet else {
-                                break 'run Verdict::Failed(format!(
-                                    "there is no board to find {part} on"
-                                ));
-                            };
-                            // A key between two GPIOs joins them rather than
-                            // driving either, so it goes as a switch and the
-                            // console hears nothing: the text protocol has no
-                            // way to say "these two pads are connected".
-                            if let Some((a, b)) = crate::nets::switch_tie(sheet, &rows, part) {
-                                match &pins {
-                                    Some(pins) => {
-                                        pins.tie(a, b, *down);
-                                        continue;
-                                    }
-                                    None => {
-                                        break 'run Verdict::Failed(format!(
-                                            "{part} joins GPIO{a} and GPIO{b}, which only \
-                                             rusty's emulator can do"
-                                        ));
-                                    }
-                                }
-                            }
-                            match crate::nets::button_drives(sheet, &rows, part) {
-                                Some((gpio, _)) => gpio,
-                                None => {
-                                    // The sheet's own finding, in its words:
-                                    // which half is missing is the fix.
-                                    break 'run Verdict::Failed(
-                                        crate::nets::Warning::SwitchDrivesNothing {
-                                            part: part.to_string(),
-                                        }
-                                        .to_string(),
-                                    );
-                                }
-                            }
-                        }
-                    };
-                    let text = crate::protocol::button_line(u32::from(gpio), *down);
-                    input.send_line(&text);
-                    if let Some(pins) = &pins {
-                        pins.follow(&text);
-                    }
-                }
-                Action::ExpectPin(gpio, level) => {
-                    let actual = match levels.get(gpio) {
-                        Some(level) => *level,
-                        // With the emulator's registers, a pin that never
-                        // moved is at its reset level. Without them, nothing
-                        // is known about a pin the firmware never mentioned.
-                        None if outcome.pins_from_emulator => false,
-                        None => {
-                            break 'run Verdict::Failed(format!(
-                                "nothing has said what level GPIO{gpio} is at"
-                            ));
-                        }
-                    };
-                    if actual != *level {
-                        break 'run Verdict::Failed(format!(
-                            "GPIO{gpio} is {}, expected {}",
-                            u8::from(actual),
-                            u8::from(*level)
-                        ));
-                    }
-                }
-                Action::Set(part, values) => {
-                    let Some(pins) = &pins else {
-                        break 'run Verdict::Failed(
-                            "sensor readings need rusty's emulator, which puts sensors on the bus"
-                                .to_string(),
-                        );
-                    };
-                    for (key, value) in values {
-                        if !pins.set_sensor(part, key, *value) {
-                            break 'run Verdict::Failed(format!(
-                                "{part} is not a sensor on the bus with a reading called {key}"
-                            ));
-                        }
-                    }
-                }
-            }
-            next += 1;
+    let board = Board {
+        input,
+        pins,
+        sheet,
+        rows,
+    };
+    let mut play = Play::new(scenario);
+    let verdict = loop {
+        if let Err(verdict) = play.take_steps(&board, outcome.pins_from_emulator) {
+            break verdict;
         }
-        if next == actions.len()
-            && seen.iter().all(|s| *s)
-            && !(actions.is_empty() && seen.is_empty())
-        {
+        if play.finished() {
             break Verdict::Passed;
         }
 
         let now = Instant::now();
-        if now >= deadline {
-            break if actions.is_empty() && seen.is_empty() {
+        if now >= play.deadline {
+            break if play.nothing_asked() {
                 Verdict::Passed
             } else {
-                Verdict::TimedOut(waiting_for(&actions, next, scenario, &seen))
+                Verdict::TimedOut(play.waiting_for())
             };
         }
-        let wake = resume_at.map_or(deadline, |at| at.min(deadline));
+        let wake = play
+            .resume_at
+            .map_or(play.deadline, |at| at.min(play.deadline));
         let heard_now = match heard.recv_timeout(
             wake.saturating_duration_since(now)
                 .min(Duration::from_millis(50)),
@@ -568,70 +415,20 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         };
         match heard_now {
             Heard::Serial(text) => {
-                on(Event::Serial(&text));
-                // What the firmware says about its pins counts only when
-                // there is nothing better: with the emulator's registers on
-                // the channel, the narration is the same edge twice, a few
-                // microseconds apart, on a clock that is the firmware's.
-                if !outcome.pins_from_emulator
-                    && let Some(report) = protocol::parse_gpio_report(&text)
-                {
-                    for (pin, level) in &report.pins {
-                        levels.insert(*pin, *level);
-                        outcome.events.push((micros(report.at_us), *pin, *level));
-                    }
-                }
-                if let Some(limit) = SimLimit::explaining(&chip, &text) {
-                    on(Event::Note(&limit.text));
-                }
-                outcome.serial.push(text.clone());
-                if let Some(bad) = scenario.fail.iter().find(|bad| text.contains(bad.as_str())) {
-                    break Verdict::Failed(format!("the firmware printed {bad:?}"));
-                }
-                for (index, want) in scenario.expect.iter().enumerate() {
-                    if text.contains(want.as_str()) {
-                        seen[index] = true;
-                    }
-                }
-                if let Some(Action::WaitSerial(want)) = actions.get(next)
-                    && text.contains(want.as_str())
-                {
-                    next += 1;
+                if let Some(verdict) = play.serial(text, &chip, &mut outcome, on) {
+                    break verdict;
                 }
             }
-            Heard::Pin(text) => {
-                if let Some(report) = protocol::parse_gpio_report(&text) {
-                    for (pin, level) in &report.pins {
-                        levels.insert(*pin, *level);
-                        outcome.events.push((micros(report.at_us), *pin, *level));
-                    }
-                } else if ["[rusty:i2c", "[rusty:spi", "[rusty:pwm", "[rusty:rmt"]
-                    .iter()
-                    .any(|prefix| text.starts_with(prefix))
-                {
-                    outcome.bus.push(text);
-                }
-            }
-            Heard::Exited(code) => {
-                let how =
-                    code.map_or_else(|| "was stopped".to_string(), |c| format!("exited ({c})"));
-                break if actions.is_empty() && seen.is_empty() {
-                    Verdict::Failed(format!("the emulator {how} before the time was up"))
-                } else {
-                    Verdict::Failed(format!(
-                        "the emulator {how} while {}",
-                        waiting_for(&actions, next, scenario, &seen)
-                    ))
-                };
-            }
+            Heard::Pin(text) => play.pin(text, &mut outcome),
+            Heard::Exited(code) => break play.exited(code),
         }
     };
 
     stopper.stop();
-    if let Some(pins) = &pins {
+    if let Some(pins) = &board.pins {
         pins.hang_up();
     }
-    drop(pins);
+    drop(board);
     // What is still in flight, so the log ends where the firmware did.
     while let Ok(heard) = heard.recv_timeout(Duration::from_millis(100)) {
         if let Heard::Serial(text) = heard {
@@ -642,6 +439,352 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     outcome.events.sort_by_key(|(at, _, _)| *at);
     outcome.verdict = verdict;
     outcome
+}
+
+/// The project's chip and its plan, or why it cannot be run at all: a
+/// scenario that does not say one thing per step, a directory that is no
+/// project, a part the emulator does not model, a tool not installed.
+fn ready(root: &Path, scenario: &Scenario) -> Result<(String, SimPlan), String> {
+    scenario.check()?;
+    let project = crate::project::detect(root).map_err(|error| {
+        format!(
+            "{} is not a project rusty can read: {error}",
+            root.display()
+        )
+    })?;
+    let plan = super::plan(&project, false);
+    if !plan.supported {
+        return Err(plan
+            .reason
+            .unwrap_or_else(|| "this project cannot be simulated".to_string()));
+    }
+    if !plan.missing.is_empty() {
+        let tools: Vec<String> = plan
+            .missing
+            .iter()
+            .map(|tool| format!("{} ({})", tool.name, tool.install))
+            .collect();
+        return Err(format!(
+            "the simulator needs tools that are not installed: {}",
+            tools.join("; ")
+        ));
+    }
+    Ok((project.chip.unwrap_or_default(), plan))
+}
+
+/// The steps before the boot — the build, the image — each said as it
+/// starts and its output as it comes. Why the run cannot go on, when one
+/// fails.
+fn build(steps: &[CommandPlan], root: &Path, on: &mut dyn FnMut(Event<'_>)) -> Result<(), String> {
+    for step in steps {
+        on(Event::Command(&step.display));
+        let session = process::spawn(step, Some(root)).map_err(|error| error.to_string())?;
+        while let Some(line) = session.recv() {
+            on(Event::Output(&line.text));
+        }
+        let code = session.wait();
+        if code != Some(0) {
+            let code = code.map_or_else(|| "a signal".to_string(), |c| c.to_string());
+            return Err(format!("`{}` failed (exit {code})", step.display));
+        }
+    }
+    Ok(())
+}
+
+/// The pin channel to the emulator listening on `port`, started as the
+/// sheet declares — its switches' polarities, its sensors, and the
+/// voltages it solves to, which a sheet that cannot be solved goes without.
+fn pin_channel(
+    port: u16,
+    sheet: Option<&Sheet>,
+    rows: &[Row],
+    specs: &[Spec],
+    tx: mpsc::Sender<Heard>,
+    outcome: &mut Outcome,
+    on: &mut dyn FnMut(Event<'_>),
+) -> PinChannel {
+    let start = sheet
+        .map(|sheet| super::start_of(sheet, rows, specs))
+        .unwrap_or_default();
+    let live = sheet.and_then(|sheet| {
+        match Live::at_rest(
+            sheet.clone(),
+            rows.to_vec(),
+            Default::default(),
+            Default::default(),
+        ) {
+            Ok(live) => Some(live),
+            Err(unstated) => {
+                let note = format!(
+                    "the sheet is not solved: {unstated}. Analog pins keep whatever the sheet \
+                     declares."
+                );
+                outcome.note(note, on);
+                None
+            }
+        }
+    });
+    super::connect(port, start, live, move |line| {
+        let _ = tx.send(Heard::Pin(line));
+    })
+}
+
+/// What a scenario's steps act on: the console, the pin channel when the
+/// emulator has one, and the sheet a switch is looked up on.
+struct Board {
+    input: process::Input,
+    pins: Option<PinChannel>,
+    sheet: Option<Sheet>,
+    rows: Vec<Row>,
+}
+
+impl Board {
+    /// A line to the firmware's console, and to the pin channel, which
+    /// moves a pin for the lines that say one moved.
+    fn send(&self, text: &str) {
+        self.input.send_line(text);
+        if let Some(pins) = &self.pins {
+            pins.follow(text);
+        }
+    }
+
+    /// The GPIO pressing or releasing `target` drives, or `None` when it
+    /// is a key between two GPIOs, which joins them rather than driving
+    /// either and so goes as a switch: the text protocol has no way to say
+    /// "these two pads are connected", so the console hears nothing.
+    fn press(&self, target: &Target, down: bool) -> Result<Option<u8>, Verdict> {
+        let part = match target {
+            Target::Gpio(gpio) => return Ok(Some(*gpio)),
+            Target::Part(part) => part,
+        };
+        let Some(sheet) = &self.sheet else {
+            return Err(Verdict::Failed(format!(
+                "there is no board to find {part} on"
+            )));
+        };
+        if let Some((a, b)) = crate::nets::switch_tie(sheet, &self.rows, part) {
+            let Some(pins) = &self.pins else {
+                return Err(Verdict::Failed(format!(
+                    "{part} joins GPIO{a} and GPIO{b}, which only rusty's emulator can do"
+                )));
+            };
+            pins.tie(a, b, down);
+            return Ok(None);
+        }
+        match crate::nets::button_drives(sheet, &self.rows, part) {
+            Some((gpio, _)) => Ok(Some(gpio)),
+            // The sheet's own finding, in its words: which half is missing
+            // is the fix.
+            None => Err(Verdict::Failed(
+                crate::nets::Warning::SwitchDrivesNothing {
+                    part: part.to_string(),
+                }
+                .to_string(),
+            )),
+        }
+    }
+
+    /// A sensor's readings, set on the bus.
+    fn set(&self, part: &str, values: &BTreeMap<String, f64>) -> Result<(), Verdict> {
+        let Some(pins) = &self.pins else {
+            return Err(Verdict::Failed(
+                "sensor readings need rusty's emulator, which puts sensors on the bus".to_string(),
+            ));
+        };
+        for (key, value) in values {
+            if !pins.set_sensor(part, key, *value) {
+                return Err(Verdict::Failed(format!(
+                    "{part} is not a sensor on the bus with a reading called {key}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A scenario being played against a running firmware: where it has got
+/// to, and what it has seen on the way.
+struct Play<'s> {
+    scenario: &'s Scenario,
+    actions: Vec<Action>,
+    /// The step to take next.
+    next: usize,
+    /// When the delay being waited out ends.
+    resume_at: Option<Instant>,
+    /// Which of the scenario's `expect` have appeared.
+    seen: Vec<bool>,
+    /// The last level heard for each GPIO.
+    levels: BTreeMap<u8, bool>,
+    started: Instant,
+    deadline: Instant,
+}
+
+impl<'s> Play<'s> {
+    fn new(scenario: &'s Scenario) -> Self {
+        let started = Instant::now();
+        Play {
+            scenario,
+            actions: scenario
+                .steps
+                .iter()
+                .filter_map(|step| step.action().ok())
+                .collect(),
+            next: 0,
+            resume_at: None,
+            seen: vec![false; scenario.expect.len()],
+            levels: BTreeMap::new(),
+            started,
+            deadline: started
+                + Duration::from_secs_f64(scenario.timeout.unwrap_or(DEFAULT_TIMEOUT)),
+        }
+    }
+
+    /// Every step that can be taken now, in order, up to one that has to
+    /// wait. A verdict when a step's check does not hold or it cannot be
+    /// taken at all.
+    fn take_steps(&mut self, board: &Board, pins_from_emulator: bool) -> Result<(), Verdict> {
+        while self.next < self.actions.len() {
+            match &self.actions[self.next] {
+                Action::WaitSerial(_) => break,
+                Action::Delay(seconds) => match self.resume_at {
+                    None => {
+                        self.resume_at = Some(Instant::now() + Duration::from_secs_f64(*seconds));
+                        break;
+                    }
+                    Some(at) if Instant::now() < at => break,
+                    Some(_) => self.resume_at = None,
+                },
+                Action::WriteSerial(text) => board.send(text),
+                Action::Press(target, down) => {
+                    let Some(gpio) = board.press(target, *down)? else {
+                        continue;
+                    };
+                    board.send(&crate::protocol::button_line(u32::from(gpio), *down));
+                }
+                Action::ExpectPin(gpio, level) => {
+                    self.expect_pin(*gpio, *level, pins_from_emulator)?;
+                }
+                Action::Set(part, values) => board.set(part, values)?,
+            }
+            self.next += 1;
+        }
+        Ok(())
+    }
+
+    fn expect_pin(&self, gpio: u8, level: bool, pins_from_emulator: bool) -> Result<(), Verdict> {
+        let actual = match self.levels.get(&gpio) {
+            Some(level) => *level,
+            // With the emulator's registers, a pin that never moved is at
+            // its reset level. Without them, nothing is known about a pin
+            // the firmware never mentioned.
+            None if pins_from_emulator => false,
+            None => {
+                return Err(Verdict::Failed(format!(
+                    "nothing has said what level GPIO{gpio} is at"
+                )));
+            }
+        };
+        if actual != level {
+            return Err(Verdict::Failed(format!(
+                "GPIO{gpio} is {}, expected {}",
+                u8::from(actual),
+                u8::from(level)
+            )));
+        }
+        Ok(())
+    }
+
+    /// Nothing to wait for and nothing to do: the run is the firmware
+    /// running for the whole timeout.
+    fn nothing_asked(&self) -> bool {
+        self.actions.is_empty() && self.seen.is_empty()
+    }
+
+    /// Every step taken and everything expected seen.
+    fn finished(&self) -> bool {
+        self.next == self.actions.len() && self.seen.iter().all(|s| *s) && !self.nothing_asked()
+    }
+
+    fn waiting_for(&self) -> String {
+        waiting_for(&self.actions, self.next, self.scenario, &self.seen)
+    }
+
+    /// A line the firmware printed: kept, read for pins when nothing
+    /// better reports them, and checked against what the run fails on and
+    /// waits for. A verdict when it ends the run.
+    fn serial(
+        &mut self,
+        text: String,
+        chip: &str,
+        outcome: &mut Outcome,
+        on: &mut dyn FnMut(Event<'_>),
+    ) -> Option<Verdict> {
+        on(Event::Serial(&text));
+        // What the firmware says about its pins counts only when there is
+        // nothing better: with the emulator's registers on the channel, the
+        // narration is the same edge twice, a few microseconds apart, on a
+        // clock that is the firmware's.
+        if !outcome.pins_from_emulator
+            && let Some(report) = protocol::parse_gpio_report(&text)
+        {
+            self.record(&report, outcome);
+        }
+        if let Some(limit) = SimLimit::explaining(chip, &text) {
+            on(Event::Note(&limit.text));
+        }
+        outcome.serial.push(text.clone());
+        if let Some(bad) = self
+            .scenario
+            .fail
+            .iter()
+            .find(|bad| text.contains(bad.as_str()))
+        {
+            return Some(Verdict::Failed(format!("the firmware printed {bad:?}")));
+        }
+        for (index, want) in self.scenario.expect.iter().enumerate() {
+            if text.contains(want.as_str()) {
+                self.seen[index] = true;
+            }
+        }
+        if let Some(Action::WaitSerial(want)) = self.actions.get(self.next)
+            && text.contains(want.as_str())
+        {
+            self.next += 1;
+        }
+        None
+    }
+
+    /// A line from the pin channel: levels, or what crossed a bus.
+    fn pin(&mut self, text: String, outcome: &mut Outcome) {
+        if let Some(report) = protocol::parse_gpio_report(&text) {
+            self.record(&report, outcome);
+        } else if BUS_REPORTS.iter().any(|prefix| text.starts_with(prefix)) {
+            outcome.bus.push(text);
+        }
+    }
+
+    /// Levels reported, remembered and put on the timeline — at the
+    /// emulator's own stamp when there is one, the host's since boot when
+    /// there is not.
+    fn record(&mut self, report: &protocol::GpioReport, outcome: &mut Outcome) {
+        for (pin, level) in &report.pins {
+            self.levels.insert(*pin, *level);
+            let at = report
+                .at_us
+                .unwrap_or_else(|| self.started.elapsed().as_micros() as u64);
+            outcome.events.push((at, *pin, *level));
+        }
+    }
+
+    /// The verdict on an emulator that ended by itself.
+    fn exited(&self, code: Option<i32>) -> Verdict {
+        let how = code.map_or_else(|| "was stopped".to_string(), |c| format!("exited ({c})"));
+        if self.nothing_asked() {
+            Verdict::Failed(format!("the emulator {how} before the time was up"))
+        } else {
+            Verdict::Failed(format!("the emulator {how} while {}", self.waiting_for()))
+        }
+    }
 }
 
 /// What the run was still waiting for, said the way a person would ask.
