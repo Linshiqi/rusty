@@ -68,9 +68,10 @@ const EXIT_GRACE: Duration = Duration::from_millis(500);
 const MAX_RESOLVES: usize = 8;
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How many completion answers are kept for resolving an accepted item. The
-/// popup asks again on every keystroke, so the answer an item was picked
-/// from is usually the newest or one behind it; four is margin.
+/// How many answers of each kind are kept — completions for resolving an
+/// accepted item, code actions for applying one. The popup asks again on
+/// every keystroke, so the answer an item was picked from is usually the
+/// newest or one behind it; four is margin.
 const KEPT_REPLIES: usize = 4;
 
 /// A running rust-analyzer, and the documents it has been shown.
@@ -115,6 +116,37 @@ struct Reply {
     items: Vec<Value>,
 }
 
+/// The latest answers of one kind, raw, each with the path it answered for
+/// and its number. Newest last, at most [`KEPT_REPLIES`].
+#[derive(Default)]
+struct Kept(Mutex<VecDeque<Reply>>);
+
+impl Kept {
+    /// Keep an answer's items under the number it went out with, and forget
+    /// the oldest past the limit.
+    fn keep(&self, path: &str, number: u64, items: Vec<Value>) {
+        let mut kept = self.0.lock().expect("lsp kept answers");
+        kept.push_back(Reply {
+            path: path.to_string(),
+            number,
+            items,
+        });
+        while kept.len() > KEPT_REPLIES {
+            kept.pop_front();
+        }
+    }
+
+    /// The `index`th item of answer `reply` for `path` — `None` once that
+    /// answer is no longer kept, when it was for another file, or when it
+    /// never had that many items.
+    fn item(&self, path: &str, reply: u64, index: u32) -> Option<Value> {
+        let kept = self.0.lock().expect("lsp kept answers");
+        kept.iter()
+            .find(|answer| answer.number == reply && answer.path == path)
+            .and_then(|answer| answer.items.get(index as usize).cloned())
+    }
+}
+
 /// Everything the session's threads share: the writer, the correlation
 /// table, the documents, and what the handshake learned.
 pub(crate) struct Shared {
@@ -133,10 +165,11 @@ pub(crate) struct Shared {
     /// for and its number: the items the frontend sees are converted copies,
     /// and `completionItem/resolve` needs the server's own item — its `data`
     /// in particular — so the accepted one is looked up here by answer and
-    /// index. Newest last, at most [`KEPT_REPLIES`].
-    completions: Mutex<VecDeque<Reply>>,
-    /// Numbers the completion answers, from 1 — far short of 2^53 in any
-    /// session, so it crosses the wire as a plain JSON number.
+    /// index.
+    completions: Kept,
+    /// Numbers the kept answers, completions and code actions alike, from 1
+    /// — far short of 2^53 in any session, so it crosses the wire as a plain
+    /// JSON number.
     replies: AtomicU64,
     /// The latest code-action answers' WorkspaceEdits, one per fix the
     /// frontend was shown, each with the path and the number it answered
@@ -144,8 +177,8 @@ pub(crate) struct Shared {
     /// the way a rename is, since the frontend only ever splices its own
     /// buffer. Kept like the completions and for the same reason: the caret
     /// and a hover both ask, so the newest answer is often not the one the
-    /// fix being applied came from. Newest last, at most [`KEPT_REPLIES`].
-    actions: Mutex<VecDeque<Reply>>,
+    /// fix being applied came from.
+    actions: Kept,
     /// The server's work in progress, by token — what `$/progress` has begun
     /// and not yet ended. Summarised into `LspEvent::Progress` on change.
     progress: Mutex<BTreeMap<String, Progress>>,
@@ -223,9 +256,9 @@ impl LspClient {
             poke: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
-            completions: Mutex::new(VecDeque::new()),
+            completions: Kept::default(),
             replies: AtomicU64::new(1),
-            actions: Mutex::new(VecDeque::new()),
+            actions: Kept::default(),
             progress: Mutex::new(BTreeMap::new()),
             next_id: AtomicI64::new(1),
             alive: AtomicBool::new(true),
@@ -418,17 +451,7 @@ impl LspClient {
             .cloned()
             .unwrap_or_default();
         let number = self.shared.replies.fetch_add(1, Ordering::Relaxed);
-        {
-            let mut kept = self.shared.completions.lock().expect("lsp completions");
-            kept.push_back(Reply {
-                path: path.to_string(),
-                number,
-                items: raw,
-            });
-            while kept.len() > KEPT_REPLIES {
-                kept.pop_front();
-            }
-        }
+        self.shared.completions.keep(path, number, raw);
         let mut list = convert::completion_items(&result, &text, self.shared.encoding());
         list.reply = number;
         Ok(list)
@@ -448,13 +471,7 @@ impl LspClient {
         reply: u64,
         index: u32,
     ) -> Result<Vec<ActionEdit>> {
-        let item = {
-            let kept = self.shared.completions.lock().expect("lsp completions");
-            kept.iter()
-                .find(|answer| answer.number == reply && answer.path == path)
-                .and_then(|answer| answer.items.get(index as usize).cloned())
-        };
-        let Some(item) = item else {
+        let Some(item) = self.shared.completions.item(path, reply, index) else {
             return Ok(Vec::new());
         };
         let text = self.shared.open_text(path).unwrap_or_default();
@@ -586,17 +603,7 @@ impl LspClient {
             kept.push(action["edit"].clone());
         }
         let number = self.shared.replies.fetch_add(1, Ordering::Relaxed);
-        {
-            let mut answers = self.shared.actions.lock().expect("lsp actions");
-            answers.push_back(Reply {
-                path: path.to_string(),
-                number,
-                items: kept,
-            });
-            while answers.len() > KEPT_REPLIES {
-                answers.pop_front();
-            }
-        }
+        self.shared.actions.keep(path, number, kept);
         match (fixes.is_empty(), failed) {
             (true, Some(error)) => Err(error),
             _ => Ok(CodeActions {
@@ -622,13 +629,7 @@ impl LspClient {
         reply: u64,
         index: u32,
     ) -> Result<Vec<String>> {
-        let edit = {
-            let kept = self.shared.actions.lock().expect("lsp actions");
-            kept.iter()
-                .find(|answer| answer.number == reply && answer.path == path)
-                .and_then(|answer| answer.items.get(index as usize).cloned())
-        };
-        let Some(edit) = edit else {
+        let Some(edit) = self.shared.actions.item(path, reply, index) else {
             return Ok(Vec::new());
         };
         let ours = self.shared.uri(path);
@@ -1745,6 +1746,22 @@ mod tests {
                 .expect("another file")
                 .is_empty()
         );
+    }
+
+    /// Four answers are kept, newest last, and the fifth forgets the first.
+    /// An item is found only under its own answer's number and file, and
+    /// only at an index that answer had.
+    #[test]
+    fn four_answers_are_kept_and_the_fifth_forgets_the_first() {
+        let kept = Kept::default();
+        for number in 1..=5 {
+            kept.keep("a.rs", number, vec![json!(number)]);
+        }
+        assert_eq!(kept.item("a.rs", 1, 0), None, "the oldest is forgotten");
+        assert_eq!(kept.item("a.rs", 2, 0), Some(json!(2)));
+        assert_eq!(kept.item("a.rs", 5, 0), Some(json!(5)));
+        assert_eq!(kept.item("b.rs", 5, 0), None, "another file's answer");
+        assert_eq!(kept.item("a.rs", 5, 1), None, "an index it never had");
     }
 
     /// The server dies with a request outstanding. The caller must hear so
