@@ -174,7 +174,11 @@ impl Folded {
 
     /// Document lines that are on screen, in order. Index into this is the
     /// view line.
-    pub fn visible(&self, total: u32) -> Vec<u32> {
+    ///
+    /// Only the tests ask it: it is their plain statement of what shows, which
+    /// [`Folded::rows`] and the two conversions are held to.
+    #[cfg(test)]
+    fn visible(&self, total: u32) -> Vec<u32> {
         (0..total).filter(|line| !self.hides(*line)).collect()
     }
 

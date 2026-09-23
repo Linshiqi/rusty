@@ -136,16 +136,6 @@ pub fn runnables(text: &str) -> Vec<Runnable> {
         .collect()
 }
 
-/// The runnable whose body contains `line`, innermost first.
-///
-/// What "run the test the caret is in" needs. Approximate on purpose: a
-/// lexical pass has no body extents, so the answer is the last runnable
-/// declared at or above the caret, which is right except inside the gap
-/// between two items.
-pub fn enclosing(text: &str, line: u32) -> Option<Runnable> {
-    runnables(text).into_iter().rfind(|r| r.line <= line)
-}
-
 /// `#[test]`, `#[tokio::test]`, `#[test_case]`-style — anything whose final
 /// path segment is `test`.
 ///
@@ -449,25 +439,6 @@ struct NotATest;
 fn ordinary() {}
 ";
         assert_eq!(names(text), vec![]);
-    }
-
-    #[test]
-    fn the_caret_finds_the_test_it_is_inside() {
-        let text = "\
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn first() {
-        assert!(true);
-    }
-
-    #[test]
-    fn second() {}
-}
-";
-        assert_eq!(enclosing(text, 4).unwrap().filter, "tests::first");
-        assert_eq!(enclosing(text, 8).unwrap().filter, "tests::second");
-        assert_eq!(enclosing(text, 0), None);
     }
 
     #[test]
