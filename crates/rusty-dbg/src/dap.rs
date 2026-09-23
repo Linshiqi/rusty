@@ -252,28 +252,17 @@ impl DapSession {
         let running = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = channel();
 
-        {
-            let state = Arc::clone(&state);
-            let wire = Arc::clone(&wire);
-            let sender = sender.clone();
-            let root = launch.root.clone();
-            let thread = Arc::clone(&thread);
-            let frames = Arc::clone(&frames);
-            let running = Arc::clone(&running);
-            std::thread::spawn(move || {
-                pump(
-                    reader_half,
-                    state,
-                    wire,
-                    sender,
-                    root,
-                    thread,
-                    frames,
-                    running,
-                    ready_tx,
-                )
-            });
-        }
+        let reader = Reader {
+            state: Arc::clone(&state),
+            wire: Arc::clone(&wire),
+            sender: sender.clone(),
+            root: launch.root.clone(),
+            thread: Arc::clone(&thread),
+            frames: Arc::clone(&frames),
+            running: Arc::clone(&running),
+            ready: ready_tx,
+        };
+        std::thread::spawn(move || reader.pump(reader_half));
 
         // The program's console, on its own thread. Lines rather than frames:
         // this pipe is plain text.
@@ -555,10 +544,10 @@ fn connect(port: u16, child: &mut Child, adapter: &Path) -> Result<TcpStream> {
     })
 }
 
-/// Read the adapter for the life of the session.
-#[allow(clippy::too_many_arguments)]
-fn pump(
-    socket: TcpStream,
+/// The reader thread's half of the session: everything a message from the
+/// adapter can change, the wire its follow-up questions go out on, and the
+/// channel the states go down.
+struct Reader {
     state: Arc<Mutex<DebugState>>,
     wire: Arc<Wire>,
     sender: Sender<DebugState>,
@@ -566,30 +555,215 @@ fn pump(
     thread: Arc<Mutex<i64>>,
     frames: Arc<Mutex<Vec<i64>>>,
     running: Arc<AtomicBool>,
+    /// Told when the adapter says it will take configuration.
     ready: Sender<()>,
-) {
-    let mut reader = BufReader::new(socket);
-    while let Some(message) = read_frame(&mut reader) {
-        let changed = apply(
-            &message, &state, &wire, &root, &thread, &frames, &running, &ready,
-        );
-        if changed {
-            let snapshot = state.lock().expect("dap state").clone();
-            if sender.send(snapshot).is_err() {
+}
+
+impl Reader {
+    /// Read the adapter for the life of the session.
+    fn pump(self, socket: TcpStream) {
+        let mut socket = BufReader::new(socket);
+        while let Some(message) = read_frame(&mut socket) {
+            let changed = self.apply(&message);
+            if changed {
+                let snapshot = self.state.lock().expect("dap state").clone();
+                if self.sender.send(snapshot).is_err() {
+                    break;
+                }
+            }
+            if self.state.lock().expect("dap state").exited.is_some() {
                 break;
             }
         }
-        if state.lock().expect("dap state").exited.is_some() {
-            break;
+        let mut final_state = self.state.lock().expect("dap state").clone();
+        final_state.running = false;
+        final_state.attached = false;
+        if final_state.exited.is_none() && final_state.error.is_none() {
+            final_state.exited = Some(0);
+        }
+        let _ = self.sender.send(final_state);
+    }
+
+    /// Fold one message into the state. Returns whether anything changed.
+    fn apply(&self, message: &Value) -> bool {
+        match message.get("type").and_then(Value::as_str) {
+            Some("event") => self.on_event(message),
+            Some("response") => self.on_response(message),
+            _ => false,
         }
     }
-    let mut final_state = state.lock().expect("dap state").clone();
-    final_state.running = false;
-    final_state.attached = false;
-    if final_state.exited.is_none() && final_state.error.is_none() {
-        final_state.exited = Some(0);
+
+    /// Something the adapter says happened: the program stopped, went on,
+    /// printed or ended, or a breakpoint moved.
+    fn on_event(&self, message: &Value) -> bool {
+        let body = message.get("body").cloned().unwrap_or(Value::Null);
+        match message.get("event").and_then(Value::as_str).unwrap_or("") {
+            "initialized" => {
+                let _ = self.ready.send(());
+                false
+            }
+            "stopped" => {
+                if let Some(id) = body.get("threadId").and_then(Value::as_i64) {
+                    *self.thread.lock().expect("dap thread") = id;
+                }
+                self.running.store(false, Ordering::SeqCst);
+                {
+                    let mut state = self.state.lock().expect("dap state");
+                    state.running = false;
+                    state.attached = true;
+                    state.reason = Some(reason_of(
+                        body.get("reason").and_then(Value::as_str).unwrap_or(""),
+                    ));
+                }
+                // The stop names one thread and nothing else; the stack is
+                // a separate question, and asking it here is what makes
+                // the panel complete the moment it appears.
+                let id = *self.thread.lock().expect("dap thread");
+                let _ = self
+                    .wire
+                    .send("stackTrace", json!({ "threadId": id, "levels": 64 }));
+                true
+            }
+            "continued" => {
+                self.running.store(true, Ordering::SeqCst);
+                let mut state = self.state.lock().expect("dap state");
+                state.running = true;
+                // A stack read while the program runs is a lie.
+                state.stack.clear();
+                state.variables.clear();
+                state.reason = None;
+                true
+            }
+            "exited" => {
+                let code = body.get("exitCode").and_then(Value::as_i64).unwrap_or(0);
+                let mut state = self.state.lock().expect("dap state");
+                state.exited = Some(i32::try_from(code).unwrap_or(-1));
+                state.running = false;
+                state.reason = Some(StopReason::Exited);
+                true
+            }
+            "terminated" => {
+                let mut state = self.state.lock().expect("dap state");
+                if state.exited.is_none() {
+                    state.exited = Some(0);
+                }
+                state.running = false;
+                true
+            }
+            "output" => {
+                let Some(text) = body.get("output").and_then(Value::as_str) else {
+                    return false;
+                };
+                // The adapter's own narration — "Launched process 1234" —
+                // is not the program's output and would read as the test
+                // printing it. Only the debuggee's streams are forwarded.
+                let category = body
+                    .get("category")
+                    .and_then(Value::as_str)
+                    .unwrap_or("console");
+                if category != "stdout" && category != "stderr" {
+                    return false;
+                }
+                let mut state = self.state.lock().expect("dap state");
+                state.output.extend(text.lines().map(str::to_string));
+                true
+            }
+            "breakpoint" => {
+                let Some(bkpt) = body.get("breakpoint") else {
+                    return false;
+                };
+                let mut state = self.state.lock().expect("dap state");
+                upsert_breakpoint(&mut state, bkpt, &self.root);
+                true
+            }
+            _ => false,
+        }
     }
-    let _ = sender.send(final_state);
+
+    /// The adapter's answer to one of this session's requests, told apart
+    /// by the `command` it answers.
+    fn on_response(&self, message: &Value) -> bool {
+        let command = message.get("command").and_then(Value::as_str).unwrap_or("");
+        let body = message.get("body").cloned().unwrap_or(Value::Null);
+        if message.get("success").and_then(Value::as_bool) == Some(false) {
+            // `pause` on an already-stopped program and `continue` on a
+            // running one are races the panel can lose harmlessly; the
+            // rest is worth showing.
+            if matches!(
+                command,
+                "pause" | "continue" | "next" | "stepIn" | "stepOut"
+            ) {
+                return false;
+            }
+            let detail = message
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("the debug adapter refused the request");
+            self.state.lock().expect("dap state").error = Some(detail.to_string());
+            return true;
+        }
+        match command {
+            "stackTrace" => {
+                let listed = body
+                    .get("stackFrames")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut ids = Vec::with_capacity(listed.len());
+                let mut stack = Vec::with_capacity(listed.len());
+                for (level, frame) in listed.iter().enumerate() {
+                    ids.push(frame.get("id").and_then(Value::as_i64).unwrap_or(0));
+                    stack.push(frame_of(level as u32, frame, &self.root));
+                }
+                *self.frames.lock().expect("dap frames") = ids.clone();
+                self.state.lock().expect("dap state").stack = stack;
+                if let Some(first) = ids.first() {
+                    let _ = self.wire.send("scopes", json!({ "frameId": first }));
+                }
+                true
+            }
+            "scopes" => {
+                // The first scope is the frame's locals in both adapters;
+                // the rest are registers and globals, which this panel
+                // does not show.
+                let reference = body
+                    .get("scopes")
+                    .and_then(Value::as_array)
+                    .and_then(|scopes| scopes.first())
+                    .and_then(|scope| scope.get("variablesReference"))
+                    .and_then(Value::as_i64);
+                if let Some(reference) = reference {
+                    let _ = self
+                        .wire
+                        .send("variables", json!({ "variablesReference": reference }));
+                }
+                false
+            }
+            "variables" => {
+                let listed = body
+                    .get("variables")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                self.state.lock().expect("dap state").variables =
+                    listed.iter().filter_map(variable_of).collect();
+                true
+            }
+            "setBreakpoints" => {
+                let listed = body
+                    .get("breakpoints")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut state = self.state.lock().expect("dap state");
+                for bkpt in &listed {
+                    upsert_breakpoint(&mut state, bkpt, &self.root);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// One `Content-Length` framed JSON message, or `None` at the end.
@@ -609,185 +783,6 @@ fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<Value> {
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body).ok()?;
     serde_json::from_slice(&body).ok()
-}
-
-/// Fold one message into the state. Returns whether anything changed.
-#[allow(clippy::too_many_arguments)]
-fn apply(
-    message: &Value,
-    state: &Arc<Mutex<DebugState>>,
-    wire: &Arc<Wire>,
-    root: &Path,
-    thread: &Arc<Mutex<i64>>,
-    frames: &Arc<Mutex<Vec<i64>>>,
-    running: &Arc<AtomicBool>,
-    ready: &Sender<()>,
-) -> bool {
-    match message.get("type").and_then(Value::as_str) {
-        Some("event") => {
-            let body = message.get("body").cloned().unwrap_or(Value::Null);
-            match message.get("event").and_then(Value::as_str).unwrap_or("") {
-                "initialized" => {
-                    let _ = ready.send(());
-                    false
-                }
-                "stopped" => {
-                    if let Some(id) = body.get("threadId").and_then(Value::as_i64) {
-                        *thread.lock().expect("dap thread") = id;
-                    }
-                    running.store(false, Ordering::SeqCst);
-                    {
-                        let mut state = state.lock().expect("dap state");
-                        state.running = false;
-                        state.attached = true;
-                        state.reason = Some(reason_of(
-                            body.get("reason").and_then(Value::as_str).unwrap_or(""),
-                        ));
-                    }
-                    // The stop names one thread and nothing else; the stack is
-                    // a separate question, and asking it here is what makes
-                    // the panel complete the moment it appears.
-                    let id = *thread.lock().expect("dap thread");
-                    let _ = wire.send("stackTrace", json!({ "threadId": id, "levels": 64 }));
-                    true
-                }
-                "continued" => {
-                    running.store(true, Ordering::SeqCst);
-                    let mut state = state.lock().expect("dap state");
-                    state.running = true;
-                    // A stack read while the program runs is a lie.
-                    state.stack.clear();
-                    state.variables.clear();
-                    state.reason = None;
-                    true
-                }
-                "exited" => {
-                    let code = body.get("exitCode").and_then(Value::as_i64).unwrap_or(0);
-                    let mut state = state.lock().expect("dap state");
-                    state.exited = Some(i32::try_from(code).unwrap_or(-1));
-                    state.running = false;
-                    state.reason = Some(StopReason::Exited);
-                    true
-                }
-                "terminated" => {
-                    let mut state = state.lock().expect("dap state");
-                    if state.exited.is_none() {
-                        state.exited = Some(0);
-                    }
-                    state.running = false;
-                    true
-                }
-                "output" => {
-                    let Some(text) = body.get("output").and_then(Value::as_str) else {
-                        return false;
-                    };
-                    // The adapter's own narration — "Launched process 1234" —
-                    // is not the program's output and would read as the test
-                    // printing it. Only the debuggee's streams are forwarded.
-                    let category = body
-                        .get("category")
-                        .and_then(Value::as_str)
-                        .unwrap_or("console");
-                    if category != "stdout" && category != "stderr" {
-                        return false;
-                    }
-                    let mut state = state.lock().expect("dap state");
-                    state.output.extend(text.lines().map(str::to_string));
-                    true
-                }
-                "breakpoint" => {
-                    let Some(bkpt) = body.get("breakpoint") else {
-                        return false;
-                    };
-                    let mut state = state.lock().expect("dap state");
-                    upsert_breakpoint(&mut state, bkpt, root);
-                    true
-                }
-                _ => false,
-            }
-        }
-        Some("response") => {
-            let command = message.get("command").and_then(Value::as_str).unwrap_or("");
-            let body = message.get("body").cloned().unwrap_or(Value::Null);
-            if message.get("success").and_then(Value::as_bool) == Some(false) {
-                // `pause` on an already-stopped program and `continue` on a
-                // running one are races the panel can lose harmlessly; the
-                // rest is worth showing.
-                if matches!(
-                    command,
-                    "pause" | "continue" | "next" | "stepIn" | "stepOut"
-                ) {
-                    return false;
-                }
-                let detail = message
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("the debug adapter refused the request");
-                state.lock().expect("dap state").error = Some(detail.to_string());
-                return true;
-            }
-            match command {
-                "stackTrace" => {
-                    let listed = body
-                        .get("stackFrames")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    let mut ids = Vec::with_capacity(listed.len());
-                    let mut stack = Vec::with_capacity(listed.len());
-                    for (level, frame) in listed.iter().enumerate() {
-                        ids.push(frame.get("id").and_then(Value::as_i64).unwrap_or(0));
-                        stack.push(frame_of(level as u32, frame, root));
-                    }
-                    *frames.lock().expect("dap frames") = ids.clone();
-                    state.lock().expect("dap state").stack = stack;
-                    if let Some(first) = ids.first() {
-                        let _ = wire.send("scopes", json!({ "frameId": first }));
-                    }
-                    true
-                }
-                "scopes" => {
-                    // The first scope is the frame's locals in both adapters;
-                    // the rest are registers and globals, which this panel
-                    // does not show.
-                    let reference = body
-                        .get("scopes")
-                        .and_then(Value::as_array)
-                        .and_then(|scopes| scopes.first())
-                        .and_then(|scope| scope.get("variablesReference"))
-                        .and_then(Value::as_i64);
-                    if let Some(reference) = reference {
-                        let _ = wire.send("variables", json!({ "variablesReference": reference }));
-                    }
-                    false
-                }
-                "variables" => {
-                    let listed = body
-                        .get("variables")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    state.lock().expect("dap state").variables =
-                        listed.iter().filter_map(variable_of).collect();
-                    true
-                }
-                "setBreakpoints" => {
-                    let listed = body
-                        .get("breakpoints")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    let mut state = state.lock().expect("dap state");
-                    for bkpt in &listed {
-                        upsert_breakpoint(&mut state, bkpt, root);
-                    }
-                    true
-                }
-                _ => false,
-            }
-        }
-        _ => false,
-    }
 }
 
 /// Add or update one breakpoint, keyed by the adapter's id.
