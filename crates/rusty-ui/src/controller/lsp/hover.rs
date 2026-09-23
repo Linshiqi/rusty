@@ -9,11 +9,11 @@ pub fn request_actions(state: AppState, path: String, line: u32, col: u32) {
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let sync = Sync {
+    let sync = PathText {
         path: path.clone(),
         text: state.editor.draft.get_untracked(),
     };
-    let ask = Ask {
+    let ask = PathAt {
         path: path.clone(),
         line,
         col,
@@ -86,14 +86,7 @@ pub fn apply_action_elsewhere(
 /// hover would be absurd. The reply is dropped if the user has moved to
 /// another file by the time it lands.
 pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
-    let args = Args {
+    let args = PathAt {
         path: path.clone(),
         line,
         col,
@@ -188,7 +181,7 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
         if problem.is_none() {
             return;
         }
-        let ask = Ask {
+        let ask = PathAt {
             path: path.clone(),
             line,
             col,

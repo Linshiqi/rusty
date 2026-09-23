@@ -66,6 +66,27 @@ use rusty_embed::{EmbeddedProject, LogLevel, LogLine, LogStream};
 
 use crate::{ipc::Answer, state::AppState};
 
+/// The arguments of a command that takes a path and nothing else.
+#[derive(serde::Serialize)]
+pub(crate) struct PathArg {
+    pub path: String,
+}
+
+/// A document and its text: a sync, a save, a format.
+#[derive(serde::Serialize)]
+pub(crate) struct PathText {
+    pub path: String,
+    pub text: String,
+}
+
+/// A document and a position in it: every request anchored at the caret.
+#[derive(serde::Serialize)]
+pub(crate) struct PathAt {
+    pub path: String,
+    pub line: u32,
+    pub col: u32,
+}
+
 /// Set a signal only when the value is not already what it holds.
 ///
 /// Every Git read's answer goes through this — an unchanged history set

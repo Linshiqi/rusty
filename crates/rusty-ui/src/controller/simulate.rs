@@ -434,17 +434,13 @@ pub fn import_schematic(state: AppState, on_sheet: Callback<rusty_embed::Sheet>)
             Ok(None) => return,
             Err(error) => return say(state, error.message),
         };
-        #[derive(serde::Serialize)]
-        struct Args {
-            path: String,
-        }
         let from_wokwi = picked.to_ascii_lowercase().ends_with(".json");
         let (command, tag) = if from_wokwi {
             (cmd::sim::IMPORT_WOKWI, "wokwi")
         } else {
             (cmd::sim::IMPORT_KICAD, "kicad")
         };
-        match ipc::call::<_, rusty_embed::Sheet>(command, &Args { path: picked }).await {
+        match ipc::call::<_, rusty_embed::Sheet>(command, &PathArg { path: picked }).await {
             Ok(sheet) => {
                 for note in &sheet.notes {
                     state.push_log(LogLine {

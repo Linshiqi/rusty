@@ -14,6 +14,7 @@ use rusty_core::{DiskReport, SweepPolicy, SweepReport};
 use rusty_embed::{LogLevel, LogLine, LogStream};
 use rusty_i18n::t;
 
+use super::PathArg;
 use crate::{
     format,
     ipc::{self, cmd},
@@ -63,10 +64,6 @@ pub fn sweep_disk(state: AppState, tree: Option<String>) {
 
 /// Remove a whole build tree or a known extra — after asking, with the size.
 pub fn remove_disk_path(state: AppState, path: String, bytes: u64) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
     let question = t!(
         "disk.remove-confirm",
         path = path.clone(),
@@ -77,7 +74,7 @@ pub fn remove_disk_path(state: AppState, path: String, bytes: u64) {
             return;
         }
         run_removal(state, async move {
-            ipc::call::<_, SweepReport>(cmd::disk::REMOVE, &Args { path }).await
+            ipc::call::<_, SweepReport>(cmd::disk::REMOVE, &PathArg { path }).await
         });
     });
 }
@@ -194,17 +191,13 @@ pub fn set_disk_idle_days(state: AppState, days: u32) {
 pub fn drop_incremental(state: AppState, tree: String, bytes: u64) {
     let separator = if tree.contains('\\') { "\\" } else { "/" };
     let path = format!("{tree}{separator}incremental");
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
     let question = t!("disk.incremental-confirm", size = format::bytes(bytes));
     spawn_local(async move {
         if !ipc::confirm(&question).await {
             return;
         }
         run_removal(state, async move {
-            ipc::call::<_, SweepReport>(cmd::disk::REMOVE, &Args { path }).await
+            ipc::call::<_, SweepReport>(cmd::disk::REMOVE, &PathArg { path }).await
         });
     });
 }

@@ -45,7 +45,7 @@ pub fn request_completion(
         asked = ask.count;
         ask.anchor = Some((path.clone(), line, word_start));
     });
-    let at = Ask { path, line, col };
+    let at = PathAt { path, line, col };
     if now {
         ask_completion(state, at, word_start, asked, true);
     } else {
@@ -81,8 +81,8 @@ fn latest_ask(state: AppState) -> Option<u64> {
         .flatten()
 }
 
-fn ask_completion(state: AppState, at: Ask, word_start: u32, asked: u64, retry: bool) {
-    let sync = Sync {
+fn ask_completion(state: AppState, at: PathAt, word_start: u32, asked: u64, retry: bool) {
+    let sync = PathText {
         path: at.path.clone(),
         text: state.editor.draft.get_untracked(),
     };
@@ -183,11 +183,11 @@ pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let sync = Sync {
+    let sync = PathText {
         path: path.clone(),
         text: state.editor.draft.get_untracked(),
     };
-    let ask = Ask {
+    let ask = PathAt {
         path: path.clone(),
         line,
         col,

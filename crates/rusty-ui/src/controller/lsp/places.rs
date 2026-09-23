@@ -19,13 +19,6 @@ pub enum PlaceQuery {
 /// the name asked about — even an empty one, which says there were none
 /// rather than letting a key seem to do nothing.
 pub fn find_places(state: AppState, query: PlaceQuery) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
     let Some(path) = state.active_path_now() else {
         return;
     };
@@ -44,7 +37,7 @@ pub fn find_places(state: AppState, query: PlaceQuery) {
         PlaceQuery::Implementations => cmd::lsp::IMPLEMENTATIONS,
         PlaceQuery::TypeDefinition => cmd::lsp::TYPE_DEFINITION,
     };
-    let args = Args { path, line, col };
+    let args = PathAt { path, line, col };
     spawn_local(async move {
         // Errors are the server warming up, as they are for a definition.
         let Ok(mut places) = ipc::call::<_, Vec<rusty_lsp::Place>>(command, &args).await else {
@@ -105,7 +98,7 @@ pub fn expand_macro(state: AppState) {
     let Some((line, col)) = caret_position(state) else {
         return;
     };
-    let args = Ask { path, line, col };
+    let args = PathAt { path, line, col };
     spawn_local(async move {
         match ipc::call::<_, Option<rusty_edit::Document>>(cmd::lsp::EXPAND_MACRO, &args).await {
             Ok(Some(document)) => {
@@ -200,14 +193,7 @@ pub fn go_to(state: AppState, location: rusty_lsp::Location) {
 /// The target lands in `state.editor.reveal`; if it is in another file, that file is
 /// opened first and the editor applies the reveal once the document arrives.
 pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
-    let args = Args { path, line, col };
+    let args = PathAt { path, line, col };
     spawn_local(async move {
         // "No definition" is a normal answer over whitespace or a keyword, and
         // an error here is the server warming up. Neither is worth a banner.
@@ -223,14 +209,7 @@ pub fn goto_definition(state: AppState, path: String, line: u32, col: u32) {
 /// a name, so the name reads as a link before it is clicked, as VS Code's
 /// does. `then` hears the answer; a server still warming up is a no.
 pub fn has_definition(path: String, line: u32, col: u32, then: impl FnOnce(bool) + 'static) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
-    let args = Args { path, line, col };
+    let args = PathAt { path, line, col };
     spawn_local(async move {
         let found = matches!(
             ipc::call::<_, Option<rusty_lsp::Location>>(cmd::lsp::DEFINITION, &args).await,

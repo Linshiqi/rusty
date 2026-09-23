@@ -182,12 +182,7 @@ pub fn clear_stale(state: AppState, path: &str) {
 /// during the round trip would be overwritten by an answer about the text as
 /// it was before.
 fn reload_open(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
-    let args = Args { path: path.clone() };
+    let args = PathArg { path: path.clone() };
     spawn_local(async move {
         let Ok(document) = ipc::call::<_, Document>(cmd::files::OPEN, &args).await else {
             return;

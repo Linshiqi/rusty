@@ -85,16 +85,12 @@ pub fn stage(state: AppState, paths: Vec<String>, on: bool) {
 /// its `.git` is removed (to the recycle bin). The backend checks again that
 /// it has no commits.
 pub fn include_nested(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
     let question = t!("git.include-nested-confirm", path = path.clone());
     spawn_local(async move {
         if !ipc::confirm(&question).await {
             return;
         }
-        let args = Args { path };
+        let args = PathArg { path };
         track(
             state,
             async move { ipc::call::<_, ()>(cmd::git::INCLUDE_NESTED, &args).await },

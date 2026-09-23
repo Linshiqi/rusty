@@ -21,14 +21,9 @@ fn host_platform() -> String {
 
 /// Float a file into its own OS window.
 pub fn detach_file(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     track(
         state,
-        async move { ipc::call::<_, ()>(cmd::files::DETACH, &Args { path }).await },
+        async move { ipc::call::<_, ()>(cmd::files::DETACH, &PathArg { path }).await },
         |()| {},
     );
 }
@@ -51,11 +46,7 @@ pub fn apply_ui_zoom(state: AppState) {
 
 /// Hand this window's file back to the shell and close.
 pub fn reattach(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-    let args = Args { path };
+    let args = PathArg { path };
     track(
         state,
         async move { ipc::call::<_, ()>(cmd::files::REATTACH, &args).await },

@@ -76,12 +76,6 @@ fn edit_pulse(state: AppState) {
     };
     let text = state.editor.draft.get_untracked();
 
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
-
     if path.ends_with(".rs") && state.lsp.status.get_untracked() == LspStatus::Ready {
         // Each view of the file asks for its own colours: a long file's are
         // asked for around the lines that view is drawing.
@@ -92,7 +86,7 @@ fn edit_pulse(state: AppState) {
         }
         lsp_sync(
             cmd::lsp::CHANGE,
-            Args {
+            PathText {
                 path: path.clone(),
                 text: text.clone(),
             },

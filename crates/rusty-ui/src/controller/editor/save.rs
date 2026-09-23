@@ -18,12 +18,6 @@ use super::*;
 /// stays honest — it lights again the moment the next key is pressed. The
 /// draft is never touched.
 pub fn autosave_file(state: AppState) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
-
     let Some(document) = state.editor.document.with_untracked(Clone::clone) else {
         return;
     };
@@ -36,7 +30,7 @@ pub fn autosave_file(state: AppState) {
     if text == document.text {
         return;
     }
-    let args = Args {
+    let args = PathText {
         path: path.clone(),
         text: text.clone(),
     };
@@ -74,12 +68,6 @@ pub fn autosave_file(state: AppState) {
 /// A write that fails stops here with the banner — building the version on
 /// disk while the screen shows another is the thing this exists to prevent.
 pub fn save_all_then(state: AppState, then: impl FnOnce() + 'static) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
-
     // One write per path: a file open on both sides has one draft, kept the
     // same in both groups.
     let mut writes: Vec<(String, String)> = Vec::new();
@@ -116,7 +104,7 @@ pub fn save_all_then(state: AppState, then: impl FnOnce() + 'static) {
     state.app.in_flight.update(|n| *n += 1);
     spawn_local(async move {
         for (path, text) in writes {
-            let args = Args {
+            let args = PathText {
                 path: path.clone(),
                 text: text.clone(),
             };
@@ -163,16 +151,11 @@ pub fn save_file(state: AppState) {
     {
         return;
     }
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
 
     let Some(path) = state.active_path_now() else {
         return;
     };
-    let args = Args {
+    let args = PathText {
         path: path.clone(),
         text: state.editor.draft.get_untracked(),
     };
@@ -203,12 +186,6 @@ pub fn format_then_save(
     caret: Option<(u32, u32)>,
     apply: impl Fn(&str, Option<(u32, u32)>) + 'static,
 ) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
-
     let Some(document) = state.editor.document.with_untracked(Clone::clone) else {
         return;
     };
@@ -226,7 +203,7 @@ pub fn format_then_save(
         return;
     }
 
-    let args = Args {
+    let args = PathText {
         path: document.path,
         text: state.editor.draft.get_untracked(),
     };

@@ -206,11 +206,6 @@ pub fn rename_entry(state: AppState, from: String, name: String, is_dir: bool) {
 /// Move an entry to the recycle bin, after asking. The question names the
 /// bin the platform has, and every tab under the entry closes with it.
 pub fn delete_entry(state: AppState, path: String, is_dir: bool) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     if !state.has_project_now() {
         return;
     }
@@ -225,7 +220,7 @@ pub fn delete_entry(state: AppState, path: String, is_dir: bool) {
         if !ipc::confirm(&question).await {
             return;
         }
-        let args = Args { path: path.clone() };
+        let args = PathArg { path: path.clone() };
         track(
             state,
             async move { ipc::call::<_, ()>(cmd::files::DELETE, &args).await },
@@ -257,14 +252,9 @@ fn close_under(state: AppState, path: &str, is_dir: bool) {
 
 /// Select the entry in the platform's file manager.
 pub fn reveal_entry(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     track(
         state,
-        async move { ipc::call::<_, ()>(cmd::files::REVEAL, &Args { path }).await },
+        async move { ipc::call::<_, ()>(cmd::files::REVEAL, &PathArg { path }).await },
         |()| {},
     );
 }

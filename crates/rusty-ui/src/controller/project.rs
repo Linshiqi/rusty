@@ -51,15 +51,11 @@ pub fn load_recents(state: AppState) {
 /// and either way the stale entry is forgotten so it stops being offered.
 pub fn open_recent(state: AppState, path: String, announce: bool) {
     #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-    #[derive(serde::Serialize)]
     struct Forget {
         path: String,
     }
 
-    let args = Args { path: path.clone() };
+    let args = PathArg { path: path.clone() };
     spawn_local(async move {
         match ipc::call::<_, OpenResult>(cmd::project::OPEN, &args).await {
             Ok(result) => {
@@ -108,14 +104,9 @@ pub fn open_project(state: AppState, path: String) {
 /// [`open_project`], then `then` once it is open — how a playground kept as
 /// a project stays laid out the way it was being worked on.
 pub fn open_project_then(state: AppState, path: String, then: impl FnOnce() + 'static) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     // Bound rather than passed as a temporary: the future outlives this
     // statement, so a borrow of an inline struct literal would dangle.
-    let args = Args { path };
+    let args = PathArg { path };
     track(
         state,
         async move { ipc::call::<_, OpenResult>(cmd::project::OPEN, &args).await },

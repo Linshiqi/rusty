@@ -28,13 +28,6 @@ fn next_serial() -> u64 {
 /// VS Code's "Show Call Hierarchy". Calls in first, as VS Code opens it, or
 /// whichever way the last hierarchy was being read.
 pub fn show_call_hierarchy(state: AppState) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
     let Some(path) = state.active_path_now().filter(|path| path.ends_with(".rs")) else {
         return;
     };
@@ -55,7 +48,7 @@ pub fn show_call_hierarchy(state: AppState) {
     let serial = next_serial();
     state.layout.calls.set(CallsView::Asking(serial));
     state.show_dock(DockTab::Calls);
-    let args = Args { path, line, col };
+    let args = PathAt { path, line, col };
     spawn_local(async move {
         let answer =
             ipc::call::<_, Vec<rusty_lsp::CallItem>>(cmd::lsp::CALL_HIERARCHY, &args).await;

@@ -32,24 +32,6 @@ pub use paint::*;
 pub use places::*;
 pub use pulse::*;
 
-/// The buffer as the server should now see it. Sent ahead of every request
-/// that reads the caret, so the answer is about this keystroke's text.
-#[derive(serde::Serialize)]
-struct Sync {
-    path: String,
-    text: String,
-}
-
-/// A position-anchored request: completion, signature help, code actions.
-/// One shape, defined once — it was declared inside each of the three
-/// functions that use it.
-#[derive(serde::Serialize)]
-struct Ask {
-    path: String,
-    line: u32,
-    col: u32,
-}
-
 /// Start rust-analyzer for the open project and route what it says into state.
 pub fn start_lsp(state: AppState) {
     use wasm_bindgen::{JsValue, prelude::Closure};
@@ -197,12 +179,7 @@ pub fn lsp_open_doc(path: String, text: String) {
     if !path.ends_with(".rs") {
         return;
     }
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
-    lsp_sync(cmd::lsp::OPEN, Args { path, text });
+    lsp_sync(cmd::lsp::OPEN, PathText { path, text });
 }
 
 /// Tell the server the buffer was replaced from outside the editor.
@@ -215,23 +192,14 @@ pub(super) fn lsp_changed_doc(path: String, text: String) {
     if !path.ends_with(".rs") {
         return;
     }
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        text: String,
-    }
-    lsp_sync(cmd::lsp::CHANGE, Args { path, text });
+    lsp_sync(cmd::lsp::CHANGE, PathText { path, text });
 }
 
 pub(super) fn lsp_saved_doc(path: String) {
     if !path.ends_with(".rs") {
         return;
     }
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-    lsp_sync(cmd::lsp::SAVED, Args { path });
+    lsp_sync(cmd::lsp::SAVED, PathArg { path });
 }
 
 /// Tell the server the editor no longer holds this file — a tab closed, or
@@ -242,9 +210,5 @@ pub(super) fn lsp_closed_doc(path: String) {
     if !path.ends_with(".rs") {
         return;
     }
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-    lsp_sync(cmd::lsp::CLOSE, Args { path });
+    lsp_sync(cmd::lsp::CLOSE, PathArg { path });
 }

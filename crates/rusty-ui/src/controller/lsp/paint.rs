@@ -121,20 +121,13 @@ pub fn hints_cover(state: AppState, from: u32, to: u32) -> bool {
 /// mark. Only the latest ask is answered: the caret has moved on from the
 /// others.
 pub fn request_highlights(state: AppState, path: String, line: u32, col: u32) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-        line: u32,
-        col: u32,
-    }
-
     static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
     let asked = ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    let args = Args {
+    let args = PathAt {
         path: path.clone(),
         line,
         col,

@@ -36,11 +36,6 @@ pub use window::*;
 /// Parked: the tab is fronted with its draft intact. New: fetched, and
 /// whatever was on screen is parked.
 pub fn open_file(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     let active = state.active_path_now();
     if active.as_deref() == Some(path.as_str()) {
         return;
@@ -59,7 +54,7 @@ pub fn open_file(state: AppState, path: String) {
         return;
     }
 
-    let args = Args { path };
+    let args = PathArg { path };
     track(
         state,
         async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
@@ -78,17 +73,12 @@ pub fn open_file(state: AppState, path: String) {
 /// error about a file nobody had asked for. `restore_tabs` has always said
 /// it fails quietly; it went through the ordinary path, which banners.
 pub(crate) fn reopen_file(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     // Restored on both sides, and the other side has read it already.
     if other_holds(state, &path) && open_view(state, &path) {
         return;
     }
 
-    let args = Args { path: path.clone() };
+    let args = PathArg { path: path.clone() };
     spawn_local(async move {
         match ipc::call::<_, Document>(cmd::files::OPEN, &args).await {
             Ok(document) => show_document(state, document, true),
@@ -113,11 +103,6 @@ pub(crate) fn reopen_file(state: AppState, path: String) {
 /// only for paths whose extension names an image the WebView can draw; a
 /// `<img src="notes.pdf">` is left to the page to describe.
 pub fn load_image(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     let Some(mime) = rusty_git::image_mime(&path) else {
         return;
     };
@@ -131,7 +116,7 @@ pub fn load_image(state: AppState, path: String) {
     state.editor.images.update(|images| {
         images.insert(path.clone(), crate::state::ImageLoad::Loading);
     });
-    let args = Args { path: path.clone() };
+    let args = PathArg { path: path.clone() };
     spawn_local(async move {
         let outcome = match ipc::call::<_, String>(cmd::files::BLOB, &args).await {
             Ok(encoded) => crate::state::ImageLoad::Ready(format!("data:{mime};base64,{encoded}")),
@@ -192,12 +177,7 @@ pub fn highlight_snippet(state: AppState, lang: String, text: String) {
 /// Re-read the active document from disk and replace it in place — the tail
 /// of a save, where disk and draft have just been made equal.
 fn reload_active(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
-    let args = Args { path };
+    let args = PathArg { path };
     track(
         state,
         async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
@@ -498,11 +478,6 @@ fn neighbour_after_close(tabs: &[String], closing: &str) -> Option<String> {
 /// Open a dependency's source read-only — where goto-definition lands when the
 /// answer lives in esp-hal or `core`.
 pub fn open_external(state: AppState, path: String) {
-    #[derive(serde::Serialize)]
-    struct Args {
-        path: String,
-    }
-
     let active = state.active_path_now();
     if active.as_deref() == Some(path.as_str()) {
         return;
@@ -516,7 +491,7 @@ pub fn open_external(state: AppState, path: String) {
         return;
     }
 
-    let args = Args { path };
+    let args = PathArg { path };
     track(
         state,
         async move { ipc::call::<_, Document>(cmd::files::OPEN_EXTERNAL, &args).await },
