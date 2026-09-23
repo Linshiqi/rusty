@@ -30,7 +30,8 @@ mod entries;
 mod error;
 #[cfg(feature = "backend")]
 mod format;
-/// The one rule for what is not shown, searched or watched.
+/// The one rule for what is not shown, searched or watched, and the walk
+/// that applies it.
 #[cfg(feature = "backend")]
 mod hidden;
 #[cfg(feature = "backend")]

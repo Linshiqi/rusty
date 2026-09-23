@@ -5,9 +5,10 @@
 //! file tree shows, and `grep-searcher`/`grep-regex` do the matching — SIMD
 //! literal search, real Unicode case folding, `-w` word boundaries, binary
 //! detection. The walker and the tree share ignore rules and the same
-//! [`hidden_entry`] predicate, so search never surfaces a file the tree would
-//! hide — `.cargo/config.toml` and `.rusty/sim.toml` included, which it once
-//! did while this paragraph said otherwise.
+//! [`hidden_entry`](crate::hidden::hidden_entry) predicate, so search never
+//! surfaces a file the tree would hide — `.cargo/config.toml` and
+//! `.rusty/sim.toml` included, which it once did while this paragraph said
+//! otherwise.
 //!
 //! Literal by default; regex sits behind an explicit toggle, and a pattern
 //! that does not parse is named rather than silently matching nothing.
@@ -27,10 +28,10 @@ use grep_matcher::{Captures, LineTerminator, Matcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::sinks::Lossy;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
+use ignore::WalkState;
 use ignore::overrides::OverrideBuilder;
-use ignore::{WalkBuilder, WalkState};
 
-use crate::hidden::hidden_entry;
+use crate::hidden::project_walk;
 use crate::model::{ReplaceOutcome, SearchHit, SearchResults, Skipped};
 
 /// Stop after this many hits. The panel says so when it happens.
@@ -84,19 +85,8 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
     let hits: Mutex<Vec<SearchHit>> = Mutex::new(Vec::new());
     let count = AtomicUsize::new(0);
 
-    WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .parents(false)
-        .require_git(false)
+    project_walk(root)
         .overrides(overrides)
-        // The tree's own rule: dot entries never show, so a hit in one would
-        // point at a file the panel cannot open. `.git` alone drowned every
-        // query the moment a project had history.
-        .filter_entry(|entry| {
-            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
-        })
         .build_parallel()
         .run(|| {
             // Per-thread searcher (stateful); the matcher clones cheaply.
@@ -241,16 +231,8 @@ pub fn replace(root: &Path, query: &Query, replacement: &str, drafts: &[String])
 
     let outcome: Mutex<ReplaceOutcome> = Mutex::new(ReplaceOutcome::default());
 
-    WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .parents(false)
-        .require_git(false)
+    project_walk(root)
         .overrides(overrides)
-        .filter_entry(|entry| {
-            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
-        })
         .build_parallel()
         .run(|| {
             let matcher = matcher.clone();

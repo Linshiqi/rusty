@@ -8,15 +8,13 @@
 
 use std::path::Path;
 
-use ignore::WalkBuilder;
-
-use crate::{error::Result, hidden::hidden_entry, model::Entry};
+use crate::{error::Result, hidden::project_walk, model::Entry};
 
 /// How deep to walk.
 ///
 /// Deep enough for any project layout anyone actually uses, shallow enough that
 /// a stray symlink into a filesystem root cannot hang the window.
-const MAX_DEPTH: usize = 12;
+pub(crate) const MAX_DEPTH: usize = 12;
 
 /// Everything in the project worth showing, as one tree.
 ///
@@ -26,23 +24,7 @@ const MAX_DEPTH: usize = 12;
 pub fn read(root: &Path) -> Result<Vec<Entry>> {
     let mut top = Vec::new();
 
-    let walk = WalkBuilder::new(root)
-        .max_depth(Some(MAX_DEPTH))
-        .hidden(false) // our own filter below decides
-        .git_ignore(true)
-        .git_global(false)
-        .parents(false)
-        // Without this, `.gitignore` is only honoured inside a git repository —
-        // and a freshly generated project has a .gitignore and no .git, so
-        // `target/` and its tens of thousands of files would land in the tree
-        // the first time anyone built.
-        .require_git(false)
-        // Dot-entries never show — the rule search and the watcher share, so
-        // no panel can name a file this tree cannot open.
-        .filter_entry(move |entry| {
-            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
-        })
-        .build();
+    let walk = project_walk(root).max_depth(Some(MAX_DEPTH)).build();
 
     for found in walk.flatten() {
         let path = found.path();

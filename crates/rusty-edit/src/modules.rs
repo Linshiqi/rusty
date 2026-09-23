@@ -198,21 +198,11 @@ fn in_a_crates_src(path: &str, manifests: &[String]) -> bool {
 /// that was not read is a crate whose whole module tree reads as unlinked.
 #[cfg(feature = "backend")]
 pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
-    use ignore::WalkBuilder;
-
     let mut manifests: Vec<String> = Vec::new();
     let mut sources: Vec<(String, String)> = Vec::new();
 
-    let walk = WalkBuilder::new(root)
-        .max_depth(Some(12))
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .parents(false)
-        .require_git(false)
-        .filter_entry(|entry| {
-            entry.depth() == 0 || !crate::hidden::hidden_entry(&entry.file_name().to_string_lossy())
-        })
+    let walk = crate::hidden::project_walk(root)
+        .max_depth(Some(crate::tree::MAX_DEPTH))
         .build();
 
     for found in walk.flatten() {
