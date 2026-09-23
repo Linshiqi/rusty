@@ -23,90 +23,59 @@ pub enum AnySession {
     Dap(DapSession),
 }
 
-impl AnySession {
-    /// What the caller has to know to word an error: which debugger is on
-    /// the other end.
-    pub fn debugger_name(&self) -> &'static str {
-        match self {
-            AnySession::Gdb(_) => "gdb",
-            AnySession::Dap(_) => "the debug adapter",
+/// The same call on whichever session it is. The two arms are one text over
+/// two types, which a closure cannot be.
+macro_rules! either {
+    ($any:expr, $session:ident => $call:expr) => {
+        match $any {
+            AnySession::Gdb($session) => $call,
+            AnySession::Dap($session) => $call,
         }
-    }
+    };
+}
 
+impl AnySession {
     pub fn state(&self) -> DebugState {
-        match self {
-            AnySession::Gdb(session) => session.state(),
-            AnySession::Dap(session) => session.state(),
-        }
+        either!(self, session => session.state())
     }
 
     pub fn add_breakpoint(&self, file: &str, line: u32) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.add_breakpoint(file, line),
-            AnySession::Dap(session) => session.add_breakpoint(file, line),
-        }
+        either!(self, session => session.add_breakpoint(file, line))
     }
 
     pub fn remove_breakpoint(&self, number: u32) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.remove_breakpoint(number),
-            AnySession::Dap(session) => session.remove_breakpoint(number),
-        }
+        either!(self, session => session.remove_breakpoint(number))
     }
 
     pub fn resume(&self) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.resume(),
-            AnySession::Dap(session) => session.resume(),
-        }
+        either!(self, session => session.resume())
     }
 
     pub fn pause(&self) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.pause(),
-            AnySession::Dap(session) => session.pause(),
-        }
+        either!(self, session => session.pause())
     }
 
     pub fn step_over(&self) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.step_over(),
-            AnySession::Dap(session) => session.step_over(),
-        }
+        either!(self, session => session.step_over())
     }
 
     pub fn step_into(&self) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.step_into(),
-            AnySession::Dap(session) => session.step_into(),
-        }
+        either!(self, session => session.step_into())
     }
 
     pub fn step_out(&self) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.step_out(),
-            AnySession::Dap(session) => session.step_out(),
-        }
+        either!(self, session => session.step_out())
     }
 
     pub fn refresh(&self, frame: u32) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.refresh(frame),
-            AnySession::Dap(session) => session.refresh(frame),
-        }
+        either!(self, session => session.refresh(frame))
     }
 
     pub fn read_memory(&self, address: u64, bytes: u32) -> Result<()> {
-        match self {
-            AnySession::Gdb(session) => session.read_memory(address, bytes),
-            AnySession::Dap(session) => session.read_memory(address, bytes),
-        }
+        either!(self, session => session.read_memory(address, bytes))
     }
 
     pub fn stop(&self) {
-        match self {
-            AnySession::Gdb(session) => session.stop(),
-            AnySession::Dap(session) => session.stop(),
-        }
+        either!(self, session => session.stop())
     }
 }
