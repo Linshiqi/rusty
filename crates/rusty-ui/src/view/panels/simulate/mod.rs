@@ -549,9 +549,7 @@ fn BoardEditor(
             .filter(|part| part.symbol.as_ref().map(behaviour_of) == Some(Behaviour::Display))
             .filter_map(|part| {
                 let panel = rusty_embed::screen::Panel::from_id(part.inst.props.get("panel")?)?;
-                let address = part.inst.props.get("addr")?.trim();
-                let address = u8::from_str_radix(address.trim_start_matches("0x"), 16).ok()?;
-                Some((address, panel))
+                Some((display_address(part)?, panel))
             })
             .collect();
         // Asked before it is written: this runs on every change to the
@@ -712,7 +710,7 @@ fn BoardEditor(
             let part = list.get(part)?;
             let symbol = part.symbol.as_ref()?;
             let found = symbol.pins.get(pin)?;
-            Some(PinRef::new(&part.inst.reference, pin_key(symbol, found)))
+            Some(PinRef::new(&part.inst.reference, symbol.wire_key(found)))
         }) else {
             return;
         };
@@ -2931,7 +2929,7 @@ fn BoardEditor(
                                                             };
                                                             let named = PinRef::new(
                                                                 &part.inst.reference,
-                                                                pin_key(symbol, &found),
+                                                                symbol.wire_key(&found),
                                                             );
                                                             no_connect.with(|marks| marks.contains(&named))
                                                         })
@@ -3382,17 +3380,21 @@ fn BoardEditor(
                                             // the matching counts as soon as a run connects, so
                                             // the panel and the converter agree before the first
                                             // drag rather than after it.
-                                            let start_turn = this
-                                                .with(|p| p.as_ref().and_then(|p| p.inst.prop::<u8>("start")))
-                                                .unwrap_or(128);
+                                            let start_turn = this.with(|p| {
+                                                p.as_ref().map_or(rusty_embed::nets::POT_REST, |p| {
+                                                    rusty_embed::nets::pot_start(&p.inst)
+                                                })
+                                            });
                                             let turned = RwSignal::new(start_turn);
                                             let span = pot_span_for(&reference.get_untracked());
                                             // The converter's full scale, named the same way the
                                             // analog source names it, so one part does not read
                                             // on a different scale from its neighbour.
-                                            let max = this
-                                                .with(|p| p.as_ref().and_then(|p| p.inst.prop::<u16>("max")))
-                                                .unwrap_or(4095);
+                                            let max = this.with(|p| {
+                                                p.as_ref().map_or(rusty_embed::nets::ADC_MAX, |p| {
+                                                    rusty_embed::nets::adc_max(&p.inst)
+                                                })
+                                            });
                                             let angle = move || -135.0 + f64::from(turned.get()) / 255.0 * 270.0;
                                             Some(view! {
                                                 <div class="pointer-events-none absolute flex items-center gap-1.5" style=style>
@@ -3441,7 +3443,11 @@ fn BoardEditor(
                                             // divider on this board, so it does
                                             // not print a voltage it cannot
                                             // stand behind.
-                                            let max = this.with(|p| p.as_ref().and_then(|p| p.inst.prop::<u16>("max"))).unwrap_or(4095);
+                                            let max = this.with(|p| {
+                                                p.as_ref().map_or(rusty_embed::nets::ADC_MAX, |p| {
+                                                    rusty_embed::nets::adc_max(&p.inst)
+                                                })
+                                            });
                                             // Where the sheet says this source
                                             // starts, until somebody moves it.
                                             // The backend sends the same value
@@ -3449,7 +3455,9 @@ fn BoardEditor(
                                             // a run connects, so the slider and
                                             // the converter agree before the
                                             // first drag rather than after it.
-                                            let start = this.with(|p| p.as_ref().and_then(|p| p.inst.prop::<u16>("start"))).unwrap_or(0);
+                                            let start = this.with(|p| {
+                                                p.as_ref().map_or(0, |p| rusty_embed::nets::analog_start(&p.inst))
+                                            });
                                             let held = move || {
                                                 gpio_at("OUT")
                                                     .map(|gpio| state.sim.analog.with(|a| a.get(&gpio).copied().unwrap_or(start)))
@@ -4245,7 +4253,7 @@ fn BoardEditor(
                                         .is_some_and(|((symbol, found), owner)| {
                                             let named = PinRef::new(
                                                 &owner.inst.reference,
-                                                pin_key(symbol, found),
+                                                symbol.wire_key(found),
                                             );
                                             no_connect.with_untracked(|m| m.contains(&named))
                                         })
@@ -4588,11 +4596,7 @@ fn BoardEditor(
                         // recent last. The point of showing it beside the
                         // fields is that "the slider does nothing" and "the
                         // firmware never asked" look identical without it.
-                        let bus_address = u8::from_str_radix(
-                            bus_addr.trim().trim_start_matches("0x"),
-                            16,
-                        )
-                        .ok();
+                        let bus_address = rusty_embed::nets::hex_address(&bus_addr);
                         // The wire's half of the same idea, offered to a part
                         // that has a clock pin.
                         let on_a_wire = part

@@ -231,7 +231,10 @@ pub fn sim_type(state: AppState, text: String) {
 
 /// A button transition on the board view.
 pub fn sim_press(state: AppState, pin: u8, down: bool) {
-    sim_send(state, format!("B{pin}={}", if down { 1 } else { 0 }));
+    sim_send(
+        state,
+        rusty_embed::protocol::button_line(u32::from(pin), down),
+    );
 }
 
 /// A key that **joins two GPIOs** rather than driving one — a matrix's.
@@ -261,7 +264,10 @@ pub fn sim_switch(state: AppState, a: u8, b: u8, closed: bool) {
 
 /// A potentiometer moved: `P<pin>=<0..255>` into the firmware's UART.
 pub fn sim_pot(state: AppState, pin: u8, value: u8) {
-    sim_send(state, format!("P{pin}={value}"));
+    sim_send(
+        state,
+        rusty_embed::protocol::pot_line(u32::from(pin), value),
+    );
 }
 
 /// Inject one sensor sample — the whole sample, in one line.

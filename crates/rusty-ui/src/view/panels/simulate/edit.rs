@@ -13,8 +13,7 @@
 use rusty_embed::{Instance, KIT_REFERENCE, PinRef, Symbol, Wire};
 
 use super::geometry::{
-    EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, pin_key, simplify_route,
-    turned_anchor,
+    EditPart, GroupStart, SNAP, Snapshot, branch_route, part_box, simplify_route, turned_anchor,
 };
 use super::layout;
 
@@ -238,7 +237,7 @@ pub(super) fn duplicate(list: &mut Vec<EditPart>, index: usize) -> Option<usize>
 fn key_of(part: &EditPart, number: &str) -> Option<PinRef> {
     let symbol = part.symbol.as_ref()?;
     let pin = symbol.pin(number)?;
-    Some(PinRef::new(&part.inst.reference, pin_key(symbol, pin)))
+    Some(PinRef::new(&part.inst.reference, symbol.wire_key(pin)))
 }
 
 /// Whether a wire end names this pin, whichever spelling it used.

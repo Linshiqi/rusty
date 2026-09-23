@@ -714,19 +714,6 @@ fn lead_of(part: &EditPart, pin: &Pin) -> Option<((f64, f64), (f64, f64))> {
     Some(spot_on_sheet(part, spot))
 }
 
-/// The spelling a wire uses for a pin: its name when no other pin of the
-/// symbol shares it and it is a name at all, its number otherwise — so a
-/// file reads `D1.K` and `U1.GPIO2`, and `U1.9` only where `GND` repeats.
-pub(super) fn pin_key(symbol: &Symbol, pin: &Pin) -> String {
-    let named = pin.name != "~" && !pin.name.is_empty();
-    let unique = symbol.pins.iter().filter(|p| p.name == pin.name).count() == 1;
-    if named && unique {
-        pin.name.clone()
-    } else {
-        pin.number.clone()
-    }
-}
-
 /// The bus address of a display part that has said which controller is
 /// behind its glass, and nothing for one that has not.
 ///
@@ -736,8 +723,7 @@ pub(super) fn pin_key(symbol: &Symbol, pin: &Pin) -> String {
 /// both are there.
 pub(super) fn display_address(part: &EditPart) -> Option<u8> {
     rusty_embed::screen::Panel::from_id(part.inst.props.get("panel")?)?;
-    let address = part.inst.props.get("addr")?.trim();
-    u8::from_str_radix(address.trim_start_matches("0x"), 16).ok()
+    rusty_embed::nets::hex_address(part.inst.props.get("addr")?)
 }
 
 /// A screen's lit pixels as one path, in the screen's own pixel units.
@@ -1333,11 +1319,17 @@ mod tests {
         }
         assert_eq!(kit.pin("GPIO2").map(|p| p.number.as_str()), Some("4"));
         assert_eq!(
-            pin_key(kit.symbol.as_ref().unwrap(), kit.pin("GPIO2").unwrap()),
+            kit.symbol
+                .as_ref()
+                .unwrap()
+                .wire_key(kit.pin("GPIO2").unwrap()),
             "GPIO2"
         );
         assert_eq!(
-            pin_key(kit.symbol.as_ref().unwrap(), kit.pin("GND").unwrap()),
+            kit.symbol
+                .as_ref()
+                .unwrap()
+                .wire_key(kit.pin("GND").unwrap()),
             "9",
             "GND repeats"
         );
