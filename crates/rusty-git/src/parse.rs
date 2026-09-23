@@ -13,9 +13,20 @@ use crate::model::{
     Status, StatusEntry, Tag,
 };
 
+/// A commit's first seven fields — hash, parents, author, email, author
+/// time, subject, decorations, on `%x1f` — which [`LOG_FORMAT`] and
+/// [`DETAIL_FORMAT`] both begin with. `commit` reads them by position, so
+/// the two must agree on them, and a macro is what `concat!` can build a
+/// constant from.
+macro_rules! commit_fields {
+    () => {
+        "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D"
+    };
+}
+
 /// The format string [`log`] reads. Hash, parents, author, email, author time,
 /// subject, decorations — fields on `\x1f`, records on `\x1e`.
-pub const LOG_FORMAT: &str = "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1e";
+pub const LOG_FORMAT: &str = concat!(commit_fields!(), "%x1e");
 
 /// Commits out of `git log --format=LOG_FORMAT`.
 pub fn log(text: &str) -> Vec<Commit> {
@@ -102,7 +113,7 @@ pub fn decorations(text: &str) -> Vec<RefLabel> {
 }
 
 /// The format [`detail`] reads: the log's fields, then the whole message.
-pub const DETAIL_FORMAT: &str = "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1f%B%x1e";
+pub const DETAIL_FORMAT: &str = concat!(commit_fields!(), "%x1f%B%x1e");
 
 /// One commit opened, out of one `git show --format=DETAIL_FORMAT --raw
 /// --numstat -p`: the record and its message up to the record separator,
@@ -741,6 +752,17 @@ mod working_tree_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `commit` reads the fields by position and `detail` finds the message
+    /// as the eighth, so the strings git is handed are pinned byte for byte.
+    #[test]
+    fn the_log_and_detail_formats_are_the_strings_git_is_handed() {
+        assert_eq!(LOG_FORMAT, "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1e");
+        assert_eq!(
+            DETAIL_FORMAT,
+            "%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1f%B%x1e"
+        );
+    }
 
     /// Two real records, with the separators git emits for the format, and a
     /// subject carrying a tab and a comma to prove neither splits anything.
