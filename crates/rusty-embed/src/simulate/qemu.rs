@@ -34,6 +34,11 @@ pub fn pins_args(port: u16) -> Vec<String> {
 
 /// A port nothing else is on, learned by binding and letting go: where the
 /// emulator listens for the pin channel, the monitor or the gdbstub.
+///
+/// QEMU listens and rusty connects. The gap between releasing this and QEMU
+/// claiming it is a race in theory; in practice the alternative is a fixed
+/// port, and a fixed port is a second simulation failing to start for a
+/// reason the panel cannot explain.
 pub fn free_port() -> Option<u16> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
     let port = listener.local_addr().ok()?.port();

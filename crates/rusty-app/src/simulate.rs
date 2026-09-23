@@ -230,19 +230,6 @@ pub async fn save_sim_trace(
     .await?
 }
 
-/// A port nothing else is on, learned by binding and letting go.
-///
-/// QEMU listens and rusty connects — the arrangement the CI gate boots. The
-/// gap between releasing this and QEMU claiming it is a race in theory; in
-/// practice the alternative is a fixed port, and a fixed port is a second
-/// simulation failing to start for a reason the panel cannot explain.
-fn free_port() -> Option<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
-    let port = listener.local_addr().ok()?.port();
-    drop(listener);
-    Some(port)
-}
-
 /// Stop the emulator's clock, or start it again.
 ///
 /// QEMU's own machine protocol, on the socket the run opened: the monitor
@@ -510,9 +497,7 @@ pub async fn run_simulation(
 
         let is_emulator = step.program.contains("qemu-system");
         if let (true, Some(port)) = (debug && is_emulator, gdb_port) {
-            let extra = debug_args(port);
-            step.display = format!("{} {}", step.display, extra.join(" "));
-            step.args.extend(extra);
+            step.extend_args(debug_args(port));
             note(
                 &on_line,
                 format!(
@@ -530,10 +515,8 @@ pub async fn run_simulation(
         let mut pins_port = None;
         // The monitor, so the run can be stopped and started again. Opened
         // for the emulator only: there is nothing to pause about a build.
-        if is_emulator && let Some(port) = free_port() {
-            let extra = simulate::qmp_args(port);
-            step.display = format!("{} {}", step.display, extra.join(" "));
-            step.args.extend(extra);
+        if is_emulator && let Some(port) = simulate::free_port() {
+            step.extend_args(simulate::qmp_args(port));
             state.set_qmp(Some(port)).await;
         }
         if is_emulator {
@@ -542,10 +525,8 @@ pub async fn run_simulation(
                 simulate::has_gpio_model(Path::new(&program))
             })
             .await?;
-            if has_model && let Some(port) = free_port() {
-                let extra = simulate::pins_args(port);
-                step.display = format!("{} {}", step.display, extra.join(" "));
-                step.args.extend(extra);
+            if has_model && let Some(port) = simulate::free_port() {
+                step.extend_args(simulate::pins_args(port));
                 pins_port = Some(port);
                 // Said in the dock and read by the board, so the panel can stop
                 // claiming these levels came from the firmware. One line per
