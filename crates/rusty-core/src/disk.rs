@@ -168,17 +168,12 @@ pub fn scan(
     let shared = !same_dir(target_dir, &project_root.join("target"));
     let volume = volume_of(if exists { target_dir } else { project_root });
 
-    let mut trees = Vec::new();
+    // Build trees in the order the walk finds them: `<profile>` for the
+    // host, `<triple>/<profile>` for a target.
+    let mut found: Vec<(PathBuf, Option<String>, String)> = Vec::new();
     let mut extras = Vec::new();
     let mut total_bytes = 0;
     let mut total_files = 0;
-    let mut tree_scan = TreeScan {
-        current,
-        options,
-        stale: Vec::new(),
-        warnings,
-        debuginfo_bytes: 0,
-    };
 
     if exists {
         for entry in sorted_entries(target_dir) {
@@ -196,10 +191,7 @@ pub fn scan(
                 continue;
             }
             if is_profile_tree(&path) {
-                let tree = tree_scan.analyze(&path, None, &name);
-                total_bytes += tree.bytes;
-                total_files += tree.files;
-                trees.push(tree);
+                found.push((path, None, name));
                 continue;
             }
             let profiles: Vec<fs::DirEntry> = sorted_entries(&path)
@@ -209,10 +201,7 @@ pub fn scan(
             if !profiles.is_empty() {
                 for profile in profiles {
                     let profile_name = profile.file_name().to_string_lossy().to_string();
-                    let tree = tree_scan.analyze(&profile.path(), Some(&name), &profile_name);
-                    total_bytes += tree.bytes;
-                    total_files += tree.files;
-                    trees.push(tree);
+                    found.push((profile.path(), Some(name.clone()), profile_name));
                 }
                 continue;
             }
@@ -228,6 +217,21 @@ pub fn scan(
                 removable,
             });
         }
+    }
+
+    let mut tree_scan = TreeScan {
+        current,
+        options,
+        stale: Vec::new(),
+        warnings,
+        debuginfo_bytes: 0,
+    };
+    let mut trees = Vec::new();
+    for (path, triple, profile) in &found {
+        let tree = tree_scan.analyze(path, triple.as_deref(), profile);
+        total_bytes += tree.bytes;
+        total_files += tree.files;
+        trees.push(tree);
     }
     extras.sort_by_key(|item| std::cmp::Reverse(item.bytes));
     trees.sort_by_key(|tree| std::cmp::Reverse(tree.bytes));
