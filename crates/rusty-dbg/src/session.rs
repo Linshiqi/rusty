@@ -532,24 +532,33 @@ fn reason_of(reason: &str) -> StopReason {
 
 /// gdb's frame tuple, in this workbench's terms.
 fn frame_of(frame: &Value, root: &Path) -> Option<StackFrame> {
+    let (file, line) = location_of(frame, root);
     Some(StackFrame {
         level: frame
             .field("level")
             .and_then(|l| l.parse().ok())
             .unwrap_or(0),
         function: frame.field("func").unwrap_or("??").to_string(),
-        file: frame
-            .field("fullname")
-            .map(|full| relative(full, root))
-            .or_else(|| frame.field("file").map(normalise)),
-        // gdb counts lines from one; everything this side of the boundary
-        // counts from zero.
-        line: frame
-            .field("line")
-            .and_then(|l| l.parse::<u32>().ok())
-            .map(|line| line.saturating_sub(1)),
+        file,
+        line,
         address: frame.field("addr").unwrap_or_default().to_string(),
     })
+}
+
+/// Where a frame or a breakpoint is: the file project-relative — from
+/// `fullname` when gdb gave one, from `file` in one spelling when it did
+/// not — and the line zero-based. gdb counts lines from one; everything
+/// this side of the boundary counts from zero.
+fn location_of(record: &Value, root: &Path) -> (Option<String>, Option<u32>) {
+    let file = record
+        .field("fullname")
+        .map(|full| relative(full, root))
+        .or_else(|| record.field("file").map(normalise));
+    let line = record
+        .field("line")
+        .and_then(|l| l.parse::<u32>().ok())
+        .map(|line| line.saturating_sub(1));
+    (file, line)
 }
 
 /// `{begin="0x3ff44004",contents="0400000f"}` — hex pairs, little-endian
@@ -585,16 +594,7 @@ fn variable_of(item: &Value) -> Option<Variable> {
 
 fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
     let number = bkpt.field("number").and_then(|n| n.parse().ok());
-    let file = bkpt
-        .field("fullname")
-        .map(|full| relative(full, root))
-        .or_else(|| bkpt.field("file").map(normalise))
-        .unwrap_or_default();
-    let line = bkpt
-        .field("line")
-        .and_then(|l| l.parse::<u32>().ok())
-        .map(|line| line.saturating_sub(1))
-        .unwrap_or(0);
+    let (file, line) = location_of(bkpt, root);
     // `original-location` is `path:line` as the request was written —
     // gdb's own record of what was asked for.
     let requested = bkpt
@@ -605,8 +605,8 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
 
     state.record_breakpoint(Breakpoint {
         number,
-        file,
-        line,
+        file: file.unwrap_or_default(),
+        line: line.unwrap_or(0),
         requested,
         // gdb answering at all means it placed it — a refusal comes back
         // as `^error`, which lands in `state.error`.
