@@ -201,7 +201,11 @@ fn raw_line(raw: &str) -> Option<(String, ChangeKind)> {
 /// `--numstat`: `added\tremoved\tpath`, `-` for binary. Renames arrive as
 /// `old => new` or `dir/{old => new}/file`; the name the file ends up with
 /// is what is kept.
-pub fn numstat(text: &str) -> Vec<(String, Option<u32>, Option<u32>)> {
+///
+/// A whole answer at once is what the tests read; [`diff_parts`] reads the
+/// lines one at a time, among the raw lines.
+#[cfg(test)]
+fn numstat(text: &str) -> Vec<(String, Option<u32>, Option<u32>)> {
     text.lines().filter_map(numstat_line).collect()
 }
 

@@ -316,8 +316,11 @@ pub struct Stale {
     pub remotes: bool,
 }
 
+/// Only the tests ask whether anything at all is stale; the panel asks each
+/// read in turn.
+#[cfg(test)]
 impl Stale {
-    pub fn any(&self) -> bool {
+    fn any(&self) -> bool {
         self.history || self.refs || self.status || self.stashes || self.remotes
     }
 }
