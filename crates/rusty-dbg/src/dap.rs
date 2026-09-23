@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::model::{Breakpoint, DebugState, StackFrame, StopReason, Variable};
-use crate::session::{Error, Events, Result, relative};
+use crate::session::{Error, Events, Result, push_line, relative};
 
 /// How long the adapter has to answer `initialized`. Generous: the first
 /// launch loads the target's symbols, and a Rust test binary with its whole
@@ -236,14 +236,7 @@ impl DapSession {
                     .lines()
                     .map_while(std::result::Result::ok)
                 {
-                    let snapshot = {
-                        let mut state = state.lock().expect("dap state");
-                        state.output.push(line);
-                        state.clone()
-                    };
-                    let gone = sender.send(snapshot).is_err();
-                    state.lock().expect("dap state").output.clear();
-                    if gone {
+                    if !push_line(&state, &sender, line) {
                         return;
                     }
                 }

@@ -347,17 +347,9 @@ fn pump(
             // push per line and cleared once sent, because the reason to
             // run a test under a debugger rather than read its assertion is
             // usually what it prints on the way there.
-            if host && !line.trim().is_empty() && line.trim() != "(gdb)" {
-                let snapshot = {
-                    let mut state = state.lock().expect("state");
-                    state.output.push(line);
-                    state.clone()
-                };
-                let gone = sender.send(snapshot).is_err();
-                state.lock().expect("state").output.clear();
-                if gone {
-                    break;
-                }
+            let printed = host && !line.trim().is_empty() && line.trim() != "(gdb)";
+            if printed && !push_line(&state, &sender, line) {
+                break;
             }
             continue;
         };
@@ -402,6 +394,24 @@ fn pump(
         final_state.error = Some("gdb ended the session without reporting an exit".to_string());
     }
     let _ = sender.send(final_state);
+}
+
+/// One line the program printed, pushed as a state of its own and cleared
+/// once sent: `output` is what arrived since the last state, not an
+/// accumulation. False once nobody is listening.
+pub(crate) fn push_line(
+    state: &Mutex<DebugState>,
+    sender: &Sender<DebugState>,
+    line: String,
+) -> bool {
+    let snapshot = {
+        let mut state = state.lock().expect("state");
+        state.output.push(line);
+        state.clone()
+    };
+    let gone = sender.send(snapshot).is_err();
+    state.lock().expect("state").output.clear();
+    !gone
 }
 
 /// Fold one record into the state. Returns whether anything changed.
@@ -898,6 +908,25 @@ mod tests {
             "hex pairs decode in order; the little-endian assembly is the panel's job, \
              not the transport's",
         );
+    }
+
+    /// A line the program printed goes out as a state of its own and is gone
+    /// from the next one — both debuggers forward the program's console this
+    /// way. Once nobody is listening, the reader is told to stop.
+    #[test]
+    fn a_printed_line_is_sent_once_and_not_kept() {
+        let state = Mutex::new(DebugState::default());
+        let (sender, receiver) = channel();
+        assert!(push_line(&state, &sender, "running 1 test".to_string()));
+        assert_eq!(receiver.recv().unwrap().output, ["running 1 test"]);
+        assert!(
+            state.lock().unwrap().output.is_empty(),
+            "sent, then cleared"
+        );
+
+        drop(receiver);
+        assert!(!push_line(&state, &sender, "test it ... ok".to_string()));
+        assert!(state.lock().unwrap().output.is_empty());
     }
 
     #[test]
