@@ -25,6 +25,7 @@ use super::kicad_sym;
 use super::place::{MM_PX, Mirror, Placement};
 use super::sexpr::{ParseError, Sx, read};
 use crate::model::{Instance, PinRef, Sheet, Symbol, Wire};
+use crate::union_find::UnionFind;
 
 /// The file as it was read, kept whole and opaque.
 ///
@@ -117,7 +118,7 @@ impl Segment {
 #[derive(Default)]
 struct Points {
     of: HashMap<Grid, usize>,
-    parent: Vec<usize>,
+    joins: UnionFind,
 }
 
 impl Points {
@@ -126,25 +127,17 @@ impl Points {
         if let Some(index) = self.of.get(&key) {
             return *index;
         }
-        let index = self.parent.len();
-        self.parent.push(index);
+        let index = self.joins.push();
         self.of.insert(key, index);
         index
     }
 
-    fn find(&mut self, mut node: usize) -> usize {
-        while self.parent[node] != node {
-            self.parent[node] = self.parent[self.parent[node]];
-            node = self.parent[node];
-        }
-        node
+    fn find(&mut self, node: usize) -> usize {
+        self.joins.find(node)
     }
 
     fn union(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.find(a), self.find(b));
-        if a != b {
-            self.parent[a] = b;
-        }
+        self.joins.union(a, b);
     }
 }
 

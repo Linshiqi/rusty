@@ -3,9 +3,10 @@
 
 use std::collections::HashSet;
 
-use super::graph::{Graph, Node, UnionFind};
+use super::graph::{Graph, Node};
 use super::{Behaviour, Rail, Row, behaviour_of, ohms, power_rail};
 use crate::model::{KIT_REFERENCE, PinRef, Sheet};
+use crate::union_find::UnionFind;
 
 /// Where a pin sits between the rails, as a fraction: 0.0 at ground, 1.0 at
 /// the supply.

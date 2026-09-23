@@ -3,9 +3,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::graph::{Drivers, Graph, Node, UnionFind};
+use super::graph::{Drivers, Graph, Node};
 use super::{Behaviour, Row, Warning, button_drives};
 use crate::model::{KIT_REFERENCE, Pin, PinKind, PinRef, Sheet};
+use crate::union_find::UnionFind;
 
 /// The whole reading of one sheet at one moment.
 #[derive(Debug, Clone, Default, PartialEq)]

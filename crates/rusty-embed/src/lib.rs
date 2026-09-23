@@ -109,6 +109,7 @@ pub mod svd;
 pub mod toolchain;
 #[cfg(feature = "backend")]
 pub mod tools;
+mod union_find;
 #[cfg(feature = "backend")]
 pub mod wizard;
 

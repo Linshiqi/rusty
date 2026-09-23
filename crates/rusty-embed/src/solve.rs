@@ -759,14 +759,7 @@ fn limited(wanted: f64, previous: f64, saturation: f64, thermal: f64) -> f64 {
 /// Every node has a conducting path to ground, or the first one that does
 /// not is named.
 fn grounded(circuit: &Circuit, stepping: bool) -> Result<(), Trouble> {
-    let mut parent: Vec<usize> = (0..circuit.nodes).collect();
-    fn find(parent: &mut [usize], mut node: usize) -> usize {
-        while parent[node] != node {
-            parent[node] = parent[parent[node]];
-            node = parent[node];
-        }
-        node
-    }
+    let mut joined = crate::union_find::UnionFind::new(circuit.nodes);
     // A capacitor conducts during a step and not at DC, which is exactly
     // the difference between a node that has a voltage while something is
     // changing and one that never had one.
@@ -779,14 +772,11 @@ fn grounded(circuit: &Circuit, stepping: bool) -> Result<(), Trouble> {
         if a >= circuit.nodes || b >= circuit.nodes {
             continue;
         }
-        let (a, b) = (find(&mut parent, a), find(&mut parent, b));
-        if a != b {
-            parent[a] = b;
-        }
+        joined.union(a, b);
     }
-    let ground = find(&mut parent, 0);
+    let ground = joined.find(0);
     for node in 1..circuit.nodes {
-        if find(&mut parent, node) != ground {
+        if joined.find(node) != ground {
             return Err(Trouble::Floating { node });
         }
     }

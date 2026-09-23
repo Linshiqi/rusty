@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::{Behaviour, Rail, Row, Warning, behaviour_of, kit_pin, power_rail};
 use crate::model::{KIT_REFERENCE, PinRef, Sheet};
+use crate::union_find::UnionFind;
 
 /// Which pins are the same *node* — joined by wires, labels and closed
 /// switches, with nothing resistive in between.
@@ -60,35 +61,6 @@ pub(super) struct Graph<'a> {
     index: HashMap<PinRef, Node>,
     pub(super) behaviours: HashMap<&'a str, Behaviour>,
     pub(super) warnings: Vec<Warning>,
-}
-
-pub(super) struct UnionFind(Vec<usize>);
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        UnionFind((0..n).collect())
-    }
-
-    pub(super) fn find(&mut self, i: usize) -> usize {
-        let mut root = i;
-        while self.0[root] != root {
-            root = self.0[root];
-        }
-        let mut at = i;
-        while self.0[at] != root {
-            let next = self.0[at];
-            self.0[at] = root;
-            at = next;
-        }
-        root
-    }
-
-    fn union(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.find(a), self.find(b));
-        if a != b {
-            self.0[a] = b;
-        }
-    }
 }
 
 impl<'a> Graph<'a> {
@@ -253,7 +225,7 @@ impl<'a> Graph<'a> {
     /// was fixed: a plain two-resistor divider with its midpoint on GPIO4
     /// reported exactly that.
     pub(super) fn solid(&mut self, wired: &UnionFind, pressed: &HashSet<String>) -> UnionFind {
-        let mut uf = UnionFind(wired.0.clone());
+        let mut uf = wired.clone();
         // Labels first: a name is a wire drawn in words, and everything
         // after this treats the joined pins as the one node they are.
         let mut by_name: HashMap<String, Node> = HashMap::new();
@@ -320,7 +292,7 @@ impl<'a> Graph<'a> {
     /// value comes from [`divider_at`](super::divider_at), which walks the resistors instead of
     /// merging them.
     pub(super) fn conducting(&mut self, solid: &UnionFind) -> UnionFind {
-        let mut uf = UnionFind(solid.0.clone());
+        let mut uf = solid.clone();
         for part in &self.sheet.parts {
             let reference = part.reference.as_str();
             if self.behaviours.get(reference) == Some(&Behaviour::Resistor)

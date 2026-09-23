@@ -31,6 +31,7 @@ use std::fmt::Write as _;
 use super::kicad_sch::Schematic;
 use super::place::{MM_PX, Mirror, Placement};
 use crate::model::{Instance, PinRef, Sheet, Symbol};
+use crate::union_find::UnionFind;
 
 /// What a write did, in the terms the user is owed.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -302,36 +303,23 @@ fn retouch(node: &str, now: &Instance) -> Option<String> {
 /// exists to avoid.
 fn nets_of(sheet: &Sheet) -> Vec<Vec<String>> {
     let mut of: HashMap<String, usize> = HashMap::new();
-    let mut parent: Vec<usize> = Vec::new();
-    let node = |of: &mut HashMap<String, usize>, parent: &mut Vec<usize>, pin: &PinRef| {
-        *of.entry(pin.to_string()).or_insert_with(|| {
-            parent.push(parent.len());
-            parent.len() - 1
-        })
+    let mut joins = UnionFind::default();
+    let node = |of: &mut HashMap<String, usize>, joins: &mut UnionFind, pin: &PinRef| {
+        *of.entry(pin.to_string()).or_insert_with(|| joins.push())
     };
-    fn find(parent: &mut [usize], mut n: usize) -> usize {
-        while parent[n] != n {
-            parent[n] = parent[parent[n]];
-            n = parent[n];
-        }
-        n
-    }
     for wire in &sheet.wires {
         if wire.from.part == crate::model::KIT_REFERENCE
             || wire.to.part == crate::model::KIT_REFERENCE
         {
             continue;
         }
-        let a = node(&mut of, &mut parent, &wire.from);
-        let b = node(&mut of, &mut parent, &wire.to);
-        let (a, b) = (find(&mut parent, a), find(&mut parent, b));
-        if a != b {
-            parent[a] = b;
-        }
+        let a = node(&mut of, &mut joins, &wire.from);
+        let b = node(&mut of, &mut joins, &wire.to);
+        joins.union(a, b);
     }
     let mut nets: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for (pin, index) in &of {
-        let root = find(&mut parent, *index);
+        let root = joins.find(*index);
         nets.entry(root).or_default().push(pin.clone());
     }
     let mut out: Vec<Vec<String>> = nets
