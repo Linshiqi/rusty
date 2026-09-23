@@ -125,8 +125,7 @@ fn main() {
     if let Some(boot) = steps.last_mut() {
         let mut extra = rusty_embed::simulate::pins_args(port);
         extra.extend(rusty_embed::simulate::qmp_args(monitor));
-        boot.display = format!("{} {}", boot.display, extra.join(" "));
-        boot.args.extend(extra);
+        boot.extend_args(extra);
     }
 
     rusty_embed::simulate::prepare(&root).expect("prepare the image directory");

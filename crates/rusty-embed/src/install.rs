@@ -115,8 +115,6 @@ fn prepare(plan: &ToolDownload) -> Result<()> {
 /// The dock shows the path that ran, so the line is not mistaken for a
 /// plain `tar`.
 fn extract_step(archive: &Path, tools: &Path, rationale: &str) -> CommandPlan {
-    let archive_text = archive.to_string_lossy().into_owned();
-    let tools_text = tools.to_string_lossy().into_owned();
     let program = if cfg!(windows) {
         r"C:\Windows\System32\tar.exe"
     } else {
@@ -126,19 +124,17 @@ fn extract_step(archive: &Path, tools: &Path, rationale: &str) -> CommandPlan {
     // there, and without it bsdtar's hard links inside the archive fail on
     // the existing file — `Can't create … esp32s3_rev0_rom.bin: File exists`
     // — leaving a working install reported as a failed one.
-    CommandPlan {
-        program: program.to_string(),
-        args: vec![
+    CommandPlan::new(
+        program,
+        vec![
             "-U".to_string(),
             "-xf".to_string(),
-            archive_text.clone(),
+            archive.to_string_lossy().into_owned(),
             "-C".to_string(),
-            tools_text.clone(),
+            tools.to_string_lossy().into_owned(),
         ],
-        display: format!("{program} -U -xf {archive_text} -C {tools_text}"),
-        rationale: rationale.to_string(),
-        warning: None,
-    }
+        rationale,
+    )
 }
 
 /// Two mirrors for one Espressif asset: GitHub, then their own asset host.

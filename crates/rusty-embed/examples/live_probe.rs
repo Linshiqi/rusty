@@ -92,9 +92,7 @@ fn main() {
     let total = plan.steps.len();
     let mut steps = std::mem::take(&mut plan.steps);
     if let Some(boot) = steps.last_mut() {
-        let extra = rusty_embed::simulate::pins_args(port);
-        boot.display = format!("{} {}", boot.display, extra.join(" "));
-        boot.args.extend(extra);
+        boot.extend_args(rusty_embed::simulate::pins_args(port));
     }
     rusty_embed::simulate::prepare(&root).expect("prepare the image directory");
 

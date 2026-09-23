@@ -225,28 +225,22 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
     // Overriding on the command line leaves their manifest alone and shows
     // in the dock exactly what ran.
     let build = if debug {
-        CommandPlan {
-            program: "cargo".to_string(),
-            args: vec![
+        CommandPlan::new(
+            "cargo",
+            vec![
                 "build".to_string(),
                 "--config".to_string(),
                 "profile.dev.opt-level=0".to_string(),
             ],
-            display: "cargo build --config profile.dev.opt-level=0".to_string(),
-            rationale: "unoptimised, so a breakpoint stops on the line you set it on rather \
-                        than the next one the optimiser left standing"
-                .to_string(),
-            warning: None,
-        }
+            "unoptimised, so a breakpoint stops on the line you set it on rather than the \
+             next one the optimiser left standing",
+        )
     } else {
-        CommandPlan {
-            program: "cargo".to_string(),
-            args: vec!["build".to_string(), "--release".to_string()],
-            display: "cargo build --release".to_string(),
-            rationale: "the project's own toolchain builds the exact firmware a device would get"
-                .to_string(),
-            warning: None,
-        }
+        CommandPlan::new(
+            "cargo",
+            vec!["build".to_string(), "--release".to_string()],
+            "the project's own toolchain builds the exact firmware a device would get",
+        )
     };
     let image_args = vec![
         "save-image".to_string(),
@@ -256,14 +250,15 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         elf.clone(),
         image.clone(),
     ];
+    // Shown by the tool's name and run by its path.
     let image_step = CommandPlan {
-        display: format!("espflash {}", image_args.join(" ")),
         program: espflash.to_string_lossy().into_owned(),
-        args: image_args,
-        rationale: "merges bootloader, partition table and app into the bootable flash image \
-                    QEMU maps as the SPI flash"
-            .to_string(),
-        warning: None,
+        ..CommandPlan::new(
+            "espflash",
+            image_args,
+            "merges bootloader, partition table and app into the bootable flash image QEMU \
+             maps as the SPI flash",
+        )
     };
     let mut qemu_args = vec![
         "-M".to_string(),
@@ -286,13 +281,13 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         qemu_args.push(data.to_string_lossy().into_owned());
     }
     let run = CommandPlan {
-        display: format!("{emulator} {}", qemu_args.join(" ")),
         program: qemu.to_string_lossy().into_owned(),
-        args: qemu_args,
-        rationale: "boots the image in Espressif's QEMU; the serial console streams here \
-                    until stopped"
-            .to_string(),
-        warning: None,
+        ..CommandPlan::new(
+            *emulator,
+            qemu_args,
+            "boots the image in Espressif's QEMU; the serial console streams here until \
+             stopped",
+        )
     };
 
     // Debugging is optional on top of the same boot: present when the

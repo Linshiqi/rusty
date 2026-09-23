@@ -352,8 +352,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         .then(free_port)
         .flatten();
     if let Some(port) = pins_port {
-        boot.args.extend(pins_args(port));
-        boot.display = format!("{} {}", boot.display, pins_args(port).join(" "));
+        boot.extend_args(pins_args(port));
     }
     outcome.pins_from_emulator = pins_port.is_some();
     if pins_port.is_none() {

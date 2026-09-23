@@ -151,15 +151,12 @@ impl Recipe {
     /// every line of every step streams into the dock, and only a failure
     /// sends anyone to the manual command.
     fn steps(&self) -> Result<Vec<CommandPlan>> {
-        let step = |program: &str, args: &[&str], rationale: &str| CommandPlan {
-            program: program.to_string(),
-            args: args.iter().map(|arg| (*arg).to_string()).collect(),
-            display: std::iter::once(program)
-                .chain(args.iter().copied())
-                .collect::<Vec<_>>()
-                .join(" "),
-            rationale: rationale.to_string(),
-            warning: None,
+        let step = |program: &str, args: &[&str], rationale: &str| {
+            CommandPlan::new(
+                program,
+                args.iter().map(|arg| (*arg).to_string()).collect(),
+                rationale,
+            )
         };
         match self {
             Recipe::Manual { because, .. } => Err(Error::refused(*because)),

@@ -199,18 +199,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         ),
     };
 
-    let display = std::iter::once(program.to_string())
-        .chain(args.iter().cloned())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    Ok(CommandPlan {
-        program: program.to_string(),
-        args,
-        display,
-        rationale: rationale.to_string(),
-        warning: None,
-    })
+    Ok(CommandPlan::new(program, args, rationale))
 }
 
 /// What this set of choices commits the user to.

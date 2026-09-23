@@ -94,16 +94,12 @@ pub fn c_interop(root: &Path, direction: Direction) -> Result<Scaffold> {
     Ok(match direction {
         Direction::RustCallsC => Scaffold {
             written,
-            command: Some(CommandPlan {
-                program: "cargo".to_string(),
-                args: vec!["add".into(), "cc".into(), "--build".into()],
-                display: "cargo add cc --build".to_string(),
-                rationale: "cc compiles the C sources into the crate; adding it \
-                            through cargo keeps your Cargo.toml formatted the way \
-                            you left it"
-                    .to_string(),
-                warning: None,
-            }),
+            command: Some(CommandPlan::new(
+                "cargo",
+                vec!["add".into(), "cc".into(), "--build".into()],
+                "cc compiles the C sources into the crate; adding it through cargo keeps \
+                 your Cargo.toml formatted the way you left it",
+            )),
             next: "`mod vendor;` in main.rs or lib.rs, then call \
                    `vendor::tick()`. The C is in csrc/ and build.rs compiles \
                    everything there."

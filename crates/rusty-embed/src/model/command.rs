@@ -25,6 +25,39 @@ pub struct CommandPlan {
     pub warning: Option<String>,
 }
 
+impl CommandPlan {
+    /// A step shown exactly as it runs: the program and its arguments
+    /// joined by spaces. A plan that has to quote an argument for a shell,
+    /// or shows a tool by a shorter name than the path it runs, builds its
+    /// own `display`.
+    pub fn new(
+        program: impl Into<String>,
+        args: Vec<String>,
+        rationale: impl Into<String>,
+    ) -> Self {
+        let program = program.into();
+        let display = std::iter::once(program.as_str())
+            .chain(args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        CommandPlan {
+            program,
+            args,
+            display,
+            rationale: rationale.into(),
+            warning: None,
+        }
+    }
+
+    /// More arguments on the end of the step — the pin channel's socket,
+    /// the monitor, the gdbstub — and on the end of the line it shows, so
+    /// the dock never shows a command other than the one that ran.
+    pub fn extend_args(&mut self, extra: Vec<String>) {
+        self.display = format!("{} {}", self.display, extra.join(" "));
+        self.args.extend(extra);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LogStream {

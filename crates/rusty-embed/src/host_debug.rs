@@ -28,13 +28,11 @@ use crate::{Error, Result, model::CommandPlan, process};
 /// cargo would build everything anyway. `--no-run` is the whole point — the
 /// running is gdb's.
 pub fn build_plan() -> CommandPlan {
-    CommandPlan {
-        program: "cargo".to_string(),
-        args: vec!["test".to_string(), "--no-run".to_string()],
-        display: "cargo test --no-run".to_string(),
-        rationale: "Builds the test binaries so gdb can read one".to_string(),
-        warning: None,
-    }
+    CommandPlan::new(
+        "cargo",
+        vec!["test".to_string(), "--no-run".to_string()],
+        "Builds the test binaries so gdb can read one",
+    )
 }
 
 /// The same build again, answered as JSON — instant, since nothing changed —
