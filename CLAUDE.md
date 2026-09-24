@@ -1800,11 +1800,19 @@ three consumers, as with every other analysis.
   adjustable in the section), or an incremental cache beyond a crate's
   newest four — rustc keys the cache on the unit's flags, so every feature
   set, profile override and wrapper leaves one, and this workspace had a
-  hundred per crate and 77 GB of them. Nothing else — the same version
-  built by another toolchain looks identical and is kept. A whole tree's
-  `incremental/` can also be dropped on request; it is a cache and rustc
-  rebuilds it. An empty dep-info file is a compile that never finished and
-  is left to cargo, which rebuilds the unit regardless.
+  hundred per crate and 77 GB of them. **A cache is named after the crate
+  rustc compiled, and a crate is a target, not a package**: an example, an
+  integration test, a bench, a bin named apart from its package and every
+  `build.rs` (`build_script_build`, one name for all of them) each have
+  caches of their own. Judged against package names, the scan called all
+  their live caches "package gone" — 1.2 GB of this checkout's, for a sweep
+  to delete — so the yardstick counts every local target under the name it
+  compiles as, and a name several targets share keeps each one's four.
+  Nothing else — the same version built by another toolchain looks
+  identical and is kept. A whole tree's `incremental/` can also be dropped
+  on request; it is a cache and rustc rebuilds it. An empty dep-info file is
+  a compile that never finished and is left to cargo, which rebuilds the
+  unit regardless.
 - **Nothing is deleted on a guess.** A dep-info the scan cannot read, a
   fingerprint record not in the shape it knows, an empty yardstick because
   `cargo metadata` failed: each marks nothing stale and lands in the
@@ -2298,6 +2306,10 @@ translation fails a test rather than reaching a screen.
   that way (a palette footer, a waves header, a flight blocker). A literal it
   flags goes into the catalogue; the short allowlist in the test is for text
   that is meant to stay English, which today is the trunk-only dev banner.
+  **It skips a line that calls `t!`, asked of the macro and not of the
+  characters**: `format!(` ends in `t!(` as well, and while the skip was a
+  substring every sentence built with `format!` went unread — ten of them,
+  found the day the rule was mended.
 - **Group headings and templated titles are keys too.** The palette's
   headings were `&'static str` literals beside translated rows, and "— needs
   a project" was a `format!` suffix; `panel.needs-project` and
@@ -3644,6 +3656,18 @@ usty`) holds `location.toml`
   therefore travels *with* the launch request rather than being placed on
   attach the way the gdb path does it, and the panel's first resume is a
   no-op rather than an error about a program that is already going.
+- **The two debuggers end, print and select by one set of rules.** A
+  session that ends without an `exited` — gdb gone, or an adapter's
+  `terminated` — has not exited 0, and says so in `error`; the DAP path
+  invented the 0 long after gdb's had stopped. A printed line travels in
+  exactly one state (`session::publish` takes `output` with the state it
+  sends, under the state's lock): an adapter's `output` event used to stay
+  behind and go out again with every later state. The selected frame moves
+  once the frame has been asked about, and every stop puts it back on the
+  innermost (`DebugState::halted`), since that is whose variables a stop
+  asks for. And a session lets go of its process: `stop` kills *and waits*,
+  once, and `Drop` calls it — a failed start and a stream that ended both
+  used to leave the adapter running or gdb a zombie.
 - **The build follows the chip; the tests follow the user.** `run_command`
   runs in `firmware_root`, which for the standard layout is the *excluded*
   bare-metal crate — and `cargo test` there fails with "can't find crate for
@@ -4027,6 +4051,13 @@ to one it does.
   wire across the whole sheet. Both live in `nets`, so the rules, the probe
   and the backend's button polarity all read them the same way. A label with
   no name joins nothing: an empty tag is one somebody has not written on.
+  **A power symbol from a KiCad file is a rail too** — anything whose
+  reference is KiCad's `#PWR`, a ground when its name is one of KiCad's
+  (`GND`, `GNDA`, `GNDD`, `GNDS`, `GNDREF`, `GNDPWR`, `Earth`; `is_ground`)
+  and a supply otherwise. They were parts nobody knew, so a lamp drawn to an
+  imported `power:GND` stayed dark. `PWR_FLAG` is `#FLG` and stays a part:
+  it tells KiCad's checker a net is driven, and read as a supply it would
+  short the ground it is nearly always drawn on.
   **This paragraph was true of every reader but one.** `button_drives` looked
   for the rail among the devkit's own rows only, so a button wired to a
   `rusty:GND` drove nothing: the sheet said "pressing it changes nothing",
