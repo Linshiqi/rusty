@@ -74,6 +74,15 @@ const PERIPHERAL_MARKERS: [&[u8]; 6] = [
 /// than which build it is.
 const ESP32_MODEL_MARKER: &[u8] = b"misc.esp32.intmatrix.status";
 
+/// Tables played against the virtual clock: a signal on a pin or on a
+/// sensor's register block, sample-exact in the firmware's own time
+/// (`docs/signals.md`). A capability of its own rather than one of
+/// `PERIPHERAL_MARKERS`: a build without it runs every firmware exactly as
+/// before, and only a sheet with a signal on it needs the upgrade — counted
+/// there, it would call every earlier ESP32 build out of date under a limit
+/// that talks about interrupts.
+const WAVE_MODEL_MARKER: &[u8] = b"[rusty:wave@";
+
 /// The markers this binary has to carry: every machine's, and the ESP32's
 /// when it is the machine that runs one.
 pub(super) fn markers_of(qemu: &Path) -> impl Iterator<Item = &'static [u8]> {
@@ -95,9 +104,15 @@ pub fn has_peripherals(qemu: &Path) -> bool {
 /// number one copy is ranked against another by.
 pub(super) fn models_carried(qemu: &Path) -> usize {
     usize::from(has_gpio_model(qemu))
+        + usize::from(has_wave_model(qemu))
         + markers_of(qemu)
             .filter(|marker| carries(qemu, marker))
             .count()
+}
+
+/// Does this emulator play a signal against the firmware's own clock?
+pub fn has_wave_model(qemu: &Path) -> bool {
+    carries(qemu, WAVE_MODEL_MARKER)
 }
 
 /// Does this emulator model GPIO, or is it the stock one whose write handler

@@ -123,6 +123,13 @@ pub struct Emulator {
     /// its own `read`, so the panel offers the upgrade for that too.
     #[serde(default)]
     pub peripherals: bool,
+    /// Whether it plays a signal against the firmware's own clock — a table
+    /// on a pin or on a sensor's registers, sample-exact in the firmware's
+    /// time. Without it a signal cannot be played at all, and the panel says
+    /// so beside the upgrade rather than sending values at the host's pace
+    /// under a claim they are exact.
+    #[serde(default)]
+    pub waves: bool,
 }
 
 /// Serde's skip test for the common case: most parts are never turned.

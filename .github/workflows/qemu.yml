@@ -499,7 +499,7 @@ jobs:
             bin="qemu-system-$arch"
             if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
             markers=('[rusty:gpio@' '[rusty:adc@' '[rusty:i2c@' '[rusty:spi@'
-                     '[rusty:pwm@' '[rusty:rmt@' '[rusty:sw@')
+                     '[rusty:pwm@' '[rusty:rmt@' '[rusty:sw@' '[rusty:wave@')
             if [ "$arch" = xtensa ]; then
               markers+=('misc.esp32.intmatrix.status')
             fi
@@ -1084,6 +1084,230 @@ jobs:
                     f"{len(theirs)} samples and agrees on every one")
           finally:
               qemu.kill()
+
+      - name: Build the signal probe and make its image
+        working-directory: qemu/wave-probe
+        run: |
+          cargo build --release
+          mkdir -p target/sim
+          espflash save-image --chip esp32c3 --merge \
+            target/riscv32imc-unknown-none-elf/release/wave-probe \
+            target/sim/flash.bin
+
+      # A value on a pin is not a signal: the host sends one about once a
+      # millisecond, never exactly on time, and a 50 Hz tone arriving that
+      # way is a third of a radian out — a filter judged against it is judged
+      # against the host's scheduler. So the host renders a table and the
+      # emulator plays it against its virtual clock, the one the firmware's
+      # systimer keeps. This proves the three halves of that: every
+      # conversion the emulator reports is the table's value at its instant;
+      # the firmware read what was reported; and the tone has the table's
+      # frequency by the firmware's own clock. And the sensor half: a burst
+      # read of a register block with a table playing is one sample whole,
+      # its seven words carrying the sample's number so a torn read shows.
+      - name: A signal plays against the firmware's own clock
+        shell: python
+        run: |
+          import math
+          import os
+          import re
+          import socket
+          import subprocess
+          import sys
+          import threading
+          import time
+
+          QEMU = "tools/qemu/bin/qemu-system-riscv32"
+          ROMS = None
+          IMAGE = "qemu/wave-probe/target/sim/flash.bin"
+          SERIAL = "wave-serial.log"
+          PORT = 5561
+
+          # One second of a 50 Hz tone at 20 kHz: fifty whole periods, so the table
+          # loops without a seam, around mid-scale with room either side.
+          RATE, LEN, TONE = 20000, 20000, 50.0
+          TABLE = [round(2048 + 1500 * math.sin(2 * math.pi * TONE * n / RATE)) for n in range(LEN)]
+          # The sensor's block: fourteen bytes a sample, its seven words each the
+          # sample's own number, so a torn read shows as words that disagree.
+          S_RATE, S_LEN, WIDTH = 1000, 4000, 14
+
+
+          def block(k):
+              word = (k & 0xFFFF).to_bytes(2, "big")
+              return word * 7
+
+
+          def lines():
+              out = [f"W3={RATE},{LEN}"]
+              for at in range(0, LEN, 96):
+                  out.append(f"W3@{at}=" + "".join(f"{c:04x}" for c in TABLE[at:at + 96]))
+              out.append("W3=on")
+              out.append(f"i2c 68~3b:{WIDTH}={S_RATE},{S_LEN}")
+              data = b"".join(block(k) for k in range(S_LEN))
+              for at in range(0, len(data), 224):
+                  out.append(f"i2c 68~@{at}=" + data[at:at + 224].hex())
+              out.append("i2c 68~=on")
+              return out
+
+
+          def expected(t, start):
+              """What a conversion at guest time `t` reads: the device's own arithmetic."""
+              elapsed = max(0, t - start)
+              position = elapsed * RATE
+              index, millionths = (position // 1_000_000) % LEN, position % 1_000_000
+              a, b = TABLE[index], TABLE[(index + 1) % LEN]
+              return min((a * (1_000_000 - millionths) + b * millionths + 500_000) // 1_000_000, 0xFFF)
+
+
+          def read_serial():
+              try:
+                  return open(SERIAL, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return ""
+
+
+          heard = []
+
+
+          def fail(why):
+              serial = read_serial()
+              said = [l for l in serial.splitlines() if l.startswith("[wave]")]
+              print(f"::error::{why}")
+              for line in said[:4] + said[-4:]:
+                  print(f"::error::probe: {line[:300]}")
+              for line in [l for l in heard if "wave" in l][:6]:
+                  print(f"::error::channel: {line[:300]}")
+              sys.exit(1)
+
+
+          def main():
+              # A log from an earlier run already says "done": QEMU's file backend
+              # does not start the file over.
+              if os.path.exists(SERIAL):
+                  os.remove(SERIAL)
+              command = [QEMU, "-M", "esp32c3", "-nographic",
+                         "-drive", f"file={IMAGE},if=mtd,format=raw",
+                         "-serial", f"file:{SERIAL}",
+                         "-chardev", f"socket,id=pins,host=127.0.0.1,port={PORT},server=on,wait=on",
+                         "-global", "driver=esp32.gpio,property=pins,value=pins"]
+              if ROMS:
+                  command += ["-L", ROMS]
+              qemu = subprocess.Popen(command, stdout=open("wave-qemu.out", "w"), stderr=subprocess.STDOUT)
+              try:
+                  link = None
+                  for _ in range(500):
+                      try:
+                          link = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                          break
+                      except OSError:
+                          time.sleep(0.02)
+                  if link is None:
+                      fail("the emulator never opened the pin channel")
+
+                  def listen():
+                      buffered = b""
+                      while True:
+                          try:
+                              chunk = link.recv(65536)
+                          except OSError:
+                              return
+                          if not chunk:
+                              return
+                          buffered += chunk
+                          while b"\n" in buffered:
+                              one, buffered = buffered.split(b"\n", 1)
+                              heard.append(one.decode("utf-8", "replace").strip())
+
+                  threading.Thread(target=listen, daemon=True).start()
+                  link.sendall(("\n".join(lines()) + "\n").encode())
+
+                  deadline = time.time() + 90
+                  while time.time() < deadline and "[wave] done" not in read_serial():
+                      time.sleep(0.25)
+                  if "[wave] done" not in read_serial():
+                      fail("the probe never finished its readings")
+                  time.sleep(0.5)
+              finally:
+                  qemu.kill()
+
+              # The tables were taken and played, with the instant sample 0 played at.
+              starts = {}
+              for line in heard:
+                  m = re.match(r"\[rusty:wave@(\d+)\] (.+?) on (\d+)$", line)
+                  if m:
+                      starts[m.group(2)] = int(m.group(3))
+                  if re.match(r"\[rusty:wave@\d+\] .* (refused|\?)", line):
+                      fail(f"the emulator refused a table: {line}")
+              if "3" not in starts or "i2c 68" not in starts:
+                  fail(f"the emulator never said both tables were playing: {starts}")
+              start = starts["3"]
+
+              # Every conversion the emulator reports is the table's value at that
+              # instant — to the count, because it is the same arithmetic.
+              reports = []
+              for line in heard:
+                  m = re.match(r"\[rusty:adc@(\d+)\] 3=(\d+)$", line)
+                  if m:
+                      reports.append((int(m.group(1)), int(m.group(2))))
+              wrong = [(t, v, expected(t, start)) for t, v in reports if v != expected(t, start)]
+              if len(reports) < 1500:
+                  fail(f"only {len(reports)} conversions of GPIO3 were reported")
+              if wrong:
+                  fail(f"{len(wrong)} of {len(reports)} conversions were not the table's value "
+                       f"at their instant, e.g. (t, read, table) {wrong[:3]}")
+
+              # The firmware read what was reported, in order. A conversion is
+              # reported when its value changed, so a reading equal to the last one
+              # reported is a conversion nobody needed to hear about — the probe's
+              # loop catching up after a slow print takes two in a row.
+              readings = [tuple(int(x) for x in m) for m in
+                          re.findall(r"\[wave\] (\d+) (\d+) (-?\d+)", read_serial())]
+              if len(readings) < 1900:
+                  fail(f"the probe printed only {len(readings)} readings")
+              values = iter(v for _, v in reports)
+              last = None
+              for at, value, _ in readings:
+                  if value == last:
+                      continue
+                  for reported in values:
+                      if reported == value:
+                          last = value
+                          break
+                  else:
+                      fail(f"the firmware read {value} at {at} µs, which the emulator never "
+                           f"reported converting after {last}")
+
+              # The tone has the table's frequency by the firmware's own clock.
+              crossings = []
+              for (t0, v0, _), (t1, v1, _) in zip(readings, readings[1:]):
+                  if (v0 - 2048) < 0 <= (v1 - 2048):
+                      crossings.append(t0 + (t1 - t0) * (2048 - v0) / (v1 - v0))
+              if len(crossings) < 50:
+                  fail(f"only {len(crossings)} rising crossings of mid-scale in the readings")
+              period = (crossings[-1] - crossings[0]) / (len(crossings) - 1)
+              frequency = 1e6 / period
+              if abs(frequency - TONE) > TONE * 0.005:
+                  fail(f"the firmware timed the tone at {frequency:.3f} Hz, not {TONE} Hz")
+
+              # The sensor: never torn, never missing, and its sample moving at the
+              # table's rate by the firmware's clock.
+              serial = read_serial()
+              if "[wave] torn" in serial or "done torn=0" not in serial:
+                  fail("a burst read took words from two samples")
+              if any(s < 0 for _, _, s in readings):
+                  fail("a burst read of the sensor failed")
+              (t0, _, s0), (t1, _, s1) = readings[0], readings[-1]
+              drift = (s1 - s0) - (t1 - t0) * S_RATE / 1e6
+              if abs(drift) > 2:
+                  fail(f"the sensor's sample moved {s1 - s0} over {t1 - t0} µs, {drift:+.1f} off its rate")
+
+              print(f"{len(reports)} conversions each the table's value at its instant; "
+                    f"the firmware timed the tone at {frequency:.3f} Hz; "
+                    f"{len(readings)} sensor reads, none torn, sample {s0}->{s1} over {(t1 - t0) / 1e6:.3f} s")
+
+
+          if __name__ == "__main__":
+              main()
 
       - name: Build the bus probe and make its image
         working-directory: qemu/i2c-probe

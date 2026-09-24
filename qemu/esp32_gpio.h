@@ -113,6 +113,16 @@ REG32(GPIO_STATUS1_W1TC, 0x0058)
  * fewer simply never touch the ones above their count. */
 #define ESP32_GPIO_PINS 40
 
+/* The bounds on a table the host asks the device to play (see "Tables" in
+ * esp32_gpio.c). Eight megabytes is minutes of a sensor's register block or
+ * seconds of a pin at tens of kilohertz; a rate past ten megahertz is past
+ * anything a firmware's converter samples at; and no register block a
+ * sensor is read in one burst is wider than sixty-four bytes. A table
+ * outside them is refused and the refusal is said. */
+#define ESP32_WAVE_MAX_BYTES (8u << 20)
+#define ESP32_WAVE_MAX_RATE 10000000u
+#define ESP32_WAVE_MAX_WIDTH 64u
+
 /*
  * The SAR ADC, which this device also answers for.
  *
@@ -723,6 +733,20 @@ typedef struct Esp32RmtChannel {
  * moves it, and a read takes bytes from there onwards. A display ignores
  * the pointer and cares only that its writes were seen, which the same
  * model gives for free. */
+/* A table of samples the host rendered, played against the virtual clock:
+ * `len` samples of `width` bytes at `rate` per second, sample 0 at `start`
+ * microseconds of guest time, looping. For a pin a sample is the converter's
+ * counts, two bytes big-endian; for an I2C device it is the register block
+ * from `reg`, as the device answers a read. No `data` means no table. */
+typedef struct Esp32Wave {
+    uint8_t *data;
+    uint32_t rate;
+    uint32_t len;
+    uint32_t width;
+    int64_t start;
+    uint8_t reg;
+} Esp32Wave;
+
 typedef struct Esp32I2cDevice {
     bool present;
     /* Whether the host has given it anything to be read from: a sensor has
@@ -850,6 +874,11 @@ typedef struct Esp32GpioState {
      * arithmetic disagreed with. */
     MemoryRegion adc_iomem;
     uint16_t analog[ESP32_GPIO_PINS];
+    /* What a pin plays in place of `analog` while a table is on, and the
+     * table being filled to replace it — swapped in whole by `on`, so a
+     * conversion never reads a table half written. */
+    Esp32Wave adc_wave[ESP32_GPIO_PINS];
+    Esp32Wave adc_wave_next[ESP32_GPIO_PINS];
     uint32_t adc_reg[ESP32_SARADC_WORDS];
     /* The last conversion each unit finished, and which pin it read — kept
      * apart from the shadow so a read of the data register cannot be
@@ -872,6 +901,12 @@ typedef struct Esp32GpioState {
     unsigned i2c_op_end;
     uint32_t i2c_reg[ESP32_I2C_WORDS];
     Esp32I2cDevice i2c_devices[ESP32_I2C_DEVICES];
+    /* The same for a device's register block, by the device's slot: the
+     * table playing, and the one being filled. Kept apart from the devices
+     * themselves, which a reset clears with one `memset` — a pointer inside
+     * them would be lost to it rather than freed. */
+    Esp32Wave i2c_wave[ESP32_I2C_DEVICES];
+    Esp32Wave i2c_wave_next[ESP32_I2C_DEVICES];
     uint8_t i2c_tx[ESP32_I2C_FIFO];
     uint8_t i2c_rx[ESP32_I2C_FIFO];
     /* Written by the guest and taken by the engine; produced by the engine

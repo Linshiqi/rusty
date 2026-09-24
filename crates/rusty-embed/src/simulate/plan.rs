@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::board_file;
 use super::machine::{MACHINES, Machine, find_gdb, qemu_data_dir};
-use super::models::{has_gpio_model, has_peripherals};
+use super::models::{has_gpio_model, has_peripherals, has_wave_model};
 use super::sheet::resolve_symbols;
 use crate::install::GDB_RELEASE;
 use crate::model::{CommandPlan, EmbeddedProject, Emulator, SimDebug, SimPlan, SimTool};
@@ -73,6 +73,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         path: qemu.display().to_string(),
         gpio_model: has_gpio_model(&qemu),
         peripherals: has_peripherals(&qemu),
+        waves: has_wave_model(&qemu),
     });
     // A refusal past this point still carries what it found missing: the
     // panel offers the installs alongside the reason rather than after it.

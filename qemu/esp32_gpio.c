@@ -459,6 +459,325 @@ static unsigned esp32_hex_bytes(const char *text, uint8_t *out, unsigned max)
 }
 
 /*
+ * Tables: a signal the host rendered, played against the virtual clock.
+ *
+ * `A<pin>=<counts>` puts a value on a pin, and the value stays until the
+ * host sends another — which it does at its own pace, about once a
+ * millisecond and never exactly on time. That is fine for a knob and no use
+ * for a signal: a 50 Hz tone arriving a millisecond late, give or take, is a
+ * third of a radian out, and a filter judged against it is judged against
+ * the host's scheduler. So the host renders the signal into a table and the
+ * device plays it against QEMU_CLOCK_VIRTUAL — the clock the firmware's
+ * timers and systimer keep — and a conversion reads the table wherever that
+ * clock is.
+ *
+ *   W<pin>=<rate>,<len>                    begin a pin's table
+ *   W<pin>@<offset>=<hex>                  fill it, four hex digits a sample
+ *   W<pin>=on | W<pin>=off                 play it, or stop
+ *   i2c <addr>~<reg>:<width>=<rate>,<len>  begin a device's register block
+ *   i2c <addr>~@<offset>=<hex>             fill it, two hex digits a byte
+ *   i2c <addr>~=on | i2c <addr>~=off       play it, or stop
+ *
+ * A table is filled beside the one playing and swapped in whole by `on`, so
+ * nothing ever reads one half written; and a table already playing keeps its
+ * phase through the swap, so a signal given a new amplitude carries on in
+ * time rather than starting over. A pin's samples are interpolated between,
+ * as a converter reading a moving voltage would; a register block is not,
+ * because a sensor's registers hold one sample until the next one lands. A
+ * read transaction that addresses a playing device latches its block first,
+ * so a burst read is one sample whole — never x from one sample and y from
+ * the next.
+ *
+ * Every `on` and `off` is said with the guest time sample 0 played at —
+ * `[rusty:wave@<us>] <pin> on <start>` — which is how the host lines the
+ * signal it rendered up with the conversions reported as `[rusty:adc@<us>]`.
+ * That comparison is the whole point, so a table the device will not take
+ * is said too, rather than left to look like a signal nobody played.
+ */
+static void esp32_wave_free(Esp32Wave *wave)
+{
+    g_free(wave->data);
+    memset(wave, 0, sizeof(*wave));
+}
+
+/* Storage for a table, zeroed; false for one past the bounds. */
+static bool esp32_wave_begin(Esp32Wave *next, uint32_t rate, uint32_t len,
+                             uint32_t width)
+{
+    uint64_t bytes = (uint64_t)len * width;
+
+    esp32_wave_free(next);
+    if (rate == 0 || rate > ESP32_WAVE_MAX_RATE || len == 0 || width == 0
+        || width > ESP32_WAVE_MAX_WIDTH || bytes > ESP32_WAVE_MAX_BYTES) {
+        return false;
+    }
+    next->data = g_malloc0(bytes);
+    next->rate = rate;
+    next->len = len;
+    next->width = width;
+    return true;
+}
+
+/* Hex text into a table being filled, from a byte offset. What runs past
+ * its end is dropped: the host sized the table, and writing beyond it is a
+ * bug on that side rather than more signal. */
+static void esp32_wave_fill(Esp32Wave *next, uint64_t offset, const char *text)
+{
+    uint64_t size = (uint64_t)next->len * next->width;
+
+    if (!next->data) {
+        return;
+    }
+    while (offset < size) {
+        int high, low;
+
+        if (text[0] == '\0' || (high = esp32_hex_digit(text[0])) < 0) {
+            break;
+        }
+        if (text[1] == '\0' || (low = esp32_hex_digit(text[1])) < 0) {
+            break;
+        }
+        next->data[offset++] = (uint8_t)((high << 4) | low);
+        text += 2;
+    }
+}
+
+/*
+ * Play what was filled: `next` becomes the table, and the answer is the
+ * guest time its sample 0 plays at. A table already playing keeps its
+ * start. -1 when nothing was filled and nothing plays.
+ */
+static int64_t esp32_wave_play(Esp32Wave *wave, Esp32Wave *next)
+{
+    int64_t start;
+
+    if (!next->data) {
+        return wave->data ? wave->start : -1;
+    }
+    start = wave->data ? wave->start : qemu_clock_get_us(QEMU_CLOCK_VIRTUAL);
+    esp32_wave_free(wave);
+    *wave = *next;
+    memset(next, 0, sizeof(*next));
+    wave->start = start;
+    return start;
+}
+
+/*
+ * Where guest time `now` is in a table: the sample, and how far past it
+ * towards the next, in millionths. Integer arithmetic throughout, so hours
+ * of playing do not drift a sample against the clock the firmware keeps.
+ */
+static uint32_t esp32_wave_at(const Esp32Wave *wave, int64_t now,
+                              uint32_t *millionths)
+{
+    uint64_t elapsed = now > wave->start ? (uint64_t)(now - wave->start) : 0;
+    uint64_t position = elapsed * wave->rate;
+
+    *millionths = (uint32_t)(position % 1000000);
+    return (uint32_t)((position / 1000000) % wave->len);
+}
+
+/* A pin's sample: the converter's counts, two bytes big-endian. */
+static unsigned esp32_wave_counts_at(const Esp32Wave *wave, uint32_t index)
+{
+    const uint8_t *at = wave->data + (uint64_t)index * wave->width;
+
+    return ((unsigned)at[0] << 8) | at[1];
+}
+
+/*
+ * What a conversion of `pin` at guest time `now` reads: its table there,
+ * interpolated between the samples either side — or, with nothing playing,
+ * the value the host last put on it. `now` is the caller's so that the
+ * conversion and its report name one instant: the host checks the one
+ * against the other, and two readings of the clock a microsecond apart
+ * would make an exact model look off by a count.
+ */
+static unsigned esp32_adc_counts(Esp32GpioState *s, int pin, int64_t now)
+{
+    const Esp32Wave *wave = &s->adc_wave[pin];
+    uint32_t millionths, index;
+    uint64_t a, b;
+
+    if (!wave->data) {
+        return s->analog[pin];
+    }
+    index = esp32_wave_at(wave, now, &millionths);
+    a = esp32_wave_counts_at(wave, index);
+    b = esp32_wave_counts_at(wave, (index + 1) % wave->len);
+    return MIN((unsigned)((a * (1000000 - millionths) + b * millionths + 500000)
+                          / 1000000),
+               ESP32_SARADC_FULL_SCALE);
+}
+
+/* A device's register block, set to its table's sample where the virtual
+ * clock is — called as a transaction addresses it, so everything the
+ * transaction reads is that one sample. */
+static void esp32_i2c_wave_latch(Esp32GpioState *s, Esp32I2cDevice *device)
+{
+    const Esp32Wave *wave = &s->i2c_wave[device - s->i2c_devices];
+    const uint8_t *sample;
+    uint32_t millionths;
+
+    if (!wave->data) {
+        return;
+    }
+    sample = wave->data
+             + (uint64_t)esp32_wave_at(wave, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL),
+                                       &millionths)
+             * wave->width;
+    for (uint32_t i = 0; i < wave->width; i++) {
+        device->regs[(uint8_t)(wave->reg + i)] = sample[i];
+    }
+}
+
+/* A table playing, stopping or refused, on the channel the pins travel. */
+static void esp32_gpio_say_wave(Esp32GpioState *s, const char *what)
+{
+    char line[96];
+    int at;
+
+    if (!qemu_chr_fe_backend_connected(&s->pins)) {
+        return;
+    }
+    at = snprintf(line, sizeof(line), "[rusty:wave@%" PRId64 "] %s\n",
+                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), what);
+    qemu_chr_fe_write_all(&s->pins, (const uint8_t *)line, at);
+}
+
+/* `on` or `off` for one table and the one being filled beside it, said
+ * as `<name> on <start>`, `<name> off`, or `<name> ?empty` for an `on`
+ * with nothing filled to play. */
+static void esp32_wave_switch(Esp32GpioState *s, Esp32Wave *wave,
+                              Esp32Wave *next, const char *name,
+                              const char *verb)
+{
+    char said[64];
+
+    if (strcmp(verb, "on") == 0) {
+        int64_t start = esp32_wave_play(wave, next);
+
+        if (start < 0) {
+            snprintf(said, sizeof(said), "%s ?empty", name);
+        } else {
+            snprintf(said, sizeof(said), "%s on %" PRId64, name, start);
+        }
+    } else if (strcmp(verb, "off") == 0) {
+        esp32_wave_free(wave);
+        esp32_wave_free(next);
+        snprintf(said, sizeof(said), "%s off", name);
+    } else {
+        snprintf(said, sizeof(said), "%s ?%s", name, verb);
+    }
+    esp32_gpio_say_wave(s, said);
+}
+
+/* `W…`: a pin's table. See "Tables" above. */
+static void esp32_gpio_host_wave(Esp32GpioState *s)
+{
+    unsigned pin, rate, len, offset;
+    char payload[ESP32_GPIO_HOST_LINE];
+    char name[16];
+
+    if (sscanf(s->host_line, "W%u@%u=%500s", &pin, &offset, payload) == 3
+        && pin < ESP32_GPIO_PINS) {
+        esp32_wave_fill(&s->adc_wave_next[pin], (uint64_t)offset * 2, payload);
+        return;
+    }
+    if (sscanf(s->host_line, "W%u=%u,%u", &pin, &rate, &len) == 3
+        && pin < ESP32_GPIO_PINS) {
+        if (!esp32_wave_begin(&s->adc_wave_next[pin], rate, len, 2)) {
+            char said[64];
+
+            snprintf(said, sizeof(said), "%u refused %u,%u", pin, rate, len);
+            esp32_gpio_say_wave(s, said);
+        }
+        return;
+    }
+    if (sscanf(s->host_line, "W%u=%3s", &pin, payload) == 2 && pin < ESP32_GPIO_PINS) {
+        snprintf(name, sizeof(name), "%u", pin);
+        esp32_wave_switch(s, &s->adc_wave[pin], &s->adc_wave_next[pin], name,
+                          payload);
+    }
+}
+
+/* `i2c <addr>~…`: a device's register-block table. False when the line is
+ * not one, for the bus parser to go on with. */
+static bool esp32_gpio_host_i2c_wave(Esp32GpioState *s)
+{
+    unsigned address, reg, width, rate, len, offset;
+    char payload[ESP32_GPIO_HOST_LINE];
+    Esp32I2cDevice *device;
+    char name[16];
+    int slot;
+
+    if (sscanf(s->host_line, "i2c %x~@%u=%500s", &address, &offset, payload) == 3
+        && address <= 0x7f) {
+        device = esp32_i2c_device(s, (int)address);
+        if (device) {
+            esp32_wave_fill(&s->i2c_wave_next[device - s->i2c_devices], offset,
+                            payload);
+        }
+        return true;
+    }
+    if (sscanf(s->host_line, "i2c %x~%x:%u=%u,%u", &address, &reg, &width, &rate,
+               &len) == 5) {
+        if (address > 0x7f || reg > 0xff) {
+            return true;
+        }
+        device = esp32_i2c_declare(s, (int)address);
+        if (!device) {
+            esp32_gpio_say_i2c(s, (int)address, "full", NULL, 0);
+            return true;
+        }
+        /* A device with a table is a sensor: it answers reads, so what it
+         * is written is worth repeating on the channel. */
+        device->has_regs = true;
+        slot = (int)(device - s->i2c_devices);
+        if (esp32_wave_begin(&s->i2c_wave_next[slot], rate, len, width)) {
+            s->i2c_wave_next[slot].reg = (uint8_t)reg;
+        } else {
+            char said[64];
+
+            snprintf(said, sizeof(said), "i2c %02x refused %u:%u,%u", address,
+                     width, rate, len);
+            esp32_gpio_say_wave(s, said);
+        }
+        return true;
+    }
+    if (sscanf(s->host_line, "i2c %x~=%3s", &address, payload) == 2
+        && address <= 0x7f) {
+        device = esp32_i2c_device(s, (int)address);
+        snprintf(name, sizeof(name), "i2c %02x", address);
+        if (device) {
+            slot = (int)(device - s->i2c_devices);
+            esp32_wave_switch(s, &s->i2c_wave[slot], &s->i2c_wave_next[slot], name,
+                              payload);
+        } else {
+            char said[64];
+
+            snprintf(said, sizeof(said), "%s ?absent", name);
+            esp32_gpio_say_wave(s, said);
+        }
+        return true;
+    }
+    return false;
+}
+
+/* Every table, gone: a reset, or a device taken off the bus. */
+static void esp32_waves_clear(Esp32GpioState *s)
+{
+    for (unsigned pin = 0; pin < ESP32_GPIO_PINS; pin++) {
+        esp32_wave_free(&s->adc_wave[pin]);
+        esp32_wave_free(&s->adc_wave_next[pin]);
+    }
+    for (unsigned slot = 0; slot < ESP32_I2C_DEVICES; slot++) {
+        esp32_wave_free(&s->i2c_wave[slot]);
+        esp32_wave_free(&s->i2c_wave_next[slot]);
+    }
+}
+
+/*
  * What the model did with a switch, on the channel the pins travel.
  *
  * `[rusty:sw@<us>] 4-6=1`. Two accounts of one thing, as everywhere else
@@ -567,6 +886,9 @@ static void esp32_gpio_host_bus(Esp32GpioState *s)
     char payload[ESP32_GPIO_HOST_LINE];
     char sign;
 
+    if (esp32_gpio_host_i2c_wave(s)) {
+        return;
+    }
     if (sscanf(s->host_line, "i2c %x:%x=%500s", &address, &reg, payload) == 3) {
         uint8_t bytes[256];
         unsigned count;
@@ -598,7 +920,11 @@ static void esp32_gpio_host_bus(Esp32GpioState *s)
             Esp32I2cDevice *device = esp32_i2c_device(s, (int)address);
 
             if (device) {
+                int slot = (int)(device - s->i2c_devices);
+
                 device->present = false;
+                esp32_wave_free(&s->i2c_wave[slot]);
+                esp32_wave_free(&s->i2c_wave_next[slot]);
             }
         } else if (sign == '+' && !esp32_i2c_declare(s, (int)address)) {
             esp32_gpio_say_i2c(s, (int)address, "full", NULL, 0);
@@ -632,6 +958,8 @@ static void esp32_gpio_host_read(void *opaque, const uint8_t *buf, int size)
             s->host_line[s->host_at] = '\0';
             if (strncmp(s->host_line, "sw ", 3) == 0) {
                 esp32_gpio_host_switch(s);
+            } else if (s->host_line[0] == 'W') {
+                esp32_gpio_host_wave(s);
             } else if (s->host_line[0] == 'i' || s->host_line[0] == 's') {
                 esp32_gpio_host_bus(s);
             } else if (sscanf(s->host_line, "A%u=%u", &pin, &level) == 2
@@ -1061,7 +1389,8 @@ static int esp32_saradc_pin_for(Esp32GpioState *s, unsigned unit,
  * as a change; here it is the pin or the value moving.
  */
 static void esp32_gpio_say_adc(Esp32GpioState *s, unsigned unit,
-                               unsigned channel, int pin, unsigned counts)
+                               unsigned channel, int pin, unsigned counts,
+                               int64_t now)
 {
     char line[64];
     int at;
@@ -1069,8 +1398,7 @@ static void esp32_gpio_say_adc(Esp32GpioState *s, unsigned unit,
     if (!qemu_chr_fe_backend_connected(&s->pins)) {
         return;
     }
-    at = snprintf(line, sizeof(line), "[rusty:adc@%" PRId64 "] ",
-                  qemu_clock_get_us(QEMU_CLOCK_VIRTUAL));
+    at = snprintf(line, sizeof(line), "[rusty:adc@%" PRId64 "] ", now);
     if (pin >= 0) {
         at += snprintf(line + at, sizeof(line) - at, "%d=%u\n", pin, counts);
     } else {
@@ -1091,14 +1419,15 @@ static void esp32_gpio_say_adc(Esp32GpioState *s, unsigned unit,
 static void esp32_saradc_sample(Esp32GpioState *s, unsigned unit,
                                 unsigned channel)
 {
+    int64_t now = qemu_clock_get_us(QEMU_CLOCK_VIRTUAL);
     int pin = esp32_saradc_pin_for(s, unit, channel);
-    unsigned counts = pin >= 0 ? s->analog[pin] : 0;
+    unsigned counts = pin >= 0 ? esp32_adc_counts(s, pin, now) : 0;
     bool moved = pin != s->adc_pin[unit] || counts != s->adc_data[unit];
 
     s->adc_pin[unit] = pin;
     s->adc_data[unit] = counts;
     if (moved) {
-        esp32_gpio_say_adc(s, unit, channel, pin, counts);
+        esp32_gpio_say_adc(s, unit, channel, pin, counts, now);
     }
 }
 
@@ -1467,6 +1796,8 @@ static bool esp32_i2c_write_step(Esp32GpioState *s, unsigned bytes)
             return false;
         }
         s->i2c_reg[R_RUSTY_I2C_SR] |= ESP32_I2C_SR_RESP_REC;
+        /* Addressed: from here to the stop, it answers from one sample. */
+        esp32_i2c_wave_latch(s, esp32_i2c_device(s, s->i2c_address));
     }
 
     device = esp32_i2c_device(s, s->i2c_address);
@@ -2536,6 +2867,7 @@ static void esp32_gpio_reset_hold(Object *obj, ResetType type)
      * heard about. rusty sends its levels and analog values on connecting
      * for exactly this reason. */
     memset(s->analog, 0, sizeof(s->analog));
+    esp32_waves_clear(s);
     memset(s->adc_reg, 0, sizeof(s->adc_reg));
     s->adc_data[0] = 0;
     s->adc_data[1] = 0;

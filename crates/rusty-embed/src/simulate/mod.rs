@@ -35,7 +35,7 @@ mod sheet;
 pub use board_file::save as save_board;
 pub use channel::{PinChannel, Sensor, Start, connect, pin_level, start_of};
 pub use machine::gdb_for;
-pub use models::{has_adc_model, has_gpio_model, has_peripherals};
+pub use models::{has_adc_model, has_gpio_model, has_peripherals, has_wave_model};
 pub use plan::{plan, prepare};
 pub use qemu::{free_port, pins_args, qmp, qmp_args};
 #[cfg(test)]
@@ -139,6 +139,56 @@ mod tests {
             Some(bundled),
             "neither is current, so the one with more models wins",
         );
+    }
+
+    /// Playing a signal is its own capability: a build that carries every
+    /// peripheral and no tables is still current for everything else — its
+    /// plan says so and names no limit — while one with tables is preferred
+    /// to it and says it can play one.
+    #[test]
+    fn playing_a_signal_is_a_capability_of_its_own() {
+        let dir = firmware(BLINKY);
+        let write = |root: &Path, contents: &[u8]| {
+            let path = root
+                .join("qemu")
+                .join("bin")
+                .join(tools::exe("qemu-system-riscv32"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, contents).unwrap();
+            path
+        };
+        let every: &[u8] =
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@ [rusty:sw@";
+        let before = write(&dir.path().join("data"), every);
+        let with_tables = write(
+            &dir.path().join("bundle"),
+            &[every, b" [rusty:wave@"].concat(),
+        );
+        assert!(has_peripherals(&before) && !has_wave_model(&before));
+        assert!(has_wave_model(&with_tables));
+
+        let both = Machine {
+            tools: Some(dir.path().join("data")),
+            bundled: Some(dir.path().join("bundle")),
+            target_dir: None,
+        };
+        assert_eq!(
+            both.find_emulator("qemu-system-riscv32"),
+            Some(with_tables),
+            "the build that can play a signal is the more capable one",
+        );
+        let plan = plan_on(&c3(dir.path()), false, &both);
+        assert!(plan.emulator.expect("found").waves);
+
+        let only_before = Machine {
+            tools: Some(dir.path().join("data")),
+            bundled: None,
+            target_dir: None,
+        };
+        let plan = plan_on(&c3(dir.path()), false, &only_before);
+        assert!(plan.limits.is_empty(), "nothing else is out of date");
+        let emulator = plan.emulator.expect("found");
+        assert!(emulator.peripherals && !emulator.waves);
     }
 
     /// An early build of rusty's QEMU in the data directory — pins, no
