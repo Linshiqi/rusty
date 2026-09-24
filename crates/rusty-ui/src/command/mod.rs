@@ -261,7 +261,13 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             }
         }
         Action::Stop => {
-            if state.app.session_running.get_untracked() {
+            // A test under the debugger is a debug session and not a tool
+            // on the dock's session, so `session_running` never says so —
+            // and Shift+F5 and the menu's Stop did nothing to it, while the
+            // transport's Stop, which never asked, stopped it.
+            if state.app.session_running.get_untracked()
+                || state.debug.session.with_untracked(Option::is_some)
+            {
                 controller::stop_anything(state);
             }
         }
