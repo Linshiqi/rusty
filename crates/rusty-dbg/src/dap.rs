@@ -199,6 +199,8 @@ pub struct DapSession {
     frames: Arc<Mutex<Vec<i64>>>,
     root: PathBuf,
     running: Arc<AtomicBool>,
+    /// Whether `stop` has run. It runs once, whether asked for or on drop.
+    stopped: AtomicBool,
 }
 
 impl DapSession {
@@ -206,41 +208,63 @@ impl DapSession {
     /// breakpoints before it runs.
     pub fn start(launch: &DapLaunch) -> Result<(Self, Events)> {
         let port = free_port()?;
-        let mut child = spawn_adapter(launch, port)?;
-        let socket = connect(port, &mut child, &launch.adapter)?;
+        let adapter = spawn_adapter(launch, port)?;
+        Self::with_adapter(adapter, port, launch)
+    }
+
+    /// Everything after the spawn, over an adapter told to listen on `port`.
+    ///
+    /// The session owns the adapter from its first line. Every step from
+    /// here can fail — the connection, a second handle on it, each request
+    /// of the handshake — and a failure drops the session, which stops its
+    /// adapter. Only the wait for `initialized` used to stop it: every other
+    /// failure returned with the adapter still running and nothing left that
+    /// could reach it.
+    fn with_adapter(adapter: Child, port: u16, launch: &DapLaunch) -> Result<(Self, Events)> {
+        let session = Self {
+            child: Mutex::new(adapter),
+            wire: Arc::new(Wire {
+                socket: Mutex::new(None),
+                seq: AtomicI64::new(1),
+            }),
+            state: Arc::new(Mutex::new(DebugState::default())),
+            placed: Mutex::new(HashMap::new()),
+            thread: Arc::new(Mutex::new(0)),
+            frames: Arc::new(Mutex::new(Vec::new())),
+            root: launch.root.clone(),
+            running: Arc::new(AtomicBool::new(false)),
+            stopped: AtomicBool::new(false),
+        };
+        let socket = {
+            let mut adapter = session.child.lock().expect("dap adapter");
+            connect(port, &mut adapter, &launch.adapter)
+        }?;
         let reader_half = socket.try_clone().map_err(|source| Error::Spawn {
             gdb: launch.adapter.display().to_string(),
             source,
         })?;
+        *session.wire.socket.lock().expect("dap socket") = Some(socket);
 
-        let state = Arc::new(Mutex::new(DebugState::default()));
         let (sender, receiver) = channel();
         let outlet: Outlet = Arc::new(Mutex::new(Some(sender)));
-        let wire = Arc::new(Wire {
-            socket: Mutex::new(Some(socket)),
-            seq: AtomicI64::new(1),
-        });
-        let thread = Arc::new(Mutex::new(0));
-        let frames = Arc::new(Mutex::new(Vec::new()));
-        let running = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = channel();
-
         let reader = Reader {
-            state: Arc::clone(&state),
-            wire: Arc::clone(&wire),
+            state: Arc::clone(&session.state),
+            wire: Arc::clone(&session.wire),
             outlet: Arc::clone(&outlet),
             root: launch.root.clone(),
-            thread: Arc::clone(&thread),
-            frames: Arc::clone(&frames),
-            running: Arc::clone(&running),
+            thread: Arc::clone(&session.thread),
+            frames: Arc::clone(&session.frames),
+            running: Arc::clone(&session.running),
             ready: ready_tx,
         };
         std::thread::spawn(move || reader.pump(reader_half));
 
         // The program's console, on its own thread. Lines rather than frames:
         // this pipe is plain text.
-        if let Some(stdout) = child.stdout.take() {
-            let state = Arc::clone(&state);
+        let console = session.child.lock().expect("dap adapter").stdout.take();
+        if let Some(stdout) = console {
+            let state = Arc::clone(&session.state);
             let outlet = Arc::clone(&outlet);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout)
@@ -254,16 +278,6 @@ impl DapSession {
             });
         }
 
-        let session = Self {
-            child: Mutex::new(child),
-            wire,
-            state,
-            placed: Mutex::new(HashMap::new()),
-            thread,
-            frames,
-            root: launch.root.clone(),
-            running,
-        };
         session.handshake(launch, &ready_rx)?;
 
         // Attached, and running: the program starts the moment configuration
@@ -284,7 +298,8 @@ impl DapSession {
 
     /// `initialize` and `launch`, then — once the adapter says it will take
     /// configuration — the standing breakpoints and `configurationDone`. An
-    /// adapter that never says so is stopped before the error returns.
+    /// adapter that never says so is an error, and like every error here it
+    /// drops the session, which stops the adapter.
     fn handshake(&self, launch: &DapLaunch, ready: &Receiver<()>) -> Result<()> {
         self.wire.send(
             "initialize",
@@ -315,7 +330,6 @@ impl DapSession {
         // Its `launch` reply does not come until after `configurationDone`, so
         // waiting on that instead would deadlock the handshake.
         if ready.recv_timeout(READY_TIMEOUT).is_err() {
-            self.stop();
             return Err(Error::Spawn {
                 gdb: launch.adapter.display().to_string(),
                 source: std::io::Error::new(
@@ -476,20 +490,39 @@ impl DapSession {
         Ok(())
     }
 
-    /// End the session and the program with it.
+    /// End the session and the program with it — once: a session stopped
+    /// and then dropped is not stopped again.
     pub fn stop(&self) {
-        let _ = self
-            .wire
-            .send("disconnect", json!({ "terminateDebuggee": true }));
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
         // The adapter is given a moment to take the program down cleanly;
         // killing it first orphans the debuggee, which then holds the test
-        // binary open and the next `cargo test` fails to link.
-        std::thread::sleep(Duration::from_millis(120));
+        // binary open and the next `cargo test` fails to link. An adapter
+        // that could not be told — never connected, or already gone — was
+        // asked for nothing, and nothing is waited for.
+        if self
+            .wire
+            .send("disconnect", json!({ "terminateDebuggee": true }))
+            .is_ok()
+        {
+            std::thread::sleep(Duration::from_millis(120));
+        }
         *self.wire.socket.lock().expect("dap socket") = None;
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+/// A session let go of without `stop` stops its adapter all the same. The
+/// app lets go of one when its stream ends, and a start that fails lets go
+/// of the one it was building; nothing stopped the adapter either time, so
+/// it was left to end itself, or not, and nobody waited for it.
+impl Drop for DapSession {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -887,6 +920,7 @@ mod tests {
     use std::sync::mpsc::TryRecvError;
 
     use super::*;
+    use crate::session::tests::{ended, stand_in};
 
     fn root() -> PathBuf {
         PathBuf::from(r"E:\CodeBase\proj")
@@ -1018,6 +1052,99 @@ mod tests {
             sent.iter().map(Vec::len).collect::<Vec<_>>(),
             [1, 0, 2, 0],
             "each in the first state to go after it was printed",
+        );
+    }
+
+    /// The adapter's end of the protocol, faked. It takes the session's
+    /// connection and, when it `answers`, says `initialized` once it is
+    /// asked to launch, then hands back every command it heard when the
+    /// session disconnects or hangs up. When it does not, it hangs up at
+    /// once.
+    fn fake_adapter(answers: bool) -> (u16, Receiver<Vec<String>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+        let port = listener.local_addr().expect("its address").port();
+        let (heard, commands) = channel();
+        std::thread::spawn(move || {
+            let Ok((socket, _)) = listener.accept() else {
+                return;
+            };
+            if !answers {
+                return;
+            }
+            let mut out = socket.try_clone().expect("a second handle");
+            let mut socket = BufReader::new(socket);
+            let mut said = Vec::new();
+            while let Some(message) = read_frame(&mut socket) {
+                let command = message["command"].as_str().unwrap_or_default().to_string();
+                if command == "launch" {
+                    let body = json!({ "seq": 1, "type": "event", "event": "initialized" });
+                    let body = body.to_string();
+                    let _ = write!(out, "Content-Length: {}\r\n\r\n{body}", body.len());
+                }
+                let disconnected = command == "disconnect";
+                said.push(command);
+                if disconnected {
+                    break;
+                }
+            }
+            let _ = heard.send(said);
+        });
+        (port, commands)
+    }
+
+    fn launch() -> DapLaunch {
+        DapLaunch {
+            adapter: PathBuf::from("stand-in"),
+            program: PathBuf::from("tests"),
+            args: Vec::new(),
+            root: root(),
+            breakpoints: Vec::new(),
+        }
+    }
+
+    /// A start that fails once the adapter is running stops it. Only the
+    /// wait for `initialized` did: an adapter that never listened was left
+    /// running when the connection gave up, with nothing left that could
+    /// reach it. Slow by design — the connection gives up only once
+    /// `LISTEN_TIMEOUT` has passed.
+    #[test]
+    fn a_start_that_cannot_connect_stops_the_adapter_it_started() {
+        let (adapter, stderr) = stand_in();
+        // Port 0, where nothing can be listening. A port another listener
+        // had just let go of could be handed to a test running beside this
+        // one inside the eight seconds.
+        assert!(DapSession::with_adapter(adapter, 0, &launch()).is_err());
+        assert!(ended(stderr), "the adapter was stopped, not left running");
+    }
+
+    /// The same further in: an adapter that hangs up before it is ready.
+    #[test]
+    fn a_start_that_fails_in_the_handshake_stops_the_adapter_it_started() {
+        let (adapter, stderr) = stand_in();
+        let (port, _) = fake_adapter(false);
+        assert!(DapSession::with_adapter(adapter, port, &launch()).is_err());
+        assert!(ended(stderr), "the adapter was stopped, not left running");
+    }
+
+    /// A session let go of without `stop` stops its adapter as `stop` would:
+    /// told to take the program down, then killed and waited for. The app
+    /// lets go of a session when its stream ends, and nothing stopped the
+    /// adapter then.
+    #[test]
+    fn a_session_let_go_of_stops_its_adapter() {
+        let (adapter, stderr) = stand_in();
+        let (port, commands) = fake_adapter(true);
+        let (session, _states) = DapSession::with_adapter(adapter, port, &launch())
+            .expect("the fake adapter completes the handshake");
+        drop(session);
+        assert!(ended(stderr), "the adapter was stopped, not left running");
+        let heard = commands
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the fake adapter heard the session out");
+        assert_eq!(
+            heard.last().map(String::as_str),
+            Some("disconnect"),
+            "told to take the program down first: {heard:?}",
         );
     }
 

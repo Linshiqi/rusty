@@ -648,11 +648,64 @@ fn fold_drive(path: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::process::ChildStderr;
+    use std::time::Duration;
+
     use super::*;
 
     fn root() -> PathBuf {
         PathBuf::from(r"E:\embeded\blinky")
+    }
+
+    /// What makes this test binary, run again, stand in for a debugger.
+    const STAND_IN: &str = "RUSTY_DBG_STAND_IN";
+
+    /// A process to stop: this test binary run again as nothing but the
+    /// ignored test below, which waits. What becomes of a debugger's process
+    /// is the one thing here only a real child can show, and whether it was
+    /// stopped is whether its stderr ends. Returned once it has said it is
+    /// waiting, so a test that then sees it end has seen it stopped — not a
+    /// filter that matched no test and let it exit on its own.
+    pub(crate) fn stand_in() -> (Child, BufReader<ChildStderr>) {
+        let mut child = Command::new(std::env::current_exe().expect("the test binary"))
+            .args([
+                "session::tests::standing_in",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(STAND_IN, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the test binary runs again");
+        let mut stderr = BufReader::new(child.stderr.take().expect("piped"));
+        let mut said = String::new();
+        let _ = stderr.read_line(&mut said);
+        assert_eq!(said.trim(), "standing in", "the stand-in never started");
+        (child, stderr)
+    }
+
+    /// Whether the stand-in's stderr ends — its process gone — within a
+    /// bound no loaded runner comes near.
+    pub(crate) fn ended(mut stderr: BufReader<ChildStderr>) -> bool {
+        let (closed, gone) = channel();
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+            let _ = closed.send(());
+        });
+        gone.recv_timeout(Duration::from_secs(20)).is_ok()
+    }
+
+    #[test]
+    #[ignore = "a process for the tests to stop, not a test"]
+    fn standing_in() {
+        if std::env::var_os(STAND_IN).is_some() {
+            eprintln!("standing in");
+            std::thread::sleep(Duration::from_secs(60));
+        }
     }
 
     #[test]
