@@ -120,10 +120,11 @@ cargo run -p rusty-embed --example loop_probe -- examples/rate-loop
 cargo run -p rusty-embed --example flight_probe -- examples/rate-loop
 
 # The signal chain, the same way: a generator on the sheet played into the
-# converter by rusty's emulator, the firmware running the filter the Signals
-# tab exported, and its gain and phase at three tones held to the design's —
-# one of them switched to by a scenario's `play` step mid-run. Needs a
-# QEMU with the tables (qemu-v9 or later).
+# converter by rusty's emulator — three tones fitted at the firmware's own
+# stamps, one of them switched to by a scenario's `play` step mid-run — and
+# the firmware's output held to the design's filter of its input, sample for
+# sample. Needs a QEMU with the tables (qemu-v9 or later); `--replay
+# <serial.log>` judges a captured log instead.
 cargo run -p rusty-embed --example filter_probe -- examples/filter-lab
 
 # The workbench without the window
@@ -1036,7 +1037,16 @@ is what it changed.
   the generator's own `valid_name` calls it rather than keeping a second
   copy — the Git panel's `ref_name_problem`, applied to the one name the
   generator never sees. It was a backend check on every keystroke whose only
-  voice was a banner.
+  voice was a banner. **And moving the voice to the field was half of it**:
+  `choose` still asked for the plan on every change, the plan still refused
+  the name, and clearing the field to type a new one put "`` is not a name
+  cargo accepts" in the dock once per change under the field saying the
+  same in red. No plan is asked for until the name passes; Create stays
+  where it is, greyed. When a check moves to the front, find every call
+  that still asks the back. The rule itself was wrong for as long as it
+  existed — it let a leading digit through and refused a leading `_`, the
+  opposite of cargo, measured on a manifest (`the name cannot start with a
+  digit`).
 - **A new entry is named where it will be.** The box sat above the whole
   tree with the target folder's path beside it in grey, which is a form
   rather than a file being made, and it said `core/src/` while the tree was
@@ -4552,7 +4562,47 @@ half, `view/lab/` the four instruments of the Signals tab and
   mirror mid-sync — so the install is retried now, with apt's own retries
   inside each try. The lab itself was driven through the mock end to end: a
   twelve-step sweep of the mock's exponential average read a first-order
-  low-pass at ten hertz, beside a second-order design's curve.
+  low-pass at ten hertz, beside a second-order design's curve. And
+  `filter_probe` runs the whole chain with nothing mocked (`examples/
+  filter-lab`): a generator through rusty's host code into the emulator,
+  firmware running the Design view's exported low-pass, `raw` carrying
+  three tones at the sheet's counts — one of them switched to by a `play`
+  step — and `y` the design's filter of `raw`, sample for sample.
+- **A line a sample is more than the console carries at a kilohertz.**
+  Printing one telemetry line costs the emulated core about a millisecond
+  and a half, so filter-lab written for a thousand samples a second fell
+  behind its own deadlines and ran at 643 — and a filter's coefficients are
+  right at one rate only, so every response it produced was another
+  filter's. The gate caught it by checking the rate off the firmware's own
+  stamps before measuring anything; the example samples 250 a second and
+  prints whole counts. Firmware that filters faster than that has to
+  decimate what it prints, and the lab measures whatever rate the stamps
+  say.
+- **A host that holds the emulator up is a firmware that catches up in a
+  burst.** Rusty's QEMU keeps its virtual clock with the host's, so while a
+  busy runner holds the process, the clock runs on and the firmware stands
+  still; its loop then takes the samples it missed a conversion apart. Every
+  value is right for the instant it was taken — the table is read at the
+  virtual clock — and every analysis that reads samples as evenly spaced is
+  wrong about them: the filter gate's second run found the chain perfect
+  and the 50 Hz hum at a third of its size, the gain through the filter
+  still within 2% because input and output were smeared alike. The gate
+  fits the tones at the firmware's own stamps now (least squares, exact
+  however the samples fell), holds the filter to the design sample for
+  sample, and says how often the clock was held — which is also what a
+  filter written for even samples was fed. The lab's views read records as
+  even; on a desk the bursts are rare, and `-icount`, which ties the clock
+  to instructions, is the fix that would remove them at the emulator's
+  expense. **Measure against the clock the data carries, not the count of
+  it.**
+- **The live-circuit probe counted every conversion twice and took lines
+  from the circuit it was testing.** It read the firmware's line *and* the
+  emulator's report of the same conversion — equal neighbours that cut every
+  climb into pairs — and fetched the report with a `try_recv` off the pin
+  channel that `Live::absorb` then never saw, a drive edge among them. It
+  passed on qemu-v9's release run and failed on the next push with a clean
+  climb read as a climb of two. One witness now, and every pin line reaches
+  the circuit: **two accounts of one event are not two readings**.
 
 ## Meeting C
 

@@ -17,6 +17,15 @@ follows it.
   millisecond with jitter, which is a phase error of a third of a radian at
   50 Hz — enough to make a notch filter look broken and a working one look
   like noise.
+- **The firmware's clock keeps the host's time, stalls included.** The
+  emulator's virtual clock runs with the host's, so a host that holds the
+  emulator up lets the clock run on while the firmware stands still, and a
+  sampling loop then catches up in a burst. Each sample is still the signal
+  at the instant it was taken; whatever reads the samples as evenly spaced
+  — the firmware's own filter, the lab's views — reads them wrong for the
+  length of the burst. Rare on a desk, routine on a shared CI runner:
+  `filter_probe` fits its tones at the firmware's stamps for that reason,
+  and says how often the clock was held.
 - **What the host renders is exact; what it cannot know it says.** The table
   is the signal after the sheet's circuit (an RC on the pin shapes it as the
   solver says), rendered with every GPIO the firmware has not driven at rest.
@@ -165,7 +174,11 @@ In one dock tab:
   `tone` on the input and on a telemetry channel the firmware prints — drawn as
   gain and phase against frequency, beside the design's own curve when there is
   one. What it needs from the firmware (a filtered value printed at its sample
-  rate) is said where the button is.
+  rate) is said where the button is. A line on the console costs the emulated
+  core about a millisecond and a half, so a firmware filtering faster than a
+  few hundred samples a second prints a decimated record rather than falling
+  behind its own deadlines — `examples/filter-lab` samples 250 a second for
+  exactly that reason.
 - **Design**: a filter chosen and tuned against the same signal, without
   running anything; its response; its `no_std` code to copy.
 
