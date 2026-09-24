@@ -20,6 +20,26 @@ pub enum Refusal {
     /// A record that holds less than one period of the frequency asked
     /// about, where a sine and an offset cannot be told apart.
     Short { periods: f64 },
+    /// Fewer taps than the design can be made of.
+    Taps { taps: usize, least: usize },
+    /// A Butterworth filter of order zero, which is no filter.
+    Order,
+    /// A quality factor that is not a positive number.
+    Q { q: f64 },
+    /// An exponential filter's weight outside `(0, 1]`: at zero it never
+    /// moves, and above one it overshoots every sample.
+    Alpha { alpha: f64 },
+    /// A windowed-sinc high-pass with an even number of taps, whose
+    /// response is forced to zero at half the rate — the one frequency a
+    /// high-pass most has to pass.
+    Even { taps: usize },
+    /// A band whose low edge is not below its high edge.
+    Edges { low: f64, high: f64 },
+    /// Sections whose own arithmetic cannot hold the design at this rate:
+    /// where the gain should be exactly one it comes to `gain`. A cutoff
+    /// too small a fraction of the rate puts the poles closer to one than
+    /// the coefficients can say.
+    Inexact { gain: f64 },
 }
 
 impl fmt::Display for Refusal {
@@ -39,6 +59,33 @@ impl fmt::Display for Refusal {
                 f,
                 "the record holds {periods:.2} periods of that frequency, and \
                  at least one is needed to tell it from an offset"
+            ),
+            Refusal::Taps { taps, least } => {
+                write!(f, "{taps} taps is too few: this needs at least {least}")
+            }
+            Refusal::Order => f.write_str("a Butterworth filter needs an order of at least 1"),
+            Refusal::Q { q } => write!(f, "Q has to be above zero; {q} is not"),
+            Refusal::Alpha { alpha } => write!(
+                f,
+                "alpha has to be above 0 and at most 1; at {alpha} the filter \
+                 either never moves or overshoots every sample"
+            ),
+            Refusal::Even { taps } => write!(
+                f,
+                "a high-pass needs an odd number of taps: with {taps} its \
+                 response is zero at half the rate, the frequency it most has \
+                 to pass"
+            ),
+            Refusal::Edges { low, high } => write!(
+                f,
+                "the band's low edge, {low} Hz, has to be below its high \
+                 edge, {high} Hz"
+            ),
+            Refusal::Inexact { gain } => write!(
+                f,
+                "at this rate the coefficients cannot hold the design: where \
+                 its gain should be 1 it comes to {gain}. A cutoff this small \
+                 a fraction of the rate wants a lower rate"
             ),
         }
     }

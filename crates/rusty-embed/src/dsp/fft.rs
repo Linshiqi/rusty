@@ -25,6 +25,11 @@ impl Complex {
     pub(crate) fn norm(self) -> f64 {
         self.re.hypot(self.im)
     }
+
+    /// The angle, in `(−π, π]`.
+    pub(crate) fn arg(self) -> f64 {
+        self.im.atan2(self.re)
+    }
 }
 
 impl Add for Complex {
