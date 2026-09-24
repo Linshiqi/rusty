@@ -3,13 +3,22 @@
 //!
 //! The sheet puts a signal generator on GPIO3 — a slow tone with mains hum
 //! on it — and the emulator plays it against this firmware's own clock. The
-//! firmware reads the converter once a millisecond by its systimer, runs the
+//! firmware reads the converter 250 times a second by its systimer, runs the
 //! reading through the filter the Design view exported (`low_pass.rs`, not a
 //! line of it written by hand), and prints both on every sample:
 //!
 //! ```text
-//! [rusty:tel@<µs>] raw=<counts>,y=<filtered>
+//! [rusty:tel@<µs>] raw=<counts>,y=<filtered, to the nearest count>
 //! ```
+//!
+//! **The rate is what a line on the console can carry, not what the
+//! converter can.** Printing a sample costs the emulated core about a
+//! millisecond and a half, so at a thousand a second the loop fell behind
+//! its own deadlines and ran at 643 — and a filter whose coefficients are
+//! right at one rate and no other then does something else, which the gate
+//! below caught. A design that filters faster than it reports would decimate
+//! the telemetry; this one keeps the two equal, and prints whole counts,
+//! because formatting a float with no FPU is much of what a line costs.
 //!
 //! which is all the Signals tab needs: the Time view lays the two over what
 //! was played, the Spectrum shows the hum gone from `y`, and the Response
@@ -34,9 +43,9 @@ use esp_println::println;
 
 use low_pass::LowPass;
 
-/// The rate the filter was designed for: its coefficients are right at this
-/// rate and no other.
-const EVERY: Duration = Duration::from_micros(1000);
+/// The rate the filter was designed for, 250 a second: its coefficients are
+/// right at this rate and no other.
+const EVERY: Duration = Duration::from_micros(4000);
 
 /// How many times to ask whether a conversion finished before calling it
 /// stuck — a firmware that spun on a converter that is not there would
@@ -60,7 +69,7 @@ fn main() -> ! {
     let mut adc = Adc::new(peripherals.ADC1, config);
     let mut filter = LowPass::new();
 
-    println!("[filter] ready: GPIO3 once a millisecond through a 10 Hz low-pass");
+    println!("[filter] ready: GPIO3 250 times a second through a 10 Hz low-pass");
 
     let mut next = Instant::now();
     loop {
@@ -80,7 +89,9 @@ fn main() -> ! {
             loop {}
         };
 
+        // To the nearest count, which is what `raw` is in too.
         let y = filter.step(f32::from(counts));
-        println!("[rusty:tel@{at}] raw={counts},y={y:.2}");
+        let y = if y < 0.0 { y - 0.5 } else { y + 0.5 } as i32;
+        println!("[rusty:tel@{at}] raw={counts},y={y}");
     }
 }

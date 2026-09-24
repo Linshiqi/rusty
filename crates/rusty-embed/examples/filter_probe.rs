@@ -35,7 +35,7 @@ const DESIGN: Design = Design::Butterworth {
     order: 2,
     cutoff: 10.0,
 };
-const RATE: f64 = 1000.0;
+const RATE: f64 = 250.0;
 
 /// What the sheet plays, in counts: half a volt and a quarter of one, of a
 /// 2.5 V full scale at twelve bits.

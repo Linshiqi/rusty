@@ -2245,7 +2245,12 @@ jobs:
       # the filter the Design view exported, and a scenario's `play` step
       # changes the signal while it runs. The probe requires `y` over `raw`
       # to be the design's gain and phase at the tone, at the hum and at the
-      # tone the step switched to — the numbers, not the shape.
+      # tone the step switched to — the numbers, not the shape. Its first run
+      # found the firmware sampling 643 times a second where it was written
+      # for a thousand: a line a sample was more than the console carries in
+      # a millisecond, the loop fell behind its deadlines, and a filter's
+      # coefficients are right at one rate only. It samples 250 a second now,
+      # and the probe checks the rate before anything else.
       - name: A filter the lab designed does in firmware what the lab says
         env:
           RUSTY_CONFIG_DIR: ${{ github.workspace }}
