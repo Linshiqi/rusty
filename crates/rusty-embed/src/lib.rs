@@ -38,6 +38,9 @@ pub mod signal;
 // Spectra, single tones and the filters a firmware runs, designed and held to
 // their closed forms. Wasm-safe with `signal`, which it measures.
 pub mod dsp;
+// Vectors, quaternions, Euler angles and frames, and the math toolbox's sheet
+// language over them. Wasm-safe: the panel evaluates the sheet as it is typed.
+pub mod spatial;
 // What a fresh machine is missing, derived from the toolchain report. Pure,
 // and unconditional so the setup screen can reason about a report it already
 // holds rather than asking the backend what it just told it.

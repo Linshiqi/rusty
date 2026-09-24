@@ -272,10 +272,15 @@ impl Plant {
     /// linear acceleration to add — which makes it exactly a drone clamped to
     /// a test gimbal, and that is the bench setup people actually use.
     ///
-    /// Convention: body X forward, Y right, Z up, and level reads
-    /// `[0, 0, 1]` — a GY-521 flat on a desk. Rolling right puts gravity on
-    /// +Y. Yours may differ, and finding out that it does is what the board
-    /// drawing in the Flight panel is for.
+    /// The world's +Z in the body's axes, in g: level reads `[0, 0, 1]`.
+    /// The numbers are right-handed and one set; the words depend on which
+    /// way the world's Z is read, and this said "X forward, Y right, Z up"
+    /// for a while, which is no right-handed frame at all. Read Z up
+    /// (forward-left-up), this is the specific force a GY-521 flat on a desk
+    /// reports, and a positive pitch puts the nose down. Read Z down
+    /// (forward-right-down, NED), it is the way gravity pulls, and a positive
+    /// pitch puts the nose up — the reading this file's tests are worded in.
+    /// The math toolbox draws either (`spatial::Frame`).
     pub fn accelerometer(&self) -> [f32; 3] {
         self.attitude.to_body([0.0, 0.0, 1.0])
     }
@@ -283,6 +288,13 @@ impl Plant {
     /// The rates as they stand, without advancing anything.
     pub fn rate(&self) -> [f32; 3] {
         self.rate
+    }
+
+    /// Which way it is pointing, as the quaternion it keeps — what the math
+    /// toolbox compares a firmware's estimate against, where `attitude`'s
+    /// three angles would fold at the poles.
+    pub fn orientation(&self) -> Quat {
+        self.attitude
     }
 
     /// A gust: add to the body rates without the motors having done it.
