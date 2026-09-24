@@ -656,10 +656,12 @@ impl<'s> Play<'s> {
                 },
                 Action::WriteSerial(text) => board.send(text),
                 Action::Press(target, down) => {
-                    let Some(gpio) = board.press(target, *down)? else {
-                        continue;
-                    };
-                    board.send(&crate::protocol::button_line(u32::from(gpio), *down));
+                    // A key between two GPIOs has already gone down the pin
+                    // channel as a switch, and the console has no words for
+                    // it; the step is taken all the same.
+                    if let Some(gpio) = board.press(target, *down)? {
+                        board.send(&crate::protocol::button_line(u32::from(gpio), *down));
+                    }
                 }
                 Action::ExpectPin(gpio, level) => {
                     self.expect_pin(*gpio, *level, pins_from_emulator)?;
@@ -911,6 +913,108 @@ write-serial = "Skp=2.5"
         assert_eq!(
             waiting_for(&actions, 0, &scenario, &[false, false]),
             "step 1 was waiting for \"boot\""
+        );
+    }
+
+    /// What a board's console was sent, kept where the test can read it.
+    #[derive(Clone, Default)]
+    struct Console(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Console {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A key between two GPIOs is a step like any other: it goes down the
+    /// pin channel as a switch, the console hears nothing, and the play
+    /// moves on. It used to take the same press again and again, so a
+    /// scenario that pressed a keypad key never ended — not even at its
+    /// timeout, which is checked between steps.
+    #[test]
+    fn a_key_between_two_gpios_is_taken_as_a_step() {
+        use crate::model::{Instance, Pin, PinKind, PinRef, Symbol, Wire};
+
+        let pin = |number: &str, x: f64| Pin {
+            number: number.into(),
+            name: number.into(),
+            kind: PinKind::Passive,
+            at: (x, 0.0),
+            length: 2.54,
+            angle: if x < 0.0 { 0 } else { 180 },
+            hidden: false,
+        };
+        let mut sheet = Sheet::empty("esp32c3");
+        sheet.symbols = vec![Symbol {
+            library: "Device".into(),
+            name: "SW_Push".into(),
+            reference: "SW".into(),
+            value: "SW_Push".into(),
+            description: None,
+            pins: vec![pin("1", -5.08), pin("2", 5.08)],
+            graphics: Vec::new(),
+        }];
+        sheet.parts.push(Instance {
+            reference: "SW1".into(),
+            symbol: "Device:SW_Push".into(),
+            value: String::new(),
+            x: 0.0,
+            y: 0.0,
+            rot: 0,
+            mirror: false,
+            props: BTreeMap::new(),
+        });
+        for (from, to) in [("U1.GPIO9", "SW1.1"), ("SW1.2", "U1.GPIO4")] {
+            sheet.wires.push(Wire {
+                from: PinRef::parse(from).unwrap(),
+                to: PinRef::parse(to).unwrap(),
+                bends: Vec::new(),
+            });
+        }
+
+        // Nobody listens on the port: what the channel would say is lost,
+        // which is the case where a step must still be taken.
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let pins = super::super::connect(port, Default::default(), None, |_| {});
+        let console = Console::default();
+        let board = Board {
+            input: process::Input::new(Some(Box::new(console.clone()))),
+            pins: Some(pins.clone()),
+            sheet: Some(sheet),
+            rows: crate::nets::kit_rows("esp32c3", &[4, 9]),
+        };
+        let scenario: &'static Scenario = Box::leak(Box::new(
+            Scenario::from_toml("[[step]]\npress = \"SW1\"\n\n[[step]]\nrelease = \"SW1\"\n")
+                .unwrap(),
+        ));
+
+        // On a thread of its own, so a play that never moves on fails this
+        // test rather than hanging it.
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut play = Play::new(scenario);
+            let taken = play.take_steps(&board, true).map(|()| play.next);
+            let _ = done.send(taken);
+        });
+        let taken = finished.recv_timeout(Duration::from_secs(10));
+        pins.hang_up();
+        assert_eq!(
+            taken,
+            Ok(Ok(2)),
+            "both steps taken, the press and the release"
+        );
+        assert!(
+            console.0.lock().unwrap().is_empty(),
+            "a key is a switch, which the console has no line for"
         );
     }
 }
