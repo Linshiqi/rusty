@@ -475,18 +475,19 @@ pub async fn run_simulation(
     let mut current = None;
     let total = plan.steps.len();
     for (index, mut step) in plan.steps.into_iter().enumerate() {
-        note(&on_line, format!("$ {}", step.display));
+        // What is said about the step goes after the step's own line, and
+        // that line waits until the step is whole: the emulator's gdbstub,
+        // monitor and pin channel are added below, and a `$` line printed
+        // before them was a command nobody could copy and run.
+        let mut said: Vec<String> = Vec::new();
 
         let is_emulator = step.program.contains("qemu-system");
         if let (true, Some(port)) = (debug && is_emulator, gdb_port) {
             step.extend_args(debug_args(port));
-            note(
-                &on_line,
-                format!(
-                    "[rusty:debug] gdbstub on :{port}, cpu frozen — attaching, then running to \
-                     your breakpoints"
-                ),
-            );
+            said.push(format!(
+                "[rusty:debug] gdbstub on :{port}, cpu frozen — attaching, then running to your \
+                 breakpoints"
+            ));
         }
 
         // Ask the emulator that is about to run, not the one that was
@@ -513,9 +514,8 @@ pub async fn run_simulation(
                 // Said in the dock and read by the board, so the panel can stop
                 // claiming these levels came from the firmware. One line per
                 // run — the pin reports themselves never reach the log.
-                note(
-                    &on_line,
-                    "[rusty:pins] emulator — pin state read from the GPIO registers",
+                said.push(
+                    "[rusty:pins] emulator — pin state read from the GPIO registers".to_string(),
                 );
             }
             // The stock build, and what that costs, said where the run is
@@ -523,17 +523,21 @@ pub async fn run_simulation(
             // the report: `is_set_high()` reads a register this emulator
             // never stores, and nothing on screen said so.
             if !has_model {
-                note(
-                    &on_line,
+                said.push(
                     "[rusty:pins] firmware — Espressif's stock QEMU: its GPIO write handler \
                      is empty, so is_set_high()/is_high() read 0 in the emulator (real \
                      hardware is fine) and the board shows only what the firmware prints. \
                      The Simulate panel's Upgrade installs rusty's build, which models the \
-                     pins.",
+                     pins."
+                        .to_string(),
                 );
             }
         }
 
+        note(&on_line, format!("$ {}", step.display));
+        for line in said {
+            note(&on_line, line);
+        }
         let session = process::spawn(&step, Some(root.as_path()))?;
         current = Some(state.start_session(session.stopper()).await);
         // The boot step is QEMU; its stdin is the board's input path.
