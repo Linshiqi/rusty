@@ -22,7 +22,7 @@ const FULL_SCALE: u16 = 0xfff;
 /// Everything that puts a pin's table on the emulator and plays it: begin,
 /// fill, on. `counts` is one period of what the pin reads, `rate` samples a
 /// second; the device loops it. A pin already playing keeps its phase.
-pub fn pin_table_lines(pin: u32, rate: u32, counts: &[u16]) -> Vec<String> {
+fn pin_table_lines(pin: u32, rate: u32, counts: &[u16]) -> Vec<String> {
     let mut lines = vec![format!("W{pin}={rate},{}\n", counts.len())];
     for (chunk, samples) in counts.chunks(PIN_CHUNK).enumerate() {
         let hex: String = samples
@@ -36,7 +36,7 @@ pub fn pin_table_lines(pin: u32, rate: u32, counts: &[u16]) -> Vec<String> {
 }
 
 /// Stop a pin's table: it reads its `A<pin>=` value again.
-pub fn pin_stop_line(pin: u32) -> String {
+fn pin_stop_line(pin: u32) -> String {
     format!("W{pin}=off\n")
 }
 
@@ -44,13 +44,7 @@ pub fn pin_stop_line(pin: u32) -> String {
 /// and plays it. `bytes` is the samples one after another, `width` bytes
 /// each from register `reg` — what a burst read of the block returns at
 /// that sample.
-pub fn block_table_lines(
-    address: u8,
-    reg: u8,
-    width: usize,
-    rate: u32,
-    bytes: &[u8],
-) -> Vec<String> {
+fn block_table_lines(address: u8, reg: u8, width: usize, rate: u32, bytes: &[u8]) -> Vec<String> {
     let samples = bytes.len() / width.max(1);
     let mut lines = vec![format!(
         "i2c {address:02x}~{reg:02x}:{width}={rate},{samples}\n"
@@ -67,7 +61,7 @@ pub fn block_table_lines(
 }
 
 /// Stop a device's table: its registers hold what they were last given.
-pub fn block_stop_line(address: u8) -> String {
+fn block_stop_line(address: u8) -> String {
     format!("i2c {address:02x}~=off\n")
 }
 
@@ -174,23 +168,6 @@ pub fn parse_wave_report(line: &str) -> Option<WaveReport> {
     })
 }
 
-/// What a conversion at `at_us` reads from a pin's table started at
-/// `start_us`: the device's own arithmetic — integer, interpolated between
-/// the samples either side — so the host can say what the firmware saw at
-/// an instant, and a test can hold the device to it.
-pub fn counts_at(counts: &[u16], rate: u32, start_us: u64, at_us: u64) -> u16 {
-    if counts.is_empty() {
-        return 0;
-    }
-    let position = u128::from(at_us.saturating_sub(start_us)) * u128::from(rate);
-    let len = counts.len() as u128;
-    let index = ((position / 1_000_000) % len) as usize;
-    let millionths = position % 1_000_000;
-    let a = u128::from(counts[index].min(FULL_SCALE));
-    let b = u128::from(counts[(index + 1) % counts.len()].min(FULL_SCALE));
-    ((a * (1_000_000 - millionths) + b * millionths + 500_000) / 1_000_000) as u16
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,35 +243,5 @@ mod tests {
             Some(WaveEvent::Refused("?absent".to_string()))
         );
         assert_eq!(parse_wave_report("[rusty:adc@9] 3=100"), None);
-    }
-
-    /// The device's arithmetic, checked where it can be checked by hand:
-    /// on a sample, halfway between two, and after the table has looped.
-    #[test]
-    fn a_conversion_reads_the_table_where_the_clock_is() {
-        let counts = [0u16, 1000, 2000, 3000];
-        // 1000 samples a second: a sample every millisecond.
-        assert_eq!(
-            counts_at(&counts, 1000, 500, 500),
-            0,
-            "sample 0 at the start"
-        );
-        assert_eq!(counts_at(&counts, 1000, 500, 1500), 1000);
-        assert_eq!(counts_at(&counts, 1000, 500, 2000), 1500, "halfway between");
-        assert_eq!(
-            counts_at(&counts, 1000, 500, 4000),
-            1500,
-            "between the last and the first: 3000 and 0"
-        );
-        assert_eq!(
-            counts_at(&counts, 1000, 500, 5500),
-            1000,
-            "a second time round"
-        );
-        assert_eq!(
-            counts_at(&counts, 1000, 500, 100),
-            0,
-            "before it started, sample 0"
-        );
     }
 }
