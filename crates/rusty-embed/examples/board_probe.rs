@@ -206,6 +206,11 @@ fn main() {
         // the same from one side.
         match rusty_embed::simulate::qmp(monitor, "stop") {
             Ok(_) => {
+                // A report written before the stop and read after it is not
+                // the emulator running on: the grace lets what was on its way
+                // land before the quiet is timed. Two edges of blinky's in
+                // the second after it would still be the emulator running.
+                still(&rx, &mut order, &mut seen, Duration::from_millis(250));
                 let quiet = still(&rx, &mut order, &mut seen, Duration::from_millis(1200));
                 match rusty_embed::simulate::qmp(monitor, "cont") {
                     Ok(_) => {

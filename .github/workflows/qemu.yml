@@ -1346,7 +1346,18 @@ jobs:
                       crossings.append(t0 + (t1 - t0) * (2048 - v0) / (v1 - v0))
               if len(crossings) < 50:
                   fail(f"only {len(crossings)} rising crossings of mid-scale in the readings")
-              period = (crossings[-1] - crossings[0]) / (len(crossings) - 1)
+              # The period is the slope of the crossings against their count, the
+              # first five left out: the probe's first readings come late while the
+              # host is still sending the tables, and two ends of a span weigh
+              # whatever those ends happened to be.
+              def slope(points):
+                  n = len(points)
+                  mx = sum(x for x, _ in points) / n
+                  my = sum(y for _, y in points) / n
+                  return (sum((x - mx) * (y - my) for x, y in points)
+                          / sum((x - mx) ** 2 for x, _ in points))
+
+              period = slope(list(enumerate(crossings))[5:])
               frequency = 1e6 / period
               # A twentieth of a percent. It was half of one, and a systimer
               # running that much slow of the virtual clock passed it — the
@@ -1362,10 +1373,15 @@ jobs:
                   fail("a burst read took words from two samples")
               if any(s < 0 for _, _, s in readings):
                   fail("a burst read of the sensor failed")
+              # Its rate by the firmware's clock is the slope of the sample against
+              # the stamp, the first readings left out for the reason the tone's
+              # are: measured between the first and the last reading, a first
+              # transaction a few milliseconds late was two samples of drift.
               (t0, _, s0), (t1, _, s1) = readings[0], readings[-1]
-              drift = (s1 - s0) - (t1 - t0) * S_RATE / 1e6
-              if abs(drift) > 2:
-                  fail(f"the sensor's sample moved {s1 - s0} over {t1 - t0} µs, {drift:+.1f} off its rate")
+              rate = slope([(t, s) for t, _, s in readings[10:]]) * 1e6
+              if abs(rate - S_RATE) > S_RATE * 0.001:
+                  fail(f"the sensor's sample moved at {rate:.2f} a second by the firmware's clock, "
+                       f"not {S_RATE}")
 
               print(f"{len(reports)} conversions each the table's value at its instant; "
                     f"the firmware timed the tone at {frequency:.3f} Hz; "

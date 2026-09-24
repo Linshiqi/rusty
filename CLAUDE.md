@@ -4596,6 +4596,13 @@ half, `view/lab/` the four instruments of the Signals tab and
   tolerance is a twentieth of a percent. Reproduced and proven in the
   Docker container before a runner saw it: slope 0.977 before, 0.999999
   after. **A tolerance wider than the effect it guards is not a gate.**
+  And two checks that had passed on the drift fell over without it: the
+  signal gate's sensor rate, measured between its first and last reading,
+  had a first transaction a few milliseconds late cancelled by a clock
+  running slow — both now fit a slope and leave the start out — and the
+  board probe counted an edge already on its way when `stop` landed as the
+  emulator running on. **A check that passes because two errors cancel is
+  waiting for one of them to be fixed.**
 - **And the first explanation was wrong, confidently.** Between the two
   runs this file said the runner held the emulator up and the firmware
   caught up in bursts — true of QEMU without `-icount` (the virtual clock
