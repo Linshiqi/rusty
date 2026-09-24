@@ -236,9 +236,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
     // A signal needs the build that plays tables; any other run does not,
     // which is why this is a limit of the sheet's and not an out-of-date
     // emulator's.
-    if board
-        .as_ref()
-        .is_some_and(crate::generator::plays_anything)
+    if board.as_ref().is_some_and(crate::generator::plays_anything)
         && found_emulator
             .as_ref()
             .is_some_and(|emulator| !emulator.waves)
