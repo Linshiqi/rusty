@@ -9,6 +9,54 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.64
+
+**Fixes for what the last release's clean-up turned up.** Tidying the code
+brought a list of things to light that did not work as they should; this
+release fixes all of them.
+
+**A sweep of the build directory no longer removes what is still in use.**
+The incremental caches of tests, examples, build scripts and binaries named
+differently from their package were counted as belonging to a package that
+was gone, and swept — which cost a slower rebuild. A build directory that
+several projects share (`build.target-dir`, as the Disk section suggests) is
+now judged only by age, because one project cannot tell what another still
+needs: a sweep there, the automatic one after each build included, used to
+remove other projects' artifacts. And `rusty-cli sweep --keep-variants`
+now removes exactly what its preview listed.
+
+**The simulator.** A scenario that presses a key of a matrix keypad no
+longer hangs `rusty-cli sim` or the assistant's `simulate`. Power symbols
+from a KiCad schematic — GND, GNDA, Earth, +3V3 and the rest — now act as
+ground and supply, so a lamp wired to one lights; they used to be ignored.
+The Output panel shows the emulator's whole command line, and the
+assistant's `simulate` reports each note once.
+
+**The debugger.** Shift+F5 stops a test running under the debugger. With
+gdb, the highlighted stack frame is the one whose variables are shown. With
+LLDB, the program's output is no longer repeated at every step, and a
+session that ends without an exit code says so rather than reporting
+success. A debugger no longer keeps running after a failed start or after
+its session ends. The register view's Fetch SVD button works.
+
+**The editor.** With part of a file folded, Ctrl+/, Cut, Copy and Find's
+prefill act on the text you selected rather than on text elsewhere in the
+file. A rename or quick fix that changes several files is put back if one
+of them cannot be written, instead of leaving half of it on disk. `i32`,
+`u8` and the other primitive types are coloured as types.
+
+**Search** lists the same results every time a query matches more than 500
+places, and no longer searches or replaces deeper than the file tree
+shows. On Linux and macOS a file with a backslash in its name is found
+under its real name.
+
+**Also:** pushing a branch goes to the right remote when a remote's name
+contains `/`. The assistant finds your latest firmware in a workspace whose
+firmware crate is excluded, and so does `rusty-cli size`. The built-in
+terminal erases wide characters correctly when you backspace or recall a
+command. Ten messages that showed in English in the Chinese interface are
+translated.
+
 ## v0.6.63
 
 **Nothing you use should behave differently.** This release tidies rusty's
