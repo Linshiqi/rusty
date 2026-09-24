@@ -207,11 +207,13 @@ impl TreeScan<'_> {
         }
     }
 
-    /// Incremental caches: named for the crate, judged by whether the crate
-    /// is still local to this workspace, by when rustc last wrote to the
-    /// cache — and, since rustc keys the cache on the unit's flags and a hot
-    /// workspace grows a hundred variants per crate, by whether it is among
-    /// the crate's newest few.
+    /// Incremental caches, each named for the crate rustc compiled. A crate
+    /// is a target, not a package, so an example, a test and a build script
+    /// each have caches of their own. Judged by whether a member or path
+    /// dependency still has a target of that name, by when rustc last wrote
+    /// to the cache — and, since rustc keys the cache on the unit's flags and
+    /// a hot workspace grows a hundred variants per crate, by whether it is
+    /// among the crate's newest few.
     fn incremental(&self, tally: &mut Tally<'_>) {
         let (current, options) = (self.current, self.options);
         let idle_after = Duration::from_secs(u64::from(options.idle_days) * 86_400);
@@ -225,7 +227,12 @@ impl TreeScan<'_> {
             let Some((crate_name, _)) = name.rsplit_once('-') else {
                 continue;
             };
-            if !current.is_empty() && !current.local.contains(crate_name) {
+            // Gone only when nothing in the graph compiles a crate of this
+            // name. A cache does not say which package compiled it, so while
+            // any package still has a target of the name — every package's
+            // `build.rs` compiles as `build_script_build` — each cache under
+            // it may be that target's.
+            if !current.is_empty() && current.targets_named(crate_name) == 0 {
                 tally.stale(
                     DiskKind::Incremental,
                     &dir,
@@ -258,17 +265,22 @@ impl TreeScan<'_> {
                 .or_default()
                 .push((dir, bytes, files, touched));
         }
-        for caches in variants.values_mut() {
+        for (crate_name, caches) in &mut variants {
+            // A name several targets compile under holds every one of their
+            // variants — a library and the binary beside it, each package's
+            // `build.rs` — and nothing in a cache says whose it is, so the
+            // name keeps each target's share. With no graph to count them
+            // in, it keeps one's.
+            let targets = current.targets_named(crate_name).max(1);
+            let keep = options.keep_variants.saturating_mul(targets);
             caches.sort_by_key(|cache| std::cmp::Reverse(cache.3));
-            for (dir, bytes, files, _) in caches.iter().skip(options.keep_variants as usize) {
+            for (dir, bytes, files, _) in caches.iter().skip(keep as usize) {
                 tally.stale(
                     DiskKind::Incremental,
                     dir,
                     *bytes,
                     *files,
-                    &StaleReason::Superseded {
-                        keep: options.keep_variants,
-                    },
+                    &StaleReason::Superseded { keep },
                 );
             }
         }

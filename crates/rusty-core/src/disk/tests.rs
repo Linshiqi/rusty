@@ -11,7 +11,7 @@ use super::judge::{Origin, dep_info_sources, origin_of, split_package_dir, unit_
 use super::tree::reason_name;
 use super::*;
 use crate::error::Error;
-use crate::model::{DiskKind, SweepPolicy};
+use crate::model::{DiskKind, StaleReason, SweepPolicy};
 
 /// A build directory laid out the way cargo lays one out, with the sizes
 /// and mtimes the rules read — real files, since the rules read real
@@ -97,7 +97,8 @@ impl Drop for Fixture {
 const REGISTRY: &str = "C:\\Users\\me\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f";
 
 /// The graph the fixture's lockfile resolves: two registry packages at
-/// the versions it holds, and the workspace's own crate.
+/// the versions it holds, and the workspace's own package, whose one
+/// target is the binary `my-app`.
 fn current() -> Current {
     let mut current = Current::default();
     for (name, version) in [("serde", "1.0.229"), ("windows-sys", "0.52.0")] {
@@ -107,8 +108,32 @@ fn current() -> Current {
             .insert((name.to_string(), version.to_string()));
     }
     current.names.insert("my-app".to_string());
-    current.local.insert(crate_name("my-app"));
+    current.add_local_target("my-app");
     current
+}
+
+/// The yardstick of `tests/fixtures/target-lab`, read off the real graph:
+/// a member with a target of every kind, and a path dependency with a
+/// build script of its own.
+fn target_lab() -> Current {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/target-lab");
+    crate::Workspace::load(path)
+        .expect("fixture workspace should load")
+        .current()
+}
+
+/// A host `debug` tree holding one of target-lab's own units — a tree is
+/// known by its `deps/` — for incremental caches to be laid out in.
+fn lab_tree(name: &str) -> Fixture {
+    let fixture = Fixture::new(name);
+    fixture.unit(
+        "debug",
+        "target_lab",
+        "0123456789abcdef",
+        "src\\lib.rs",
+        100,
+    );
+    fixture
 }
 
 fn lay_out(fixture: &Fixture) {
@@ -425,6 +450,133 @@ fn deps_d_len(fixture: &Fixture, stem: &str) -> u64 {
     fs::metadata(fixture.target().join(format!("debug/deps/{stem}.d")))
         .unwrap()
         .len()
+}
+
+/// Every stale path's file name with its reason, sorted by name.
+fn stale_by_name(scan: &Scan) -> Vec<(String, StaleReason)> {
+    let mut stale: Vec<(String, StaleReason)> = scan
+        .stale_paths()
+        .into_iter()
+        .map(|(path, _, reason)| {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            (name, reason)
+        })
+        .collect();
+    stale.sort_by(|a, b| a.0.cmp(&b.0));
+    stale
+}
+
+/// Read off a real graph, the yardstick holds every target of every member
+/// and path dependency, under the name rustc compiles it as, and how many
+/// targets share each name.
+#[test]
+fn the_yardstick_counts_every_local_target_by_the_crate_it_compiles_as() {
+    let current = target_lab();
+    assert_eq!(
+        current.targets_named("target_lab"),
+        2,
+        "the library and the binary beside it"
+    );
+    assert_eq!(
+        current.targets_named("build_script_build"),
+        2,
+        "the member's build script and the path dependency's"
+    );
+    for single in ["lab_tool", "demo_run", "smoke", "speed", "lab_helper"] {
+        assert_eq!(current.targets_named(single), 1, "{single}");
+    }
+    assert_eq!(
+        current.targets_named("lab-tool"),
+        0,
+        "rustc is given `lab_tool`, and that is what the cache is called"
+    );
+}
+
+/// An incremental cache is named after the crate rustc compiled, and a
+/// crate is a target: an example, an integration test, a binary named
+/// apart from its package and a build script each leave caches under a
+/// name no package carries. Judged against the package names, every one of
+/// those was gone — on this repository's own build directory, the caches of
+/// every test and probe compiled minutes before — and a sweep removed them:
+/// a slower rebuild, for a reason that was not true.
+#[test]
+fn an_incremental_cache_is_judged_by_the_package_whose_target_it_is() {
+    let fixture = lab_tree("targets");
+    for cache in [
+        "target_lab-0a0a0a0a0a0a0",
+        "lab_tool-1b1b1b1b1b1b1",
+        "demo_run-2c2c2c2c2c2c2",
+        "smoke-3d3d3d3d3d3d3",
+        "speed-4e4e4e4e4e4e4",
+        "build_script_build-5f5f5f5f5f5f5",
+        "lab_helper-6g6g6g6g6g6g6",
+        "dropped_example-7h7h7h7h7h7h7",
+    ] {
+        fixture.write(
+            &format!("debug/incremental/{cache}/s-a-b/query-cache.bin"),
+            100,
+        );
+    }
+    let scan = scan(
+        &fixture.target(),
+        &fixture.project(),
+        &target_lab(),
+        ScanOptions::default(),
+    );
+    assert_eq!(
+        stale_by_name(&scan),
+        [(
+            "dropped_example-7h7h7h7h7h7h7".to_string(),
+            StaleReason::PackageGone {
+                package: "dropped_example".to_string()
+            }
+        )],
+        "only the crate nothing in the graph compiles is gone"
+    );
+}
+
+/// A name several targets compile under holds every one of their variants
+/// — the member's build script and the path dependency's are both
+/// `build_script_build`, and a library shares its name with the binary
+/// beside it — and nothing in a cache says whose it is. Four kept for the
+/// name would call the second target's live caches superseded; the name
+/// keeps four for each.
+#[test]
+fn a_crate_name_several_targets_share_keeps_each_ones_variants() {
+    let fixture = lab_tree("shared-name");
+    // Nine caches under each name, a day apart and none of them idle.
+    for crate_name in ["build_script_build", "target_lab", "lab_tool"] {
+        for day in 1..=9u64 {
+            let relative =
+                format!("debug/incremental/{crate_name}-{day:013}/s-a-b/query-cache.bin");
+            fixture.write(&relative, 100);
+            fixture.age(&relative, day);
+        }
+    }
+    let options = ScanOptions {
+        idle_days: 30,
+        keep_variants: 4,
+    };
+    let scan = scan(
+        &fixture.target(),
+        &fixture.project(),
+        &target_lab(),
+        options,
+    );
+    let superseded = |name: &str, keep| (name.to_string(), StaleReason::Superseded { keep });
+    assert_eq!(
+        stale_by_name(&scan),
+        [
+            superseded("build_script_build-0000000000009", 8),
+            superseded("lab_tool-0000000000005", 4),
+            superseded("lab_tool-0000000000006", 4),
+            superseded("lab_tool-0000000000007", 4),
+            superseded("lab_tool-0000000000008", 4),
+            superseded("lab_tool-0000000000009", 4),
+            superseded("target_lab-0000000000009", 8),
+        ],
+        "two targets share each of the first two names, one has the third"
+    );
 }
 
 #[test]

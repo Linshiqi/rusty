@@ -350,7 +350,10 @@ pub enum StaleReason {
     /// The lockfile resolves this package to another version now; artifacts
     /// of the old one are never read again unless the lockfile moves back.
     VersionGone { package: String, version: String },
-    /// The package is no longer in the dependency graph at all.
+    /// The package is no longer in the dependency graph at all. An
+    /// incremental cache is named after a crate rather than a package, so
+    /// for one of those `package` is the crate's name, and what it means is
+    /// that no package in the graph has a target compiling as that crate.
     PackageGone { package: String },
     /// An incremental cache not touched for this many days. Removing it costs
     /// one non-incremental compile of that crate the next time it changes.
@@ -359,7 +362,10 @@ pub enum StaleReason {
     /// unit's flags, so every distinct feature set, profile override or
     /// wrapper leaves a cache of its own, used again only if exactly that
     /// combination is built again; a hot workspace grows a hundred per crate.
-    /// Only the newest `keep` survive. Removing one costs the same as `Idle`.
+    /// Only the newest `keep` under the crate's name survive: the scan's
+    /// number for each target compiled under it, since a library and the
+    /// binary beside it share a name, and every package's `build.rs` shares
+    /// one. Removing one costs the same as `Idle`.
     Superseded { keep: u32 },
 }
 

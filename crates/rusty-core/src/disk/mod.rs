@@ -36,7 +36,7 @@ mod tree;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use guppy::graph::{PackageGraph, PackageSource};
@@ -60,9 +60,14 @@ pub struct Current {
     names: HashSet<String>,
     /// Full revisions of git dependencies.
     git_revs: HashSet<String>,
-    /// Workspace members and path dependencies, as crate names (`_` for `-`),
-    /// which is how their incremental caches are named.
-    local: HashSet<String>,
+    /// Every crate the workspace members and path dependencies compile, by
+    /// the name rustc is given for it (`_` for `-`) — which is what its
+    /// incremental caches are named after — and how many targets compile
+    /// under that name. A crate is a target, not a package: an example, an
+    /// integration test, a bench and a binary each have a name of their own,
+    /// while a library and the binary beside it share one, and so does every
+    /// package's `build.rs` (`build_script_build`).
+    local: HashMap<String, u32>,
 }
 
 impl Current {
@@ -75,7 +80,9 @@ impl Current {
                 .insert((name.clone(), package.version().to_string()));
             match package.source() {
                 PackageSource::Workspace(_) | PackageSource::Path(_) => {
-                    current.local.insert(crate_name(&name));
+                    for target in package.build_targets() {
+                        current.add_local_target(target.name());
+                    }
                 }
                 PackageSource::External(source) => {
                     if source.starts_with("git+")
@@ -95,11 +102,25 @@ impl Current {
     fn is_empty(&self) -> bool {
         self.names.is_empty()
     }
+
+    /// Count one target of a member or path dependency, by its name as
+    /// `cargo metadata` gives it.
+    fn add_local_target(&mut self, target: &str) {
+        *self.local.entry(crate_name(target)).or_default() += 1;
+    }
+
+    /// How many targets of the members and path dependencies compile as
+    /// `crate_name` — none for a crate nothing in the graph builds any more.
+    fn targets_named(&self, crate_name: &str) -> u32 {
+        self.local.get(crate_name).copied().unwrap_or(0)
+    }
 }
 
-/// A package name as rustc spells the crate: `-` becomes `_`.
-fn crate_name(package: &str) -> String {
-    package.replace('-', "_")
+/// A target's name as cargo hands it to rustc for the crate: `-` becomes
+/// `_`, so the binary `rusty-shell` compiles as `rusty_shell`, and a
+/// `build.rs` (`build-script-build`) as `build_script_build`.
+fn crate_name(target: &str) -> String {
+    target.replace('-', "_")
 }
 
 /// How stale artifacts are judged.
@@ -107,9 +128,10 @@ fn crate_name(package: &str) -> String {
 pub struct ScanOptions {
     /// An incremental cache untouched for this many days is idle.
     pub idle_days: u32,
-    /// How many of a crate's incremental caches to keep, newest first; the
-    /// rest are superseded. Four covers the combinations a workspace
-    /// alternates between — build, test, check and clippy.
+    /// How many incremental caches to keep for each target, newest first;
+    /// the rest under that target's crate name are superseded. Four covers
+    /// the combinations a workspace alternates between — build, test, check
+    /// and clippy.
     pub keep_variants: u32,
 }
 
