@@ -499,7 +499,8 @@ jobs:
             bin="qemu-system-$arch"
             if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
             markers=('[rusty:gpio@' '[rusty:adc@' '[rusty:i2c@' '[rusty:spi@'
-                     '[rusty:pwm@' '[rusty:rmt@' '[rusty:sw@' '[rusty:wave@')
+                     '[rusty:pwm@' '[rusty:rmt@' '[rusty:sw@' '[rusty:wave@'
+                     '[rusty:systimer-exact]')
             if [ "$arch" = xtensa ]; then
               markers+=('misc.esp32.intmatrix.status')
             fi
@@ -705,6 +706,55 @@ jobs:
 
           print(f"both accounts of GPIO0 agree, the emulator leading by {offset} "
                 "— the pin being configured, which the firmware never printed")
+
+      # The firmware's clock is the systimer, and it has to keep the virtual
+      # clock's time: that is the clock the emulator stamps its own reports
+      # with and plays a signal against. Upstream's counter dropped the
+      # fraction of a tick at every read, so firmware polling it in a loop —
+      # blinky's busy wait, every esp-hal delay — ran slow by however often
+      # it looked: about half a percent on a runner, which the signal gate's
+      # tolerance let through and the filter gate did not. Each GPIO0 edge
+      # has two stamps here, the emulator's and the one blinky takes off its
+      # systimer, and the two have to advance together.
+      - name: The firmware's clock keeps the emulator's time
+        shell: python
+        run: |
+          import re, sys
+
+          def edges(path):
+              try:
+                  text = open(path, encoding="utf-8", errors="replace").read()
+              except OSError:
+                  return []
+              return [(int(m.group(1)), int(m.group(2))) for m in
+                      re.finditer(r"\[rusty:gpio@(\d+)\][^\n]*?\b0=([01])\b", text)]
+
+          emulator = edges("pins.log")
+          firmware = edges("serial.log")
+          lead = next((k for k in range(4)
+                       if len(emulator) > k + 4 and len(firmware) >= 4
+                       and [l for _, l in emulator[k:k + 4]] == [l for _, l in firmware[:4]]),
+                      None)
+          if lead is None:
+              print(f"::error::the two accounts of GPIO0 do not line up: "
+                    f"emulator={emulator[:6]} firmware={firmware[:6]}")
+              sys.exit(1)
+          pairs = [(e, f) for (e, _), (f, _) in zip(emulator[lead:], firmware)]
+          if len(pairs) < 10:
+              print(f"::error::only {len(pairs)} edges carry both stamps")
+              sys.exit(1)
+          n = len(pairs)
+          mx = sum(e for e, _ in pairs) / n
+          my = sum(f for _, f in pairs) / n
+          slope = (sum((e - mx) * (f - my) for e, f in pairs)
+                   / sum((e - mx) ** 2 for e, _ in pairs))
+          gaps = sorted(b - a for (a, _), (b, _) in zip(pairs, pairs[1:]))
+          print(f"{n} edges: the firmware's clock ran {slope:.7f} of the emulator's; "
+                f"a 500 ms wait and a print took {gaps[len(gaps) // 2] / 1000:.3f} ms")
+          if abs(slope - 1) > 1e-4:
+              print(f"::error::the firmware's clock ran {slope:.6f} of the emulator's "
+                    f"({(slope - 1) * 100:+.3f}%): the systimer is not keeping virtual time")
+              sys.exit(1)
 
       # Everything above proves the *output* half. The input half — a host
       # driving a level that unmodified firmware reads through GPIO_IN — has
@@ -1298,7 +1348,11 @@ jobs:
                   fail(f"only {len(crossings)} rising crossings of mid-scale in the readings")
               period = (crossings[-1] - crossings[0]) / (len(crossings) - 1)
               frequency = 1e6 / period
-              if abs(frequency - TONE) > TONE * 0.005:
+              # A twentieth of a percent. It was half of one, and a systimer
+              # running that much slow of the virtual clock passed it — the
+              # filter gate is what found the drift, as a hum fitted at a
+              # third of its size.
+              if abs(frequency - TONE) > TONE * 0.0005:
                   fail(f"the firmware timed the tone at {frequency:.3f} Hz, not {TONE} Hz")
 
               # The sensor: never torn, never missing, and its sample moving at the
@@ -2251,12 +2305,14 @@ jobs:
       # line a sample was more than the console carries in a millisecond,
       # the loop fell behind its deadlines, and a filter's coefficients are
       # right at one rate only. It samples 250 a second now, and the probe
-      # checks the rate before anything else. Its second found the chain
-      # perfect and the hum at a third of its size: this runner holds the
-      # emulator up, the virtual clock runs on with the host's, and the
-      # firmware catches up in bursts — every value right for its instant,
-      # and a 50 Hz tone smeared when the samples are read as evenly spaced.
-      # The log says how often that happened.
+      # checks the rate before anything else. Its next two found the hum at a
+      # third and then a seventh of its size, the second with every sample
+      # exactly on time: the firmware's clock was slow. Upstream's systimer
+      # dropped a fraction of a tick at every read, so firmware busy-waiting
+      # on it ran half a percent slow here, and the tone arrived at another
+      # frequency by its clock — the systimer patch in qemu/patches.py, and
+      # the clock gate after blinky's. The log still says how evenly the
+      # samples fell, since a held-up host bunches them.
       - name: A filter the lab designed does in firmware what the lab says
         env:
           RUSTY_CONFIG_DIR: ${{ github.workspace }}

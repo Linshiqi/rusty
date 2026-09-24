@@ -83,6 +83,18 @@ const ESP32_MODEL_MARKER: &[u8] = b"misc.esp32.intmatrix.status";
 /// that talks about interrupts.
 const WAVE_MODEL_MARKER: &[u8] = b"[rusty:wave@";
 
+/// A systimer that keeps the virtual clock's time. Upstream's counter
+/// dropped the fraction of a tick at every read, so firmware polling it ran
+/// slow by however often it looked — about half a percent on a runner, a
+/// few on a slow machine — and a signal played against the virtual clock
+/// reached it at another frequency by its own. Nothing else of the fix is
+/// left in the binary to recognise it by, so `qemu/patches.py` leaves this.
+/// Part of playing a signal rather than a capability of its own: a table
+/// is only in the firmware's time when the firmware's clock keeps that
+/// time, so a build with the tables and without this is outdated for a
+/// sheet that plays anything.
+const CLOCK_MODEL_MARKER: &[u8] = b"[rusty:systimer-exact]";
+
 /// The markers this binary has to carry: every machine's, and the ESP32's
 /// when it is the machine that runs one.
 pub(super) fn markers_of(qemu: &Path) -> impl Iterator<Item = &'static [u8]> {
@@ -110,9 +122,10 @@ pub(super) fn models_carried(qemu: &Path) -> usize {
             .count()
 }
 
-/// Does this emulator play a signal against the firmware's own clock?
+/// Does this emulator play a signal against the firmware's own clock — the
+/// tables, and a firmware clock that keeps the time they are played in?
 pub fn has_wave_model(qemu: &Path) -> bool {
-    carries(qemu, WAVE_MODEL_MARKER)
+    carries(qemu, WAVE_MODEL_MARKER) && carries(qemu, CLOCK_MODEL_MARKER)
 }
 
 /// Does this emulator model GPIO, or is it the stock one whose write handler

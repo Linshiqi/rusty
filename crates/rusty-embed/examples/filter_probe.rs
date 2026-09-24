@@ -24,17 +24,25 @@
 //! measured through an uneven clock were only near them.
 //!
 //! **Why the stamps and not the sample count.** Rusty's QEMU keeps its
-//! virtual clock with the host's, so a host that holds the emulator up —
-//! a shared runner, a busy desk — lets the clock run on while the firmware
-//! stands still, and the firmware's loop then catches up in a burst of
-//! samples taken a conversion apart. Every value is still right for the
-//! instant it was taken; read as evenly spaced, the burst smears a 50 Hz
-//! hum to a third of its size. The first version measured that way and
-//! failed on a run whose chain was perfect. So the chain is fitted by least
-//! squares at the stamps, and the filter compared in sample order — its own
-//! order, whatever the clock did — and the probe says how uneven the clock
-//! was, since a filter written for even samples is fed uneven ones by such
-//! a host.
+//! virtual clock with the host's, so a host that holds the emulator up lets
+//! the clock run on while the firmware stands still, and the firmware's
+//! loop then catches up in a burst of samples a conversion apart — every
+//! value right for its instant, and read as evenly spaced, wrong. So the
+//! chain is fitted by least squares at the stamps, the filter is compared
+//! in sample order — its own order, whatever the clock did — and the probe
+//! says how uneven the clock was.
+//!
+//! **That was not what failed, though it was the first explanation.** The
+//! run after it had every sample exactly 4 ms after the last and the hum
+//! fitted at a seventh of its size: the firmware's clock itself was slow.
+//! Upstream's systimer dropped the fraction of a tick at every read, so a
+//! firmware busy-waiting on it ran slow by however often it looked — half a
+//! percent on a runner — and a 50 Hz tone the emulator played at 50 Hz was
+//! 50.25 Hz by the firmware's clock, three seconds of which is most of a
+//! turn of phase. `qemu/patches.py` counts both ends from the clock's zero
+//! now, and `qemu.yml` holds blinky's own stamps to the emulator's. The
+//! tones fitted at the firmware's instants are what caught it, and are what
+//! would catch it again.
 //!
 //! It exits non-zero when either claim does not hold, which is what makes
 //! it a gate. It needs rusty's QEMU with the tables (`[rusty:wave@`).

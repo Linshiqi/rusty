@@ -17,15 +17,23 @@ follows it.
   millisecond with jitter, which is a phase error of a third of a radian at
   50 Hz — enough to make a notch filter look broken and a working one look
   like noise.
-- **The firmware's clock keeps the host's time, stalls included.** The
-  emulator's virtual clock runs with the host's, so a host that holds the
-  emulator up lets the clock run on while the firmware stands still, and a
-  sampling loop then catches up in a burst. Each sample is still the signal
-  at the instant it was taken; whatever reads the samples as evenly spaced
-  — the firmware's own filter, the lab's views — reads them wrong for the
-  length of the burst. Rare on a desk, routine on a shared CI runner:
-  `filter_probe` fits its tones at the firmware's stamps for that reason,
-  and says how often the clock was held.
+- **The firmware's clock is the virtual clock.** esp-hal's `Instant` reads
+  the systimer, and the systimer keeps the virtual clock's time — which
+  upstream's did not: it dropped a fraction of a tick at every read, so a
+  firmware busy-waiting on it ran slow by however often it looked, about
+  half a percent on a runner, and a 50 Hz tone played at 50 Hz arrived at
+  50.25 by the firmware's clock. rusty's build counts both ends of every
+  interval from the clock's zero and says so in the binary
+  (`[rusty:systimer-exact]`); `qemu.yml` holds blinky's own stamps to the
+  emulator's.
+- **The virtual clock keeps the host's time, stalls included.** A host that
+  holds the emulator up lets the clock run on while the firmware stands
+  still, and a sampling loop then catches up in a burst. Each sample is
+  still the signal at the instant it was taken; whatever reads the samples
+  as evenly spaced — the firmware's own filter, the lab's views — reads them
+  wrong for the length of the burst. Rare on a desk: `filter_probe` fits its
+  tones at the firmware's stamps all the same, and says how evenly the
+  samples fell.
 - **What the host renders is exact; what it cannot know it says.** The table
   is the signal after the sheet's circuit (an RC on the pin shapes it as the
   solver says), rendered with every GPIO the firmware has not driven at rest.
@@ -41,9 +49,11 @@ follows it.
   channel declared with `[rusty:sensor]` is fed over the console at the host's
   pace, and the panel says so.
 - **An older emulator is not asked to pretend.** Playing tables is a model
-  only rusty's newest build carries (`[rusty:wave@` is its marker). With an
-  older copy a signal cannot be played in the firmware's time, the plan says
-  so beside the Upgrade button, and nothing claims otherwise.
+  only rusty's newest build carries, over a systimer that keeps time
+  (`[rusty:wave@` and `[rusty:systimer-exact]` are its markers, and it
+  takes both). With an older copy a signal cannot be played in the
+  firmware's time, the plan says so beside the Upgrade button, and nothing
+  claims otherwise.
 
 ## The pieces
 

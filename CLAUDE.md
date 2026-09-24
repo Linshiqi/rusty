@@ -4578,23 +4578,34 @@ half, `view/lab/` the four instruments of the Signals tab and
   prints whole counts. Firmware that filters faster than that has to
   decimate what it prints, and the lab measures whatever rate the stamps
   say.
-- **A host that holds the emulator up is a firmware that catches up in a
-  burst.** Rusty's QEMU keeps its virtual clock with the host's, so while a
-  busy runner holds the process, the clock runs on and the firmware stands
-  still; its loop then takes the samples it missed a conversion apart. Every
-  value is right for the instant it was taken — the table is read at the
-  virtual clock — and every analysis that reads samples as evenly spaced is
-  wrong about them: the filter gate's second run found the chain perfect
-  and the 50 Hz hum at a third of its size, the gain through the filter
-  still within 2% because input and output were smeared alike. The gate
-  fits the tones at the firmware's own stamps now (least squares, exact
-  however the samples fell), holds the filter to the design sample for
-  sample, and says how often the clock was held — which is also what a
-  filter written for even samples was fed. The lab's views read records as
-  even; on a desk the bursts are rare, and `-icount`, which ties the clock
-  to instructions, is the fix that would remove them at the emulator's
-  expense. **Measure against the clock the data carries, not the count of
-  it.**
+- **The firmware's clock was slow, and the gate that would have seen it
+  was loose.** Upstream's systimer counted the whole ticks between two
+  readings and threw the fraction left over away at every one, so firmware
+  polling it — every busy wait, every esp-hal delay — ran slow by however
+  often it looked: blinky's 500 ms wait lasted 502 ms of virtual time on a
+  runner and 530 on a slow container, and a 50 Hz tone the emulator played
+  against the virtual clock reached the firmware at 50.25 Hz by its own.
+  The signal gate timed its tone within half a percent and passed; the
+  filter gate fitted the hum at the firmware's stamps and found a third of
+  it, then a seventh. `qemu/patches.py` counts both ends of each interval
+  from the clock's zero so the fraction carries, leaves
+  `[rusty:systimer-exact]` in the binary, and `has_wave_model` asks for it
+  beside the tables — a signal is in the firmware's time only when the
+  firmware's clock keeps that time. `qemu.yml` holds blinky's own systimer
+  stamps to the emulator's (slope within 1e-4), and the signal gate's
+  tolerance is a twentieth of a percent. Reproduced and proven in the
+  Docker container before a runner saw it: slope 0.977 before, 0.999999
+  after. **A tolerance wider than the effect it guards is not a gate.**
+- **And the first explanation was wrong, confidently.** Between the two
+  runs this file said the runner held the emulator up and the firmware
+  caught up in bursts — true of QEMU without `-icount` (the virtual clock
+  keeps the host's, stalls included), so the gate fits its tones at the
+  firmware's stamps and says how evenly they fell, and a held-up host
+  still bunches samples a filter written for even ones reads wrong. But the
+  run that followed had every sample exactly 4 ms apart and a worse fit.
+  The hypothesis had explained the numbers without predicting anything;
+  the probe printing how even the samples were is what retired it. **Make
+  the diagnosis print the fact that would refute it.**
 - **The live-circuit probe counted every conversion twice and took lines
   from the circuit it was testing.** It read the firmware's line *and* the
   emulator's report of the same conversion — equal neighbours that cut every

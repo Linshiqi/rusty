@@ -51,6 +51,13 @@ can change what a generator plays while the simulation runs, and a
 `examples/filter-lab` puts it together: a generator playing a slow tone with
 mains hum on it, and firmware running a filter exported from the Design view.
 
+**The simulator's clock keeps time.** Firmware timing itself in the
+emulator — a busy wait, an esp-hal delay, a control loop's period — ran slow
+by however often it read its clock: half a percent on a fast machine,
+several on a slow one, so a 500 ms blink took 502 ms or 530. The emulator's
+timer now keeps the firmware's clock exactly on the simulation's time, which
+is also what lets a played signal arrive at its own frequency.
+
 **It needs this release's emulator**, which the installer carries. An older
 copy you installed yourself still runs everything else; the Simulate panel
 says it cannot play a signal and offers the Upgrade.

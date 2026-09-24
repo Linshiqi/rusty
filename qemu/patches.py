@@ -65,6 +65,24 @@ deleting somebody else's device. And every peripheral on this part is
 reachable at two addresses, the DPORT one and an APB mirror, so each
 region is mapped twice exactly as upstream's own helper does it.
 
+## The clock
+
+**The firmware's clock ran slow by however often it looked at it.** The
+systimer is what esp-hal's `Instant` reads on the C3 and the S3 — every busy
+wait, every stamp a firmware prints — and it has to keep the virtual clock's
+time, because that is the clock rusty's device stamps its reports with and
+plays a signal against. Upstream's counter counted the whole ticks in each
+interval between two readings and threw the fraction left over away, at
+every reading. Firmware polling it in a loop reads it about once a
+microsecond and lost up to a sixteenth of one each time: blinky's 500 ms
+busy wait lasted 530 ms of virtual time on a slow machine and about 502 on
+a runner, and a 50 Hz tone the emulator played arrived at another frequency
+by the firmware's clock — which is how the filter gate found it, as a hum
+fitted at a third of its size on a run with no stall in it. Both ends are
+counted from the clock's zero now, so the fraction carries. The binary says
+so (`[rusty:systimer-exact]`), because a signal played against the virtual
+clock is only in the firmware's time when this is there.
+
 ## The CPU
 
 **An ESP32 application's first float faults**, because `CPENABLE` resets to
@@ -408,6 +426,31 @@ EDITS = [
         "        const unsigned half =\n"
         "            (unsigned)(index - ESP32C3_INTMATRIX_IO_STATUS0_REG);\n"
         "        r = (uint32_t)(s->irq_levels >> (half * 32));\n",
+    ),
+    # The systimer keeps the virtual clock's time: both ends of an interval
+    # counted from the clock's zero, so the fraction of a tick at either end
+    # carries into the next reading instead of being dropped at every one.
+    # Inserted after upstream's own sum, which it corrects by the difference.
+    (
+        "hw/timer/esp_systimer.c",
+        "    counter->value = (counter->value + ticks) & ESP_SYSTIMER_52BIT_MASK;\n",
+        "    /* rusty: the ticks between the two instants, each counted from\n"
+        "     * the clock's zero, so the fraction of a tick at either end\n"
+        "     * carries into the next reading. See qemu/patches.py. */\n"
+        "    counter->value = (counter->value - ticks\n"
+        "                      + (now * ESP_SYSTIMER_CNT_PER_US) / 1000\n"
+        "                      - (counter->base * ESP_SYSTIMER_CNT_PER_US) / 1000)\n"
+        "                     & ESP_SYSTIMER_52BIT_MASK;\n",
+    ),
+    # And the binary says so: `simulate::models` reads this to tell a clock
+    # that keeps time from one that drifted, since the fix leaves nothing
+    # else behind to recognise it by.
+    (
+        "hw/timer/esp_systimer.c",
+        "#define TICKS_TO_NS(ticks) (((ticks) / ESP_SYSTIMER_CNT_PER_US) * 1000)\n",
+        "\n/* rusty: this counter keeps the virtual clock's time. */\n"
+        "static const char rusty_systimer_marker[] __attribute__((used)) =\n"
+        "    \"[rusty:systimer-exact]\";\n",
     ),
     # The FPU is usable from reset on the silicon, and upstream's system
     # emulation leaves it switched off.

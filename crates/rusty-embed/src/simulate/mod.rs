@@ -162,10 +162,17 @@ mod tests {
         let before = write(&dir.path().join("data"), every);
         let with_tables = write(
             &dir.path().join("bundle"),
-            &[every, b" [rusty:wave@"].concat(),
+            &[every, b" [rusty:wave@ [rusty:systimer-exact]"].concat(),
         );
         assert!(has_peripherals(&before) && !has_wave_model(&before));
         assert!(has_wave_model(&with_tables));
+        // The tables alone, over a clock that drifts from them, do not play
+        // a signal in the firmware's time.
+        let drifting = write(
+            &dir.path().join("drifting"),
+            &[every, b" [rusty:wave@"].concat(),
+        );
+        assert!(!has_wave_model(&drifting));
 
         let both = Machine {
             tools: Some(dir.path().join("data")),
@@ -523,7 +530,10 @@ mod tests {
             }
         };
         let before = install("before", every);
-        let current = install("current", &[every, b" [rusty:wave@"].concat());
+        let current = install(
+            "current",
+            &[every, b" [rusty:wave@ [rusty:systimer-exact]"].concat(),
+        );
         let limits = |machine: &Machine| -> Vec<String> {
             plan_on(&c3(dir.path()), false, machine)
                 .limits
