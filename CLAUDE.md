@@ -123,8 +123,8 @@ cargo run -p rusty-embed --example flight_probe -- examples/rate-loop
 # converter by rusty's emulator — three tones fitted at the firmware's own
 # stamps, one of them switched to by a scenario's `play` step mid-run — and
 # the firmware's output held to the design's filter of its input, sample for
-# sample. Needs a QEMU with the tables (qemu-v9 or later); `--replay
-# <serial.log>` judges a captured log instead.
+# sample. Needs a QEMU with the tables and the exact systimer (qemu-v10 or
+# later); `--replay <serial.log>` judges a captured log instead.
 cargo run -p rusty-embed --example filter_probe -- examples/filter-lab
 
 # The workbench without the window

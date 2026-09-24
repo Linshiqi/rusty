@@ -50,7 +50,11 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// plays a signal: a table on a converter or in a sensor's registers,
 /// sample-exact against the firmware's own clock (`[rusty:wave@`, which a
 /// build before this one does not carry — the plan says so beside the
-/// Upgrade, rather than the marker making every older copy out of date).
+/// Upgrade, rather than the marker making every older copy out of date) —
+/// over a systimer that keeps the virtual clock's time, which upstream's
+/// did not (`[rusty:systimer-exact]`; a firmware polling it ran slow by
+/// however often it looked, and a played tone arrived at another
+/// frequency by its clock).
 ///
 /// The tag is pinned for the reason in this module's header; the repository
 /// it hangs off is [`REPO`], named once for the whole crate. **It moves with
@@ -59,7 +63,7 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// Upgrade that would fix it would fetch the same old build again. The
 /// QEMU workflow's packaging step checks the same list, so a build that
 /// lacks one never becomes a release.
-const RUSTY_QEMU_TAG: &str = "qemu-v9";
+const RUSTY_QEMU_TAG: &str = "qemu-v10";
 
 /// An archive to fetch: where to put it, the URLs to try in order, and the
 /// extraction step. One shape for QEMU, the debuggers and the C toolchain —
