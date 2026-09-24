@@ -5556,6 +5556,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "tokio",
+ "unicode-width",
  "vt100",
  "windows-sys 0.59.0",
 ]

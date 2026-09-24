@@ -20,6 +20,8 @@
 
 use std::io::{Read, Write};
 
+use unicode_width::UnicodeWidthChar;
+
 /// Run the shell until EOF or `exit`. Never returns to the caller.
 pub fn run() -> ! {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -286,11 +288,7 @@ fn read_line(
             0x04 if line.is_empty() => return None,
             0x7f | 0x08 => {
                 if let Some(gone) = line.pop() {
-                    // Erase the glyph — twice for a wide char's two cells.
-                    let cells = if (gone as u32) > 0xFF { 2 } else { 1 };
-                    for _ in 0..cells {
-                        let _ = write!(stdout, "\x08 \x08");
-                    }
+                    rub_out(stdout, cells(gone));
                     let _ = stdout.flush();
                 }
             }
@@ -366,11 +364,29 @@ fn read_csi(bytes: &mut impl Iterator<Item = std::io::Result<u8>>) -> Option<(Ve
 
 /// Repaint: wipe the line as it stands, write `next` in its place.
 fn repaint_line(stdout: &mut impl Write, line: &str, next: &str) {
-    for _ in 0..line.chars().count() {
-        let _ = write!(stdout, "\x08 \x08");
-    }
+    rub_out(stdout, line.chars().map(cells).sum());
     let _ = write!(stdout, "{next}");
     let _ = stdout.flush();
+}
+
+/// How many cells `c` takes on screen, measured the way vt100 — the
+/// terminal the pty is drawn by — measures it: a character at a time, by
+/// the same table. `中` is two, `ž` one, a combining accent none of its own
+/// (it is drawn into the cell before it) and a control character none.
+///
+/// Backspace used to call anything past U+00FF two cells wide, so `ž`
+/// rubbed out the cell before it too, and recalling history rubbed out one
+/// cell a character, which left half of a CJK line on the screen.
+fn cells(c: char) -> usize {
+    c.width().unwrap_or(0)
+}
+
+/// Rub out the `cells` cells before the cursor, leaving it on the first:
+/// back, a space over the cell, back again, for each.
+fn rub_out(stdout: &mut impl Write, cells: usize) {
+    for _ in 0..cells {
+        let _ = write!(stdout, "\x08 \x08");
+    }
 }
 
 /// Accumulate the rest of a UTF-8 scalar whose lead byte just arrived, then
@@ -471,5 +487,50 @@ impl brush_core::builtins::Command for LsCommand {
         } else {
             brush_core::ExecutionResult::success()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One cell rubbed out: back, a space over it, back again.
+    const ERASE: &str = "\x08 \x08";
+
+    /// What editing a line writes to the terminal for `input`, as text, and
+    /// the line it hands back.
+    fn typed(input: &str, history: &[&str]) -> (String, Option<String>) {
+        let history: Vec<String> = history.iter().map(|line| line.to_string()).collect();
+        let mut bytes = input.bytes().map(std::io::Result::Ok);
+        let mut written = Vec::new();
+        let line = read_line(&mut bytes, &mut written, &history);
+        (String::from_utf8(written).expect("UTF-8 out"), line)
+    }
+
+    /// Backspace rubs out the cells the character took: two for `中`, and one
+    /// for `ž`, which the old rule — anything past U+00FF is wide — gave two,
+    /// rubbing out the cell before it as well.
+    #[test]
+    fn backspace_rubs_out_the_cells_the_character_took() {
+        let (written, line) = typed("中\x7f\r", &[]);
+        assert_eq!(written, format!("中{}\r\n", ERASE.repeat(2)));
+        assert_eq!(line.as_deref(), Some(""));
+
+        let (written, line) = typed("ž\x7f\r", &[]);
+        assert_eq!(written, format!("ž{ERASE}\r\n"));
+        assert_eq!(line.as_deref(), Some(""));
+    }
+
+    /// Up rubs out the line it replaces cell by cell, and a CJK character is
+    /// two of them: counted by characters, `中文` left half of itself on the
+    /// screen beside the line recalled over it — typed or recalled alike.
+    #[test]
+    fn recalling_a_line_rubs_out_every_cell_of_the_one_it_replaces() {
+        let (written, line) = typed("中文\x1b[A\x1b[A\r", &["ls", "echo 中文"]);
+        assert_eq!(
+            written,
+            format!("中文{}echo 中文{}ls\r\n", ERASE.repeat(4), ERASE.repeat(9))
+        );
+        assert_eq!(line.as_deref(), Some("ls"));
     }
 }
