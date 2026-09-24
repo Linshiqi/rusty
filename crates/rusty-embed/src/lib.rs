@@ -78,6 +78,10 @@ mod esp_env;
 pub mod firmware;
 #[cfg(feature = "backend")]
 pub mod flash;
+// A signal generator on the sheet and the table it plays at each converter
+// it reaches, stepped through the sheet's circuit. Pure, beside `circuit`
+// and `live`, whose arithmetic it is.
+pub mod generator;
 #[cfg(feature = "backend")]
 pub mod host_debug;
 #[cfg(feature = "backend")]
@@ -119,6 +123,10 @@ pub mod toolchain;
 #[cfg(feature = "backend")]
 pub mod tools;
 mod union_find;
+// The lines that put a rendered signal on the emulator and its account of
+// playing it. Wasm-safe with the protocol: the frontend reads the account
+// to line the signal it drew up with the conversions the emulator reports.
+pub mod wave;
 #[cfg(feature = "backend")]
 pub mod wizard;
 

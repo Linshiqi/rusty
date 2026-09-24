@@ -79,6 +79,12 @@ pub struct Step {
     /// A sensor's readings: `{ part = "U2", ax = 0.5 }`.
     #[serde(default)]
     pub set: Option<SetReadings>,
+    /// What a signal plays from here on: `{ part = "V1", signal = "sine
+    /// f=20 a=0.5" }` on a generator, and with `reading = "gz"` on a sensor
+    /// rusty answers for. The emulator plays it against the firmware's own
+    /// clock, as a run's start does.
+    #[serde(default)]
+    pub play: Option<PlaySignal>,
 }
 
 /// A switch by its reference on the sheet, or a GPIO by number.
@@ -104,6 +110,16 @@ pub struct SetReadings {
     pub values: BTreeMap<String, f64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaySignal {
+    pub part: String,
+    /// The sensor's reading the signal moves; none for a generator.
+    #[serde(default)]
+    pub reading: Option<String>,
+    pub signal: String,
+}
+
 /// A step, once it is known to say exactly one thing.
 #[derive(Debug, Clone, PartialEq)]
 enum Action {
@@ -113,6 +129,8 @@ enum Action {
     Delay(f64),
     ExpectPin(u8, bool),
     Set(String, BTreeMap<String, f64>),
+    /// A part, where on it the signal is kept, and the signal's text.
+    Play(String, String, String),
 }
 
 impl Step {
@@ -149,6 +167,17 @@ impl Step {
                 return Err(format!("setting {} names no reading to set", set.part));
             }
             found.push(Action::Set(set.part.clone(), set.values.clone()));
+        }
+        if let Some(play) = &self.play {
+            // Read now, so a typo fails the scenario before anything is
+            // built rather than halfway through a run.
+            crate::signal::Signal::parse(&play.signal)
+                .map_err(|why| format!("{}'s signal does not read: {why}", play.part))?;
+            let key = match &play.reading {
+                Some(reading) => format!("{}{reading}", crate::generator::SIGNAL_OF),
+                None => crate::generator::SIGNAL.to_string(),
+            };
+            found.push(Action::Play(play.part.clone(), key, play.signal.clone()));
         }
         match found.len() {
             1 => Ok(found.remove(0)),
@@ -302,6 +331,10 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         Err(reason) => return Outcome::unrunnable(reason),
     };
     let mut outcome = Outcome::opening(&plan, on);
+    let waves = plan
+        .emulator
+        .as_ref()
+        .is_some_and(|emulator| emulator.waves);
     if plan
         .emulator
         .as_ref()
@@ -368,6 +401,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
             sheet.as_ref(),
             &rows,
             &parts.specs,
+            waves,
             tx.clone(),
             &mut outcome,
             on,
@@ -394,7 +428,11 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     };
     let mut play = Play::new(scenario);
     let verdict = loop {
-        if let Err(verdict) = play.take_steps(&board, outcome.pins_from_emulator) {
+        let taken = play.take_steps(&board, outcome.pins_from_emulator);
+        for line in std::mem::take(&mut play.said) {
+            outcome.note(line, on);
+        }
+        if let Err(verdict) = taken {
             break verdict;
         }
         if play.finished() {
@@ -501,20 +539,29 @@ fn build(steps: &[CommandPlan], root: &Path, on: &mut dyn FnMut(Event<'_>)) -> R
 }
 
 /// The pin channel to the emulator listening on `port`, started as the
-/// sheet declares — its switches' polarities, its sensors, and the
-/// voltages it solves to, which a sheet that cannot be solved goes without.
+/// sheet declares — its switches' polarities, its sensors, its signals
+/// when the emulator plays tables (`waves`), and the voltages it solves
+/// to, which a sheet that cannot be solved goes without.
+#[allow(clippy::too_many_arguments)]
 fn pin_channel(
     port: u16,
     sheet: Option<&Sheet>,
     rows: &[Row],
     specs: &[Spec],
+    waves: bool,
     tx: mpsc::Sender<Heard>,
     outcome: &mut Outcome,
     on: &mut dyn FnMut(Event<'_>),
 ) -> PinChannel {
-    let start = sheet
+    let mut start = sheet
         .map(|sheet| super::start_of(sheet, rows, specs))
         .unwrap_or_default();
+    if !waves {
+        start.without_signals();
+    }
+    for line in &start.said {
+        outcome.note(line.clone(), on);
+    }
     let live = sheet.and_then(|sheet| {
         match Live::at_rest(
             sheet.clone(),
@@ -594,6 +641,18 @@ impl Board {
     }
 
     /// A sensor's readings, set on the bus.
+    /// Play a signal from here on, and what the run says about it.
+    fn play(&self, part: &str, key: &str, text: &str) -> Result<Vec<String>, Verdict> {
+        let Some(pins) = &self.pins else {
+            return Err(Verdict::Failed(
+                "a signal needs rusty's emulator, which plays it against the firmware's clock"
+                    .to_string(),
+            ));
+        };
+        pins.set_signal(part, key, Some(text))
+            .map_err(|why| Verdict::Failed(format!("{part}: {why}")))
+    }
+
     fn set(&self, part: &str, values: &BTreeMap<String, f64>) -> Result<(), Verdict> {
         let Some(pins) = &self.pins else {
             return Err(Verdict::Failed(
@@ -624,6 +683,8 @@ struct Play<'s> {
     seen: Vec<bool>,
     /// The last level heard for each GPIO.
     levels: BTreeMap<u8, bool>,
+    /// What the steps taken so far had the run say, not yet said.
+    said: Vec<String>,
     started: Instant,
     deadline: Instant,
 }
@@ -642,6 +703,7 @@ impl<'s> Play<'s> {
             resume_at: None,
             seen: vec![false; scenario.expect.len()],
             levels: BTreeMap::new(),
+            said: Vec::new(),
             started,
             deadline: started
                 + Duration::from_secs_f64(scenario.timeout.unwrap_or(DEFAULT_TIMEOUT)),
@@ -676,6 +738,10 @@ impl<'s> Play<'s> {
                     self.expect_pin(*gpio, *level, pins_from_emulator)?;
                 }
                 Action::Set(part, values) => board.set(part, values)?,
+                Action::Play(part, key, text) => {
+                    let said = board.play(part, key, text)?;
+                    self.said.extend(said);
+                }
             }
             self.next += 1;
         }
@@ -875,6 +941,31 @@ write-serial = "Skp=2.5"
         assert_eq!(values.get("ax"), Some(&0.5));
         assert_eq!(values.get("gz"), Some(&-30.0));
         assert_eq!(actions[6], Action::WriteSerial("Skp=2.5".into()));
+    }
+
+    /// A signal a step plays is read with the scenario: a generator's goes
+    /// where a generator keeps it, a reading's under its reading, and one
+    /// that does not read fails the scenario naming the part.
+    #[test]
+    fn a_play_step_reads_its_signal_before_the_run() {
+        let scenario = Scenario::from_toml(
+            "[[step]]\nplay = { part = \"V1\", signal = \"sine f=20 a=0.5\" }\n\n\
+             [[step]]\nplay = { part = \"U2\", reading = \"gz\", signal = \"dc 30\" }\n",
+        )
+        .unwrap();
+        let actions: Vec<Action> = scenario.steps.iter().map(|s| s.action().unwrap()).collect();
+        assert_eq!(
+            actions,
+            [
+                Action::Play("V1".into(), "signal".into(), "sine f=20 a=0.5".into()),
+                Action::Play("U2".into(), "signal.gz".into(), "dc 30".into()),
+            ]
+        );
+        let typo = Scenario::from_toml(
+            "[[step]]\nplay = { part = \"V1\", signal = \"sine fq=20 a=0.5\" }\n",
+        )
+        .unwrap_err();
+        assert!(typo.contains("V1") && typo.contains("fq"), "{typo}");
     }
 
     /// A step that says two things, or nothing, is refused before anything

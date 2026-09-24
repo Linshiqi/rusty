@@ -186,17 +186,24 @@ pub fn operating_point(
     let bridged = of(sheet, rows, pressed, levels)?;
     match crate::solve::dc(&bridged.circuit) {
         Ok(answer) => Ok(Solved { bridged, answer }),
-        // The one refusal worth restating: the solver knows the node and
-        // the bridge knows the pins, and only here are both in hand.
-        Err(Trouble::Floating { node }) => Err(Unsolved::Floating {
+        Err(why) => Err(unsolved(&bridged, why)),
+    }
+}
+
+/// A solver's refusal in the sheet's terms. The one worth restating is a
+/// floating node: the solver knows its number and the bridge knows the pins
+/// on it, and only where both are in hand can it say which end is loose.
+pub(crate) fn unsolved(bridged: &Bridged, why: Trouble) -> Unsolved {
+    match why {
+        Trouble::Floating { node } => Unsolved::Floating {
             pins: bridged
                 .node_of
                 .iter()
                 .filter(|(_, on)| **on == node)
                 .map(|(pin, _)| pin.clone())
                 .collect(),
-        }),
-        Err(why) => Err(Unsolved::Trouble(why)),
+        },
+        why => Unsolved::Trouble(why),
     }
 }
 
@@ -429,6 +436,23 @@ pub fn of(
                     });
                 };
                 Element::Capacitor { a, b, farads }
+            }
+            // A generator is a source between its two terminals, at the
+            // volts its signal starts at. What it does over time is the
+            // transient's business: the table a generator plays is this
+            // same element driven sample by sample (`generator`).
+            Behaviour::Generator => {
+                let Some((plus, minus)) = ends("1", "2") else {
+                    continue;
+                };
+                if plus == minus {
+                    continue;
+                }
+                Element::Source {
+                    plus,
+                    minus,
+                    volts: crate::generator::volts_at_start(part),
+                }
             }
             // Nothing else is an element. A closed switch is already one
             // solid node — `solid_nets` joined it — and an open one is no

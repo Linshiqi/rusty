@@ -215,6 +215,23 @@ impl Reset {
     }
 }
 
+/// The widest register block the emulator plays as one table
+/// (`ESP32_WAVE_MAX_WIDTH`): past it, a sample would not travel whole.
+pub const MAX_BLOCK: usize = 64;
+
+/// A part's data registers as one block, a sample after another: what the
+/// emulator plays so that a burst read at any instant is one sample whole
+/// (`docs/signals.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    /// The first register of the block.
+    pub reg: u8,
+    /// Bytes per sample.
+    pub width: usize,
+    /// The samples, one after another.
+    pub bytes: Vec<u8>,
+}
+
 /// One part on the bus: what it is reading, and what the firmware has
 /// configured that changes how the reading is encoded.
 #[derive(Debug, Clone, PartialEq)]
@@ -275,6 +292,12 @@ impl Device {
         true
     }
 
+    /// The readings this part has, by the keys a sheet and a slider name
+    /// them with, in its declaration's order.
+    pub fn keys(&self) -> Vec<&str> {
+        self.spec.channels.iter().map(|c| c.key.as_str()).collect()
+    }
+
     fn index_of(&self, key: &str) -> Option<usize> {
         self.spec.channels.iter().position(|c| c.key == key)
     }
@@ -313,6 +336,58 @@ impl Device {
                 (0xe1, bosch::humidity_calibration()),
             ],
         }
+    }
+
+    /// A table of the part's readings as `signals` move them: every data
+    /// register as one block — from the first to the end of the last, a
+    /// register between two readings holding what it always holds — one
+    /// block per sample. `signals` gives each moving reading its samples,
+    /// all the same length; a reading not named keeps its value, and each
+    /// sample is encoded exactly as a slider's value is, at the range the
+    /// firmware last chose, so a range change is a table rendered again.
+    ///
+    /// `None` when the part has no data registers, when they span more than
+    /// the emulator plays as one block, or when there is nothing to play.
+    pub fn block(&self, signals: &[(String, Vec<f64>)]) -> Option<Block> {
+        let data = self.data();
+        let reg = data.iter().map(|(at, _)| *at).min()?;
+        let end = data
+            .iter()
+            .map(|(at, bytes)| usize::from(*at) + bytes.len())
+            .max()?;
+        let width = end - usize::from(reg);
+        if width == 0 || width > MAX_BLOCK {
+            return None;
+        }
+        let samples = signals.iter().map(|(_, samples)| samples.len()).min()?;
+
+        // Into a block, whatever the runs cover of it.
+        let lay = |block: &mut [u8], runs: &[(u8, Vec<u8>)]| {
+            for (at, bytes) in runs {
+                for (offset, byte) in bytes.iter().enumerate() {
+                    let index = usize::from(*at) + offset;
+                    if let Some(slot) = index.checked_sub(usize::from(reg))
+                        && let Some(cell) = block.get_mut(slot)
+                    {
+                        *cell = *byte;
+                    }
+                }
+            }
+        };
+        let mut rest = vec![0u8; width];
+        lay(&mut rest, &self.registers());
+
+        let mut moving = self.clone();
+        let mut bytes = Vec::with_capacity(samples * width);
+        for sample in 0..samples {
+            for (key, values) in signals {
+                moving.set(key, values[sample]);
+            }
+            let mut block = rest.clone();
+            lay(&mut block, &moving.data());
+            bytes.extend(block);
+        }
+        Some(Block { reg, width, bytes })
     }
 
     /// Only the registers that change when a reading does: what a slider
@@ -671,6 +746,46 @@ mod tests {
             assert_eq!(id(&spec.name), Some(spec.id.as_str()));
             assert!(!spec.addresses.is_empty());
         }
+    }
+
+    /// A table of the readings as signals move them is the part's data
+    /// registers, one block a sample, each sample decoding to the values it
+    /// was given — at the range the firmware chose — and the readings no
+    /// signal moves holding still across every sample.
+    #[test]
+    fn a_block_is_every_data_register_a_sample_at_a_time() {
+        let mut device = Device::new(built_in("mpu6050"), &props(&[("az", "1")]));
+        let gz: Vec<f64> = vec![0.0, 10.0, -20.0, 250.0];
+        let block = device
+            .block(&[("gz".to_string(), gz.clone())])
+            .expect("the MPU-6050 has data registers");
+        assert_eq!(block.reg, 0x3b, "from ACCEL_XOUT_H");
+        assert_eq!(block.width, 14, "to GYRO_ZOUT_L");
+        assert_eq!(block.bytes.len(), 4 * 14);
+        for (sample, want) in gz.iter().enumerate() {
+            let at = |offset: usize| {
+                let base = sample * 14 + offset;
+                i16::from_be_bytes([block.bytes[base], block.bytes[base + 1]])
+            };
+            assert_eq!(
+                f64::from(at(0x47 - 0x3b)),
+                (want * 131.0).round(),
+                "gz at ±250 °/s"
+            );
+            assert_eq!(at(0x3f - 0x3b), 16384, "az holds its 1 g throughout");
+        }
+
+        // The firmware chooses ±2000 °/s, and the same readings encode at
+        // 16.4 counts a degree.
+        device.wrote(&[0x1b, 0x18]);
+        let block = device.block(&[("gz".to_string(), gz)]).unwrap();
+        let gz_at = |sample: usize| {
+            let base = sample * 14 + (0x47 - 0x3b);
+            i16::from_be_bytes([block.bytes[base], block.bytes[base + 1]])
+        };
+        assert_eq!(f64::from(gz_at(3)), (250.0f64 * 16.4).round());
+
+        assert_eq!(device.block(&[]), None, "nothing to play");
     }
 
     /// What the `mpu6050` crate does with the registers, done here: a level

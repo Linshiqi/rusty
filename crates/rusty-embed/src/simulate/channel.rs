@@ -10,18 +10,21 @@
 //! `rusty-cli sim` and the assistant's tool — because a board that behaved
 //! differently depending on who was watching it would be two boards.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::generator;
 use crate::live::Live;
 use crate::model::Sheet;
 use crate::nets::{self, Behaviour, BusDevice, Row, WireDevice};
 use crate::protocol;
 use crate::sensor;
+use crate::signal::Signal;
+use crate::wave::{self, WaveTarget};
 
 /// What a run says down the channel before anything moves.
 ///
@@ -45,6 +48,44 @@ pub struct Start {
     pub wire: Vec<WireDevice>,
     /// The devices on `bus` whose readings a slider moves.
     pub sensors: Vec<Sensor>,
+    /// What plays against the firmware's own clock from the first
+    /// instruction: a generator's pins, a sensor's moving readings.
+    pub tables: Vec<wave::Table>,
+    /// What the run should say about them, a line each: where each signal
+    /// plays, and why one does not.
+    pub said: Vec<String>,
+    /// The sheet and its header, kept so a signal changed while the run
+    /// goes on is rendered through the same circuit the first one was.
+    pub sheet: Option<Sheet>,
+    pub rows: Vec<Row>,
+    /// Set by [`Start::without_signals`]: nothing plays on this run.
+    pub silent: bool,
+}
+
+/// What a run on an emulator that cannot play a table says instead of what
+/// its signals would have played.
+pub const NO_WAVES: &str = "[rusty:signal] this emulator cannot play a signal against the \
+                            firmware's own clock, so nothing plays — the Simulate panel's \
+                            Upgrade installs the build that can";
+
+impl Start {
+    /// Everything a signal would play, taken off: for an emulator that
+    /// cannot play one, which would be handed lines for a model it does
+    /// not have. [`NO_WAVES`] is said instead when anything was going to
+    /// play, and a signal changed while the run goes on is refused with it.
+    pub fn without_signals(&mut self) {
+        let had =
+            !self.tables.is_empty() || self.sensors.iter().any(|sensor| !sensor.signals.is_empty());
+        self.tables.clear();
+        for sensor in &mut self.sensors {
+            sensor.signals.clear();
+        }
+        self.said.clear();
+        if had {
+            self.said.push(NO_WAVES.to_string());
+        }
+        self.silent = true;
+    }
 }
 
 /// A sensor on the bus that rusty answers for, register by register.
@@ -54,6 +95,26 @@ pub struct Sensor {
     pub part: String,
     pub address: u8,
     pub device: sensor::Device,
+    /// The readings a signal moves, each one loop of samples at `rate` a
+    /// second. None, and the device holds still where its sliders put it.
+    pub signals: Vec<(String, Vec<f64>)>,
+    pub rate: u32,
+}
+
+impl Sensor {
+    /// Its register block as its signals move it, at the encoding the
+    /// firmware has chosen — `None` when nothing moves it.
+    pub fn table(&self) -> Option<wave::Table> {
+        if self.signals.is_empty() {
+            return None;
+        }
+        let block = self.device.block(&self.signals)?;
+        Some(wave::Table::Block {
+            address: self.address,
+            rate: self.rate,
+            block,
+        })
+    }
 }
 
 /// What `sheet` declares, read the way the run will say it. `specs` is the
@@ -91,7 +152,7 @@ pub fn start_of(sheet: &Sheet, rows: &[Row], specs: &[sensor::Spec]) -> Start {
     let analog = sources.chain(pots).collect();
 
     let bus = nets::bus_devices(sheet, rows, specs).0;
-    let sensors = bus
+    let mut sensors: Vec<Sensor> = bus
         .iter()
         .filter_map(|device| {
             let part = sheet.parts.iter().find(|p| p.reference == device.part)?;
@@ -100,9 +161,52 @@ pub fn start_of(sheet: &Sheet, rows: &[Row], specs: &[sensor::Spec]) -> Start {
                 part: device.part.clone(),
                 address: device.address,
                 device: sensor::Device::new(spec.clone(), &part.props),
+                signals: Vec::new(),
+                rate: 0,
             })
         })
         .collect();
+
+    // What plays against the firmware's own clock: the generators, through
+    // the circuit to every converter they reach, and every sensor a signal
+    // moves, in its own register block.
+    let played = generator::generators(sheet, rows);
+    let mut said = played.said;
+    let mut tables = played.tables;
+    for sensor in &mut sensors {
+        let Some(part) = sheet.parts.iter().find(|p| p.reference == sensor.part) else {
+            continue;
+        };
+        let moved = generator::sensor_signals(part, &sensor.device);
+        said.extend(moved.said);
+        sensor.signals = moved.signals;
+        sensor.rate = moved.rate;
+        match sensor.table() {
+            Some(table) => tables.push(table),
+            None if !sensor.signals.is_empty() => said.push(format!(
+                "[rusty:signal] {}: its readings span more registers than the emulator plays \
+                 as one sample ({} bytes), so no signal moves them",
+                sensor.part,
+                sensor::MAX_BLOCK
+            )),
+            None => {}
+        }
+    }
+    // A reading a signal would move on a part rusty does not answer for is
+    // a signal nobody would hear, and said as one.
+    for part in &sheet.parts {
+        let moves = part
+            .props
+            .keys()
+            .any(|key| key.starts_with(generator::SIGNAL_OF) && key != generator::SIGNAL_RATE);
+        if moves && !sensors.iter().any(|sensor| sensor.part == part.reference) {
+            said.push(format!(
+                "[rusty:signal] {}: a signal moves its readings, and rusty answers for it on \
+                 the bus only with a `model` and wires to the bus, so nothing plays",
+                part.reference
+            ));
+        }
+    }
 
     Start {
         low_when_pressed,
@@ -110,6 +214,11 @@ pub fn start_of(sheet: &Sheet, rows: &[Row], specs: &[sensor::Spec]) -> Start {
         bus,
         wire: nets::wire_devices(sheet, rows).0,
         sensors,
+        tables,
+        said,
+        sheet: Some(sheet.clone()),
+        rows: rows.to_vec(),
+        silent: false,
     }
 }
 
@@ -133,9 +242,30 @@ pub struct PinChannel {
     out: Arc<Mutex<Option<TcpStream>>>,
     low_when_pressed: Arc<HashSet<u32>>,
     sensors: Arc<Mutex<Vec<Sensor>>>,
+    generators: Arc<Mutex<Generators>>,
     /// Set when the run that opened the channel is over, which is the only
     /// thing that stops the connection being retried.
     closed: Arc<AtomicBool>,
+}
+
+/// What a run's generators are rendered from, kept so a signal changed
+/// while it runs goes through the same circuit, and the pins their tables
+/// are playing on — a pin a changed signal no longer reaches is stopped.
+#[derive(Debug, Default)]
+struct Generators {
+    sheet: Option<Sheet>,
+    rows: Vec<Row>,
+    playing: Vec<u8>,
+    /// An emulator that plays no tables: every change is refused, saying so.
+    silent: bool,
+}
+
+/// The GPIO a table plays on, when it plays on one.
+fn pin_of(table: &wave::Table) -> Option<u8> {
+    match table.target() {
+        WaveTarget::Pin(gpio) => Some(gpio),
+        WaveTarget::Device(_) => None,
+    }
 }
 
 impl PinChannel {
@@ -164,6 +294,21 @@ impl PinChannel {
         for line in protocol::bus_lines(device.address, &device.regs) {
             self.say(&line);
         }
+    }
+
+    /// Play a table against the firmware's own clock. One already playing
+    /// on the same pin or device is replaced in step: the emulator keeps its
+    /// phase, so a signal given a new amplitude does not start over.
+    pub fn play(&self, table: &wave::Table) {
+        for line in table.lines() {
+            self.say(&line);
+        }
+    }
+
+    /// Stop what plays on a pin or a device. A pin reads its `A<pin>=`
+    /// value again; a device's registers hold what they were last given.
+    pub fn stop(&self, target: wave::WaveTarget) {
+        self.say(&wave::stop_line(target));
     }
 
     /// What a chip select answers with. Nothing declared is a device that is
@@ -211,12 +356,116 @@ impl PinChannel {
             if !sensor.device.set(key, value) {
                 return true;
             }
-            protocol::bus_register_lines(sensor.address, &sensor.device.data())
+            // With a table playing, the block is latched from it at every
+            // read, so a register written directly would be gone by the next
+            // one: the still reading moves by the table being rendered again.
+            match sensor.table() {
+                Some(table) => table.lines(),
+                None => protocol::bus_register_lines(sensor.address, &sensor.device.data()),
+            }
         };
         for line in lines {
             self.say(&line);
         }
         true
+    }
+
+    /// Change what a signal plays while the run goes on: `signal` on a
+    /// generator, `signal.<reading>` on a sensor rusty answers for, `None`
+    /// to take it off. Rendered exactly as a run's start renders it and
+    /// played in step with what it replaces — the emulator keeps the phase,
+    /// so a tone given a new amplitude does not start over. What the run
+    /// should say about it comes back, or why nothing changed.
+    pub fn set_signal(
+        &self,
+        part: &str,
+        key: &str,
+        text: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        if let Some(text) = text {
+            Signal::parse(text).map_err(|why| why.to_string())?;
+        }
+        let edit = |props: &mut BTreeMap<String, String>| match text {
+            Some(text) => {
+                props.insert(key.to_string(), text.to_string());
+            }
+            None => {
+                props.remove(key);
+            }
+        };
+        let gone = || "the run is over".to_string();
+        let mut board = self.generators.lock().map_err(|_| gone())?;
+        let Generators {
+            sheet,
+            rows,
+            playing,
+            silent,
+        } = &mut *board;
+        if *silent {
+            return Err(NO_WAVES.trim_start_matches("[rusty:signal] ").to_string());
+        }
+        let Some(sheet) = sheet.as_mut() else {
+            return Err(format!("this run has no sheet, so {part} is not on it"));
+        };
+
+        let (lines, said) = if key == generator::SIGNAL {
+            let is_generator = sheet
+                .symbol_of(part)
+                .is_some_and(|symbol| nets::behaviour_of(symbol) == Behaviour::Generator);
+            let Some(instance) = sheet.parts.iter_mut().find(|p| p.reference == part) else {
+                return Err(format!("{part} is not on this run's sheet"));
+            };
+            if !is_generator {
+                return Err(format!("{part} is not a signal generator"));
+            }
+            edit(&mut instance.props);
+            let played = generator::generators(sheet, rows);
+            let now: Vec<u8> = played.tables.iter().filter_map(pin_of).collect();
+            let mut lines: Vec<String> = playing
+                .iter()
+                .filter(|pin| !now.contains(pin))
+                .map(|pin| wave::stop_line(WaveTarget::Pin(*pin)))
+                .collect();
+            lines.extend(played.tables.iter().flat_map(wave::Table::lines));
+            *playing = now;
+            (lines, played.said)
+        } else if key.starts_with(generator::SIGNAL_OF) && key != generator::SIGNAL_RATE {
+            let Some(instance) = sheet.parts.iter_mut().find(|p| p.reference == part) else {
+                return Err(format!("{part} is not on this run's sheet"));
+            };
+            let mut sensors = self.sensors.lock().map_err(|_| gone())?;
+            let Some(sensor) = sensors.iter_mut().find(|s| s.part == part) else {
+                return Err(format!("rusty does not answer for {part} on the bus"));
+            };
+            edit(&mut instance.props);
+            let moved = generator::sensor_signals(instance, &sensor.device);
+            sensor.signals = moved.signals;
+            sensor.rate = moved.rate;
+            // Nothing left moving it: the table stops and the registers hold
+            // what its sliders say, as they did before anything played.
+            let lines = match sensor.table() {
+                Some(table) => table.lines(),
+                None => {
+                    let mut lines = vec![wave::stop_line(WaveTarget::Device(sensor.address))];
+                    lines.extend(protocol::bus_register_lines(
+                        sensor.address,
+                        &sensor.device.data(),
+                    ));
+                    lines
+                }
+            };
+            (lines, moved.said)
+        } else {
+            return Err(format!(
+                "{key} is not where a signal is kept: a generator's is `signal`, a sensor \
+                 reading's `signal.<reading>`"
+            ));
+        };
+        drop(board);
+        for line in lines {
+            self.say(&line);
+        }
+        Ok(said)
     }
 
     /// What a sensor would change in answer to a write the firmware made:
@@ -233,7 +482,18 @@ impl PinChannel {
             let Some(sensor) = sensors.iter_mut().find(|s| s.address == report.address) else {
                 return;
             };
-            protocol::bus_register_lines(sensor.address, &sensor.device.wrote(&report.bytes))
+            let mut lines =
+                protocol::bus_register_lines(sensor.address, &sensor.device.wrote(&report.bytes));
+            // A range the firmware chose re-encodes every reading, and a
+            // playing table carries the old encoding until it is rendered
+            // again — its phase kept, so the signal does not start over.
+            lines.extend(
+                sensor
+                    .table()
+                    .map(|table| table.lines())
+                    .unwrap_or_default(),
+            );
+            lines
         };
         for line in lines {
             self.say(&line);
@@ -286,6 +546,12 @@ pub fn connect(
         out: Arc::new(Mutex::new(None)),
         low_when_pressed: Arc::new(start.low_when_pressed.clone()),
         sensors: Arc::new(Mutex::new(start.sensors.clone())),
+        generators: Arc::new(Mutex::new(Generators {
+            sheet: start.sheet.clone(),
+            rows: start.rows.clone(),
+            playing: start.tables.iter().filter_map(pin_of).collect(),
+            silent: start.silent,
+        })),
         closed: Arc::new(AtomicBool::new(false)),
     };
     let handle = channel.clone();
@@ -321,6 +587,12 @@ pub fn connect(
         }
         for device in &start.wire {
             handle.wire_device(device);
+        }
+        // Before the guest's first instruction, like everything above: a
+        // firmware that samples as it boots samples the signal, not the
+        // silence before it arrived.
+        for table in &start.tables {
+            handle.play(table);
         }
 
         // The circuit runs on its own thread, and that is not tidiness — it
@@ -476,6 +748,8 @@ mod tests {
                 part: "U2".into(),
                 address: 0x68,
                 device,
+                signals: Vec::new(),
+                rate: 0,
             }],
             ..Start::default()
         };
@@ -514,6 +788,142 @@ mod tests {
         assert!(
             heard.iter().any(|l| l.starts_with("i2c 68:3b=0800")),
             "{heard:?}"
+        );
+    }
+
+    /// A reading a signal moves plays as a table from the first
+    /// instruction — the whole data block, a sample at a time — and the
+    /// firmware choosing another range sends the table again, re-encoded:
+    /// the block is latched from the table at every read, so a register
+    /// rewritten on its own would be gone by the next one.
+    /// A signal changed while the run goes on is rendered through the same
+    /// circuit and played in step with what it replaces; one that does not
+    /// read changes nothing and says why, and a part that is no generator
+    /// is refused rather than quietly given a property.
+    #[test]
+    fn a_signal_changed_mid_run_plays_through_the_same_circuit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".rusty")).unwrap();
+        std::fs::write(
+            dir.path().join(".rusty/sim.toml"),
+            "version = 2\n[board]\nchip = \"esp32c3\"\n\n\
+             [[part]]\nref = \"V1\"\nsymbol = \"rusty:SignalGen\"\nx = 0.0\ny = 0.0\n\
+             props = { signal = \"dc 1.65; sine f=50 a=1\", fullscale = \"3.3\" }\n\n\
+             [[part]]\nref = \"R1\"\nsymbol = \"Device:R\"\nvalue = \"10k\"\nx = 0.0\ny = 0.0\n\n\
+             [[wire]]\nfrom = \"V1.1\"\nto = \"U1.GPIO3\"\n\n\
+             [[wire]]\nfrom = \"V1.2\"\nto = \"U1.GND\"\n\n\
+             [[wire]]\nfrom = \"R1.1\"\nto = \"U1.GPIO4\"\n\n\
+             [[wire]]\nfrom = \"R1.2\"\nto = \"U1.GND\"\n",
+        )
+        .unwrap();
+        let sheet = crate::simulate::load_board_for_test(dir.path(), "esp32c3").unwrap();
+        let rows = nets::kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
+        let start = start_of(&sheet, &rows, &[]);
+        assert!(
+            start
+                .said
+                .iter()
+                .any(|line| line.starts_with("[rusty:signal] V1 play on GPIO3")),
+            "{:?}",
+            start.said
+        );
+        assert_eq!(start.tables.len(), 1);
+
+        let (port, heard, say) = emulator();
+        let channel = connect(port, start, None, |_| {});
+        std::thread::sleep(Duration::from_millis(300));
+
+        let said = channel
+            .set_signal("V1", "signal", Some("dc 0.825"))
+            .expect("a signal that reads");
+        assert!(said.iter().any(|line| line.contains("GPIO3")), "{said:?}");
+        let refused = channel
+            .set_signal("V1", "signal", Some("sine fq=5 a=1"))
+            .unwrap_err();
+        assert!(refused.contains("fq"), "{refused}");
+        let refused = channel
+            .set_signal("R1", "signal", Some("dc 1"))
+            .unwrap_err();
+        assert!(refused.contains("not a signal generator"), "{refused}");
+        std::thread::sleep(Duration::from_millis(200));
+        say.send(None).unwrap();
+
+        let heard = heard.join().unwrap();
+        // Played at the start, a second of a 50 Hz tone at 20 kHz, and then
+        // again as one sample at a quarter of the full scale — and nothing
+        // else, since neither refusal said anything to the emulator.
+        let begun: Vec<&String> = heard.iter().filter(|l| l.starts_with("W3=")).collect();
+        assert_eq!(
+            begun,
+            ["W3=20000,20000", "W3=on", "W3=20000,1", "W3=on"],
+            "{heard:?}"
+        );
+        assert!(heard.contains(&"W3@0=0400".to_string()), "{heard:?}");
+    }
+
+    #[test]
+    fn a_sensor_moved_by_a_signal_plays_a_table_and_plays_it_again_rescaled() {
+        let imu = crate::partfile::load(None)
+            .specs
+            .into_iter()
+            .find(|spec| spec.id == "mpu6050")
+            .expect("the built-in library carries an MPU-6050");
+        let device = sensor::Device::new(imu, &std::collections::BTreeMap::new());
+        let sensor = Sensor {
+            part: "U2".into(),
+            address: 0x68,
+            device: device.clone(),
+            signals: vec![("gz".to_string(), vec![0.0, 100.0])],
+            rate: 1000,
+        };
+        let table = sensor.table().expect("a reading moves");
+        let start = Start {
+            bus: vec![BusDevice {
+                part: "U2".into(),
+                address: 0x68,
+                regs: device.registers(),
+            }],
+            sensors: vec![sensor],
+            tables: vec![table],
+            ..Start::default()
+        };
+
+        let (port, heard, say) = emulator();
+        let (seen_tx, seen) = std::sync::mpsc::channel();
+        let _channel = connect(port, start, None, move |line| {
+            let _ = seen_tx.send(line);
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        // The firmware selects ±2000 °/s.
+        say.send(Some("[rusty:i2c@10] 68 w 1b18\n".to_string()))
+            .unwrap();
+        seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        say.send(None).unwrap();
+
+        let heard = heard.join().unwrap();
+        let begun: Vec<usize> = heard
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.as_str() == "i2c 68~3b:14=1000,2")
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(begun.len(), 2, "played at the start and again: {heard:?}");
+        assert!(
+            heard.iter().filter(|l| l.as_str() == "i2c 68~=on").count() == 2,
+            "{heard:?}"
+        );
+        // Sample 1's gz, 100 °/s, at ±250 °/s and then at ±2000 °/s: the
+        // block's last two bytes of the second sample, 14 bytes in.
+        let gz_of = |from: usize| -> i16 {
+            let hex = heard[from + 1].split_once('=').unwrap().1;
+            let at = (14 + 12) * 2;
+            i16::from_str_radix(&hex[at..at + 4], 16).unwrap()
+        };
+        assert_eq!(gz_of(begun[0]), 13100, "100 °/s at 131 counts a degree");
+        assert_eq!(
+            gz_of(begun[1]),
+            1640,
+            "and at 16.4, once the firmware chose"
         );
     }
 }

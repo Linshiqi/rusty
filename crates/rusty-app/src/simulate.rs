@@ -317,6 +317,34 @@ pub async fn sim_sensor_set(
     }
 }
 
+/// Change what a signal plays while the simulation runs: `signal` on a
+/// generator, `signal.<reading>` on a sensor rusty answers for, and `None`
+/// to take it off. Answered with what the run says about it — which pins
+/// it now plays on, for how long a loop — for the dock.
+///
+/// Refused when nothing is running that plays tables, and when the signal
+/// does not read, with the reader's own words: a generator that quietly
+/// kept its old signal would read as a filter that ignored the change.
+#[tauri::command]
+pub async fn sim_signal_set(
+    part: String,
+    key: String,
+    signal: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, CommandError> {
+    let Some(pins) = state.pins().await else {
+        return Err(CommandError::new(
+            "nothing is running that can play a signal — only rusty's emulator plays one",
+        ));
+    };
+    // A generator's table is the circuit stepped a sample at a time.
+    blocking("rendering the signal", move || {
+        pins.set_signal(&part, &key, signal.as_deref())
+    })
+    .await?
+    .map_err(CommandError::new)
+}
+
 /// QEMU: in-process download with a mirror fallback, then tar extraction.
 ///
 /// The download runs on rustls rather than through curl — the user's curl
@@ -417,18 +445,31 @@ pub async fn run_simulation(
         return Err(CommandError::new(lines.join("\n")));
     }
     // What the run declares down the pin channel before the firmware's first
-    // instruction: button polarity, analog pins, and everything on the buses.
-    let start = plan
-        .board
-        .as_ref()
-        .map(|sheet| {
-            simulate::start_of(
-                sheet,
-                &simulate::kit_rows_for(&root, &sheet.chip),
-                &plan.parts,
-            )
+    // instruction: button polarity, analog pins, everything on the buses and
+    // every signal — off the async thread, because a generator's table is
+    // the sheet's circuit stepped a sample at a time.
+    let start = {
+        let root = root.clone();
+        let board = plan.board.clone();
+        let parts = plan.parts.clone();
+        let waves = plan
+            .emulator
+            .as_ref()
+            .is_some_and(|emulator| emulator.waves);
+        blocking("rendering the sheet's signals", move || {
+            let mut start = board
+                .as_ref()
+                .map(|sheet| {
+                    simulate::start_of(sheet, &simulate::kit_rows_for(&root, &sheet.chip), &parts)
+                })
+                .unwrap_or_default();
+            if !waves {
+                start.without_signals();
+            }
+            start
         })
-        .unwrap_or_default();
+        .await?
+    };
 
     // A debug run freezes the CPU at reset so breakpoints can be placed before
     // the first instruction. With no gdb to place them, that freeze is
@@ -517,6 +558,9 @@ pub async fn run_simulation(
                 said.push(
                     "[rusty:pins] emulator — pin state read from the GPIO registers".to_string(),
                 );
+                // Where each signal plays, and why one does not: only with
+                // a channel to play it down.
+                said.extend(start.said.iter().cloned());
             }
             // The stock build, and what that costs, said where the run is
             // read. A blinky whose `toggle()` printed `false` for ever was

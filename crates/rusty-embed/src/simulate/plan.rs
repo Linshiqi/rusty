@@ -232,6 +232,20 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         .as_ref()
         .is_some_and(|e| !(e.gpio_model && e.peripherals));
 
+    let mut limits = crate::model::SimLimit::for_chip(chip, outdated);
+    // A signal needs the build that plays tables; any other run does not,
+    // which is why this is a limit of the sheet's and not an out-of-date
+    // emulator's.
+    if board
+        .as_ref()
+        .is_some_and(crate::generator::plays_anything)
+        && found_emulator
+            .as_ref()
+            .is_some_and(|emulator| !emulator.waves)
+    {
+        limits.push(crate::model::SimLimit::signals_outdated());
+    }
+
     SimPlan {
         supported: true,
         reason: None,
@@ -244,7 +258,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         debug,
         debug_tool,
         notes,
-        limits: crate::model::SimLimit::for_chip(chip, outdated),
+        limits,
     }
 }
 

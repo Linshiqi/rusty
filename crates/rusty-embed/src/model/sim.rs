@@ -13,8 +13,8 @@ use super::{CommandPlan, Sheet, Symbol};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimLimit {
-    /// `esp32-outdated`, `s3-unproven`, and the one diagnosis a run can
-    /// end on, `cpu-fpu-off`.
+    /// `esp32-outdated`, `s3-unproven`, `signals-outdated`, and the one
+    /// diagnosis a run can end on, `cpu-fpu-off`.
     pub kind: String,
     pub text: String,
 }
@@ -63,6 +63,20 @@ impl SimLimit {
             )],
             _ => Vec::new(),
         }
+    }
+
+    /// A sheet that plays a signal, on an emulator that cannot play one
+    /// against the firmware's own clock. Said before the run and not
+    /// papered over by sending values at the host's pace instead: those
+    /// arrive a millisecond apart, give or take, and a filter judged against
+    /// them is judged against the host's scheduler.
+    pub fn signals_outdated() -> SimLimit {
+        SimLimit::new(
+            "signals-outdated",
+            "This sheet plays a signal, and this emulator cannot play one against the \
+             firmware's own clock: a generator's pins and a sensor's moving readings stay \
+             where they rest. Upgrade the emulator from this panel.",
+        )
     }
 
     /// A line the emulator printed that explains where a run stopped, so

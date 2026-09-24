@@ -69,6 +69,32 @@ pub struct Scale {
     pub max: u16,
 }
 
+/// What a part on `node` says the converter there turns volts into: its
+/// `fullscale`, and its `max` or the twelve-bit default. Shared by the live
+/// circuit and a generator's tables, which read one converter one way.
+pub(crate) fn scale_at(sheet: &Sheet, bridged: &Bridged, node: usize) -> Option<Scale> {
+    sheet.parts.iter().find_map(|part| {
+        let full_volts = part.prop::<f64>("fullscale").filter(|v| *v > 0.0)?;
+        let symbol = sheet.symbol_of(&part.reference)?;
+        let touches = symbol.pins.iter().any(|pin| {
+            bridged
+                .node_of
+                .get(&PinRef::new(&part.reference, &pin.number))
+                == Some(&node)
+        });
+        touches.then_some(Scale {
+            full_volts,
+            max: crate::nets::adc_max(part),
+        })
+    })
+}
+
+/// Volts at a converter as its counts, clamped to its range.
+pub(crate) fn counts_of(volts: f64, scale: Scale) -> u16 {
+    let counts = (volts / scale.full_volts * f64::from(scale.max)).round();
+    counts.clamp(0.0, f64::from(scale.max)) as u16
+}
+
 /// A circuit being driven by a running firmware.
 #[derive(Debug, Clone)]
 pub struct Live {
@@ -285,9 +311,7 @@ impl Live {
     /// the converter, so it still refuses.
     pub fn counts_at(&self, gpio: u8) -> Option<u16> {
         let volts = self.run.volts_at(self.gpio_node(gpio)?);
-        let scale = self.scale_for(gpio)?;
-        let counts = (volts / scale.full_volts * f64::from(scale.max)).round();
-        Some(counts.clamp(0.0, f64::from(scale.max)) as u16)
+        Some(counts_of(volts, self.scale_for(gpio)?))
     }
 
     /// What the sheet says the converter on this pin turns volts into, or
@@ -298,21 +322,7 @@ impl Live {
     /// never have obtained one. Found by the review after the fact, which
     /// is what the review is for.
     pub fn scale_for(&self, gpio: u8) -> Option<Scale> {
-        let node = self.gpio_node(gpio)?;
-        self.sheet.parts.iter().find_map(|part| {
-            let full_volts = part.prop::<f64>("fullscale").filter(|v| *v > 0.0)?;
-            let symbol = self.sheet.symbol_of(&part.reference)?;
-            let touches = symbol.pins.iter().any(|pin| {
-                self.bridged
-                    .node_of
-                    .get(&PinRef::new(&part.reference, &pin.number))
-                    == Some(&node)
-            });
-            touches.then_some(Scale {
-                full_volts,
-                max: crate::nets::adc_max(part),
-            })
-        })
+        scale_at(&self.sheet, &self.bridged, self.gpio_node(gpio)?)
     }
 
     /// The node a GPIO row sits on, by name or by number.

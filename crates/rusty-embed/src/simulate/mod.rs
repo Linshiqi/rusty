@@ -499,6 +499,55 @@ mod tests {
         );
     }
 
+    /// A sheet that plays a signal names the limit on an emulator that
+    /// cannot play one, and only then: the same sheet on a build that plays
+    /// tables, and a sheet playing nothing on the older build, say nothing.
+    #[test]
+    fn a_sheet_that_plays_a_signal_says_so_on_an_emulator_that_cannot() {
+        let dir = firmware(BLINKY);
+        std::fs::create_dir_all(dir.path().join(".rusty")).unwrap();
+        let every: &[u8] =
+            b"[rusty:gpio@ [rusty:adc@ [rusty:i2c@ [rusty:spi@ [rusty:pwm@ [rusty:rmt@ [rusty:sw@";
+        let install = |root: &str, contents: &[u8]| {
+            let tools = dir.path().join(root);
+            let path = tools
+                .join("qemu")
+                .join("bin")
+                .join(tools::exe("qemu-system-riscv32"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, contents).unwrap();
+            Machine {
+                tools: Some(tools),
+                bundled: None,
+                target_dir: None,
+            }
+        };
+        let before = install("before", every);
+        let current = install("current", &[every, b" [rusty:wave@"].concat());
+        let limits = |machine: &Machine| -> Vec<String> {
+            plan_on(&c3(dir.path()), false, machine)
+                .limits
+                .into_iter()
+                .map(|limit| limit.kind)
+                .collect()
+        };
+
+        std::fs::write(
+            dir.path().join(".rusty/sim.toml"),
+            "version = 2\n[board]\nchip = \"esp32c3\"\n\n[[part]]\nref = \"V1\"\nsymbol = \"rusty:SignalGen\"\nx = 0.0\ny = 0.0\nprops = { signal = \"sine f=50 a=0.5\" }\n",
+        )
+        .unwrap();
+        assert_eq!(limits(&before), ["signals-outdated"]);
+        assert!(limits(&current).is_empty());
+
+        std::fs::write(
+            dir.path().join(".rusty/sim.toml"),
+            "version = 2\n[board]\nchip = \"esp32c3\"\n\n[[part]]\nref = \"R1\"\nsymbol = \"Device:R\"\nvalue = \"10k\"\nx = 0.0\ny = 0.0\n",
+        )
+        .unwrap();
+        assert!(limits(&before).is_empty(), "nothing plays");
+    }
+
     /// The board a plan carries is drawn for the chip being simulated, and a
     /// file that says otherwise is answered in the plan's notes rather than
     /// by drawing the other part's header.

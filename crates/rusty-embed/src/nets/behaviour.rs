@@ -35,6 +35,11 @@ pub enum Behaviour {
     Pot,
     /// A voltage the panel sends as ADC counts, `A<gpio>=<count>`.
     Analog,
+    /// A signal generator (`rusty:SignalGen`): a waveform in volts between
+    /// `OUT` and `GND`, a source in the sheet's circuit whose value moves
+    /// with time, and a table played against the firmware's own clock at
+    /// every converter it reaches (`docs/signals.md`).
+    Generator,
     /// Duty on `PWM`, direction on `IN1`/`IN2`.
     Motor,
     /// A rail on the sheet: `rusty:GND` or `rusty:Supply`, or a power
@@ -63,6 +68,7 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
     match (symbol.library.as_str(), symbol.name.as_str()) {
         ("rusty", "Pot") => return Behaviour::Pot,
         ("rusty", "Analog") => return Behaviour::Analog,
+        ("rusty", "SignalGen") => return Behaviour::Generator,
         ("rusty", "Display") => return Behaviour::Display,
         ("rusty", "RGB_LED") => return Behaviour::Rgb,
         ("rusty", "Strip") => return Behaviour::Strip,

@@ -157,6 +157,8 @@ enum Look {
     Switch,
     Pot,
     Analog,
+    /// A bench generator: a case with a screen and its two terminals.
+    Generator,
     Display,
     Motor,
     /// A rail: the ground symbol, or the supply arrow.
@@ -188,6 +190,7 @@ fn look(symbol: &Symbol) -> Look {
         Behaviour::Switch => Look::Switch,
         Behaviour::Pot => Look::Pot,
         Behaviour::Analog => Look::Analog,
+        Behaviour::Generator => Look::Generator,
         Behaviour::Display => Look::Display,
         Behaviour::Motor => Look::Motor,
         Behaviour::Power if is_ground(&symbol.name) => Look::Ground,
@@ -487,6 +490,14 @@ pub(super) fn layout(symbol: &Symbol, value: &str) -> Layout {
         Look::Analog => Layout {
             spots: legs_down(&pins, &spread(pins.len().max(1), 10.0), 24.0),
             bounds: (-16.0, -14.0, 16.0, 24.0),
+            lens: None,
+            face: None,
+        },
+
+        // A bench generator, its output and ground down from the case.
+        Look::Generator => Layout {
+            spots: legs_down(&pins, &spread(pins.len().max(1), 10.0), 26.0),
+            bounds: (-21.0, -16.0, 21.0, 26.0),
             lens: None,
             face: None,
         },
@@ -832,6 +843,23 @@ pub(super) fn markup(symbol: &Symbol, value: &str) -> String {
 <rect x="-16" y="-14" width="32" height="9" rx="2.5" fill="#2b3038"/>
 <text x="0" y="7" text-anchor="middle" font-family="ui-monospace" font-size="8" fill="#f7e3d8">+</text>"##,
             );
+        }
+
+        Look::Generator => {
+            legs(&mut out, (0.0, 14.0));
+            // A bench generator: the case, a screen with one period of a
+            // wave on it, a knob and the output's red terminal — the shape
+            // that says "this makes a signal" where a cell says "this is a
+            // voltage".
+            out.push_str(&format!(
+                r##"<rect x="-21" y="-16" width="42" height="30" rx="3" fill="{PLASTIC}" stroke="{PLASTIC_EDGE}" stroke-width="1"/>
+<rect x="-17" y="-12" width="25" height="15" rx="1.5" fill="{SCREEN}" stroke="#0e2a33" stroke-width="0.8"/>
+<path d="M -15 -4.5 C -12.5 -12, -10 -12, -8 -4.5 S -3.5 3, -1 -4.5 S 3.5 -12, 6 -4.5" fill="none" stroke="#5fd0c8" stroke-width="1.3" stroke-linecap="round"/>
+<circle cx="14" cy="-6" r="3.6" fill="{KNOB}" stroke="#9aa2ae" stroke-width="0.8"/>
+<circle cx="14" cy="7" r="2.2" fill="#b8452f" stroke="#7d2c1d" stroke-width="0.8"/>
+<circle cx="-12" cy="8" r="1.4" fill="{LEAD_DARK}"/>
+<circle cx="-7" cy="8" r="1.4" fill="{LEAD_DARK}"/>"##
+            ));
         }
 
         Look::Display => {

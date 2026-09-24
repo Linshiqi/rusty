@@ -159,7 +159,8 @@ enum Command {
         #[arg(long)]
         fail: Vec<String>,
         /// A TOML file of steps, taken in order while the firmware runs:
-        /// wait-serial, write-serial, press, release, delay, expect-pin, set.
+        /// wait-serial, write-serial, press, release, delay, expect-pin, set,
+        /// play (a signal on a generator or on a sensor's reading).
         #[arg(long)]
         scenario: Option<PathBuf>,
         /// Write every pin transition to this file as a Value Change Dump.

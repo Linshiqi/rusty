@@ -33,6 +33,7 @@ fn glyph(symbol: &Symbol) -> &'static str {
         Behaviour::Display => "h-3 w-4 rounded-[2px] bg-[#0d1a12] ring-1 ring-[#1d4a2f]",
         Behaviour::Pot => "size-3.5 rounded-full bg-line-strong ring-2 ring-[#c9a227]",
         Behaviour::Analog => "h-3.5 w-3 rounded-[2px] border border-line-strong",
+        Behaviour::Generator => "h-3 w-4 rounded-[2px] bg-[#20242b] ring-1 ring-[#5fd0c8]",
         Behaviour::Motor => "size-3.5 rounded-full border border-line-strong",
         Behaviour::Power => "h-3.5 w-3.5 border-b-2 border-[#9aa2ae]",
         Behaviour::Label => "h-2.5 w-4 rounded-[2px] border border-[#5fd0c8]",

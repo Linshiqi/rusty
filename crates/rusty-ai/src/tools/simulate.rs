@@ -53,7 +53,11 @@ impl Tool for Simulate {
                 wait-serial (text to wait for), write-serial (a line into the console), \
                 press / release (a switch's reference such as \"SW1\", or a GPIO number), \
                 delay (seconds), expect-pin ({gpio, level}), set ({part, <reading>: value} \
-                for a sensor with a model, e.g. {\"part\": \"U2\", \"ax\": 0.5}). \
+                for a sensor with a model, e.g. {\"part\": \"U2\", \"ax\": 0.5}), play \
+                ({part, signal} on a signal generator, and reading besides for a sensor's \
+                reading: a line such as \"dc 1.2; sine f=50 a=0.1; white rms=0.005\", played \
+                against the firmware's own clock — how a filter is fed a tone, a sweep or \
+                noise). \
                 `expect` lists text the run must see to pass; `fail` text ends it as a \
                 failure. The first build can take minutes; the timeout counts from boot. \
                 Supported on ESP32-C3; on an ESP32 or S3 the answer says what the emulator \
