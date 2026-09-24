@@ -373,8 +373,8 @@ pub enum StaleReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StaleSummary {
-    /// `version-gone`, `package-gone` or `idle` — the reason's kind, so the
-    /// frontend translates it by name.
+    /// `version-gone`, `package-gone`, `idle` or `superseded` — the kind of
+    /// the [`StaleReason`], so the frontend translates it by name.
     pub reason: String,
     pub bytes: u64,
     pub files: u64,

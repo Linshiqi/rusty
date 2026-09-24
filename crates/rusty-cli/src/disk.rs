@@ -83,8 +83,9 @@ pub(crate) fn sweep(path: &Path, idle_days: u32, keep_variants: u32, apply: bool
 
 /// The build directory and the yardstick for a `disk` or `sweep` run: from
 /// the workspace when it loads, and a bare `target/` with an empty yardstick
-/// when it does not — nothing is then judged stale but idle caches, and the
-/// report's warnings say so.
+/// when it does not. No dependency artifact is then judged stale, only the
+/// incremental caches, as idle or superseded; the note printed here says
+/// so, and so do the report's warnings.
 fn disk_context(path: &std::path::Path) -> (PathBuf, rusty_core::disk::Current) {
     match Workspace::load(path) {
         Ok(workspace) => (workspace.target_directory(), workspace.current()),
