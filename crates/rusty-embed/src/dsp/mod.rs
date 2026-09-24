@@ -6,7 +6,9 @@
 //! need. A spectrum and a single-frequency measurement to see a signal
 //! with; a [`Design`] — what a person asks for — realised at a sample rate
 //! as a [`Filter`], whose coefficients say what it does to a record
-//! (`apply`) and to a sine (`response`).
+//! (`apply`) and to a sine (`response`); and the same filter written out
+//! as `no_std` Rust that computes, in `f32`, what `apply` computes
+//! (`code`).
 //!
 //! **Every answer here is held to a closed form**, the same rule as the
 //! circuit solver's: a sine at a bin reads its own amplitude, a Butterworth

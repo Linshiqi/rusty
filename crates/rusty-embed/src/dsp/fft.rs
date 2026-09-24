@@ -6,8 +6,8 @@ use std::ops::{Add, Div, Mul, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct Complex {
-    pub(crate) re: f64,
-    pub(crate) im: f64,
+    re: f64,
+    im: f64,
 }
 
 impl Complex {

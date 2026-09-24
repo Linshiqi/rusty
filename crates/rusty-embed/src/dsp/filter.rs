@@ -168,7 +168,7 @@ fn median(samples: &[f64], taps: usize) -> Vec<f64> {
 
 /// The middle of a sorted window: its middle value, or the mean of its
 /// middle two.
-pub(crate) fn middle(sorted: &[f64]) -> f64 {
+fn middle(sorted: &[f64]) -> f64 {
     let half = sorted.len() / 2;
     if sorted.len() % 2 == 1 {
         sorted[half]
