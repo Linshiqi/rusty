@@ -9,6 +9,63 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.65
+
+**A signal generator for the simulator, and a Signals tab to judge a filter
+with.** Design a filter against the signals it will meet, then watch the one
+your firmware runs deal with them — in time, as a spectrum, and as a
+measured frequency response.
+
+**The generator is a part.** Place *SignalGen* from the parts library and
+wire its OUT to an ADC pin. What it plays is one line of text — `dc 1.2;
+sine f=50 a=0.1; white rms=0.005` — made of tones, squares, triangles,
+sawtooths, frequency sweeps, white and pink noise, spikes and steps, with
+presets for the cases filters are built for: a sensor under mains hum, a
+vibrating accelerometer, a drifting thermistor, a slow signal with spikes, a
+sweep, a noisy step, two tones. The inspector edits it, says exactly what is
+wrong with a line that does not read, and shows one loop of what will play.
+State the converter's full scale there too; without it no count can be put
+on the pin, and the run says so.
+
+**It plays against your firmware's own clock.** The emulator reads the signal
+sample by sample at the instant your firmware converts, so a 50 Hz tone is
+50 Hz to the firmware whatever the computer is doing — and it arrives
+through whatever you drew between them: an RC on the pin shapes it exactly
+as the circuit says. A sensor with a model (MPU-6050, BMP280, BME280) can
+have a signal on any reading, played in its own registers so a burst read is
+always one sample whole; a sensor your firmware declares on its console can
+be fed one from the Signals tab, at the computer's pace, and the tab says so.
+
+**The Signals tab** opens in the panel below when a signal plays. *Time* lays
+what was played, what the converter took and what your firmware printed on
+one clock. *Spectrum* shows any of them. *Response* steps a sine across a band
+on your running firmware, measures the gain and phase of its filtered output
+at each step, and draws them beside the design's own curve. *Design* lets you
+choose a filter — moving average, exponential, Butterworth, biquad low-pass,
+high-pass, band-pass or notch, windowed FIR, median — shows its response
+over your signal's spectrum and what it does to the signal, and gives you its
+code to copy: `no_std` Rust that computes in `f32` what the charts show. You
+can change what a generator plays while the simulation runs, and a
+`rusty-cli sim` scenario can too, with its new `play` step.
+
+`examples/filter-lab` puts it together: a generator playing a slow tone with
+mains hum on it, and firmware running a filter exported from the Design view.
+
+**It needs this release's emulator**, which the installer carries. An older
+copy you installed yourself still runs everything else; the Simulate panel
+says it cannot play a signal and offers the Upgrade.
+
+**Fixed in the new-project wizard**
+
+- Clearing the project's name to type a new one filled the Output panel
+  with "`` is not a name cargo accepts for a crate", once per change. The
+  field already says what is wrong with a name, in red beneath it; nothing
+  is asked about the name until it is one cargo takes, and the Create
+  button stays where it is, greyed, until then.
+- A name starting with a digit was accepted and one starting with `_` was
+  refused — the opposite of cargo, which rejects `2fast-core` at the first
+  build of the workspace the wizard made. The field now follows cargo.
+
 ## v0.6.64
 
 **Fixes for what the last release's clean-up turned up.** Tidying the code
