@@ -409,6 +409,11 @@ pub struct SweepReport {
     pub failed: Vec<String>,
 }
 
+/// How many incremental caches each target keeps, newest first, unless a
+/// scan or a sweep is told otherwise. Four covers the combinations a
+/// workspace alternates between — build, test, check and clippy.
+pub const KEEP_VARIANTS: u32 = 4;
+
 /// Which stale artifacts a sweep removes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -417,8 +422,14 @@ pub struct SweepPolicy {
     pub version_gone: bool,
     /// Artifacts of packages no longer in the graph.
     pub package_gone: bool,
-    /// A crate's older incremental caches, beyond the newest few.
+    /// A crate's older incremental caches, beyond the newest `keep_variants`.
     pub superseded: bool,
+    /// How many incremental caches each target keeps — the number the scan
+    /// that previewed the sweep was given. The sweep kept four whatever
+    /// `rusty-cli sweep --keep-variants` said, so what went was not what the
+    /// preview had listed.
+    #[serde(default = "keep_variants")]
+    pub keep_variants: u32,
     /// Incremental caches idle for at least this many days; `None` leaves
     /// them all.
     pub idle_days: Option<u32>,
@@ -432,8 +443,13 @@ impl Default for SweepPolicy {
             version_gone: true,
             package_gone: true,
             superseded: true,
+            keep_variants: KEEP_VARIANTS,
             idle_days: Some(7),
             tree: None,
         }
     }
+}
+
+fn keep_variants() -> u32 {
+    KEEP_VARIANTS
 }

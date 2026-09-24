@@ -34,6 +34,7 @@ pub(crate) fn sweep(path: &Path, idle_days: u32, keep_variants: u32, apply: bool
     let (target_dir, current) = disk_context(path);
     let policy = rusty_core::SweepPolicy {
         idle_days: Some(idle_days),
+        keep_variants,
         ..rusty_core::SweepPolicy::default()
     };
     if apply {

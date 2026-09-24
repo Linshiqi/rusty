@@ -19,7 +19,7 @@ pub fn sweep(
 ) -> Result<SweepReport> {
     let options = ScanOptions {
         idle_days: policy.idle_days.unwrap_or(u32::MAX),
-        ..ScanOptions::default()
+        keep_variants: policy.keep_variants,
     };
     let scan = scan(target_dir, project_root, current, options);
     let mut report = SweepReport::default();

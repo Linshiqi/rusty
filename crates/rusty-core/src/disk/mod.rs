@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 
 use guppy::graph::{PackageGraph, PackageSource};
 
-use crate::model::{DiskItem, DiskReport, StaleReason};
+use crate::model::{DiskItem, DiskReport, KEEP_VARIANTS, StaleReason};
 
 use fs::{measure, same_dir, sorted_entries};
 use sweep::{cargo_home, cargo_home_items};
@@ -131,9 +131,7 @@ pub struct ScanOptions {
     /// An incremental cache untouched for this many days is idle.
     pub idle_days: u32,
     /// How many incremental caches to keep for each target, newest first;
-    /// the rest under that target's crate name are superseded. Four covers
-    /// the combinations a workspace alternates between — build, test, check
-    /// and clippy.
+    /// the rest under that target's crate name are superseded.
     pub keep_variants: u32,
 }
 
@@ -141,7 +139,7 @@ impl Default for ScanOptions {
     fn default() -> Self {
         ScanOptions {
             idle_days: 7,
-            keep_variants: 4,
+            keep_variants: KEEP_VARIANTS,
         }
     }
 }

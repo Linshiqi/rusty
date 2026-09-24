@@ -11,7 +11,7 @@ use super::judge::{Origin, dep_info_sources, origin_of, split_package_dir, unit_
 use super::tree::reason_name;
 use super::*;
 use crate::error::Error;
-use crate::model::{DiskKind, StaleReason, SweepPolicy};
+use crate::model::{DiskKind, KEEP_VARIANTS, StaleReason, SweepPolicy};
 
 /// A build directory laid out the way cargo lays one out, with the sizes
 /// and mtimes the rules read — real files, since the rules read real
@@ -666,6 +666,7 @@ fn a_policy_narrows_the_sweep_to_a_reason_and_a_tree() {
         version_gone: false,
         package_gone: false,
         superseded: false,
+        keep_variants: KEEP_VARIANTS,
         idle_days: Some(7),
         tree: None,
     };
@@ -708,6 +709,50 @@ fn a_policy_narrows_the_sweep_to_a_reason_and_a_tree() {
             .join("debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib")
             .exists()
     );
+}
+
+/// The sweep keeps as many of each target's caches as the scan that
+/// previewed it was told to. It kept four whatever `--keep-variants` said,
+/// so `rusty-cli sweep --keep-variants 2` listed four caches for removal and
+/// then removed two.
+#[test]
+fn a_sweep_keeps_as_many_variants_as_the_scan_that_previewed_it() {
+    let fixture = Fixture::new("keep");
+    lay_out(&fixture);
+    let options = ScanOptions {
+        keep_variants: 2,
+        ..ScanOptions::default()
+    };
+    let preview = scan(&fixture.target(), &fixture.project(), &current(), options);
+    let superseded = preview
+        .stale
+        .iter()
+        .filter(|s| matches!(s.reason, StaleReason::Superseded { keep: 2 }))
+        .count();
+    assert_eq!(superseded, 4, "six live variants of my_app, two kept");
+
+    let policy = SweepPolicy {
+        keep_variants: 2,
+        ..SweepPolicy::default()
+    };
+    let report = sweep(&fixture.target(), &fixture.project(), &current(), &policy).unwrap();
+    assert_eq!(
+        report.removed_items as usize,
+        preview.stale.len(),
+        "what the preview listed is what went"
+    );
+    let left = fs::read_dir(fixture.target().join("debug/incremental"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("my_app-")
+        })
+        .count();
+    assert_eq!(left, 2, "the two newest");
 }
 
 #[test]
