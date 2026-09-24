@@ -534,7 +534,7 @@ pub(super) fn stream_to_terminal(state: AppState) -> ipc::Channel {
             // the one thing a monitor must never do.
             Err(e) => state.push_log(LogLine {
                 stream: LogStream::Stderr,
-                text: format!("[rusty could not decode a line from the tool: {e}]"),
+                text: t!("misc.undecodable-tool-line", error = e),
                 level: Some(LogLevel::Warn),
             }),
         }

@@ -344,20 +344,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                // Spelled in two halves so this test's own source is not a
-                // call site the scan finds.
-                const NEEDLE: &str = concat!("t!", "(");
-                for (index, _) in text.match_indices(NEEDLE) {
-                    // `format!("…")` ends in `t!(` too. The macro's name is
-                    // one character long, so what precedes it has to not be
-                    // part of an identifier.
-                    let preceded_by_a_name = text[..index]
-                        .chars()
-                        .next_back()
-                        .is_some_and(|c| c.is_alphanumeric() || c == '_');
-                    if preceded_by_a_name {
-                        continue;
-                    }
+                for index in t_calls(&text) {
                     // rustfmt breaks a call with arguments after the paren,
                     // so the key may start on the next line. A scan that
                     // demanded `t!("` on one line skipped exactly those —
@@ -414,8 +401,11 @@ mod tests {
             "the", "a", "an", "to", "of", "is", "no", "in", "and", "or", "for", "with", "on",
             "not", "this", "it", "was", "are", "has", "have", "be", "its", "from", "by",
         ];
+        // A line calling `t!` is already translated. Asked of the macro
+        // itself and not of the characters `t!(`, which also end every
+        // `format!(` — so every English sentence built with `format!` used
+        // to be skipped as though it were a key.
         const SKIP_LINE_IF: &[&str] = &[
-            concat!("t!", "("),
             "assert",
             "panic!(",
             "expect(",
@@ -460,7 +450,9 @@ mod tests {
                         Some(at) => &line[..at],
                         None => line,
                     };
-                    if SKIP_LINE_IF.iter().any(|marker| code.contains(marker)) {
+                    if t_calls(code).next().is_some()
+                        || SKIP_LINE_IF.iter().any(|marker| code.contains(marker))
+                    {
                         continue;
                     }
                     for literal in string_literals(code) {
@@ -483,6 +475,31 @@ mod tests {
             "these literals read as user-visible prose; put them in the catalogue and use `t!`:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    /// Where `t!(` is called in `text`: the byte after each `t!(` that is
+    /// the macro and not the end of `format!(`. The macro's name is one
+    /// character long, so what precedes it must not be part of a name.
+    fn t_calls(text: &str) -> impl Iterator<Item = usize> + '_ {
+        // Spelled in two halves so this test's own source is not a call
+        // site the scans find.
+        const NEEDLE: &str = concat!("t!", "(");
+        text.match_indices(NEEDLE).filter_map(move |(index, _)| {
+            let preceded_by_a_name = text[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            (!preceded_by_a_name).then_some(index)
+        })
+    }
+
+    #[test]
+    fn a_format_call_is_not_a_translation() {
+        let format = concat!("format", "!(\"{} was not found\", name)");
+        let call = concat!("t", "!(\"files.missing\")");
+        assert_eq!(t_calls(format).count(), 0);
+        assert_eq!(t_calls(call).count(), 1);
+        assert_eq!(t_calls(&format!("({call})")).count(), 1);
     }
 
     /// The `"…"` literals on one line of source, unescaped enough to read.

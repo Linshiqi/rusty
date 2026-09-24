@@ -219,7 +219,7 @@ pub fn format_then_save(
                 // save; a blocked one is data loss waiting for a fix.
                 state.push_log(LogLine {
                     stream: LogStream::Stderr,
-                    text: format!("rustfmt skipped this save: {}", error.message),
+                    text: t!("misc.rustfmt-skipped", reason = error.message),
                     level: Some(LogLevel::Warn),
                 });
             }

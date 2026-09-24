@@ -8,6 +8,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use rusty_embed::{LogLevel, LogLine, LogStream};
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -91,7 +92,7 @@ pub fn delete_key(state: AppState, profile: String) {
                 state.ai.key_stored.set(false);
                 state.push_log(LogLine {
                     stream: LogStream::Stdout,
-                    text: format!("the key for {profile} was removed"),
+                    text: t!("misc.key-removed", profile = profile),
                     level: None,
                 });
             }
@@ -435,7 +436,7 @@ pub fn open_link(state: AppState, port: String, baud: u32) {
                 Ok(line) => absorb(state, line),
                 Err(e) => state.push_log(LogLine {
                     stream: LogStream::Stderr,
-                    text: format!("[rusty could not decode a line from the port: {e}]"),
+                    text: t!("misc.undecodable-port-line", error = e),
                     level: Some(LogLevel::Warn),
                 }),
             }
@@ -506,7 +507,7 @@ pub fn export_vcd(state: AppState) {
             Ok(path) => {
                 state.push_log(LogLine {
                     stream: LogStream::Stdout,
-                    text: format!("waveform written to {path} — PulseView and GTKWave open it"),
+                    text: t!("misc.waveform-written", path = path),
                     level: None,
                 });
                 state.show_dock(crate::state::DockTab::Output);

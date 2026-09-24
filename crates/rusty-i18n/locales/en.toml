@@ -616,6 +616,8 @@ choose = "Choose…"
 note = "Board definitions and workbench settings are plain files here. Moving copies them and switches over; the old files stay. API keys are not in it."
 already-has-data = "That folder already holds rusty data"
 use-existing = "Use it"
+adopted = "Now using the data already in {path}."
+moved = "Moved: {count} files copied to {to}. The originals are still in {from} — delete them yourself once you are satisfied."
 
 [settings.network]
 proxy = "Proxy"
@@ -1176,6 +1178,14 @@ proxy-detect = "Detect"
 proxy-direct = "Direct"
 proxy-manual = "Manual"
 waves-capped = "oldest events dropped (cap)"
+undecodable-tool-line = "[rusty could not decode a line from the tool: {error}]"
+undecodable-port-line = "[rusty could not decode a line from the port: {error}]"
+reopen-failed = "{path} could not be reopened: {reason}"
+metadata-unavailable = "cargo metadata is unavailable: {reason}"
+key-removed = "the key for {profile} was removed"
+waveform-written = "waveform written to {path} — PulseView and GTKWave open it"
+board-save-failed = "could not save the board: {reason}"
+rustfmt-skipped = "rustfmt skipped this save: {reason}"
 [problem]
 # Diagnostics, keyed on the backend's `kind` rather than on its English, with
 # `{placeholders}` for what the backend sent in `args`. The English on the wire

@@ -67,7 +67,7 @@ pub fn run_simulation(state: AppState, debug: bool) {
             }
             Err(e) => state.push_log(LogLine {
                 stream: LogStream::Stderr,
-                text: format!("[rusty could not decode a line from the tool: {e}]"),
+                text: t!("misc.undecodable-tool-line", error = e),
                 level: Some(LogLevel::Warn),
             }),
         }
@@ -572,7 +572,7 @@ pub fn save_sim_board(state: AppState, board: rusty_embed::Sheet, dirty: RwSigna
             Err(error) => {
                 state.push_log(LogLine {
                     stream: LogStream::Stderr,
-                    text: format!("could not save the board: {}", error.message),
+                    text: t!("misc.board-save-failed", reason = error.message),
                     level: Some(LogLevel::Error),
                 });
             }

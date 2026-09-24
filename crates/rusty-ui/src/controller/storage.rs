@@ -61,12 +61,13 @@ pub fn relocate_storage(
             Ok(report) => {
                 blocked.set(None);
                 note.set(Some(if report.adopted {
-                    format!("Now using the data already in {}.", report.to)
+                    t!("settings.storage.adopted", path = report.to)
                 } else {
-                    format!(
-                        "Moved: {} files copied to {}. The originals are still in {} — \
-                         delete them yourself once you are satisfied.",
-                        report.copied_files, report.to, report.from,
+                    t!(
+                        "settings.storage.moved",
+                        count = report.copied_files,
+                        to = report.to,
+                        from = report.from
                     )
                 }));
                 load_storage_location(location);

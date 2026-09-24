@@ -65,7 +65,7 @@ pub fn open_recent(state: AppState, path: String, announce: bool) {
             Err(error) => {
                 state.push_log(LogLine {
                     stream: LogStream::Stderr,
-                    text: format!("{path} could not be reopened: {}", error.message),
+                    text: t!("misc.reopen-failed", path = path, reason = error.message),
                     level: Some(LogLevel::Warn),
                 });
                 let _ = ipc::call::<_, ()>(
@@ -263,7 +263,7 @@ fn refresh_workspace(state: AppState) {
                 // panel empty" has to be answerable after the fact.
                 state.push_log(LogLine {
                     stream: LogStream::Stderr,
-                    text: format!("cargo metadata is unavailable: {}", e.message),
+                    text: t!("misc.metadata-unavailable", reason = e.message),
                     level: Some(LogLevel::Warn),
                 });
             }
