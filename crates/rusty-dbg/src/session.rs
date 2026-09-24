@@ -1,9 +1,15 @@
 //! A live gdb, driven.
 //!
-//! One process and one reader thread. Commands carry a token and answers
-//! quote it back — MI's own mechanism, so nothing here has to guess which
-//! `^done` belongs to which request, which is what makes stepping reliable
-//! while output is still arriving from the last continue.
+//! One process and one reader thread. Every command goes out with a token
+//! and gdb quotes it back on the answer — MI's own way of pairing the two —
+//! but nothing here reads it. An answer is folded into the state by what it
+//! carries: a `stack=` is the stack, `variables=` the selected frame's
+//! variables, a `bkpt=` a breakpoint and `memory=` a span of memory,
+//! whichever request asked, and an `^error` lands in `error` whatever it
+//! refused. The latest answer of each kind is what the state holds. What an
+//! answer cannot say — which frame its variables belong to — is recorded
+//! where the question is asked: [`Debugger::refresh`] for a frame chosen
+//! from the stack, the stop itself for the innermost.
 //!
 //! The session owns *interpretation* as well as transport: what the panel
 //! receives is a [`DebugState`], not a pile of records. Somebody has to turn
@@ -118,6 +124,7 @@ impl Events {
 /// stop and, until something asked, a call stack one frame deep.
 struct Wire {
     stdin: Mutex<Option<ChildStdin>>,
+    /// Numbers each command, as MI has it; nothing reads the number back.
     token: AtomicU32,
 }
 
