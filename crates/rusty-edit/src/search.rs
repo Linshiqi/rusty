@@ -20,9 +20,9 @@
 //! [`RegexMatcher`], and replace runs it on the same per-line slices the
 //! searcher does.
 
+use std::cmp::Ordering;
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use grep_matcher::{Captures, LineTerminator, Matcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -34,8 +34,12 @@ use ignore::{DirEntry, WalkState};
 use crate::hidden::{project_walk, relative_slashed};
 use crate::model::{ReplaceOutcome, SearchHit, SearchResults, Skipped};
 
-/// Stop after this many hits. The panel says so when it happens.
+/// List no more than this many hits. The panel says so when there were more.
 const MAX_HITS: usize = 500;
+/// How many hits the walk holds on to: the first [`MAX_HITS`] in the panel's
+/// order and one more — the one more is how `truncated` knows a hit was left
+/// out, rather than guessing it from where the walk happened to stop.
+const KEEP: usize = MAX_HITS + 1;
 /// Files bigger than this are skipped — nobody is text-searching an ELF, and
 /// a generated 40MB file would eat the whole budget.
 const MAX_FILE: u64 = 1_000_000;
@@ -72,8 +76,13 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
         }
     };
 
-    let hits: Mutex<Vec<SearchHit>> = Mutex::new(Vec::new());
-    let count = AtomicUsize::new(0);
+    // The first hits in the panel's order, kept while the walk runs and never
+    // more than `KEEP` of them. The walk is parallel, so the order hits
+    // arrive in is not an order: the list used to be whatever arrived first,
+    // cut at the cap and only then sorted, which listed whichever files the
+    // threads happened to reach — a different set the next time — and called
+    // it complete whenever the walk stopped on exactly the cap.
+    let kept: Mutex<Vec<SearchHit>> = Mutex::new(Vec::new());
 
     project_walk(root)
         .overrides(overrides)
@@ -90,40 +99,30 @@ pub fn search(root: &Path, query: &Query) -> SearchResults {
                 // CRLF file while it was left on.
                 .line_terminator(LineTerminator::crlf())
                 .build();
-            let hits = &hits;
-            let count = &count;
+            let kept = &kept;
 
             Box::new(move |entry| {
-                if count.load(Ordering::Relaxed) >= MAX_HITS {
-                    return WalkState::Quit;
-                }
                 let Some((entry, relative)) = searchable(entry, root) else {
                     return WalkState::Continue;
                 };
-
-                let file_hits = hits_in(&mut searcher, &matcher, entry.path(), &relative);
-                if file_hits.is_empty() {
+                // Once the list is full, a file that sorts after its last hit
+                // has nothing it could add, and is not read at all.
+                if sorts_after(&kept.lock().unwrap(), &relative) {
                     return WalkState::Continue;
                 }
-                let already = count.fetch_add(file_hits.len(), Ordering::Relaxed);
-                if already < MAX_HITS
-                    && let Ok(mut all) = hits.lock()
-                {
-                    all.extend(file_hits);
-                }
-                if count.load(Ordering::Relaxed) >= MAX_HITS {
-                    return WalkState::Quit;
+                let file_hits = hits_in(&mut searcher, &matcher, entry.path(), &relative);
+                if !file_hits.is_empty() {
+                    keep_first(&mut kept.lock().unwrap(), file_hits);
                 }
                 WalkState::Continue
             })
         });
 
-    let mut hits = hits.into_inner().unwrap_or_default();
-    let truncated = hits.len() > MAX_HITS || count.load(Ordering::Relaxed) > MAX_HITS;
+    let mut hits = kept.into_inner().unwrap_or_default();
+    // The list keeps one more than it shows, so a full one means a hit is
+    // left out.
+    let truncated = hits.len() > MAX_HITS;
     hits.truncate(MAX_HITS);
-    // Parallel arrival order is racy; sorting keeps the panel identical
-    // between two runs of the same query.
-    hits.sort_by(|a, b| (&a.path, a.line, a.col).cmp(&(&b.path, b.line, b.col)));
 
     let mut files = 0u32;
     let mut last: Option<&str> = None;
@@ -256,8 +255,38 @@ fn searchable(entry: Result<DirEntry, ignore::Error>, root: &Path) -> Option<(Di
     Some((entry, relative))
 }
 
+/// The order the panel lists hits in: by file, then line, then column.
+fn panel_order(a: &SearchHit, b: &SearchHit) -> Ordering {
+    (&a.path, a.line, a.col).cmp(&(&b.path, b.line, b.col))
+}
+
+/// Fold one file's hits into the list and cut it back to the first [`KEEP`]
+/// in [`panel_order`]. Both halves arrive in that order already — the list
+/// is kept sorted and a file's hits come by line and column — so the stable
+/// sort has two runs to merge, and hits that tie keep the order their file
+/// gave them whichever thread got there first.
+fn keep_first(kept: &mut Vec<SearchHit>, hits: Vec<SearchHit>) {
+    kept.extend(hits);
+    kept.sort_by(panel_order);
+    kept.truncate(KEEP);
+}
+
+/// Whether a full list can take nothing from the file at `relative`: every
+/// hit the file could hold sorts after the last one kept. The last one only
+/// ever moves earlier, so a file passed over here could not have been
+/// listed later either.
+fn sorts_after(kept: &[SearchHit], relative: &str) -> bool {
+    kept.len() == KEEP
+        && kept
+            .last()
+            .is_some_and(|last| relative > last.path.as_str())
+}
+
 /// Every match in one file, each with its line cut to a window for the
-/// panel.
+/// panel — the first [`KEEP`] of them. A file's matches come by line and
+/// column, so past that many they sort after enough hits of their own file
+/// to fill the list and could never be listed, and a megabyte of `e` is a
+/// million of them.
 fn hits_in(
     searcher: &mut Searcher,
     matcher: &RegexMatcher,
@@ -282,9 +311,9 @@ fn hits_in(
                     found.start(),
                     found.end() - found.start(),
                 ));
-                true
+                hits.len() < KEEP
             });
-            Ok(true)
+            Ok(hits.len() < KEEP)
         }),
     );
     hits
@@ -671,6 +700,77 @@ mod tests {
         assert_eq!(order, sorted, "stable output regardless of thread timing");
         assert_eq!(results.files, 3);
     }
+
+    /// Which hits survive the cap is the panel's order and nothing else. The
+    /// walk is parallel, and the list used to be whatever arrived first, cut
+    /// at the cap and only then sorted: the same query could list different
+    /// hits twice running, and seldom the first ones by file and line.
+    #[test]
+    fn past_the_cap_the_first_hits_in_the_panels_order_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        // Several files, one holding more hits than the cap by itself, and
+        // two hits to a line so the column decides as well as the line.
+        let mut files: [(&str, u32); 4] =
+            [("d.txt", 70), ("b.txt", 600), ("a.txt", 80), ("c.txt", 90)];
+        for (name, lines) in files {
+            write(dir.path(), name, &"needle needle\n".repeat(lines as usize));
+        }
+        files.sort();
+        let mut every: Vec<(String, u32, u32)> = Vec::new();
+        for (name, lines) in files {
+            for line in 0..lines {
+                every.push((name.to_string(), line, 0));
+                every.push((name.to_string(), line, 7));
+            }
+        }
+
+        for _ in 0..3 {
+            let results = search(dir.path(), &query("needle"));
+            let listed: Vec<(String, u32, u32)> = results
+                .hits
+                .iter()
+                .map(|hit| (hit.path.clone(), hit.line, hit.col))
+                .collect();
+            assert_eq!(listed.len(), MAX_HITS);
+            let wrong = listed.iter().zip(&every).position(|(got, due)| got != due);
+            assert_eq!(
+                wrong.map(|at| (&listed[at], &every[at])),
+                None,
+                "a hit that is not the panel's next one"
+            );
+            assert!(results.truncated);
+            assert_eq!(results.files, 2, "all of a.txt, then the start of b.txt");
+        }
+    }
+
+    /// `truncated` says whether a hit was left out — not whether the walk
+    /// happened to stop at the cap. The cap's worth of hits is the whole
+    /// answer, and one more is not, wherever the walk came across it.
+    #[test]
+    fn truncated_is_whether_a_hit_was_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = (MAX_HITS / 2, MAX_HITS - MAX_HITS / 2);
+        write(dir.path(), "a.txt", &"needle\n".repeat(first));
+        write(dir.path(), "b.txt", &"needle\n".repeat(second));
+
+        let whole = search(dir.path(), &query("needle"));
+        assert_eq!(whole.hits.len(), MAX_HITS);
+        assert!(!whole.truncated, "every hit is listed");
+
+        // One more, in a file that sorts first: it is listed, and the last
+        // line of `b.txt` is what gives way.
+        write(dir.path(), "0.txt", "needle\n");
+        let over = search(dir.path(), &query("needle"));
+        assert_eq!(over.hits.len(), MAX_HITS);
+        assert!(over.truncated, "one hit is not listed");
+        assert_eq!(over.hits[0].path, "0.txt");
+        let last = over.hits.last().unwrap();
+        assert_eq!(
+            (last.path.as_str(), last.line as usize),
+            ("b.txt", second - 2)
+        );
+    }
+
     fn write(dir: &std::path::Path, name: &str, text: &str) {
         let path = dir.join(name);
         if let Some(parent) = path.parent() {

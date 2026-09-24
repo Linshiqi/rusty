@@ -184,8 +184,10 @@ pub struct SearchResults {
     pub hits: Vec<SearchHit>,
     /// Distinct files in `hits`.
     pub files: u32,
-    /// True when the cap was reached — the panel says "first N", because a
-    /// silently partial answer reads as a complete one.
+    /// True when there were more hits than the cap lets through — the panel
+    /// says "first N", because a silently partial answer reads as a complete
+    /// one. Exactly the cap's worth of hits is a whole answer, and leaves this
+    /// false.
     pub truncated: bool,
     /// A query that could not run as written — a malformed glob, named so the
     /// user can fix the pattern instead of trusting an empty result.
