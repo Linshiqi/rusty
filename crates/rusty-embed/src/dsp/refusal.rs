@@ -40,6 +40,15 @@ pub enum Refusal {
     /// too small a fraction of the rate puts the poles closer to one than
     /// the coefficients can say.
     Inexact { gain: f64 },
+    /// A name the exported struct cannot have: it is a type, so an
+    /// upper-case letter and then letters and digits, and not `Self`.
+    Name { name: String },
+    /// A filter whose `f32` arithmetic strays from its design by `error`
+    /// of its output's peak — more than an export allows, which is
+    /// `limit`. The recursive sections are the ones this happens to, when
+    /// the cutoff is so small a fraction of the rate that single precision
+    /// cannot place the poles.
+    Precision { error: f64, limit: f64 },
 }
 
 impl fmt::Display for Refusal {
@@ -86,6 +95,18 @@ impl fmt::Display for Refusal {
                 "at this rate the coefficients cannot hold the design: where \
                  its gain should be 1 it comes to {gain}. A cutoff this small \
                  a fraction of the rate wants a lower rate"
+            ),
+            Refusal::Name { name } => write!(
+                f,
+                "\"{name}\" cannot name the filter's struct: it has to be an \
+                 upper-case letter and then letters and digits"
+            ),
+            Refusal::Precision { error, limit } => write!(
+                f,
+                "in f32 this filter strays from its design by {error:.1e} of \
+                 its output, more than the {limit:.0e} an export allows: its \
+                 poles are too close to one for single precision. Filter at a \
+                 lower rate, or with a higher cutoff"
             ),
         }
     }

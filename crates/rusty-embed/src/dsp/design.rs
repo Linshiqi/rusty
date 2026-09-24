@@ -10,7 +10,7 @@
 //! and a Butterworth filter is the same function called once for each pair
 //! of its poles with that pair's Q.
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::PI;
 
 use serde::{Deserialize, Serialize};
 
@@ -272,7 +272,7 @@ fn windowed_sinc(band: Band, taps: usize, window: Window, rate: f64) -> Result<V
                 let ideal = if x == 0.0 {
                     2.0 * fraction
                 } else {
-                    (TAU * fraction * x).sin() / (PI * x)
+                    sin_pi(2.0 * fraction * x) / (PI * x)
                 };
                 ideal * window.at((i + 1) as f64 / (taps + 1) as f64)
             })
@@ -301,6 +301,29 @@ fn windowed_sinc(band: Band, taps: usize, window: Window, rate: f64) -> Result<V
             Ok(wide.iter().zip(&narrow).map(|(w, n)| w - n).collect())
         }
     }
+}
+
+/// `sin(πt)`, and exactly zero at every whole `t`.
+///
+/// The sinc's zeros land on taps whenever the cutoff is a round fraction
+/// of the rate — every fifth tap at a tenth — and `sin(π·t)` computed as
+/// written puts π's own rounding there instead: taps of 10⁻¹⁸ that an
+/// export then prints as `7.5e-20`, a multiply by nothing that reads as a
+/// number somebody chose. Reduced to within half a turn of zero first, a
+/// whole `t` is zero exactly.
+fn sin_pi(t: f64) -> f64 {
+    // Exact for any |t| a tap's argument can reach: halving, rounding and
+    // doubling a double move no bits, and the difference is a multiple of
+    // t's own last place.
+    let r = t - 2.0 * (t / 2.0).round();
+    let folded = if r > 0.5 {
+        1.0 - r
+    } else if r < -0.5 {
+        -1.0 - r
+    } else {
+        r
+    };
+    (PI * folded).sin()
 }
 
 #[cfg(test)]

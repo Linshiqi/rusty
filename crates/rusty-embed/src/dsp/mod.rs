@@ -19,12 +19,14 @@
 //! Compiled unconditionally and free of IO, like `signal` beside it: the
 //! frontend draws what this computes, on the one thread it has.
 
+mod code;
 mod design;
 mod fft;
 mod filter;
 mod refusal;
 mod spectrum;
 
+pub use code::{LIMIT, check_name};
 pub use design::{Band, BiquadKind, Design, Pass};
 pub use filter::{Coefficients, Filter, Response, Section};
 pub use refusal::Refusal;

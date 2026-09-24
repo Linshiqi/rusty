@@ -272,6 +272,35 @@ fn a_windowed_sinc_high_pass_and_band_pass_are_low_passes_combined() {
     assert!(db(gain(&band, RATE / 2.0)) < -70.0);
 }
 
+/// Where the sinc crosses zero on a tap — every fifth one from the middle
+/// when the cutoff is a tenth of the rate — the tap is zero, not π's
+/// rounding; and `sin_pi` is the sine everywhere else.
+#[test]
+fn a_sincs_zeros_are_zeros() {
+    let filter = realized(Design::Fir {
+        band: Band::LowPass { cutoff: 100.0 },
+        taps: 31,
+        window: Window::Hann,
+    });
+    let Coefficients::Taps(taps) = filter.coefficients() else {
+        panic!("a FIR is taps");
+    };
+    for (i, tap) in taps.iter().enumerate() {
+        let from_middle = i.abs_diff(15);
+        if from_middle > 0 && from_middle % 5 == 0 {
+            assert_eq!(*tap, 0.0, "tap {i}");
+        } else {
+            assert!(tap.abs() > 1e-6, "tap {i}: {tap}");
+        }
+    }
+    for t in [-3.0, -1.0, 0.0, 1.0, 2.0, 7.0] {
+        assert_eq!(sin_pi(t), 0.0, "{t}");
+    }
+    for t in [-2.75, -0.6, 0.25, 0.5, 0.9, 1.3, 5.55] {
+        assert!((sin_pi(t) - (PI * t).sin()).abs() < 1e-14, "{t}");
+    }
+}
+
 /// Each refusal names what it refused.
 #[test]
 fn what_cannot_be_realised_is_refused_by_name() {
