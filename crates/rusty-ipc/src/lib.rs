@@ -262,6 +262,12 @@ pub mod disk {
     pub const SET_AUTO_SWEEP: &str = "set_disk_auto_sweep";
 }
 
+/// The math toolbox's sheet, in the project's `.rusty/math.toml`.
+pub mod math {
+    pub const LOAD: &str = "math_sheet_load";
+    pub const SAVE: &str = "math_sheet_save";
+}
+
 /// Running firmware without hardware: Espressif's QEMU.
 pub mod sim {
     pub const PLAN: &str = "plan_simulation";

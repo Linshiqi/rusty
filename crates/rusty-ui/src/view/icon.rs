@@ -67,6 +67,8 @@ pub enum Icon {
     Check,
     /// A triangle with a bar: something needs doing.
     Warn,
+    /// Three axes from a corner and a turn about them: the math toolbox.
+    Math,
 }
 
 impl Icon {
@@ -156,6 +158,9 @@ impl Icon {
             Icon::Plug => "M7.5 2.5v3M12.5 2.5v3M5.5 5.5h9v3.5a4.5 4.5 0 0 1-9 0zM10 13.5v4",
             Icon::Check => "M4.5 10.5 8.3 14.2 15.5 6.3",
             Icon::Warn => "M10 3.2 17.3 16.3H2.7zM10 8.3v3.8M10 14.3v.2",
+            Icon::Math => {
+                "M6.5 13V3.5M6.5 13H17M6.5 13 3 16.5M10.5 4.6a6 6 0 0 1 4.9 4.9M15.4 9.5l.3-2.2M15.4 9.5l-2.1-.7"
+            }
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",
             // A parcel — a crate, literally.

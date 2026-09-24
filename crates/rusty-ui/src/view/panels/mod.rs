@@ -10,6 +10,7 @@ mod disk;
 mod features;
 pub(crate) mod files;
 pub mod git;
+mod math;
 mod memory;
 mod search;
 mod simulate;
@@ -94,6 +95,17 @@ pub fn all() -> Vec<Panel> {
             needs_project: true,
             hidden: false,
             render: || view! { <simulate::Simulate /> }.into_any(),
+        },
+        Panel {
+            id: "math",
+            title: t!("panel.math"),
+            section: "Tools",
+            icon: Icon::Math,
+            // Arithmetic needs no project; a project gives the sheet a file
+            // to live in, `.rusty/math.toml`.
+            needs_project: false,
+            hidden: false,
+            render: || view! { <math::MathPanel /> }.into_any(),
         },
         Panel {
             id: "wizard",

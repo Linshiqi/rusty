@@ -162,6 +162,8 @@ fn main() {
             commands::memory_report,
             commands::wizard_options,
             commands::explain_choice,
+            commands::math_sheet_load,
+            commands::math_sheet_save,
             commands::plan_new_project,
             commands::serial_ports,
             commands::debug_probes,
@@ -422,6 +424,8 @@ mod wire_names {
             cmd::flash::STOP => flash::stop_flash,
             cmd::flash::LINK => flash::serial_link,
 
+            cmd::math::LOAD => commands::math_sheet_load,
+            cmd::math::SAVE => commands::math_sheet_save,
             cmd::wizard::OPTIONS => commands::wizard_options,
             cmd::wizard::EXPLAIN => commands::explain_choice,
             cmd::wizard::PLAN => commands::plan_new_project,

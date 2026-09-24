@@ -23,6 +23,7 @@ mod inlay;
 mod ipc;
 mod lab;
 mod paint;
+mod scene;
 mod state;
 mod theme;
 mod view;

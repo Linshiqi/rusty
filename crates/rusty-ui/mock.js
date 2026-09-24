@@ -651,6 +651,23 @@
           a.onLine.send({ stream: "stdout", text: `[rusty:gpio] ${pin}=${on ? 1 : 0}`, level: null });
         }, m.breathe ? 50 : 400);
       }
+      // A flight controller's attitude on its telemetry, named the way
+      // cf-drone-rs names it — radians and rad/s, fifty lines a second — for
+      // the math toolbox's live sheet (`__mock.attitude` before Run).
+      if (m.attitude && !a.debug) {
+        const say = (text) => a.onLine.send({ stream: "stdout", text, level: null });
+        let t = 0;
+        m.simTimer = setInterval(() => {
+          t += 0.02;
+          const roll = 0.45 * Math.sin(0.9 * t);
+          const pitch = 0.25 * Math.sin(0.6 * t + 1);
+          const yaw = 0.8 * Math.sin(0.3 * t);
+          const gx = 0.405 * Math.cos(0.9 * t);
+          const gy = 0.15 * Math.cos(0.6 * t + 1);
+          const gz = 0.24 * Math.cos(0.3 * t);
+          say(`[rusty:tel@${Math.round(t * 1e6)}] roll=${roll.toFixed(4)},pitch=${pitch.toFixed(4)},yaw=${yaw.toFixed(4)},gx=${gx.toFixed(3)},gy=${gy.toFixed(3)},gz=${gz.toFixed(3)}`);
+        }, 20);
+      }
       if (m.signal && !a.debug) {
         const say = (text) => a.onLine.send({ stream: "stdout", text, level: null });
         // A part's props arrive as a JS Map: serde_wasm_bindgen writes a
@@ -855,6 +872,10 @@
       { id: "esp32c3-devkitm-1", name: "ESP32-C3-DevKitM-1", chip: "esp32c3", flashBytes: 4194304, psramBytes: null, usb: [], flashBaud: null, pins: [], source: "builtin" },
     ],
     catalog_problems: () => [],
+    // The math toolbox's sheet, kept the way the file is, so an edit reads
+    // back after a reload — the save-then-reread rule above.
+    math_sheet_load: () => window.__mock.mathSheet ?? null,
+    math_sheet_save: (a) => { window.__mock.mathSheet = a.sheet; return null; },
     wizard_options: () => [],
     // What the backend says about a choice, as far as the review step needs:
     // the plan refuses a name cargo would, as `wizard::plan` does, so a

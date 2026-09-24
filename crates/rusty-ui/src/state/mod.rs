@@ -27,6 +27,7 @@ mod editor;
 mod git;
 mod lab;
 mod layout;
+mod math;
 mod project;
 mod services;
 mod sim;
@@ -39,6 +40,7 @@ pub use editor::*;
 pub use git::*;
 pub use lab::*;
 pub use layout::*;
+pub use math::*;
 pub use project::*;
 pub use services::*;
 pub use sim::*;
@@ -88,6 +90,8 @@ pub struct AppState {
     pub sim: Sim,
     /// What a run's signals played and what the firmware made of them.
     pub lab: Lab,
+    /// The math toolbox's sheet and the view of it.
+    pub math: Math,
     pub debug: Debug,
     pub git: Git,
     pub term: Terminal,
@@ -261,6 +265,7 @@ impl AppState {
                 unsaved_sheet: StoredValue::new(None),
             },
             lab: Lab::fresh(),
+            math: Math::fresh(),
             debug: Debug {
                 session: RwSignal::new(None),
                 epoch: RwSignal::new(0),
