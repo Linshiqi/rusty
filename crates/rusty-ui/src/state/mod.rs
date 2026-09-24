@@ -440,12 +440,6 @@ impl AppState {
             .with_untracked(|d| d.as_ref().map(|d| d.path.clone()))
     }
 
-    /// Whether this file has edits the disk has not seen.
-    ///
-    /// The active editor keeps its draft in `editor.draft`; every other open
-    /// one keeps its own inside `parked`. A read-only document can never be
-    /// dirty — its draft is the disk's text by construction, and treating it
-    /// as unsaved would put a dot on every dependency you glanced at.
     /// Is this file in no crate's module tree — the state where
     /// rust-analyzer parses it and answers nothing else?
     ///
@@ -476,6 +470,12 @@ impl AppState {
         })
     }
 
+    /// Whether this file has edits the disk has not seen.
+    ///
+    /// The active editor keeps its draft in `editor.draft`; every other open
+    /// one keeps its own inside `parked`. A read-only document can never be
+    /// dirty — its draft is the disk's text by construction, and treating it
+    /// as unsaved would put a dot on every dependency you glanced at.
     pub fn is_dirty(&self, path: &str) -> bool {
         // Both groups, whichever this value addresses: a file is open in one
         // of them at most, and a draft anywhere is what protects the disk.

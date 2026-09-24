@@ -199,7 +199,9 @@ impl Divider {
         }
     }
 
-    /// Where a divider sits before anyone has dragged it, in pixels.
+    /// Where a divider sits before anyone has dragged it: in pixels, or in
+    /// permille for the two that are a share of their width (`GitSplit`,
+    /// `EditorSplit`).
     ///
     /// Spelled once: the boot default and View ▸ Reset layout both read it,
     /// so a divider added here is reset there without a second copy of the
@@ -221,9 +223,10 @@ impl Divider {
         }
     }
 
-    /// Bounds, in pixels. The lower one keeps a region usable rather than
-    /// letting it be dragged to nothing — collapsing is what the toggle is for,
-    /// and a two-pixel sidebar is not a smaller sidebar, it is a mistake.
+    /// Bounds, in the divider's own units — pixels, or permille for the two
+    /// splits. The lower one keeps a region usable rather than letting it be
+    /// dragged to nothing — collapsing is what the toggle is for, and a
+    /// two-pixel sidebar is not a smaller sidebar, it is a mistake.
     pub fn bounds(self) -> (f64, f64) {
         match self {
             Divider::Tree => (160.0, 440.0),

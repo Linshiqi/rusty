@@ -301,12 +301,6 @@ fn host_now_us() -> u64 {
         .unwrap_or(0)
 }
 
-/// One gpio report into the waveform capture.
-///
-/// The first report decides the clock: stamped reports run on the firmware's
-/// systimer, unstamped ones on the host's arrival time — never both, because
-/// a trace that mixes time bases is a trace that lies. Capped so an hour of
-/// simulation cannot eat the tab.
 /// Take pins out of one of the two pin maps, because the other has just
 /// heard about them: a pin is in one or the other, never both (see
 /// `Sim::pwm`). Touched only when one of them is there — `update` wakes
@@ -326,6 +320,12 @@ fn forget<T: Send + Sync + 'static>(
     }
 }
 
+/// One gpio report into the waveform capture.
+///
+/// The first report decides the clock: stamped reports run on the firmware's
+/// systimer, unstamped ones on the host's arrival time — never both, because
+/// a trace that mixes time bases is a trace that lies. Capped so an hour of
+/// simulation cannot eat the tab.
 fn record_trace(state: AppState, report: rusty_embed::GpioReport) {
     const CAP: usize = 200_000;
 

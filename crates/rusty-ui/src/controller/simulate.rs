@@ -406,8 +406,6 @@ pub fn sim_analog(state: AppState, pin: u8, count: u16) {
     });
 }
 
-/// Persist the board editor's layout, then re-plan so the panel shows what
-/// the file now says.
 /// Read a KiCad `.kicad_sch` or a Wokwi `diagram.json` onto the sheet,
 /// told apart by the file's extension.
 ///
@@ -557,6 +555,8 @@ pub fn withdraw_unsaved_sheet(state: AppState, number: u64) {
     });
 }
 
+/// Persist the board editor's layout, then re-plan so the panel shows what
+/// the file now says.
 pub fn save_sim_board(state: AppState, board: rusty_embed::Sheet, dirty: RwSignal<bool>) {
     #[derive(serde::Serialize)]
     struct Args {
