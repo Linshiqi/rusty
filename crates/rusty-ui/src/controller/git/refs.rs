@@ -55,6 +55,13 @@ fn default_remote(state: AppState) -> Option<String> {
         .git
         .status
         .with_untracked(|status| status.as_ref().and_then(|s| s.upstream.clone()));
+    pick_remote(upstream.as_deref(), &known_remotes(state))
+}
+
+/// Every remote name there is evidence of, for [`pick_remote`]: the
+/// config's, then any a remote-tracking branch names that the config has
+/// not been read for yet.
+fn known_remotes(state: AppState) -> Vec<String> {
     let mut known: Vec<String> = state
         .git
         .remotes
@@ -66,7 +73,7 @@ fn default_remote(state: AppState) -> Option<String> {
             }
         }
     });
-    pick_remote(upstream.as_deref(), &known)
+    known
 }
 
 /// The arguments that check out `name`. A local branch by name; a remote
@@ -261,8 +268,14 @@ pub fn push_branch(state: AppState, name: String) {
             .find(|b| !b.remote && b.name == name)
             .and_then(|b| b.upstream.clone())
     });
-    let args = match upstream.as_deref().and_then(|u| u.split('/').next()) {
-        Some(remote) => words(&["push", remote, &name]),
+    // The remote that owns the upstream is the longest name that begins
+    // it, as for the current branch: `team/fw/main` is on a remote called
+    // `team/fw`, and its first segment named a remote called `team`.
+    let owner = upstream
+        .as_deref()
+        .and_then(|upstream| pick_remote(Some(upstream), &known_remotes(state)));
+    let args = match owner {
+        Some(remote) => words(&["push", &remote, &name]),
         None => match default_remote(state) {
             Some(remote) => words(&["push", "-u", &remote, &name]),
             None => return open_prompt(state, PromptKind::Remote { push: false }),
