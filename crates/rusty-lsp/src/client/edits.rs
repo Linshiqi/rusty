@@ -5,7 +5,8 @@
 
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    io::Write,
+    path::{Path, PathBuf},
     sync::{Mutex, atomic::Ordering},
     time::Duration,
 };
@@ -286,13 +287,16 @@ impl LspClient {
     /// Write a server's edits to the files they name — a rename, or the part
     /// of a quick fix that lands outside the file it was asked in.
     ///
-    /// Every file is read and converted before any is written. A file the
-    /// server names that cannot be read, or that has changed since the
-    /// server read it, refuses the whole set — not the half of it that came
-    /// after. Answers with the paths that changed.
+    /// All of it or none of it, as far as a filesystem allows. Every file is
+    /// read and converted before any is written, so a file the server names
+    /// that cannot be read, or that has changed since the server read it,
+    /// refuses the whole set — not the half of it that came after. A write
+    /// that fails once others have succeeded puts those back as they were;
+    /// only when that fails as well is anything left changed, and the error
+    /// then names it. Answers with the paths that changed.
     fn write_edits(&self, method: &str, by_file: Vec<(String, Vec<Value>)>) -> Result<Vec<String>> {
         let encoding = self.shared.encoding();
-        let mut planned: Vec<(PathBuf, String)> = Vec::new();
+        let mut planned: Vec<Planned> = Vec::new();
         for (uri, edits) in by_file {
             let Some(file) = uri_to_absolute(&uri) else {
                 return Err(Error::Server {
@@ -301,11 +305,12 @@ impl LspClient {
                 });
             };
             let file = PathBuf::from(file);
-            let text = std::fs::read_to_string(&file).map_err(|source| Error::Apply {
+            let before = std::fs::read_to_string(&file).map_err(|source| Error::Apply {
                 path: file.display().to_string(),
                 source,
+                undone: Vec::new(),
             })?;
-            let Some(out) = convert::apply_text_edits(&text, &edits, encoding) else {
+            let Some(after) = convert::apply_text_edits(&before, &edits, encoding) else {
                 return Err(Error::Server {
                     method: method.into(),
                     message: format!(
@@ -314,22 +319,90 @@ impl LspClient {
                     ),
                 });
             };
-            if out != text {
-                planned.push((file, out));
+            if after != before {
+                planned.push(Planned {
+                    file,
+                    before,
+                    after,
+                });
             }
         }
-
-        let mut changed = Vec::new();
-        for (file, out) in planned {
-            std::fs::write(&file, &out).map_err(|source| Error::Apply {
-                path: file.display().to_string(),
-                source,
-            })?;
-            changed.push(file.display().to_string());
-        }
-        changed.sort();
-        Ok(changed)
+        write_all(&planned, write_file)
     }
+}
+
+/// One file's part of an edit: what it holds, and what it is to hold.
+struct Planned {
+    file: PathBuf,
+    before: String,
+    after: String,
+}
+
+/// A write that failed, and whether it got far enough to change the file:
+/// opening one for writing empties it, so a failure after the open leaves
+/// it holding part of what was being written, and one at the open leaves
+/// it as it was.
+struct WriteFailure {
+    error: std::io::Error,
+    touched: bool,
+}
+
+/// Put `text` in `file`, in place. Writing a copy and renaming it over the
+/// file would make a failed write harmless, but it would be another file:
+/// default permissions, no link to the old one, and a rename to every
+/// watcher where this is a change to a file that was already there.
+fn write_file(file: &Path, text: &str) -> std::result::Result<(), WriteFailure> {
+    let mut out = std::fs::File::create(file).map_err(|error| WriteFailure {
+        error,
+        touched: false,
+    })?;
+    out.write_all(text.as_bytes())
+        .map_err(|error| WriteFailure {
+            error,
+            touched: true,
+        })
+}
+
+/// Write every planned file through `write`, in order, or leave them all as
+/// they were: when one fails, the files already written — and the failing
+/// one, if the failure came after it was emptied — get their old text back
+/// through the same `write`. Answers with the paths written, sorted.
+fn write_all(
+    planned: &[Planned],
+    mut write: impl FnMut(&Path, &str) -> std::result::Result<(), WriteFailure>,
+) -> Result<Vec<String>> {
+    for (at, failing) in planned.iter().enumerate() {
+        let Err(failure) = write(&failing.file, &failing.after) else {
+            continue;
+        };
+        let emptied = failure.touched.then_some(failing);
+        let mut undone = Vec::new();
+        let mut left = Vec::new();
+        for plan in planned[..at].iter().chain(emptied) {
+            let name = plan.file.display().to_string();
+            match write(&plan.file, &plan.before) {
+                Ok(()) => undone.push(name),
+                Err(_) => left.push(name),
+            }
+        }
+        let path = failing.file.display().to_string();
+        let source = failure.error;
+        return Err(if left.is_empty() {
+            Error::Apply {
+                path,
+                source,
+                undone,
+            }
+        } else {
+            Error::PartlyApplied { path, source, left }
+        });
+    }
+    let mut changed: Vec<String> = planned
+        .iter()
+        .map(|plan| plan.file.display().to_string())
+        .collect();
+    changed.sort();
+    Ok(changed)
 }
 
 #[cfg(test)]
@@ -350,5 +423,102 @@ mod tests {
         assert_eq!(kept.item("a.rs", 5, 0), Some(json!(5)));
         assert_eq!(kept.item("b.rs", 5, 0), None, "another file's answer");
         assert_eq!(kept.item("a.rs", 5, 1), None, "an index it never had");
+    }
+
+    /// Three files on disk, each planned to gain a `pub`.
+    fn three_files(dir: &Path) -> Vec<Planned> {
+        ["a", "b", "c"]
+            .into_iter()
+            .map(|name| {
+                let file = dir.join(format!("{name}.rs"));
+                let before = format!("fn {name}() {{}}\n");
+                std::fs::write(&file, &before).unwrap();
+                let after = format!("pub {before}");
+                Planned {
+                    file,
+                    before,
+                    after,
+                }
+            })
+            .collect()
+    }
+
+    fn on_disk(plan: &Planned) -> String {
+        std::fs::read_to_string(&plan.file).unwrap()
+    }
+
+    fn name(plan: &Planned) -> String {
+        plan.file.display().to_string()
+    }
+
+    /// When putting back fails as well, the edit is half on disk, and the
+    /// error names exactly the files that are: the one written and not put
+    /// back — not the one whose write was refused, nor the one never
+    /// reached.
+    #[test]
+    fn a_file_that_cannot_be_put_back_is_named_as_left_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let planned = three_files(dir.path());
+        let outcome = write_all(&planned, |file, text| {
+            // b's write is refused at the open, and so is a's way back.
+            if file == planned[1].file || (file == planned[0].file && text == planned[0].before) {
+                return Err(WriteFailure {
+                    error: std::io::ErrorKind::PermissionDenied.into(),
+                    touched: false,
+                });
+            }
+            write_file(file, text)
+        });
+        let error = outcome.unwrap_err();
+        match &error {
+            Error::PartlyApplied { path, left, .. } => {
+                assert_eq!(*path, name(&planned[1]));
+                assert_eq!(*left, [name(&planned[0])]);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            error
+                .to_string()
+                .ends_with(&format!("left changed: {}", name(&planned[0]))),
+            "{error}"
+        );
+        assert_eq!(on_disk(&planned[0]), planned[0].after, "a keeps the edit");
+        assert_eq!(on_disk(&planned[1]), planned[1].before);
+        assert_eq!(
+            on_disk(&planned[2]),
+            planned[2].before,
+            "c was never reached"
+        );
+    }
+
+    /// A write can fail after the open has emptied its file — a full disk
+    /// — and then that file is as changed as the ones before it, and is put
+    /// back with them.
+    #[test]
+    fn a_write_that_fails_after_emptying_its_file_puts_that_file_back_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let planned = three_files(dir.path());
+        let outcome = write_all(&planned, |file, text| {
+            if file == planned[1].file && text == planned[1].after {
+                // Half the new text lands, and then the disk is full.
+                std::fs::write(file, &text[..text.len() / 2]).unwrap();
+                return Err(WriteFailure {
+                    error: std::io::ErrorKind::StorageFull.into(),
+                    touched: true,
+                });
+            }
+            write_file(file, text)
+        });
+        match outcome {
+            Err(Error::Apply { path, undone, .. }) => {
+                assert_eq!(path, name(&planned[1]));
+                assert_eq!(undone, [name(&planned[0]), name(&planned[1])]);
+            }
+            other => panic!("{other:?}"),
+        }
+        for plan in &planned {
+            assert_eq!(on_disk(plan), plan.before, "{}", name(plan));
+        }
     }
 }

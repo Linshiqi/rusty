@@ -41,14 +41,43 @@ pub enum Error {
     #[error("the call hierarchy item is not the server's JSON: {0}")]
     Item(#[source] serde_json::Error),
 
-    /// An edit the server sent could not be put on disk — the file it names
-    /// could not be read or written. Nothing was applied: a rename lands
-    /// whole or not at all, because half of one is a build that fails in
-    /// the caller you did not see.
-    #[error("could not apply the edit to {path}: {source}")]
+    /// An edit the server sent could not be put on disk — a file it names
+    /// could not be read or written — and nothing is left changed. Every
+    /// file is read before any is written, and a write that fails once
+    /// others have succeeded puts those back first: a rename lands whole or
+    /// not at all, because half of one is a build that fails in the caller
+    /// you did not see. `undone` names the files that were written and then
+    /// put back, none when the failure came before any write.
+    #[error("could not apply the edit to {path}: {source} — {}", nothing_changed(.undone))]
     Apply {
         path: String,
         #[source]
         source: std::io::Error,
+        undone: Vec<String>,
     },
+
+    /// A write failed part-way through an edit, and so did putting back the
+    /// files written before it: the edit is half on disk. `left` names every
+    /// file that no longer holds what it held, for somebody to look at.
+    #[error(
+        "could not apply the edit to {path}: {source} — and could not put back \
+         what had been written, so these are left changed: {}",
+        .left.join(", ")
+    )]
+    PartlyApplied {
+        path: String,
+        #[source]
+        source: std::io::Error,
+        left: Vec<String>,
+    },
+}
+
+/// How [`Error::Apply`] ends: nothing changed, and whether that took
+/// putting anything back.
+fn nothing_changed(undone: &[String]) -> &'static str {
+    if undone.is_empty() {
+        "nothing was changed"
+    } else {
+        "what had been written was put back, so nothing was changed"
+    }
 }

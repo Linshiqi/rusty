@@ -975,3 +975,105 @@ fn a_rename_naming_an_unreadable_file_writes_nothing() {
         "nothing may be written when part of the rename cannot be",
     );
 }
+
+/// A rename's answer that turns `radio` into `tuner` in each of `files`,
+/// in that order: `documentChanges` is a list, where `changes` is a map
+/// and keeps whatever order the map does.
+fn radio_renamed_in(root: &Path, files: &[&str]) -> Value {
+    let edit = json!({
+        "range": {
+            "start": { "line": 0, "character": 3 },
+            "end": { "line": 0, "character": 8 },
+        },
+        "newText": "tuner",
+    });
+    let changes: Vec<Value> = files
+        .iter()
+        .map(|file| {
+            json!({
+                "textDocument": { "uri": path_to_uri(&root.join(file)), "version": null },
+                "edits": [edit.clone()],
+            })
+        })
+        .collect();
+    json!({ "documentChanges": changes })
+}
+
+/// Every file of a rename is read before any is written, so when the
+/// second cannot be read the first is not written and put back — it is
+/// never written at all, and there is nothing to undo.
+#[test]
+fn a_rename_whose_second_file_cannot_be_read_leaves_the_first_alone() {
+    let (client, root, _seen) =
+        client_with(&[("src/main.rs", "fn radio() {}\n")], |message, root| {
+            (method(message) == "textDocument/rename")
+                .then(|| radio_renamed_in(root, &["src/main.rs", "src/tuner.rs"]))
+        });
+    client.did_open("src/main.rs", "fn radio() {}\n").unwrap();
+
+    match client.rename("src/main.rs", 0, 4, "tuner") {
+        Err(Error::Apply { path, undone, .. }) => {
+            assert!(path.ends_with("src/tuner.rs"), "{path}");
+            assert!(undone.is_empty(), "nothing was written: {undone:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("src/main.rs")).unwrap(),
+        "fn radio() {}\n",
+    );
+}
+
+/// A rename whose second file cannot be written puts the first back, and
+/// says so: the edit lands whole or not at all. It used to stop at the
+/// failure with the first file renamed and an error saying nothing had
+/// been applied. The second file is read-only, which refuses the write on
+/// every platform — to anyone but a superuser, who is told why the test
+/// does not run.
+#[test]
+fn a_rename_whose_second_file_cannot_be_written_puts_the_first_back() {
+    let (client, root, _seen) = client_with(
+        &[
+            ("src/main.rs", "fn radio() {}\n"),
+            ("src/tuner.rs", "fn radio() {}\n"),
+        ],
+        |message, root| {
+            (method(message) == "textDocument/rename")
+                .then(|| radio_renamed_in(root, &["src/main.rs", "src/tuner.rs"]))
+        },
+    );
+    let main = root.path().join("src/main.rs");
+    let tuner = root.path().join("src/tuner.rs");
+    let mut permissions = std::fs::metadata(&tuner).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&tuner, permissions).unwrap();
+    if std::fs::OpenOptions::new().write(true).open(&tuner).is_ok() {
+        eprintln!("skipped: this user can write a read-only file, so no write can be made to fail");
+        return;
+    }
+    client.did_open("src/main.rs", "fn radio() {}\n").unwrap();
+
+    let outcome = client.rename("src/main.rs", 0, 4, "tuner");
+    match &outcome {
+        Err(Error::Apply { path, undone, .. }) => {
+            assert!(path.ends_with("src/tuner.rs"), "{path}");
+            assert_eq!(undone.len(), 1, "{undone:?}");
+            assert!(undone[0].ends_with("src/main.rs"), "{undone:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        outcome
+            .unwrap_err()
+            .to_string()
+            .ends_with("what had been written was put back, so nothing was changed"),
+    );
+    for file in [&main, &tuner] {
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            "fn radio() {}\n",
+            "{}",
+            file.display()
+        );
+    }
+}
