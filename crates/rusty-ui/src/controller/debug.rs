@@ -349,7 +349,12 @@ pub fn fetch_svd(state: AppState) {
         async move {
             ipc::call_streaming::<_, ()>(cmd::debug::FETCH_SVD, &(), "onLine", &channel).await
         },
-        move |()| load_registers(state),
+        // A download is a session like any tool's, and over when it answers:
+        // that is what takes the Stop button and the status bar's clock away.
+        move |()| {
+            note_exit(state, Some(0));
+            load_registers(state);
+        },
     );
 }
 

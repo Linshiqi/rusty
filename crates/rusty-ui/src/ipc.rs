@@ -266,6 +266,15 @@ where
 {
     let args = serde_wasm_bindgen::to_value(args)
         .map_err(|e| IpcError::local(format!("could not encode arguments: {e}")))?;
+    // A command whose only argument is its channel is called with `&()`,
+    // which encodes as `undefined` — and nothing can be set on `undefined`,
+    // so the call failed before it was made: the SVD download never started.
+    // The channel then goes on an object of its own.
+    let args = if args.is_undefined() || args.is_null() {
+        js_sys::Object::new().into()
+    } else {
+        args
+    };
     js_sys::Reflect::set(&args, &JsValue::from_str(channel_key), channel.as_ref())
         .map_err(|e| IpcError::from_js(&e))?;
 
