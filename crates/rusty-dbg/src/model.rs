@@ -148,6 +148,17 @@ impl DebugState {
         self.reason = None;
     }
 
+    /// The target has come to rest. Both debuggers read a stop at its
+    /// innermost frame — gdb selects it, and the adapter's stack answer asks
+    /// for its scopes — so the variables that follow are that frame's, and
+    /// the selected frame goes back to it whichever was chosen before.
+    pub fn halted(&mut self, reason: StopReason) {
+        self.running = false;
+        self.attached = true;
+        self.reason = Some(reason);
+        self.frame = 0;
+    }
+
     /// A breakpoint as the debugger reported it: in place of the one carrying
     /// its number, or added. One the debugger has not numbered is always
     /// added — there is nothing to know it again by.
@@ -223,6 +234,23 @@ mod tests {
         assert_eq!(state.reason, None);
         assert!(state.attached, "attached is not resuming's to change");
         assert_eq!(state.frame, 1, "nor is the selected frame");
+    }
+
+    /// A stop is read at the innermost frame, so the marker that says whose
+    /// variables are shown goes back there — whichever frame was chosen at
+    /// the last stop, whose variables are gone.
+    #[test]
+    fn halting_selects_the_innermost_frame() {
+        let mut state = DebugState {
+            attached: true,
+            running: true,
+            frame: 2,
+            ..DebugState::default()
+        };
+        state.halted(StopReason::Step);
+        assert!(state.stopped(), "at rest, attached, not over");
+        assert_eq!(state.reason, Some(StopReason::Step));
+        assert_eq!(state.frame, 0);
     }
 
     /// A breakpoint reported again under its number replaces the one it was;

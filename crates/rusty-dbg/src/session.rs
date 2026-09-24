@@ -272,15 +272,25 @@ impl Debugger {
         self.send("-exec-finish")
     }
 
-    /// Ask for the stack and the selected frame's variables. Called after
-    /// every stop; the answers arrive as records and land in the state.
+    /// Select a frame and ask for the stack and that frame's variables —
+    /// what choosing a row of the stack does; a stop asks for its own. The
+    /// answers arrive as records and land in the state.
+    ///
+    /// The panel marks the row `frame` names beside the variables shown, so
+    /// the two have to be about the same frame, and no answer from gdb says
+    /// which frame it is about. So the marker moves here, once every request
+    /// has gone. Never set, it stayed on the innermost frame while the
+    /// variables beside it were another's; a refresh gdb could not be sent
+    /// leaves it where it was.
     pub fn refresh(&self, frame: u32) -> Result<()> {
         self.send(&format!("-stack-select-frame {frame}"))?;
         self.send("-stack-list-frames")?;
         // `--all-values` rather than names alone: a variables panel that
         // needs a round trip per row updates one row at a time on a target
         // that is already slow.
-        self.send("-stack-list-variables --all-values")
+        self.send("-stack-list-variables --all-values")?;
+        self.state.lock().expect("state").frame = frame;
+        Ok(())
     }
 
     /// Read a span of target memory — a peripheral's register block, for
@@ -428,9 +438,7 @@ fn apply(state: &mut DebugState, record: &Record, root: &Path) -> bool {
                 return true;
             }
             if class == "stopped" {
-                state.running = false;
-                state.attached = true;
-                state.reason = Some(reason_of(value.field("reason").unwrap_or_default()));
+                state.halted(reason_of(value.field("reason").unwrap_or_default()));
                 // gdb prints `exit-code` in *octal* — `exit-code="012"` is
                 // ten — as the MI manual says and as nothing about the field
                 // suggests. Read as decimal, exit 10 was reported as 12.
@@ -772,6 +780,37 @@ pub(crate) mod tests {
         let (gdb, stderr) = stand_in();
         drop(around(gdb));
         assert!(ended(stderr), "gdb was stopped, not left running");
+    }
+
+    /// The panel marks the stack row `frame` names and shows the variables
+    /// beside it, so both have to be about one frame. gdb's refresh never set
+    /// it, and the marker stayed on the innermost frame while the variables
+    /// were another's. It moves once gdb has been asked, stays when gdb could
+    /// not be, and a stop takes it back to the innermost frame — the one
+    /// whose variables a stop asks for.
+    #[test]
+    fn the_selected_frame_is_the_one_whose_variables_are_shown() {
+        let (gdb, _stderr) = stand_in();
+        let debugger = around(gdb);
+        let stop = mi::parse(
+            r#"*stopped,reason="breakpoint-hit",bkptno="1",frame={addr="0x400d1a2c",func="blinky::main",file="src/bin/main.rs",line="68"},thread-id="1""#,
+        )
+        .unwrap();
+        apply(&mut debugger.state.lock().unwrap(), &stop, &root());
+
+        debugger.refresh(2).expect("gdb is asked");
+        assert_eq!(debugger.state().frame, 2, "the frame asked about");
+
+        *debugger.wire.stdin.lock().unwrap() = None;
+        assert!(debugger.refresh(1).is_err(), "gdb's input is closed");
+        assert_eq!(
+            debugger.state().frame,
+            2,
+            "a refresh that never went moves nothing",
+        );
+
+        apply(&mut debugger.state.lock().unwrap(), &stop, &root());
+        assert_eq!(debugger.state().frame, 0, "a stop is read at frame 0");
     }
 
     #[test]

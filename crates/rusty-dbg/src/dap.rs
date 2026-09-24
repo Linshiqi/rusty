@@ -466,8 +466,13 @@ impl DapSession {
 
     /// Select a frame and read its variables. The panel counts levels; the
     /// adapter counts its own frame ids.
+    ///
+    /// The marker moves once the adapter has been asked about the frame, as
+    /// gdb's does: not to a level the last stack did not list, whose
+    /// variables nobody will send, and not when the request could not go.
+    /// It used to move first, and either case left it beside another
+    /// frame's variables.
     pub fn refresh(&self, frame: u32) -> Result<()> {
-        self.state.lock().expect("dap state").frame = frame;
         let id = self
             .frames
             .lock()
@@ -478,6 +483,7 @@ impl DapSession {
             return Ok(());
         };
         self.wire.send("scopes", json!({ "frameId": id }))?;
+        self.state.lock().expect("dap state").frame = frame;
         Ok(())
     }
 
@@ -699,14 +705,9 @@ impl Reader {
                     *self.thread.lock().expect("dap thread") = id;
                 }
                 self.running.store(false, Ordering::SeqCst);
-                {
-                    let mut state = self.state.lock().expect("dap state");
-                    state.running = false;
-                    state.attached = true;
-                    state.reason = Some(reason_of(
-                        body.get("reason").and_then(Value::as_str).unwrap_or(""),
-                    ));
-                }
+                self.state.lock().expect("dap state").halted(reason_of(
+                    body.get("reason").and_then(Value::as_str).unwrap_or(""),
+                ));
                 // The stop names one thread and nothing else; the stack is
                 // a separate question, and asking it here is what makes
                 // the panel complete the moment it appears.
@@ -1146,6 +1147,59 @@ mod tests {
             Some("disconnect"),
             "told to take the program down first: {heard:?}",
         );
+    }
+
+    /// The marker on the stack moves once the adapter has been asked about
+    /// the frame: not to a level the last stack did not list, whose
+    /// variables nobody will send, and not when the request could not go.
+    #[test]
+    fn a_frame_is_selected_once_the_adapter_is_asked_about_it() {
+        let (adapter, _stderr) = stand_in();
+        let (port, commands) = fake_adapter(true);
+        let (session, _states) = DapSession::with_adapter(adapter, port, &launch())
+            .expect("the fake adapter completes the handshake");
+        *session.frames.lock().expect("frame ids") = vec![1000, 1001];
+
+        session.refresh(1).expect("the adapter is asked");
+        assert_eq!(session.state().frame, 1);
+        session
+            .refresh(5)
+            .expect("a level with no frame is no error");
+        assert_eq!(session.state().frame, 1, "a level the stack did not list");
+
+        session
+            .wire
+            .socket
+            .lock()
+            .expect("the socket")
+            .as_ref()
+            .expect("connected")
+            .shutdown(std::net::Shutdown::Write)
+            .expect("the write half shut");
+        assert!(session.refresh(0).is_err(), "the request cannot go");
+        assert_eq!(session.state().frame, 1, "a request that never went");
+
+        drop(session);
+        let heard = commands
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the fake adapter heard the session out");
+        assert_eq!(
+            heard.iter().filter(|command| *command == "scopes").count(),
+            1,
+            "one frame asked about: {heard:?}",
+        );
+    }
+
+    /// A stop is read at its innermost frame — the stack's answer asks for
+    /// frame 0's scopes — so the marker goes back there, whichever frame was
+    /// chosen at the last stop.
+    #[test]
+    fn a_stop_selects_the_innermost_frame() {
+        let (reader, _states) = unwired();
+        reader.state.lock().expect("the state").frame = 3;
+        let stopped = event("stopped", json!({ "reason": "step", "threadId": 1 }));
+        assert!(reader.handle(&stopped));
+        assert_eq!(reader.state.lock().expect("the state").frame, 0);
     }
 
     #[test]
