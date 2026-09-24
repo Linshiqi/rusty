@@ -119,6 +119,13 @@ cargo run -p rusty-embed --example sim_probe -- <project-dir> [seconds]
 cargo run -p rusty-embed --example loop_probe -- examples/rate-loop
 cargo run -p rusty-embed --example flight_probe -- examples/rate-loop
 
+# The signal chain, the same way: a generator on the sheet played into the
+# converter by rusty's emulator, the firmware running the filter the Signals
+# tab exported, and its gain and phase at three tones held to the design's —
+# one of them switched to by a scenario's `play` step mid-run. Needs a
+# QEMU with the tables (qemu-v9 or later).
+cargo run -p rusty-embed --example filter_probe -- examples/filter-lab
+
 # The workbench without the window
 cargo run -p rusty-cli -- check .
 cargo run -p rusty-cli -- size target/riscv32imc-unknown-none-elf/release/app

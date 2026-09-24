@@ -2229,6 +2229,28 @@ jobs:
             }
           tail -30 live-probe.log
 
+      # The Signals tab's whole chain, with nothing mocked. The sheet in
+      # examples/filter-lab puts a generator on GPIO3: rusty's own host code
+      # renders its table through the circuit and plays it down the pin
+      # channel, the firmware reads its converter by its own clock and runs
+      # the filter the Design view exported, and a scenario's `play` step
+      # changes the signal while it runs. The probe requires `y` over `raw`
+      # to be the design's gain and phase at the tone, at the hum and at the
+      # tone the step switched to — the numbers, not the shape.
+      - name: A filter the lab designed does in firmware what the lab says
+        env:
+          RUSTY_CONFIG_DIR: ${{ github.workspace }}
+        run: |
+          cargo run -p rusty-embed --example filter_probe -- examples/filter-lab \
+            > filter-probe.log 2>&1 || {
+              echo "::error::the filter gate failed on examples/filter-lab"
+              tail -40 filter-probe.log | sed 's/%/%25/g' \
+                | awk '{printf "%s%%0A", $0} END{printf "\n"}' | fold -w 3500 \
+                | while IFS= read -r chunk; do echo "::error::…$chunk"; done
+              exit 1
+            }
+          tail -30 filter-probe.log
+
       # The Xtensa toolchain, which none of the gates above need: every
       # other probe is an ESP32-C3 on stable Rust. This one is an ESP32,
       # and there is no ESP32 without espup — a prebuilt Xtensa `core` does
