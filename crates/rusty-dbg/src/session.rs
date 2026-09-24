@@ -139,6 +139,8 @@ pub struct Debugger {
     host: bool,
     /// Whether that program has been started — the first resume is the run.
     launched: AtomicBool,
+    /// Whether `stop` has run. It runs once, whether asked for or on drop.
+    stopped: AtomicBool,
 }
 
 impl Debugger {
@@ -201,6 +203,7 @@ impl Debugger {
             state,
             host,
             launched: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
         };
 
         // Connect, and stop before anything runs. `set` lines first: a
@@ -287,16 +290,35 @@ impl Debugger {
         self.send(&format!("-data-read-memory-bytes 0x{address:x} {bytes}"))
     }
 
-    /// End the session and the target with it.
+    /// End the session and the target with it — once: a session stopped and
+    /// then dropped is not stopped again.
+    ///
+    /// Killed is not gone. A killed gdb nobody waits for stays a zombie on
+    /// Unix for as long as rusty runs, so it is waited for, and `stop`
+    /// returns with gdb's end in hand.
     pub fn stop(&self) {
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let _ = self.send("-gdb-exit");
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
+            let _ = child.wait();
         }
     }
 
     fn send(&self, command: &str) -> Result<()> {
         self.wire.send(command)
+    }
+}
+
+/// A session let go of without `stop` takes gdb with it. The app lets go
+/// of one when its stream ends — after a host program's exit, say, which
+/// told gdb to quit and then never waited for it — and a start that fails
+/// lets go of the one it was building.
+impl Drop for Debugger {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -706,6 +728,50 @@ pub(crate) mod tests {
             eprintln!("standing in");
             std::thread::sleep(Duration::from_secs(60));
         }
+    }
+
+    /// A session around a process that is not gdb: enough for what the
+    /// session does to the process itself, and for what it writes to it.
+    fn around(mut gdb: Child) -> Debugger {
+        let stdin = gdb.stdin.take();
+        Debugger {
+            child: Mutex::new(gdb),
+            wire: Arc::new(Wire {
+                stdin: Mutex::new(stdin),
+                token: AtomicU32::new(1),
+            }),
+            state: Arc::new(Mutex::new(DebugState::default())),
+            host: false,
+            launched: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    /// Killed is not gone: a gdb nobody waits for is a zombie on Unix until
+    /// rusty exits. `stop` returns once gdb has ended, with its status in
+    /// hand — a kill alone returns while the process is still going down.
+    #[test]
+    fn stopping_gdb_waits_until_it_is_gone() {
+        let (gdb, _stderr) = stand_in();
+        let debugger = around(gdb);
+        debugger.stop();
+        let status = debugger
+            .child
+            .lock()
+            .expect("gdb")
+            .try_wait()
+            .expect("a status");
+        assert!(status.is_some(), "gdb has ended by the time stop returns");
+    }
+
+    /// A session let go of without `stop` takes gdb with it, as the app lets
+    /// go of one when its stream ends and a failed start of the one it was
+    /// building.
+    #[test]
+    fn a_debugger_let_go_of_takes_gdb_with_it() {
+        let (gdb, stderr) = stand_in();
+        drop(around(gdb));
+        assert!(ended(stderr), "gdb was stopped, not left running");
     }
 
     #[test]
