@@ -158,16 +158,20 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         }
     }
 
+    // The name is refused in both layouts: in one it is the crate the
+    // generator is asked for, in the other the directory and the prefix of
+    // the `-core` package, which the generator never sees. The wizard's field
+    // says the same while it is typed, by the same rule, and asks for no plan
+    // until the name passes — so this is for a caller that skipped the field.
+    let name = valid_name(&choice.name)?;
+
     // In the workspace layout the generator makes the *firmware* crate, under
     // the project directory named after the choice; the scaffold around it
     // is rusty's (`scaffold_workspace`). So the crate the generator is asked
     // for is always `firmware` there, whatever the project is called.
     let crate_name = match choice.layout {
-        WizardLayout::Single => choice.name.clone(),
-        WizardLayout::Workspace => {
-            valid_name(&choice.name)?;
-            "firmware".to_string()
-        }
+        WizardLayout::Single => name.to_string(),
+        WizardLayout::Workspace => "firmware".to_string(),
     };
 
     let (program, args, rationale) = match choice.runtime {
@@ -265,10 +269,13 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
                  rusty builds, flashes and simulates it from its own directory.",
                 chip.name
             ),
+            // Asked while the name is still being typed, so it may be none
+            // yet: the paths are then said with a placeholder rather than as
+            // `/core/` and `-core`, which read as paths somebody meant.
             consequence: Some(format!(
                 "Creates `{name}/Cargo.toml`, `{name}/core/` and `{name}/firmware/`; the \
                  firmware depends on `{name}-core`.",
-                name = choice.name
+                name = valid_name(&choice.name).unwrap_or("<name>")
             )),
         });
     }
@@ -377,7 +384,7 @@ fn valid_name(name: &str) -> Result<&str> {
     } else {
         Err(Error::refused(format!(
             "`{name}` is not a name cargo accepts for a crate — use letters, digits, `-` and \
-             `_`, starting with a letter or a digit."
+             `_`, starting with a letter or `_`."
         )))
     }
 }
@@ -639,15 +646,18 @@ mod tests {
 
     #[test]
     fn a_name_cargo_would_refuse_is_refused_before_anything_is_generated() {
-        for bad in ["", "my project", "-lead", "驱动"] {
-            let refused = plan(&WizardChoice {
-                name: bad.to_string(),
-                ..workspace("esp32c3")
-            });
-            assert!(
-                matches!(refused, Err(Error::Refused { .. })),
-                "{bad:?} should be refused"
-            );
+        for bad in ["", "my project", "-lead", "2fast", "驱动"] {
+            for layout in [WizardLayout::Single, WizardLayout::Workspace] {
+                let refused = plan(&WizardChoice {
+                    name: bad.to_string(),
+                    layout,
+                    ..workspace("esp32c3")
+                });
+                assert!(
+                    matches!(refused, Err(Error::Refused { .. })),
+                    "{bad:?} should be refused in {layout:?}"
+                );
+            }
         }
         assert!(valid_name("cf-drone_rs2").is_ok());
     }
@@ -661,6 +671,20 @@ mod tests {
             .expect("the layout is a commitment worth explaining");
         assert!(note.detail.contains("ESP32-C3"));
         assert!(note.consequence.as_deref().unwrap().contains("blinky-core"));
+        // Explained while the field is empty too, and not as `/core/`.
+        let unnamed = explain(&WizardChoice {
+            name: String::new(),
+            ..workspace("esp32c3")
+        });
+        let unnamed = unnamed
+            .iter()
+            .find_map(|e| {
+                e.consequence
+                    .as_deref()
+                    .filter(|_| e.topic.contains("workspace"))
+            })
+            .unwrap();
+        assert!(unnamed.contains("`<name>-core`"), "{unnamed}");
         assert!(
             !explain(&choice("esp32c3", Runtime::BareMetal, &[]))
                 .iter()

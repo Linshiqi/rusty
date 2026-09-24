@@ -773,14 +773,6 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
             }}
 
             {move || {
-                let Some(plan) = state.wizard.plan.get() else {
-                    return view! {
-                        <p class="text-callout text-label-2">
-                            {t!("wizard.no-generator")}
-                        </p>
-                    }
-                        .into_any();
-                };
                 let busy = state.app.session_running.get();
                 // A name cargo would refuse is refused here, not by cargo
                 // minutes later and not by the backend after the folder
@@ -789,6 +781,43 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                     .wizard
                     .choice
                     .with(|c| c.as_ref().is_some_and(|c| crate_name_problem(&c.name).is_none()));
+                // The button, live or not. It stays where it is while a name
+                // is typed, although `choose` asks for no plan until the name
+                // passes: a button that vanished at every keystroke that
+                // emptied the field would move whatever was under it.
+                let create_row = move |live: bool| {
+                    view! {
+                        <div class="flex items-center gap-2">
+                            <Button
+                                label=t!("wizard.create")
+                                kind=ButtonKind::Primary
+                                disabled=Signal::derive(move || busy || !live)
+                                on_click=Callback::new(move |_| {
+                                    if let Some(choice) = state.wizard.choice.get_untracked() {
+                                        controller::create_project(state, choice);
+                                    }
+                                })
+                            />
+                            <span class="text-footnote text-label-3">
+                                {t!("misc.wizard-runs")}
+                            </span>
+                        </div>
+                    }
+                };
+                let Some(plan) = state.wizard.plan.get() else {
+                    // Named, no plan is the backend refusing the combination,
+                    // and the dock says why. Unnamed, it is the field's to
+                    // say, and the field does.
+                    if !named {
+                        return create_row(false).into_any();
+                    }
+                    return view! {
+                        <p class="text-callout text-label-2">
+                            {t!("wizard.no-generator")}
+                        </p>
+                    }
+                        .into_any();
+                };
 
                 // Check the generator is there *before* offering the button.
                 // The toolchain report already probed every tool rusty drives,
@@ -839,21 +868,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
                 }
 
                 view! {
-                    <div class="flex items-center gap-2">
-                        <Button
-                            label=t!("wizard.create")
-                            kind=ButtonKind::Primary
-                            disabled=Signal::derive(move || busy || !named)
-                            on_click=Callback::new(move |_| {
-                                if let Some(choice) = state.wizard.choice.get_untracked() {
-                                    controller::create_project(state, choice);
-                                }
-                            })
-                        />
-                        <span class="text-footnote text-label-3">
-                            {t!("misc.wizard-runs")}
-                        </span>
-                    </div>
+                    {create_row(named)}
 
                     // The command stays visible underneath. Showing it is what
                     // makes the tool checkable and pasteable into a bug report;

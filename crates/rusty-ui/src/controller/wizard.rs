@@ -7,6 +7,7 @@ use rusty_i18n::t;
 
 use rusty_embed::{
     CommandPlan, Explanation, LogLevel, LogLine, LogStream, WizardChoice, WizardOption,
+    crate_name_problem,
 };
 
 // The sibling modules, flat: `controller` re-exports every one of them,
@@ -52,6 +53,14 @@ pub fn choose(state: AppState, choice: WizardChoice) {
     // ESP-IDF runtime, say — and that refusal is the useful answer. It surfaces
     // through the normal error path and clears the stale command.
     state.wizard.plan.set(None);
+    // A name the field is already refusing is not asked about. The backend
+    // refuses it by the same rule, and each refusal went to the dock and the
+    // banner: clearing the field to type a new name put "`` is not a name
+    // cargo accepts" there once per change, under a field saying the same
+    // thing in red. The plan waits for a name cargo takes.
+    if crate_name_problem(&choice.name).is_some() {
+        return;
+    }
     let plan_args = Args { choice };
     track(
         state,

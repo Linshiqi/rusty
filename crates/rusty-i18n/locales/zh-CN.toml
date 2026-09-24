@@ -1014,7 +1014,7 @@ what-high = "上限"
 [wizard]
 name-empty = "需要一个名字。"
 name-character = "不能包含 `{char}`——只能用字母、数字、`-` 和 `_`。"
-name-start = "不能以 `{char}` 开头——请以字母或数字开头。"
+name-start = "不能以 `{char}` 开头——请以字母或 `_` 开头。"
 loading-catalogue = "正在加载芯片目录…"
 cores = "{count} 核"
 needs-espup = "需要 espup"

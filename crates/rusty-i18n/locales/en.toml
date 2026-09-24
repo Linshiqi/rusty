@@ -1056,7 +1056,7 @@ what-high = "The high edge"
 [wizard]
 name-empty = "A name is needed."
 name-character = "`{char}` is not allowed — use letters, digits, `-` and `_`."
-name-start = "It cannot start with `{char}` — start with a letter or a digit."
+name-start = "It cannot start with `{char}` — start with a letter or `_`."
 loading-catalogue = "Loading the chip catalogue…"
 cores = "{count} core"
 needs-espup = "needs espup"

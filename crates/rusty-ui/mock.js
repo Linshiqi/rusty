@@ -856,6 +856,21 @@
     ],
     catalog_problems: () => [],
     wizard_options: () => [],
+    // What the backend says about a choice, as far as the review step needs:
+    // the plan refuses a name cargo would, as `wizard::plan` does, so a
+    // wizard that asks about one shows the refusal here as it did in the app.
+    explain_choice: (a) => [
+      { topic: `Bare metal on ${a.choice.chip}`, detail: "The mock's one explanation.", consequence: null },
+    ],
+    plan_new_project: (a) => {
+      const { chip, name, layout } = a.choice;
+      if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) {
+        throw `\`${name}\` is not a name cargo accepts for a crate — use letters, digits, \`-\` and \`_\`, starting with a letter or \`_\`.`;
+      }
+      const crate = layout === "workspace" ? "firmware" : name;
+      const display = `esp-generate --headless --chip ${chip} ${crate}`;
+      return { program: "esp-generate", args: [], display, rationale: "" };
+    },
     ai_presets: () => [],
     ai_tools: () => [],
     window_minimize: () => null,

@@ -90,7 +90,11 @@ pub enum CrateNameProblem {
     Empty,
     /// Anything that is not a letter, a digit, `-` or `_`.
     Character(char),
-    /// A first character that is not a letter or a digit.
+    /// A first character that is not a letter or `_`. A digit is one:
+    /// cargo refuses `1abc-core` with "the name cannot start with a digit",
+    /// measured, and takes `_abc`. This rule said the opposite of both for
+    /// as long as it existed, so `2fast` passed the field and the workspace
+    /// it named failed at its first `cargo` — the failure the rule is for.
     Start(char),
 }
 
@@ -106,7 +110,7 @@ pub fn crate_name_problem(name: &str) -> Option<CrateNameProblem> {
     {
         return Some(CrateNameProblem::Character(bad));
     }
-    if !first.is_ascii_alphanumeric() {
+    if !(first.is_ascii_alphabetic() || first == '_') {
         return Some(CrateNameProblem::Start(first));
     }
     None
@@ -118,9 +122,19 @@ mod name_tests {
 
     #[test]
     fn a_name_cargo_takes_has_no_problem() {
-        for good in ["blinky", "cf-drone_rs2", "a", "2fast"] {
+        for good in ["blinky", "cf-drone_rs2", "a", "_private", "rs2"] {
             assert_eq!(crate_name_problem(good), None, "{good}");
         }
+    }
+
+    /// What cargo said about a manifest naming `1abc-core`: "invalid
+    /// character `1` in package name … the name cannot start with a digit".
+    #[test]
+    fn a_name_cannot_start_with_a_digit() {
+        assert_eq!(
+            crate_name_problem("2fast"),
+            Some(CrateNameProblem::Start('2'))
+        );
     }
 
     /// The character is named, because "not a name cargo accepts" over a
