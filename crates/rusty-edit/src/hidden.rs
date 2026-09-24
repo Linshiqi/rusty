@@ -60,12 +60,23 @@ pub(crate) fn project_walk(root: &Path) -> WalkBuilder {
     walk
 }
 
-/// `path` relative to `root` with every backslash made a forward slash: the
-/// name search and the module scan give what the walk finds. `None` outside
-/// the root; the root itself is the empty string.
+/// `path` relative to `root`, its components joined with `/`: the name the
+/// tree, search and the module scan all give what the walk finds. `None`
+/// outside the root; the root itself is the empty string.
+///
+/// Joined by component, not by turning every `\` into `/`. On Windows the
+/// two agree, but on Linux and macOS a backslash is an ordinary character
+/// in a file name: `a\b.rs` was reported as `a/b.rs`, a file that does not
+/// exist, and a replace did not know it for the draft the editor held.
 pub(crate) fn relative_slashed(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
-    Some(relative.to_string_lossy().replace('\\', "/"))
+    Some(
+        relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
 }
 
 #[cfg(test)]
@@ -82,8 +93,8 @@ mod tests {
         }
     }
 
-    /// The name search and the module scan give a file: forward slashes on
-    /// every platform, and nothing for a path outside the root.
+    /// The name the tree, search and the module scan give a file: forward
+    /// slashes on every platform, and nothing for a path outside the root.
     #[test]
     fn a_walked_path_is_named_from_the_root_with_forward_slashes() {
         let root = Path::new("project");
@@ -93,5 +104,20 @@ mod tests {
         );
         assert_eq!(relative_slashed(root, Path::new("elsewhere/main.rs")), None);
         assert_eq!(relative_slashed(root, root).as_deref(), Some(""));
+    }
+
+    /// A backslash separates on Windows and is part of the name everywhere
+    /// else, and the name given is the components the path really has.
+    /// Turning every `\` into `/` named a Linux file `a\b.rs` as `a/b.rs`.
+    #[test]
+    fn a_walked_path_is_named_by_its_own_components() {
+        let root = Path::new("project");
+        let path = root.join("src").join(r"a\b.rs");
+        let named = if cfg!(windows) {
+            "src/a/b.rs"
+        } else {
+            r"src/a\b.rs"
+        };
+        assert_eq!(relative_slashed(root, &path).as_deref(), Some(named));
     }
 }

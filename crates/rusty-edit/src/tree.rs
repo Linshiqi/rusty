@@ -8,7 +8,11 @@
 
 use std::path::Path;
 
-use crate::{error::Result, hidden::project_walk, model::Entry};
+use crate::{
+    error::Result,
+    hidden::{project_walk, relative_slashed},
+    model::Entry,
+};
 
 /// Everything in the project worth showing, as one tree.
 ///
@@ -25,17 +29,12 @@ pub fn read(root: &Path) -> Result<Vec<Entry>> {
         if path == root {
             continue;
         }
-        let Ok(relative) = path.strip_prefix(root) else {
-            continue;
-        };
         // Forward slashes on every platform: this string is an identity the
         // frontend sends back, and two spellings of one path would look like
-        // two files.
-        let relative = relative
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
+        // two files — so search names a file through the same function.
+        let Some(relative) = relative_slashed(root, path) else {
+            continue;
+        };
         if relative.is_empty() {
             continue;
         }

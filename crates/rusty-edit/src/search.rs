@@ -1155,4 +1155,36 @@ let c = kp;",
             "a file the tree never showed must not change",
         );
     }
+
+    /// On Linux and macOS a backslash is a character like any other, and a
+    /// file can carry one in its name. It was listed with the backslash made
+    /// a separator — `src/a/b.rs`, which is no file at all — and a replace
+    /// did not know it for the draft the editor held under its real name.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_file_name_is_part_of_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), r"src/a\b.rs", "gain\n");
+
+        let found = search(dir.path(), &query("gain"));
+        assert_eq!(
+            found
+                .hits
+                .iter()
+                .map(|h| h.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![r"src/a\b.rs"],
+        );
+        assert!(dir.path().join(&found.hits[0].path).is_file());
+
+        let outcome = replace(
+            dir.path(),
+            &query("gain"),
+            "kp",
+            &[r"src/a\b.rs".to_string()],
+        );
+        assert!(outcome.changed.is_empty(), "{outcome:?}");
+        assert_eq!(outcome.skipped.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.skipped[0].path, r"src/a\b.rs");
+    }
 }
