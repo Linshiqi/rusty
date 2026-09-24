@@ -11,9 +11,17 @@
 //! repository?" — asked now only when a command has already failed, where
 //! the answer decides which refusal to give.
 //!
-//! [`stamp`](fn@stamp) runs no `git` at all: it reads the sizes and times
-//! of the files git keeps its state in, so the panel can ask "did anything
-//! move?" every few seconds for nothing.
+//! [`stamp`](fn@stamp) runs one `git`, once per root: the first time a root
+//! is asked about, `git rev-parse --path-format=absolute --git-dir
+//! --git-common-dir` says where its repository keeps its state — two
+//! directories in a linked worktree — and the answer is kept, for sixteen
+//! roots at most, the oldest dropped first. [`status`] finds an operation's
+//! markers through the same answer, so whichever of the two asks first
+//! pays for it. From then on a stamp reads only the sizes and times of the
+//! files git keeps its state in, so the panel can ask "did anything move?"
+//! every few seconds for nothing. A `rev-parse` that fails — a directory
+//! that is not a repository — keeps nothing, and runs again at the next
+//! ask.
 
 mod run;
 mod stamp;
