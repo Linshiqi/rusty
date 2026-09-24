@@ -278,8 +278,9 @@ pub enum GitOperation {
 }
 
 /// A fingerprint of the repository's own files — `HEAD` and its log, the
-/// refs, the index, the stash — made from their sizes and times, with no
-/// `git` run at all.
+/// refs, the index, the stash — made from their sizes and times. No `git`
+/// runs for it but the one `rev-parse` per root that finds where those files
+/// are, asked once and kept.
 ///
 /// The panel compares one with the last to decide what to read again. Before
 /// it, every save anywhere in the project re-ran the whole panel — nine `git`

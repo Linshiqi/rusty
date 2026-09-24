@@ -70,7 +70,9 @@ pub(super) fn dirs(root: &Path) -> Result<Dirs> {
     Ok(dirs)
 }
 
-/// The repository's fingerprint — see [`GitStamp`]. Reads metadata only.
+/// The repository's fingerprint — see [`GitStamp`]. Reads metadata only,
+/// once [`dirs`] has found the git directory: the first ask for a root runs
+/// its one `rev-parse`.
 pub fn stamp(root: &Path) -> Result<GitStamp> {
     let dirs = dirs(root)?;
     let mut head = Fnv::new();

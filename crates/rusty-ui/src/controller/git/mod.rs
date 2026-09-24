@@ -16,11 +16,12 @@
 //! the project, and set every signal whether or not the answer differed, so
 //! the whole history was rebuilt each time. Now a save re-reads the status
 //! alone; anything else is decided by the repository's stamp
-//! (`rusty_git::GitStamp`), which costs no `git` at all and is also asked
-//! every few seconds while the panel is showing — how a commit made in a
-//! terminal, which the file watcher cannot see, reaches the panel. Every
-//! answer is compared with what is on screen before it is set, and one of
-//! each read is in flight at a time (`state::ReadGate`).
+//! (`rusty_git::GitStamp`), which costs no `git` past one `rev-parse` the
+//! first time a root is asked about and is also asked every few seconds
+//! while the panel is showing — how a commit made in a terminal, which the
+//! file watcher cannot see, reaches the panel. Every answer is compared
+//! with what is on screen before it is set, and one of each read is in
+//! flight at a time (`state::ReadGate`).
 
 use std::time::Duration;
 
@@ -209,8 +210,9 @@ fn take_stamp(state: AppState) {
 }
 
 /// Ask whether the repository moved since it was last read, and read again
-/// only what did. No `git` runs for the question — see `GitStamp` — so this
-/// is what the panel asks every few seconds while it is showing.
+/// only what did. No `git` runs for the question once the root's git
+/// directory is known — see `GitStamp` — so this is what the panel asks
+/// every few seconds while it is showing.
 pub fn probe_git(state: AppState) {
     if !state.git.loaded.get_untracked() || !state.has_project_now() {
         return;
