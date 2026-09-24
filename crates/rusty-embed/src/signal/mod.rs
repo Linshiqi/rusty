@@ -40,7 +40,7 @@ mod looping;
 mod random;
 mod text;
 
-pub use text::{Rule, SignalError};
+pub use text::{KINDS, Rule, SignalError, keys};
 
 use random::{Noise, Pink, Spikes};
 

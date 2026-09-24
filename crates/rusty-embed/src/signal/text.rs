@@ -22,13 +22,17 @@ use std::str::FromStr;
 
 use super::{Component, Signal};
 
-/// Every kind, in the order a message lists them.
-const KINDS: [&str; 10] = [
+/// Every kind the text form knows, in the order a message lists them —
+/// and the words the frontend offers and translates, so a kind added here
+/// is a kind it can name.
+pub const KINDS: [&str; 10] = [
     "dc", "sine", "square", "triangle", "sawtooth", "chirp", "white", "pink", "spikes", "step",
 ];
 
-/// The keys each kind takes, in the order they are written.
-fn keys(kind: &str) -> &'static [&'static str] {
+/// The keys `kind` takes, in the order they are written; nothing for a
+/// word that is not a kind. `dc` has one, `level`, which the text writes
+/// bare — `dc 1.2` — and `chirp` takes the word `log` besides.
+pub fn keys(kind: &str) -> &'static [&'static str] {
     match kind {
         "dc" => &["level"],
         "sine" | "triangle" | "sawtooth" => &["f", "a", "ph"],
@@ -736,6 +740,24 @@ mod tests {
             }
         );
         assert!(Signal::parse("chirp from=0 to=100 t=1 a=1").is_ok());
+    }
+
+    /// The vocabulary the frontend names is the reader's own: every kind in
+    /// `KINDS`, given every key `keys` lists for it, reads as a component of
+    /// that kind, and a word that is no kind has no keys.
+    #[test]
+    fn the_public_vocabulary_is_what_the_reader_reads() {
+        for kind in KINDS {
+            let text = if kind == "dc" {
+                "dc 1".to_string()
+            } else {
+                let pairs: Vec<String> = keys(kind).iter().map(|key| format!("{key}=1")).collect();
+                format!("{kind} {}", pairs.join(" "))
+            };
+            let signal = Signal::parse(&text).expect("reads");
+            assert_eq!(signal.components[0].kind(), kind, "{text}");
+        }
+        assert!(keys("sin").is_empty());
     }
 
     /// A signal built without the reader — a form, a slider — is held to
