@@ -1843,6 +1843,19 @@ three consumers, as with every other analysis.
   Disk section says so, shows the exact snippet with the absolute path, and
   copies it. The simulator, `size` and the tool follow `cargo metadata`'s
   `target_directory`, so a shared directory needs no other change.
+- **A shared build directory is judged by age alone.** Other projects
+  build into it, and one project's graph cannot speak for them: judged
+  against it, their dependencies read as versions and packages gone and
+  their crates' caches as dropped, and the sweep — the auto-sweep after
+  every successful build included — removed them. So a build directory
+  outside the workspace (`shared`, decided against the graph's own
+  workspace root, so a `target-dir` of the project's own inside it is still
+  its alone) has only incremental caches idle past the threshold judged
+  stale, and the report says why. Superseded caches are not judged there
+  either: another project's crate of the same name leaves its caches under
+  the same name. **And a sweep keeps what its preview kept**: `SweepPolicy`
+  carries `keep_variants`, which it once did not, so `rusty-cli sweep
+  --keep-variants 2` listed one set and removed another.
 
 ## The first run
 

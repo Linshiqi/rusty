@@ -253,9 +253,12 @@ pub struct FeatureRow {
 pub struct DiskReport {
     /// The build directory, as `cargo metadata` names it.
     pub target_dir: String,
-    /// True when it is not `<project>/target` — a `build.target-dir` in the
-    /// project's or the user's cargo config points builds elsewhere, which is
-    /// how several projects share one set of compiled dependencies.
+    /// True when it lies outside the workspace — a `build.target-dir` in the
+    /// user's cargo config or `CARGO_TARGET_DIR` points builds elsewhere,
+    /// which is how several projects share one set of compiled dependencies.
+    /// Other projects may then build into it, and nothing in it is judged by
+    /// this project's graph: only incremental caches idle past the threshold
+    /// are stale, and `warnings` says so.
     pub shared: bool,
     /// Whether the build directory exists at all.
     pub exists: bool,

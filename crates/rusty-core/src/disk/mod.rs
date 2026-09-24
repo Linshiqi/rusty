@@ -45,7 +45,7 @@ use guppy::graph::{PackageGraph, PackageSource};
 
 use crate::model::{DiskItem, DiskReport, KEEP_VARIANTS, StaleReason};
 
-use fs::{measure, same_dir, sorted_entries};
+use fs::{inside, measure, same_dir, sorted_entries};
 use sweep::{cargo_home, cargo_home_items};
 use tree::TreeScan;
 
@@ -70,11 +70,17 @@ pub struct Current {
     /// while a library and the binary beside it share one, and so does every
     /// package's `build.rs` (`build_script_build`).
     local: HashMap<String, u32>,
+    /// Where the workspace the graph describes has its root: a build
+    /// directory outside it is one other projects may build into.
+    workspace_root: Option<PathBuf>,
 }
 
 impl Current {
     pub fn from_graph(graph: &PackageGraph) -> Self {
-        let mut current = Current::default();
+        let mut current = Current {
+            workspace_root: Some(graph.workspace().root().as_std_path().to_path_buf()),
+            ..Current::default()
+        };
         for package in graph.packages() {
             let name = package.name().to_string();
             current
@@ -176,15 +182,25 @@ impl Scan {
 /// Measure the build directory and judge what in it is stale.
 ///
 /// `project_root` is where the volume is measured when the build directory
-/// does not exist yet, and what decides `shared`.
+/// does not exist yet, and what decides `shared` when the graph cannot say
+/// where the workspace is.
 pub fn scan(
     target_dir: &Path,
     project_root: &Path,
     current: &Current,
     options: ScanOptions,
 ) -> Scan {
+    let shared = shared_with_others(target_dir, project_root, current);
     let mut warnings = Vec::new();
-    if current.is_empty() {
+    if shared {
+        warnings.push(
+            "the build directory is outside this workspace, so other projects can build into \
+             it too: what this project's dependency graph no longer needs may be what another \
+             project's still does, so only incremental caches idle past the threshold are \
+             judged stale"
+                .to_string(),
+        );
+    } else if current.is_empty() {
         warnings.push(
             "the dependency graph could not be read, so no dependency artifact is marked \
              stale; only the incremental caches are judged, by age and by count"
@@ -192,7 +208,6 @@ pub fn scan(
         );
     }
     let exists = target_dir.is_dir();
-    let shared = !same_dir(target_dir, &project_root.join("target"));
     let volume = volume_of(if exists { target_dir } else { project_root });
 
     // Build trees in the order the walk finds them: `<profile>` for the
@@ -249,6 +264,8 @@ pub fn scan(
     let mut tree_scan = TreeScan {
         current,
         options,
+        by_graph: !shared && !current.is_empty(),
+        by_count: !shared,
         stale: Vec::new(),
         warnings,
         debuginfo_bytes: 0,
@@ -279,6 +296,24 @@ pub fn scan(
             warnings: tree_scan.warnings,
         },
         stale: tree_scan.stale,
+    }
+}
+
+/// Whether other projects may build into `target_dir`: it lies outside the
+/// workspace the yardstick describes, which is where a `build.target-dir`
+/// in the user's cargo config or `CARGO_TARGET_DIR` puts builds — how
+/// several projects share one set of compiled dependencies. Without a graph
+/// to say where the workspace is, the project's own `target/` is the one
+/// build directory known to be its alone.
+///
+/// Judged against one project's graph, a shared directory is mostly other
+/// projects' builds: their dependencies read as versions and packages gone,
+/// their crates' caches as dropped, and a sweep — the auto-sweep after every
+/// build included — removed them all.
+fn shared_with_others(target_dir: &Path, project_root: &Path, current: &Current) -> bool {
+    match &current.workspace_root {
+        Some(workspace) => !inside(target_dir, workspace),
+        None => !same_dir(target_dir, &project_root.join("target")),
     }
 }
 

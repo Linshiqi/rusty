@@ -73,6 +73,11 @@ pub(crate) fn sweep(path: &Path, idle_days: u32, keep_variants: u32, apply: bool
         if stale.len() > 40 {
             println!("  … and {} more", stale.len() - 40);
         }
+        // Why the list is what it is — in a shared build directory, only
+        // what age alone decides.
+        for warning in &scan.report.warnings {
+            eprintln!("note: {warning}");
+        }
         println!(
             "{} in {} items would be removed; run with --apply to remove them",
             human(total),

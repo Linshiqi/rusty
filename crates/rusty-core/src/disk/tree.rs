@@ -22,6 +22,15 @@ type Variant = (PathBuf, u64, u64, Option<SystemTime>);
 pub(super) struct TreeScan<'a> {
     pub(super) current: &'a Current,
     pub(super) options: ScanOptions,
+    /// Whether anything is judged by the graph: artifacts of versions and
+    /// packages it no longer holds, and caches of crates nothing builds.
+    /// Not with no graph, and not in a directory other projects share,
+    /// whose builds this graph cannot speak for.
+    pub(super) by_graph: bool,
+    /// Whether a crate's caches are judged by how many there are. Not in a
+    /// shared directory, where another project's crate of the same name
+    /// leaves its caches under the same name.
+    pub(super) by_count: bool,
     /// The stale paths of every tree measured so far, tree after tree.
     pub(super) stale: Vec<Stale>,
     pub(super) warnings: Vec<String>,
@@ -95,7 +104,7 @@ impl TreeScan<'_> {
             }
         }
         let mut stale_hashes: HashMap<String, StaleReason> = HashMap::new();
-        if !current.is_empty() {
+        if self.by_graph {
             for (hash, dep_info) in &dep_infos {
                 match verdict_of(dep_info, current) {
                     Ok(Verdict::Stale(reason)) => {
@@ -151,7 +160,7 @@ impl TreeScan<'_> {
                 .map(|e| e.path())
                 .find(|p| p.extension().is_some_and(|e| e == "d"));
             match dep_info {
-                Some(dep_info) if !current.is_empty() => match verdict_of(&dep_info, current) {
+                Some(dep_info) if self.by_graph => match verdict_of(&dep_info, current) {
                     Ok(Verdict::Stale(reason)) => {
                         compile_verdicts.insert(hash.to_string(), reason.clone());
                         tally.stale(DiskKind::BuildScripts, &dir, bytes, files, &reason);
@@ -167,7 +176,7 @@ impl TreeScan<'_> {
             }
         }
         for (dir, hash, bytes, files) in run_dirs {
-            if current.is_empty() {
+            if !self.by_graph {
                 continue;
             }
             let package = package_of_unit(
@@ -232,7 +241,7 @@ impl TreeScan<'_> {
             // any package still has a target of the name — every package's
             // `build.rs` compiles as `build_script_build` — each cache under
             // it may be that target's.
-            if !current.is_empty() && current.targets_named(crate_name) == 0 {
+            if self.by_graph && current.targets_named(crate_name) == 0 {
                 tally.stale(
                     DiskKind::Incremental,
                     &dir,
@@ -264,6 +273,9 @@ impl TreeScan<'_> {
                 .entry(crate_name.to_string())
                 .or_default()
                 .push((dir, bytes, files, touched));
+        }
+        if !self.by_count {
+            return;
         }
         for (crate_name, caches) in &mut variants {
             // A name several targets compile under holds every one of their

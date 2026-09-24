@@ -122,6 +122,18 @@ fn target_lab() -> Current {
         .current()
 }
 
+/// target-lab's yardstick, rooted where `fixture` lays out a build
+/// directory: the graph's own root is in the repository and the build
+/// directory these tests write is in the temp directory, and a yardstick
+/// that did not say the two go together would read it as shared — where
+/// nothing is judged by the graph at all.
+fn target_lab_at(fixture: &Fixture) -> Current {
+    Current {
+        workspace_root: Some(fixture.project()),
+        ..target_lab()
+    }
+}
+
 /// A host `debug` tree holding one of target-lab's own units — a tree is
 /// known by its `deps/` — for incremental caches to be laid out in.
 fn lab_tree(name: &str) -> Fixture {
@@ -520,7 +532,7 @@ fn an_incremental_cache_is_judged_by_the_package_whose_target_it_is() {
     let scan = scan(
         &fixture.target(),
         &fixture.project(),
-        &target_lab(),
+        &target_lab_at(&fixture),
         ScanOptions::default(),
     );
     assert_eq!(
@@ -560,7 +572,7 @@ fn a_crate_name_several_targets_share_keeps_each_ones_variants() {
     let scan = scan(
         &fixture.target(),
         &fixture.project(),
-        &target_lab(),
+        &target_lab_at(&fixture),
         options,
     );
     let superseded = |name: &str, keep| (name.to_string(), StaleReason::Superseded { keep });
@@ -753,6 +765,111 @@ fn a_sweep_keeps_as_many_variants_as_the_scan_that_previewed_it() {
         })
         .count();
     assert_eq!(left, 2, "the two newest");
+}
+
+/// A build directory outside the workspace is one other projects can build
+/// into — `build.target-dir` in the user's cargo config, which the Disk
+/// section itself recommends. Judged against this project's graph, every
+/// other project's dependency read as a version or a package gone and every
+/// crate of theirs as dropped, and a sweep removed them — the auto-sweep
+/// after every successful build included. There, only what age alone
+/// decides is judged: an idle cache is idle whichever project wrote it.
+#[test]
+fn a_build_directory_other_projects_share_is_judged_by_age_alone() {
+    let fixture = Fixture::new("shared");
+    lay_out(&fixture);
+    let elsewhere = fixture.root.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    // The graph of a workspace the build directory is not inside.
+    let other = Current {
+        workspace_root: Some(elsewhere),
+        ..current()
+    };
+    let scan = scan(
+        &fixture.target(),
+        &fixture.project(),
+        &other,
+        ScanOptions::default(),
+    );
+    assert!(scan.report.shared);
+    assert!(
+        scan.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("outside this workspace")),
+        "the report says why so little is stale: {:?}",
+        scan.report.warnings
+    );
+    let stale: Vec<(PathBuf, StaleReason)> = scan
+        .stale_paths()
+        .into_iter()
+        .map(|(path, _, reason)| (path, reason))
+        .collect();
+    assert_eq!(
+        stale,
+        [(
+            fixture
+                .target()
+                .join("debug/incremental/my_app-9z8y7x6w5v4u3t"),
+            StaleReason::Idle { days: 7 }
+        )],
+        "the idle cache and nothing the graph would have judged"
+    );
+
+    let report = sweep(
+        &fixture.target(),
+        &fixture.project(),
+        &other,
+        &SweepPolicy::default(),
+    )
+    .unwrap();
+    assert_eq!(report.removed_bytes, 400, "the idle cache alone");
+    let target = fixture.target();
+    for kept in [
+        "debug/deps/libserde-aaaaaaaaaaaaaaaa.rlib",
+        "debug/deps/libleft_pad-dddddddddddddddd.rlib",
+        "debug/incremental/gone_crate-0000000000000",
+        "debug/incremental/my_app-v5v5v5v5v5v5v",
+        "debug/build/left-pad-1111111111111111",
+    ] {
+        assert!(
+            target.join(kept).exists(),
+            "{kept} is another project's to judge"
+        );
+    }
+}
+
+/// Where the workspace is decides whose a build directory is, not its name:
+/// one inside the workspace is its own even under another name, and one
+/// beside it is shared. Without a graph to say where the workspace is, only
+/// the project's own `target/` is known to be its alone.
+#[test]
+fn a_build_directory_is_the_workspaces_own_only_inside_it() {
+    let fixture = Fixture::new("inside");
+    let workspace = fixture.project();
+    let own = workspace.join("build");
+    let beside = fixture.root.join("shared-target");
+    fs::create_dir_all(&own).unwrap();
+    fs::create_dir_all(&beside).unwrap();
+    let rooted = Current {
+        workspace_root: Some(workspace.clone()),
+        ..current()
+    };
+    assert!(!shared_with_others(&own, &workspace, &rooted));
+    assert!(!shared_with_others(
+        &workspace.join("target"),
+        &workspace,
+        &rooted
+    ));
+    assert!(shared_with_others(&beside, &workspace, &rooted));
+
+    let unrooted = current();
+    assert!(!shared_with_others(
+        &workspace.join("target"),
+        &workspace,
+        &unrooted
+    ));
+    assert!(shared_with_others(&own, &workspace, &unrooted));
 }
 
 #[test]

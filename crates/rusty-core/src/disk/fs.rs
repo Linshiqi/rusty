@@ -115,6 +115,15 @@ pub(super) fn remove_path(path: &Path) -> Result<()> {
 
 /// Whether two paths name the same directory, by canonical form when both
 /// exist and by text otherwise.
+/// Whether `path` is `root` or lies somewhere below it, compared as the
+/// filesystem has them when both exist and as written otherwise.
+pub(super) fn inside(path: &Path, root: &Path) -> bool {
+    match (fs::canonicalize(path), fs::canonicalize(root)) {
+        (Ok(path), Ok(root)) => path.starts_with(root),
+        _ => path.starts_with(root),
+    }
+}
+
 pub(super) fn same_dir(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
