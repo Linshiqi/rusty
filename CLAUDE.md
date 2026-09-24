@@ -61,12 +61,20 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # exercised here at all — and the chips carried no `gpio`, which draws a
 # devkit with rails and no header and makes every wire to a pin a finding.
 # It is a divider on a C3 now: two resistors, both rails, a tap on GPIO4,
-# and 1.10 V at the middle for anyone to check. Three switches: set
-# `mock.norecents` in localStorage to start on the welcome screen (a launch
-# that reopens the last project never shows it), `__mock.pickFolder` to
-# answer the folder picker instead of cancelling it, and `__mock.breathe`
-# before Run to have the playground breathe its LED through `[rusty:pwm]`
-# reports instead of blinking it.
+# and 1.10 V at the middle for anyone to check. A fifth: **a Rust map
+# crosses as a JS `Map`, not an object** — serde_wasm_bindgen writes one — so
+# a stub reading a part's `props.signal` reads nothing and plays its own
+# default while the frontend is right; read props with `.get()`. Four
+# switches: set `mock.norecents` in localStorage to start on the welcome
+# screen (a launch that reopens the last project never shows it),
+# `__mock.pickFolder` to answer the folder picker instead of cancelling it,
+# `__mock.breathe` before Run to have the playground breathe its LED through
+# `[rusty:pwm]` reports instead of blinking it, and `__mock.signal` before
+# opening the Simulate panel for a board with a signal generator on GPIO3: a
+# run then streams its conversions at 500 Hz on the firmware's clock, a
+# firmware printing `raw` and an exponential average `y` of it, declares a
+# console `gyro`, and answers `sim_signal_set` — every instrument in the
+# Signals tab, the sweep included, can be driven here.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -120,7 +128,8 @@ cargo run -p rusty-cli -- symbol C2286   # an LCSC part as a schematic symbol
 # The firmware run without the window: build, image, boot, watch. Serial to
 # stdout, everything else to stderr; exit 0 passed, 1 failed or timed out, 2
 # could not run. A scenario is TOML — [[step]] tables of wait-serial,
-# write-serial, press/release, delay, expect-pin and set.
+# write-serial, press/release, delay, expect-pin, set and play (a signal on a
+# generator or a sensor's reading, from that moment on).
 cargo run -p rusty-cli -- sim <project> --timeout 10 --expect "ready" --vcd pins.vcd
 cargo run -p rusty-cli -- sim <project> --scenario scenario.toml
 
@@ -165,7 +174,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification. `disk/` is the build directory measured and judged (`tree.rs` counts one build tree, `judge.rs` decides what is stale and why, `sweep.rs` removes it, `fs.rs` the filesystem it reads) — the Crates panel's Disk section, `rusty-cli disk` / `sweep` and the `disk_report` tool are its three readers |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json` |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json` |
 | `rusty-ai` | Bring-your-own-LLM providers (both dialects authorise, send and read a line through `provider/mod.rs`), the tool registry, the agent loop (`agent.rs`: open a turn, read it, run its tools), and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -175,7 +184,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
-| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope |
+| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
 
 ## The rules that are load-bearing
@@ -4470,6 +4479,73 @@ hand, and every bug below was caught that way and by nothing else.
   brightness whatever the pin did next. One edge is the emulator's: a pad
   given back to GPIO reports its level *before* the channel's idle line, so
   the idle level stands until the pin next moves.
+
+## Signals: a generator on the bench, and the lab to judge a filter with
+
+A filter is designed against signals and proven against them, and
+`docs/signals.md` is the design: the emulator plays tables (`qemu/
+esp32_gpio.c`, `[rusty:wave@]`), `rusty_embed::signal` says what a generator
+produces, `dsp` measures and filters, `generator` renders what a run plays,
+`wave` puts it on the pin channel; in the window, `crate::lab` is the pure
+half, `view/lab/` the four instruments of the Signals tab and
+`controller/lab.rs` the sweep and the console feed.
+
+- **A signal is played by the emulator against its virtual clock, never
+  pushed by the host.** The host's pace is a millisecond with jitter — a third
+  of a radian of phase at 50 Hz, enough to make a working notch look broken —
+  which is the whole reason the device model changed. Tables are
+  double-buffered and `on` keeps the phase, so a tone given a new amplitude
+  does not start over. Playing one is a capability of its own
+  (`Emulator.waves`, marker `[rusty:wave@`), not a peripheral marker: a build
+  without tables is current for everything else, and a sheet that plays
+  anything on one carries `signals-outdated` before the run rather than a
+  signal quietly pushed at the host's pace instead.
+- **A generator's table is the sheet's circuit stepped, one loop dropped
+  first.** An RC charged by a tone is mid-swing when its loop comes round; a
+  table rendered from rest puts a seam there. Only the pins a generator
+  *reaches* get a table — one step with each generator a volt away against
+  one without, a step and not a DC solve so an AC-coupled pin counts — and a
+  reached pin that never moves gets one sample: a table on every pin with a
+  `fullscale` held a knob on another pin still. It renders with the
+  firmware's pins at rest and does not follow a GPIO the firmware later moves
+  on the generator's own net; that is stated in `docs/signals.md`, which
+  claimed otherwise before the code existed.
+- **Every choice a run makes is a function in `generator`** — the rate (20 kHz
+  unless `rate`), the loop (one to ten seconds, exact in fractions, the seam
+  and repeated noise said), the seed (the reference and the property's key,
+  FNV, mixed with `seed`) — so the lab renders exactly what the emulator was
+  handed, and the Time view's "played" lane lies on the converter's reports.
+- **A sensor's reading can be a signal too** (`signal.<reading>`, played as the
+  part's whole register block at `signal.rate`, 1 kHz), and a range the
+  firmware chooses re-renders it with the phase kept. A reading with no
+  signal stays where its slider is. A channel declared on the console
+  (`[rusty:sensor]`) has no table to play and is fed from the lab at fifty
+  samples a second inside its declared range, **with the host's pace said in
+  amber above the fields**.
+- **The sweep is timed by the firmware's clock.** Each step waits for the
+  emulator's own report that the table switched, settles five periods,
+  listens ten, and measures both records by `tone` with each phase carried to
+  one instant — two records need not start on the same sample, and a phase
+  compared across two instants is off by `2πf` times the gap. What goes in is
+  the converter's record by default, in counts as the firmware's filter reads
+  them, so the gain is the filter's and not the converter's scale besides; a
+  step's frequency is rounded to three figures, since `f=100.00000000000004`
+  in the step's signal was the logarithm's rounding. Stopped, finished or
+  failed, the source plays what it played before, unless a newer sweep has it.
+- **Every instrument reads a record** (`crate::lab::record`): a telemetry
+  channel's rate is its stamps', a converter's reports get their left-out
+  repeats back by holding each value on the commonest interval between them,
+  and a played table is taken at the question's rate with straight lines
+  between samples, as the emulator reads a pin between them.
+- **Proven twice.** `qemu.yml`'s signal gate boots `qemu/wave-probe` on the
+  packaged Linux build: every conversion is the table's value at that instant
+  to the count, the firmware's own systimer times the tone at the table's
+  frequency, and two thousand burst reads of a sensor's block are never torn.
+  Its first CI run stopped at `apt-get` with exit 100 before a gate ran — a
+  mirror mid-sync — so the install is retried now, with apt's own retries
+  inside each try. The lab itself was driven through the mock end to end: a
+  twelve-step sweep of the mock's exponential average read a first-order
+  low-pass at ten hertz, beside a second-order design's curve.
 
 ## Meeting C
 

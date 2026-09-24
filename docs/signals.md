@@ -19,9 +19,11 @@ follows it.
   like noise.
 - **What the host renders is exact; what it cannot know it says.** The table
   is the signal after the sheet's circuit (an RC on the pin shapes it as the
-  solver says). A digital pin the firmware moves later, which changes that
-  circuit, changes what the table should be; the table is re-rendered from
-  that moment and the seam is said, not hidden.
+  solver says), rendered with every GPIO the firmware has not driven at rest.
+  A digital pin the firmware moves later on the generator's own net changes
+  the circuit the table was rendered through, and the table does not follow
+  it: that is a limit, written here rather than hidden, and a filter test
+  does not need it — a generator, perhaps an RC, and a converter.
 - **A sensor on the bus is sample-exact too; one on the console is not.** A
   part with a `model` (MPU-6050, BMP280, BME280) is played the same way, its
   whole register block per sample, latched when a read transaction addresses
@@ -115,21 +117,50 @@ sensor's burst read is always one sample whole.
   generator, with its `signal` in its properties. The circuit treats it as a
   voltage source that changes with time; the table for each ADC pin it reaches
   is the pin's voltage over time, through whatever the sheet puts between
-  them, in the converter's counts at the pin's `fullscale`.
+  them, in the converter's counts at the pin's `fullscale`
+  (`rusty_embed::generator`). What a run chooses is a function there, so the
+  frontend renders with exactly what the emulator is handed:
+  - the **rate** is the part's `rate`, 20 000 samples a second when absent — the
+    generator's bandwidth, and its noise's — and every generator on a sheet is
+    stepped at the fastest any of them asks for;
+  - the **loop** is the fewest samples, from one second to ten, in which every
+    periodic component of every generator comes back to where it started
+    (`Signal::loop_length`, exact in fractions); with none that short it is ten
+    seconds and the run says the joint is a seam, and noise is said to repeat;
+  - the **seed** is the part's reference and the property the signal is kept
+    in, so two generators given one signal do not hiss in unison, mixed with a
+    `seed` property for another draw of the same noise;
+  - **only the pins a generator reaches get a table**, found by one step of the
+    circuit with each generator a volt from where it stands — a step and not a
+    DC solve, so a pin AC-coupled through a capacitor counts. A knob on another
+    pin keeps its own value. A reached pin whose counts never move gets a table
+    of one sample, so it reads the generator's level and not what was said
+    before.
 - **A sensor reading can be a signal**: `signal.<reading>` on a part with a
-  `model`, played as that part's register block. A range the firmware chooses
-  re-encodes the table, as it re-encodes the static readings today.
-- **A console sensor channel** (`[rusty:sensor]`) can be driven by a signal at
-  the host's pace.
+  `model`, played as that part's register block at `signal.rate` samples a
+  second (1000 when absent), each reading drawing its own noise. A range the
+  firmware chooses re-encodes the table, as it re-encodes the static readings.
+  A reading with no signal stays where its slider is.
+- **A console sensor channel** (`[rusty:sensor]`) is driven from the lab at the
+  host's pace, fifty samples a second, inside the range the firmware declared —
+  and the lab says so above the fields, because a filter judged against it is
+  judged against the host's scheduler as well.
+- **What plays changes while it runs**: the lab's sources column, the
+  `sim_signal_set` command behind it (rendered as a run's start renders it,
+  the emulator keeping the phase), and a scenario's `play` step for a run
+  without the window. A sheet that plays anything, on an emulator without the
+  tables, carries the `signals-outdated` limit before the run.
 
 ### The analysis: time, frequency, response, design
 
 In one dock tab:
 
 - **Time**: the ideal signal, what the converter handed over, and the
-  firmware's filtered telemetry (`[rusty:tel]`), on one clock.
+  firmware's filtered telemetry (`[rusty:tel]`), on one clock — as lanes, one
+  unit each, because volts, counts and whatever the firmware prints on one
+  scale would flatten two of them.
 - **Spectrum**: any of those, windowed, in dB, with the generator's
-  frequencies marked.
+  frequencies marked, on a logarithmic axis by default.
 - **Response**: a sweep — a sine stepped across a range, each step measured by
   `tone` on the input and on a telemetry channel the firmware prints — drawn as
   gain and phase against frequency, beside the design's own curve when there is
@@ -137,3 +168,23 @@ In one dock tab:
   rate) is said where the button is.
 - **Design**: a filter chosen and tuned against the same signal, without
   running anything; its response; its `no_std` code to copy.
+
+Every instrument reads a **record** — evenly spaced samples at a known rate
+(`crate::lab::record` in the frontend). A telemetry channel is one already,
+its rate read off the firmware's stamps. A converter's reports are one with the
+repeats left out, since the emulator reports a conversion only when it changed,
+and they are put back by holding each value on the interval the reports keep.
+What a source plays is the table itself, taken at whatever rate the question
+asks, with straight lines between samples as the emulator reads a pin.
+
+The **sweep is timed by the firmware's clock, not the host's** (`controller::
+lab`): a step asks for its tone, waits for the emulator's own report that the
+table switched, lets the filter settle for five periods (a fifth of a second
+at least) and listens for ten (half a second at least) — measured on the stamps
+of what the firmware and the emulator said, so a host that stalled for a second
+measures what one that did not would. The tone going in and the tone coming
+out are each carried to the same instant before their phases are compared,
+because the two records need not begin on the same sample. What goes in is the
+converter's record by default, in the counts a firmware's filter reads, so the
+gain is the filter's own and not the converter's scale besides. When the sweep
+ends, is stopped or goes wrong, the source plays what it played before.
