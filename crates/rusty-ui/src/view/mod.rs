@@ -18,6 +18,7 @@ pub mod components;
 mod device;
 pub mod dock;
 pub mod icon;
+pub mod lab;
 pub mod loclink;
 pub mod markdown;
 pub mod menu;

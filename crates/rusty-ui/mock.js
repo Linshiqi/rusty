@@ -10,6 +10,30 @@
     send(msg) { if (this._handler) this._handler(msg); else (this._queued = this._queued || []).push(msg); }
   }
 
+  // Enough of the signal text form to play what the lab and a sweep send.
+  function mockSignal(text) {
+    return text.split(";").map((part) => part.trim().split(/\s+/)).filter((w) => w[0]).map((words) => {
+      const kind = words[0];
+      const keys = {};
+      words.slice(1).forEach((w) => { const [k, v] = w.split("="); keys[k] = v === undefined ? k : Number(v); });
+      if (kind === "dc") keys.level = Number(words[1]);
+      return { kind, keys };
+    });
+  }
+  function mockValue(signal, t) {
+    let v = 0;
+    for (const { kind, keys } of signal) {
+      if (kind === "dc") v += keys.level || 0;
+      if (kind === "sine") v += (keys.a || 0) * Math.sin(2 * Math.PI * (keys.f || 0) * t + ((keys.ph || 0) * Math.PI / 180));
+      if (kind === "square") v += ((t * (keys.f || 0)) % 1 < (keys.duty || 0.5) ? 1 : -1) * (keys.a || 0);
+      if (kind === "white") {
+        const u = Math.random() || 1e-9, w = Math.random();
+        v += (keys.rms || 0) * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * w);
+      }
+    }
+    return v;
+  }
+
   // The pin sets the two mocked chips actually have. Without them the
   // devkit draws rails and nothing else — `kit_rows` derives the header
   // from the die — and every wire to a GPIO is reported as reaching a pin
@@ -92,6 +116,15 @@
              pin("3", "GND", 0, 90)],
       graphics: [
         { kind: "rectangle", start: [-5.08, 3.81], end: [5.08, -3.81], width: 0.254, fill: "background" },
+      ],
+    },
+    // A bench generator: what it plays is a property, played as a table by
+    // rusty's emulator. `__mock.signal` puts one on the board.
+    {
+      library: "rusty", name: "SignalGen", reference: "V", value: "Signal",
+      pins: [pin("1", "OUT", 5.08, 180), pin("2", "GND", 0, 90)],
+      graphics: [
+        { kind: "circle", center: [0, 0], radius: 2.54, width: 0.254, fill: "background" },
       ],
     },
     // A lens that mixes three duties, so a colour set by PWM can be watched:
@@ -496,7 +529,33 @@
     // every time put a resistor changed to 1k straight back to 220. The
     // symbols come from the library on the way back, as the planner's do —
     // what is saved is the file, and the file carries none.
-    plan_simulation: () => window.__mock.playground ? ({
+    plan_simulation: () => window.__mock.signal ? ({
+      supported: true, reason: null, missing: [],
+      steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
+      board: window.__mock.savedBoard ? { ...window.__mock.savedBoard, symbols: MOCK_SYMBOLS } : {
+        chip: "esp32c3", kitX: 460, kitY: 40,
+        parts: [
+          {
+            reference: "V1", symbol: "rusty:SignalGen", value: "Signal", x: 240, y: 160,
+            props: {
+              signal: "dc 1.2; sine f=0.2 a=0.05; sine f=50 a=0.1; white rms=0.005",
+              fullscale: "2.5",
+            },
+          },
+          { reference: "GND1", symbol: "rusty:GND", value: "GND", x: 240, y: 300 },
+        ],
+        wires: [
+          { from: { part: "V1", pin: "OUT" }, to: { part: "U1", pin: "GPIO3" }, bends: [] },
+          { from: { part: "V1", pin: "GND" }, to: { part: "GND1", pin: "GND" }, bends: [] },
+        ],
+        symbols: MOCK_SYMBOLS,
+      },
+      library: MOCK_SYMBOLS,
+      parts: [],
+      emulator: { name: "qemu-system-riscv32", path: "mock/qemu", gpioModel: true, peripherals: true, waves: true },
+      debug: { gdbCommand: "echo mock-gdb", elf: "target/x/filter", port: 1234 },
+      debugTool: null,
+    }) : window.__mock.playground ? ({
       supported: true, reason: null, missing: [],
       steps: [{ program: "cargo", args: ["build"], display: "cargo build --release", rationale: "builds it" }],
       board: (window.__mock.savedBoard && window.__mock.savedBoard.chip === window.__mock.playground)
@@ -592,9 +651,49 @@
           a.onLine.send({ stream: "stdout", text: `[rusty:gpio] ${pin}=${on ? 1 : 0}`, level: null });
         }, m.breathe ? 50 : 400);
       }
+      if (m.signal && !a.debug) {
+        const say = (text) => a.onLine.send({ stream: "stdout", text, level: null });
+        // A part's props arrive as a JS Map: serde_wasm_bindgen writes a
+        // Rust map as one, not as an object.
+        const sheet = m.savedBoard || null;
+        const v1 = sheet && sheet.parts.find((p) => p.reference === "V1");
+        const props = v1 && v1.props;
+        const saved = props instanceof Map ? props.get("signal") : props && props.signal;
+        m.wave = mockSignal(saved || "dc 1.2; sine f=0.2 a=0.05; sine f=50 a=0.1; white rms=0.005");
+        say("[rusty:pins] emulator — pin state read from the GPIO registers");
+        say("[rusty:signal] V1 play on GPIO3: 20000 samples a second, a 5 s loop");
+        say("[rusty:wave@0] 3 on 0");
+        // A sensor the firmware wants fed over its console, for the lab's
+        // host-paced feed.
+        say("[rusty:sensor] gyro=3 rad/s -35..35");
+        let n = 0;
+        let y = null;
+        m.fwNow = 0;
+        m.simTimer = setInterval(() => {
+          for (let k = 0; k < 10; k++, n++) {
+            const t = n / 500;
+            const counts = Math.max(0, Math.min(4095, Math.round(mockValue(m.wave, t) / 2.5 * 4095)));
+            y = y === null ? counts : y + 0.12 * (counts - y);
+            m.fwNow = n * 2000;
+            say(`[rusty:adc@${m.fwNow}] 3=${counts}`);
+            say(`[rusty:tel@${m.fwNow}] raw=${counts},y=${y.toFixed(2)}`);
+          }
+        }, 20);
+      }
       // QEMU runs until something stops it, so this resolves only when
       // something does — the Stop button, or the debugger going away.
       return new Promise((resolve) => { m.simResolve = resolve; });
+    },
+    // What the backend answers for a signal changed mid-run: the emulator
+    // switches the table, says so on its clock, and the run says where it
+    // plays.
+    sim_signal_set: (a) => {
+      const m = window.__mock;
+      m.signalSets = (m.signalSets || []).concat([{ part: a.part, key: a.key, signal: a.signal }]);
+      m.wave = mockSignal(a.signal || "");
+      const at = (m.fwNow || 0) + 2000;
+      m.simChannel && m.simChannel.send({ stream: "stdout", text: `[rusty:wave@${at}] 3 on 0`, level: null });
+      return [`[rusty:signal] ${a.part} play on GPIO3: 20000 samples a second, a 1 s loop`];
     },
     // One cargo-style warning so the Output panel's location links can be
     // exercised: the ` --> path:line:col` must render as a click-to-open.

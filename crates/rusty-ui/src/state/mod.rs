@@ -25,6 +25,7 @@ use crate::ipc::IpcError;
 mod assistant;
 mod editor;
 mod git;
+mod lab;
 mod layout;
 mod project;
 mod services;
@@ -36,6 +37,7 @@ mod workbench;
 pub use assistant::*;
 pub use editor::*;
 pub use git::*;
+pub use lab::*;
 pub use layout::*;
 pub use project::*;
 pub use services::*;
@@ -84,6 +86,8 @@ pub struct AppState {
     pub search: Search,
     pub lsp: Lsp,
     pub sim: Sim,
+    /// What a run's signals played and what the firmware made of them.
+    pub lab: Lab,
     pub debug: Debug,
     pub git: Git,
     pub term: Terminal,
@@ -256,6 +260,7 @@ impl AppState {
                 install_failed: RwSignal::new(Vec::new()),
                 unsaved_sheet: StoredValue::new(None),
             },
+            lab: Lab::fresh(),
             debug: Debug {
                 session: RwSignal::new(None),
                 epoch: RwSignal::new(0),

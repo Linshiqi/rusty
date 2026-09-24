@@ -410,6 +410,18 @@ pub(super) fn Inspector(board: Board) -> impl IntoView {
                                 </label>
                             }
                         })}
+                        // What a generator plays, how fast, and the
+                        // converter's full scale that turns it into
+                        // counts.
+                        {(behaviour == Some(Behaviour::Generator)).then(|| {
+                            view! {
+                                <signal_fields::GeneratorFields
+                                    board=board
+                                    index=index
+                                    props=part.inst.props.clone()
+                                />
+                            }
+                        })}
                         // The two pulse widths this servo answers
                         // to. Stated rather than assumed: 500..2500
                         // and 1000..2000 are both ordinary, and
@@ -509,6 +521,24 @@ pub(super) fn Inspector(board: Board) -> impl IntoView {
                                             .collect_view()}
                                     </select>
                                 </label>
+                                // A part rusty answers for can have its
+                                // readings moved by a signal, played in its
+                                // own registers against the firmware's clock.
+                                {known.as_ref().and_then(|id| {
+                                    let readings: Vec<String> = sensors.with_value(|all| {
+                                        rusty_embed::sensor::Spec::find(all, id).map(|spec| {
+                                            spec.channels.iter().map(|c| c.key.clone()).collect()
+                                        })
+                                    })?;
+                                    Some(view! {
+                                        <signal_fields::ReadingSignals
+                                            board=board
+                                            index=index
+                                            props=part.inst.props.clone()
+                                            readings=readings
+                                        />
+                                    })
+                                })}
                             }
                         })}
                         // Which controller is behind the glass, so

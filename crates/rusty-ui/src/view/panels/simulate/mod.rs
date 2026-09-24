@@ -38,6 +38,7 @@ mod menu;
 mod parts;
 mod reading;
 mod readout;
+mod signal_fields;
 mod wires;
 mod words;
 

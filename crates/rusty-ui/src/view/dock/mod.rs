@@ -61,6 +61,9 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Plot => {
                             view! { <crate::view::plot::Plot /> }.into_any()
                         }
+                        DockTab::Signals => {
+                            view! { <crate::view::lab::SignalsTab /> }.into_any()
+                        }
                         DockTab::Debug => view! { <DebugTab /> }.into_any(),
                         DockTab::Registers => view! { <RegistersTab /> }.into_any(),
                         DockTab::Flight => view! { <FlightTab /> }.into_any(),
@@ -253,6 +256,15 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             // the telemetry is arriving at all.
             DockTab::Plot => (state.sim.plot.with(|p| p.channels.len()), Tone::Neutral),
             DockTab::Calls => (0, Tone::Neutral),
+            // How many tables are playing: a signal the firmware is being
+            // fed right now, which is worth knowing from another tab.
+            DockTab::Signals => (
+                state
+                    .lab
+                    .switched
+                    .with(|switched| switched.values().filter(|s| s.start_us.is_some()).count()),
+                Tone::Neutral,
+            ),
             // How many motors are being driven right now. Worth a glance
             // from another tab for one reason: it is not zero when it should
             // be zero.

@@ -117,6 +117,7 @@ pub(super) fn clear_capture(state: AppState) {
     state.sim.analog.set(std::collections::HashMap::new());
     state.sim.readings.set(std::collections::HashMap::new());
     state.sim.adc.set(std::collections::HashMap::new());
+    state.lab.clear_capture();
     state.sim.i2c.set(Vec::new());
     state.sim.spi.set(Vec::new());
     state.sim.rmt.set(std::collections::HashMap::new());
@@ -238,6 +239,17 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
         state.sim.adc.update(|adc| {
             adc.insert(report.pin, report.counts);
         });
+        // And every stamped one kept, for the lab: with a signal playing a
+        // conversion is a sample of it, on the clock the firmware reads by.
+        if let Some(at_us) = report.at_us {
+            state.lab.conversions.update(|all| {
+                crate::state::record_conversion(
+                    all.entry(report.pin).or_default(),
+                    at_us,
+                    report.counts,
+                );
+            });
+        }
     } else if let Some(report) = rusty_embed::parse_i2c_report(&line.text) {
         // A screen the sheet declared at that address is drawn as well as
         // listed. Only one the sheet declared: which controller it is
@@ -286,6 +298,32 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
         });
     } else if let Some(text) = rusty_embed::parse_display_report(&line.text) {
         state.sim.display.set(text);
+    } else if let Some(report) = rusty_embed::wave::parse_wave_report(&line.text) {
+        // When a table started or stopped on the emulator's clock: what a
+        // played signal is lined up with the conversions it produced by. A
+        // refusal is the emulator saying a table did not arrive whole, which
+        // somebody has to be able to read.
+        use rusty_embed::wave::WaveEvent;
+        let start_us = match report.event {
+            WaveEvent::On { start_us } => Some(start_us),
+            WaveEvent::Off => None,
+            WaveEvent::Refused(_) => {
+                state.push_log(line);
+                return;
+            }
+        };
+        state.lab.switched.update(|switched| {
+            switched.insert(
+                report.target,
+                crate::state::Switched {
+                    at_us: report.at_us,
+                    start_us,
+                },
+            );
+        });
+        if start_us.is_some() {
+            state.reveal_tab(crate::state::DockTab::Signals);
+        }
     } else {
         state.push_log(line);
     }

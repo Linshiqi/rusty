@@ -216,6 +216,53 @@ pub fn sim_reading(state: AppState, part: String, key: String, value: f64) {
     });
 }
 
+/// Change what a signal plays while the simulation runs — the lab's knob on
+/// the bench generator. `None` takes it off. What the run makes of it
+/// (which pins it plays on, for how long a loop) is said in the dock; a
+/// signal that does not read is refused there with the reader's reason.
+///
+/// For this run only: the sheet keeps its own signal until somebody changes
+/// it in the inspector, as a bench's schematic does not change because a
+/// knob was turned.
+pub fn sim_signal_set(state: AppState, source: crate::state::Source, text: Option<String>) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        part: String,
+        key: String,
+        signal: Option<String>,
+    }
+    if !state.app.session_running.get_untracked() {
+        return;
+    }
+    let args = Args {
+        part: source.part.clone(),
+        key: source.key.clone(),
+        signal: text.clone(),
+    };
+    spawn_local(async move {
+        match ipc::call::<_, Vec<String>>(cmd::sim::SIGNAL_SET, &args).await {
+            Ok(said) => {
+                state.lab.playing.update(|playing| match text {
+                    Some(text) => {
+                        playing.insert(source, text);
+                    }
+                    None => {
+                        playing.remove(&source);
+                    }
+                });
+                for text in said {
+                    state.push_log(LogLine {
+                        stream: LogStream::Stdout,
+                        text,
+                        level: None,
+                    });
+                }
+            }
+            Err(error) => say(state, error.message),
+        }
+    });
+}
+
 /// A line typed into the running simulation's serial port, from the
 /// Output dock — what a serial monitor's input box is. Said in the dock as
 /// well, marked as sent, so the firmware's answer reads against the

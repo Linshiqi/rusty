@@ -75,6 +75,18 @@ fn place_raw(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize
     } else {
         symbol.value.clone()
     };
+    // A generator arrives playing the first case the lab offers — a slow
+    // reading under mains hum and a little noise — rather than silence: a
+    // new part with nothing to look at is a part nobody learns from.
+    let mut props = std::collections::BTreeMap::new();
+    if rusty_embed::nets::behaviour_of(symbol) == rusty_embed::nets::Behaviour::Generator
+        && let Some(first) = rusty_embed::signal::presets().first()
+    {
+        props.insert(
+            rusty_embed::generator::SIGNAL.to_string(),
+            first.signal.to_string(),
+        );
+    }
     list.push(EditPart {
         inst: Instance {
             reference,
@@ -84,7 +96,7 @@ fn place_raw(list: &mut Vec<EditPart>, symbol: &Symbol, x: f64, y: f64) -> usize
             y,
             rot: 0,
             mirror: false,
-            props: Default::default(),
+            props,
         },
         symbol: Some(symbol.clone()),
     });

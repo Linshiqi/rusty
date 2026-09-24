@@ -21,6 +21,7 @@ mod gitlog;
 mod i18n;
 mod inlay;
 mod ipc;
+mod lab;
 mod paint;
 mod state;
 mod theme;
