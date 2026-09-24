@@ -7,12 +7,21 @@
 //! the module doc above it promised the opposite. One predicate, three
 //! callers, and a test beside each caller that the answer agrees.
 //!
-//! The walk is here too: the tree, the module scan and search all start from
-//! [`project_walk`], so the ignore rules cannot differ between them either.
+//! The walk is here too: the tree, the module scan, search and replace all
+//! start from [`project_walk`], so neither the ignore rules nor how deep the
+//! walk goes can differ between them.
 
 use std::path::Path;
 
 use ignore::WalkBuilder;
+
+/// How deep any walk of the project goes.
+///
+/// Deep enough for any project layout anyone actually uses, shallow enough that
+/// a stray symlink into a filesystem root cannot hang the window. It was the
+/// tree's own once, and search and replace walked without it: they listed —
+/// and rewrote — files further down than the tree had ever shown.
+pub(crate) const MAX_DEPTH: usize = 12;
 
 /// Whether a directory entry is one the workbench never shows, searches or
 /// watches: anything dot-named.
@@ -26,9 +35,10 @@ pub(crate) fn hidden_entry(name: &str) -> bool {
 
 /// The walk every lister of the project's files starts from: ripgrep's
 /// walker over the project's own ignore files — nothing above the root,
-/// nothing from the user's global git config — with [`hidden_entry`]
-/// deciding the dot entries. Each caller adds only what is its own: a depth
-/// for the tree and the module scan, include and exclude globs for search.
+/// nothing from the user's global git config — no deeper than
+/// [`MAX_DEPTH`], with [`hidden_entry`] deciding the dot entries. Each
+/// caller adds only what is its own: include and exclude globs for search
+/// and replace.
 pub(crate) fn project_walk(root: &Path) -> WalkBuilder {
     let mut walk = WalkBuilder::new(root);
     walk.hidden(false) // our own filter below decides
@@ -40,6 +50,7 @@ pub(crate) fn project_walk(root: &Path) -> WalkBuilder {
         // `target/` and its tens of thousands of files would land in the tree
         // the first time anyone built.
         .require_git(false)
+        .max_depth(Some(MAX_DEPTH))
         // Dot entries never show — the rule the watcher applies as well — so
         // no panel can name a file the tree cannot open. `.git` alone drowned
         // every search the moment a project had history.

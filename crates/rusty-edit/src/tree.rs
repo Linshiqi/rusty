@@ -10,12 +10,6 @@ use std::path::Path;
 
 use crate::{error::Result, hidden::project_walk, model::Entry};
 
-/// How deep to walk.
-///
-/// Deep enough for any project layout anyone actually uses, shallow enough that
-/// a stray symlink into a filesystem root cannot hang the window.
-pub(crate) const MAX_DEPTH: usize = 12;
-
 /// Everything in the project worth showing, as one tree.
 ///
 /// Built whole rather than a level at a time. A source tree with `target/`
@@ -24,7 +18,7 @@ pub(crate) const MAX_DEPTH: usize = 12;
 pub fn read(root: &Path) -> Result<Vec<Entry>> {
     let mut top = Vec::new();
 
-    let walk = project_walk(root).max_depth(Some(MAX_DEPTH)).build();
+    let walk = project_walk(root).build();
 
     for found in walk.flatten() {
         let path = found.path();

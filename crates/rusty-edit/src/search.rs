@@ -4,10 +4,11 @@
 //! `ignore` walks the tree in parallel with the same gitignore rules the
 //! file tree shows, and `grep-searcher`/`grep-regex` do the matching — SIMD
 //! literal search, real Unicode case folding, `-w` word boundaries, binary
-//! detection. The walker and the tree share ignore rules and the same
-//! [`hidden_entry`](crate::hidden::hidden_entry) predicate, so search never
-//! surfaces a file the tree would hide — `.cargo/config.toml` and
-//! `.rusty/sim.toml` included, which it once did while this paragraph said
+//! detection. The walker and the tree share ignore rules, the same
+//! [`hidden_entry`](crate::hidden::hidden_entry) predicate and the same
+//! depth, so search never surfaces a file the tree would hide —
+//! `.cargo/config.toml`, `.rusty/sim.toml` and anything deeper than the tree
+//! goes included, all of which it once listed while this paragraph said
 //! otherwise.
 //!
 //! Literal by default; regex sits behind an explicit toggle, and a pattern
@@ -487,6 +488,7 @@ fn windowed(path: &str, line_index: u32, line: &str, at: usize, len: usize) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hidden::MAX_DEPTH;
 
     fn project() -> tempfile::TempDir {
         let dir = tempfile::Builder::new()
@@ -1115,6 +1117,42 @@ let c = kp;",
             std::fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap(),
             "gain = 1\n",
             "a file the panel never listed must not change",
+        );
+    }
+
+    /// The tree stops [`MAX_DEPTH`] levels down, and search and replace stop
+    /// where it does. They had no bound of their own, so a file the tree
+    /// never showed could be listed — and rewritten.
+    #[test]
+    fn a_file_deeper_than_the_tree_goes_is_neither_searched_nor_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        // `d/d/…/name`, as many levels down as it has parts.
+        let at_depth = |depth: usize, name: &str| {
+            let mut parts = vec!["d"; depth - 1];
+            parts.push(name);
+            parts.join("/")
+        };
+        let deepest = at_depth(MAX_DEPTH, "shown.rs");
+        let deeper = at_depth(MAX_DEPTH + 1, "unseen.rs");
+        write(dir.path(), &deepest, "gain\n");
+        write(dir.path(), &deeper, "gain\n");
+
+        let found = search(dir.path(), &query("gain"));
+        assert_eq!(
+            found
+                .hits
+                .iter()
+                .map(|h| h.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![deepest.as_str()],
+        );
+
+        let outcome = replace(dir.path(), &query("gain"), "kp", &[]);
+        assert_eq!(outcome.changed, vec![deepest]);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(&deeper)).unwrap(),
+            "gain\n",
+            "a file the tree never showed must not change",
         );
     }
 }

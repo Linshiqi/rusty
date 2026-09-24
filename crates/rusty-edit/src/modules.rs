@@ -201,9 +201,7 @@ pub fn scan(root: &std::path::Path) -> Option<Vec<String>> {
     let mut manifests: Vec<String> = Vec::new();
     let mut sources: Vec<(String, String)> = Vec::new();
 
-    let walk = crate::hidden::project_walk(root)
-        .max_depth(Some(crate::tree::MAX_DEPTH))
-        .build();
+    let walk = crate::hidden::project_walk(root).build();
 
     for found in walk.flatten() {
         let path = found.path();
