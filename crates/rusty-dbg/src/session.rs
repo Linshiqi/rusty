@@ -222,12 +222,9 @@ impl Debugger {
                 // a breakpoint placed after `-exec-run` is one the program
                 // may already have run past.
                 debugger.send(&format!("-exec-arguments {}", exec_arguments(args)))?;
-                let snapshot = {
-                    let mut state = debugger.state.lock().expect("state");
-                    state.attached = true;
-                    state.clone()
-                };
-                let _ = initial.send(snapshot);
+                let mut state = debugger.state.lock().expect("state");
+                state.attached = true;
+                publish(&mut state, &initial);
             }
         }
         Ok((debugger, Events(receiver)))
@@ -339,17 +336,12 @@ fn pump(
             let _ = wire.send("-stack-list-frames");
             let _ = wire.send("-stack-list-variables --all-values");
         }
-        let (changed, exited) = {
-            let mut state = state.lock().expect("state");
-            let changed = apply(&mut state, &record, &root);
-            (changed, state.exited.is_some())
-        };
-        if changed {
-            let snapshot = state.lock().expect("state").clone();
-            if sender.send(snapshot).is_err() {
-                break;
-            }
+        let mut current = state.lock().expect("state");
+        if apply(&mut current, &record, &root) && !publish(&mut current, &sender) {
+            break;
         }
+        let exited = current.exited.is_some();
+        drop(current);
         // A host program that has exited leaves gdb with nothing to debug;
         // a remote target that stopped with an exit code is QEMU's or the
         // probe's to end. Quitting here is what closes this pipe and lets
@@ -362,31 +354,45 @@ fn pump(
     // that exited said so itself, code and all; a gdb that went away without
     // that is *not* a clean exit, and inventing `Some(0)` here read a crashed
     // debugger as a program that finished normally.
-    let mut final_state = state.lock().expect("state").clone();
-    final_state.running = false;
-    final_state.attached = false;
-    if final_state.exited.is_none() && final_state.error.is_none() {
-        final_state.error = Some("gdb ended the session without reporting an exit".to_string());
+    let mut state = state.lock().expect("state");
+    state.running = false;
+    state.attached = false;
+    if state.exited.is_none() && state.error.is_none() {
+        state.error = Some("gdb ended the session without reporting an exit".to_string());
     }
-    let _ = sender.send(final_state);
+    publish(&mut state, &sender);
 }
 
-/// One line the program printed, pushed as a state of its own and cleared
-/// once sent: `output` is what arrived since the last state, not an
-/// accumulation. False once nobody is listening.
+/// Send the state as it stands, and with it every line printed since the
+/// last state went out.
+///
+/// Every state either debugger sends goes this way. `output` in the shared
+/// state is what has been printed and not yet sent, and the state that goes
+/// out takes it — so a line travels in exactly one state, whichever thread
+/// sends it: gdb's reader, or the DAP session's reader and console thread.
+/// A line left behind went out again with every later state, and the dock
+/// printed an adapter's output once more at every step. The caller holds
+/// the lock across the send, so states leave in the order they were taken.
+pub(crate) fn publish(state: &mut DebugState, sender: &Sender<DebugState>) -> bool {
+    let output = std::mem::take(&mut state.output);
+    sender
+        .send(DebugState {
+            output,
+            ..state.clone()
+        })
+        .is_ok()
+}
+
+/// One line the program printed, sent at once. False once nobody is
+/// listening.
 pub(crate) fn push_line(
     state: &Mutex<DebugState>,
     sender: &Sender<DebugState>,
     line: String,
 ) -> bool {
-    let snapshot = {
-        let mut state = state.lock().expect("state");
-        state.output.push(line);
-        state.clone()
-    };
-    let gone = sender.send(snapshot).is_err();
-    state.lock().expect("state").output.clear();
-    !gone
+    let mut state = state.lock().expect("state");
+    state.output.push(line);
+    publish(&mut state, sender)
 }
 
 /// Fold one record into the state. Returns whether anything changed.

@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::model::{Breakpoint, DebugState, StackFrame, StopReason, Variable};
-use crate::session::{Error, Events, Result, push_line, relative};
+use crate::session::{Error, Events, Result, publish, push_line, relative};
 
 /// How long the adapter has to answer `initialized`. Generous: the first
 /// launch loads the target's symbols, and a Rust test binary with its whole
@@ -273,13 +273,10 @@ impl DapSession {
         // in which case its last state has been sent and nothing follows it.
         session.running.store(true, Ordering::SeqCst);
         if let Some(sender) = outlet.lock().expect("dap outlet").as_ref() {
-            let snapshot = {
-                let mut state = session.state.lock().expect("dap state");
-                state.attached = true;
-                state.running = true;
-                state.clone()
-            };
-            let _ = sender.send(snapshot);
+            let mut state = session.state.lock().expect("dap state");
+            state.attached = true;
+            state.running = true;
+            publish(&mut state, sender);
         }
 
         Ok((session, Events::new(receiver)))
@@ -601,22 +598,22 @@ impl Reader {
     /// there is nothing more to read: the program exited, the adapter ended
     /// the session, or nobody is listening.
     fn handle(&self, message: &Value) -> bool {
-        if self.apply(message) && !self.publish() {
+        if self.apply(message) && !self.send_state() {
             return false;
         }
         let terminated = message.get("event").and_then(Value::as_str) == Some("terminated");
         !terminated && self.state.lock().expect("dap state").exited.is_none()
     }
 
-    /// The state as it stands, out through the outlet. False once nobody is
+    /// The state as it stands, out through the outlet — with whatever the
+    /// program printed that has not gone yet. False once nobody is
     /// listening, or the session is over.
-    fn publish(&self) -> bool {
+    fn send_state(&self) -> bool {
         let outlet = self.outlet.lock().expect("dap outlet");
         let Some(sender) = outlet.as_ref() else {
             return false;
         };
-        let snapshot = self.state.lock().expect("dap state").clone();
-        sender.send(snapshot).is_ok()
+        publish(&mut self.state.lock().expect("dap state"), sender)
     }
 
     /// Say once that the session is over, and close the channel behind it.
@@ -643,7 +640,7 @@ impl Reader {
             state.error =
                 Some("the debug adapter ended the session without reporting an exit".to_string());
         }
-        let _ = sender.send(state.clone());
+        publish(&mut state, &sender);
     }
 
     /// Fold one message into the state. Returns whether anything changed.
@@ -718,6 +715,7 @@ impl Reader {
                 if category != "stdout" && category != "stderr" {
                     return false;
                 }
+                // Waiting for the next state to go, which takes them with it.
                 let mut state = self.state.lock().expect("dap state");
                 state.output.extend(text.lines().map(str::to_string));
                 true
@@ -983,6 +981,44 @@ mod tests {
         let last = states.try_iter().last().expect("the session's last state");
         assert_eq!(last.exited, None);
         assert_eq!(last.error.as_deref(), Some("program not found"));
+    }
+
+    /// A line the program printed goes out in exactly one state, whichever
+    /// thread sends it. An adapter's `output` event stayed in the state, so
+    /// every state after it carried its lines again and the dock printed
+    /// them once more at every step — and the console thread, clearing the
+    /// state after its own line, could take them before they were sent.
+    #[test]
+    fn a_printed_line_goes_out_once_and_never_again() {
+        let (reader, states) = unwired();
+        let printed = |category: &str, text: &str| {
+            event("output", json!({ "category": category, "output": text }))
+        };
+        assert!(reader.handle(&printed("stdout", "running 1 test\n")));
+        assert!(reader.handle(&event("continued", json!({ "threadId": 1 }))));
+
+        // The adapter's line is in the state and not yet sent when the
+        // console thread sends one of its own: that state carries both, and
+        // the reader's after it neither.
+        reader.apply(&printed("stderr", "from the adapter\n"));
+        assert!(console_line(
+            &reader.outlet,
+            &reader.state,
+            "from the console".to_string()
+        ));
+        assert!(reader.send_state());
+
+        let sent: Vec<Vec<String>> = states.try_iter().map(|state| state.output).collect();
+        assert_eq!(
+            sent.concat(),
+            ["running 1 test", "from the adapter", "from the console"],
+            "every line, once",
+        );
+        assert_eq!(
+            sent.iter().map(Vec::len).collect::<Vec<_>>(),
+            [1, 0, 2, 0],
+            "each in the first state to go after it was printed",
+        );
     }
 
     #[test]
