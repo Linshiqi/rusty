@@ -37,8 +37,9 @@ pub enum Behaviour {
     Analog,
     /// Duty on `PWM`, direction on `IN1`/`IN2`.
     Motor,
-    /// A rail on the sheet: `rusty:GND` or `rusty:Supply`, which puts its
-    /// net at a level without a wire running all the way to the devkit.
+    /// A rail on the sheet: `rusty:GND` or `rusty:Supply`, or a power
+    /// symbol a KiCad file brought (`power:GND`, `power:+3V3`), which puts
+    /// its net at a level without a wire running all the way to the devkit.
     Power,
     /// A name for a net (`rusty:Label`): every label carrying the same
     /// value is one net, however far apart they are drawn. What a
@@ -78,6 +79,10 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
     let prefix = symbol.reference.trim_end_matches(['?', '_']);
     let has = |name: &str| symbol.pins.iter().any(|p| p.name == name);
     match prefix {
+        // KiCad's own mark for a power symbol, whatever library it is in.
+        // `PWR_FLAG` is `#FLG`: it tells KiCad's checker a net is driven,
+        // and read as a rail it would short every ground it sits on.
+        "#PWR" => Behaviour::Power,
         "R" => Behaviour::Resistor,
         "C" => Behaviour::Capacitor,
         "SW" | "S" => Behaviour::Switch,
@@ -90,18 +95,30 @@ pub fn behaviour_of(symbol: &Symbol) -> Behaviour {
 }
 
 /// The rail a power symbol puts on its net, or `None` for a symbol that
-/// is not one. Ground is ground; everything else is a supply, whatever
+/// is not one. A ground is ground; everything else is a supply, whatever
 /// voltage its value names — the rules are DC on and off, and a symbol
 /// claiming to know 3.3 V from 5 V would be claiming more than they read.
 pub fn power_rail(symbol: &Symbol) -> Option<Rail> {
     if behaviour_of(symbol) != Behaviour::Power {
         return None;
     }
-    Some(if symbol.name == "GND" {
+    Some(if is_ground(&symbol.name) {
         Rail::Ground
     } else {
         Rail::Supply
     })
+}
+
+/// The names a ground symbol goes by: rusty's own `GND`, and every ground
+/// in KiCad's power library — analog, digital, signal, reference, power
+/// and earth are all the one level as far as on and off can tell.
+const GROUNDS: &[&str] = &["GND", "GNDA", "GNDD", "GNDS", "GNDREF", "GNDPWR", "Earth"];
+
+/// Is a power symbol with this name a ground? Asked of the symbol's name,
+/// not its value: a value is what the net is called on this sheet, and a
+/// `power:GND` relabelled `0V` is still the ground symbol.
+pub fn is_ground(name: &str) -> bool {
+    GROUNDS.contains(&name)
 }
 
 /// What a rail is at: the two levels a supply pin can have.

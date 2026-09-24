@@ -57,17 +57,6 @@ pub struct Schematic {
     pub notes: Vec<String>,
 }
 
-/// A KiCad ground symbol by name. Everything else under `power:` is a
-/// supply — the same reading `power_rail` does for rusty's own two, and for
-/// the same reason: the rules are on and off, so which supply it is does not
-/// change an answer, but ground against supply does.
-const GROUNDS: &[&str] = &["GND", "GNDA", "GNDD", "GNDS", "GNDREF", "GNDPWR", "Earth"];
-
-/// Is this KiCad power symbol a ground?
-pub fn is_ground(name: &str) -> bool {
-    GROUNDS.contains(&name)
-}
-
 /// A point on the sheet, rounded to something two floats can agree on.
 ///
 /// Schematic coordinates are a grid of mils written as millimetres, so the
@@ -474,14 +463,5 @@ mod tests {
     fn a_file_that_is_not_a_schematic_is_refused_by_name() {
         let error = parse("(kicad_symbol_lib (version 20211014))", "esp32c3").expect_err("refused");
         assert!(error.detail.contains("kicad_sch"), "{}", error.detail);
-    }
-
-    #[test]
-    fn kicads_grounds_are_told_from_its_supplies_by_name() {
-        assert!(is_ground("GND"));
-        assert!(is_ground("GNDA"));
-        assert!(is_ground("Earth"));
-        assert!(!is_ground("VCC"));
-        assert!(!is_ground("+3V3"));
     }
 }

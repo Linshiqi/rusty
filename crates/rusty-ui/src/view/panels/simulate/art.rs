@@ -18,7 +18,7 @@
 //! pins down the two long sides: a chip, which is what most of them are, and
 //! an honest one — the outline says "some part", the pin names say the rest.
 
-use rusty_embed::nets::{Behaviour, behaviour_of, ohms};
+use rusty_embed::nets::{Behaviour, behaviour_of, is_ground, ohms};
 use rusty_embed::{Pin, Symbol};
 
 use super::geometry::local;
@@ -190,7 +190,7 @@ fn look(symbol: &Symbol) -> Look {
         Behaviour::Analog => Look::Analog,
         Behaviour::Display => Look::Display,
         Behaviour::Motor => Look::Motor,
-        Behaviour::Power if symbol.name == "GND" => Look::Ground,
+        Behaviour::Power if is_ground(&symbol.name) => Look::Ground,
         Behaviour::Power => Look::Supply,
         Behaviour::Label => Look::Label,
         Behaviour::Buzzer => Look::Buzzer,

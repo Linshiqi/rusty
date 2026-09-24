@@ -794,6 +794,55 @@ fn a_power_symbol_is_a_rail_wherever_it_is_drawn() {
     );
 }
 
+/// The power symbols a KiCad file brings are rails too: every ground in
+/// its power library by name, and anything else marked `#PWR` a supply.
+/// They were read as parts nobody knew, so a lamp to `power:GND` stayed
+/// dark — and `power:GNDA` or `power:Earth` would have been a supply.
+/// `PWR_FLAG` is the one that is not a rail: it tells KiCad's checker a
+/// net is driven, and read as a supply it would short the ground it is
+/// nearly always drawn on.
+#[test]
+fn kicads_power_symbols_are_rails_and_its_flag_is_not() {
+    let mut s = sheet();
+    s.symbols.extend([
+        symbol("power", "GND", "#PWR", &[("1", "GND")]),
+        symbol("power", "GNDA", "#PWR", &[("1", "GNDA")]),
+        symbol("power", "Earth", "#PWR", &[("1", "Earth")]),
+        symbol("power", "+3V3", "#PWR", &[("1", "+3V3")]),
+        symbol("power", "PWR_FLAG", "#FLG", &[("1", "pwr")]),
+    ]);
+    let rail = |name: &str| power_rail(s.symbols.iter().find(|x| x.name == name).unwrap());
+    assert_eq!(rail("GND"), Some(Rail::Ground));
+    assert_eq!(rail("GNDA"), Some(Rail::Ground));
+    assert_eq!(rail("Earth"), Some(Rail::Ground));
+    assert_eq!(rail("+3V3"), Some(Rail::Supply));
+    assert_eq!(rail("PWR_FLAG"), None);
+    assert_eq!(
+        power_rail(s.symbols.iter().find(|x| x.name == "Supply").unwrap()),
+        Some(Rail::Supply),
+        "rusty's own supply is not a ground by its name"
+    );
+
+    // On a sheet: a lamp from a GPIO to an analog ground, with the flag
+    // KiCad's checker wants on that ground.
+    place(&mut s, "R1", "Device:R");
+    place(&mut s, "D1", "Device:LED");
+    place(&mut s, "#PWR01", "power:GNDA");
+    place(&mut s, "#FLG01", "power:PWR_FLAG");
+    wire(&mut s, "U1.GPIO2", "R1.1");
+    wire(&mut s, "R1.2", "D1.A");
+    wire(&mut s, "D1.K", "#PWR01.1");
+    wire(&mut s, "#FLG01.1", "#PWR01.1");
+    let on = eval(&s, &[(2, true)], &[]);
+    assert!(on.is_lit("D1"), "the analog ground grounds the cathode");
+    assert!(
+        on.warnings.is_empty(),
+        "the flag shorts nothing: {:?}",
+        on.warnings
+    );
+    assert!(!eval(&s, &[(2, false)], &[]).is_lit("D1"));
+}
+
 /// Two labels carrying the same name are one net, however far apart
 /// they are drawn — and two different names are two nets, which is the
 /// half that makes the first mean anything.

@@ -30,7 +30,7 @@ pub use analog::{
     ADC_MAX, Divider, POT_REST, PotSpan, adc_max, analog_start, divider_at, gpio_of, pot_span,
     pot_start,
 };
-pub use behaviour::{Behaviour, Rail, behaviour_of, power_rail};
+pub use behaviour::{Behaviour, Rail, behaviour_of, is_ground, power_rail};
 pub use bus::{BusDevice, WireDevice, bus_devices, hex_address, sensor_model, wire_devices};
 pub use evaluate::{Evaluation, Inputs, evaluate};
 pub use graph::solid_nets;
