@@ -244,18 +244,13 @@ impl Pane {
             // Prefill from the selection, as every editor
             // does — finding the thing under the cursor is
             // the whole gesture.
-            if let Some(element) = area.get_untracked() {
-                let text = state.editor.draft.get_untracked();
-                let from = element.selection_start().ok().flatten().unwrap_or(0) as usize;
-                let to = element.selection_end().ok().flatten().unwrap_or(0) as usize;
-                if to > from {
-                    let picked =
-                        text[byte_of_utf16(&text, from)..byte_of_utf16(&text, to)].to_string();
-                    if !picked.contains('\n') && !picked.is_empty() {
-                        state.find.query.set(picked);
-                        state.find.index.set(0);
-                    }
-                }
+            if let Some((_, _, picked)) = area
+                .get_untracked()
+                .and_then(|element| selection_of(&element, state))
+                && !picked.contains('\n')
+            {
+                state.find.query.set(picked);
+                state.find.index.set(0);
             }
             state.find.open.set(true);
             if event.key().eq_ignore_ascii_case("h") {

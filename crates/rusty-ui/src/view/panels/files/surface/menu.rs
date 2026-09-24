@@ -24,8 +24,7 @@ pub(super) fn EditorMenu(pane: Pane) -> impl IntoView {
                 let path = path.clone();
                 let has_selection = area
                     .get_untracked()
-                    .zip(Some(state.editor.draft.get_untracked()))
-                    .and_then(|(element, text)| selection_of(&element, &text))
+                    .and_then(|element| selection_of(&element, state))
                     .is_some();
                 let (goto_path, fix_path) = (path.clone(), path.clone());
                 Some(
@@ -45,7 +44,7 @@ pub(super) fn EditorMenu(pane: Pane) -> impl IntoView {
                                     } else if let Some(element) = area.get_untracked() {
                                         let text = state.editor.draft.get_untracked();
                                         if let Some((from, to, picked)) =
-                                            selection_of(&element, &text)
+                                            selection_of(&element, state)
                                         {
                                             copy_to_clipboard(&picked);
                                             record_edit(state);
@@ -70,13 +69,11 @@ pub(super) fn EditorMenu(pane: Pane) -> impl IntoView {
                                         && !has_selection
                                     {
                                         clipboard_key(state, &element, false, read_only);
-                                    } else if let Some(element) = area.get_untracked() {
-                                        let text = state.editor.draft.get_untracked();
-                                        if let Some((_, _, picked)) =
-                                            selection_of(&element, &text)
-                                        {
-                                            copy_to_clipboard(&picked);
-                                        }
+                                    } else if let Some((_, _, picked)) = area
+                                        .get_untracked()
+                                        .and_then(|element| selection_of(&element, state))
+                                    {
+                                        copy_to_clipboard(&picked);
                                     }
                                     editor_menu.set(None);
                                 })

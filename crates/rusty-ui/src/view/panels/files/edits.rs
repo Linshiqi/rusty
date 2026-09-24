@@ -371,15 +371,13 @@ fn toggle_comment_lines(marker: &str, text: &str, from: usize, to: usize) -> Str
 /// come to disagree about what a half-commented block does.
 pub(super) fn comment_selection(state: AppState, area: &web_sys::HtmlTextAreaElement) {
     let text = state.editor.draft.get_untracked();
-    let from = scalar_of_units(
-        &text,
-        area.selection_start().ok().flatten().unwrap_or(0) as usize,
-    );
-    let to = scalar_of_units(
-        &text,
-        area.selection_end().ok().flatten().unwrap_or(0) as usize,
-    );
-    let out = toggle_comments(state, &text, from.min(to), from.max(to));
+    // Document offsets, through the fold table. The textarea's are the
+    // screen's, and counted against the draft they commented whichever line
+    // a fold above had moved up to the caret's row — and wrote it.
+    let (start, end) = doc_selection(area, state);
+    let from = text[..start].chars().count();
+    let to = text[..end].chars().count();
+    let out = toggle_comments(state, &text, from, to);
     if out == text {
         return;
     }

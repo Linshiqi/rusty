@@ -60,17 +60,21 @@ pub(super) fn paste_at_caret(state: AppState, area: NodeRef<html::Textarea>) {
     });
 }
 
-/// The editor's selection as (byte range, text), when there is one.
+/// The editor's selection as (document byte range, text), when there is
+/// one.
+///
+/// Read through [`doc_selection`]: the textarea holds the screen text, and
+/// with anything folded above the selection its offsets counted against the
+/// draft picked out the wrong text — which Cut then deleted and wrote.
 pub(super) fn selection_of(
     area: &web_sys::HtmlTextAreaElement,
-    text: &str,
+    state: AppState,
 ) -> Option<(usize, usize, String)> {
-    let from = area.selection_start().ok().flatten()? as usize;
-    let to = area.selection_end().ok().flatten()? as usize;
+    let (from, to) = doc_selection(area, state);
     if to <= from {
         return None;
     }
-    let (from, to) = (byte_of_utf16(text, from), byte_of_utf16(text, to));
+    let text = state.editor.draft.get_untracked();
     Some((from, to, text[from..to].to_string()))
 }
 
