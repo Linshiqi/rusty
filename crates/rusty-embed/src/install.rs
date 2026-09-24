@@ -46,7 +46,11 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// frequency its timer sets, and a strip's codes come back as the bytes
 /// they carry — on the original ESP32 as well as the C3, whose CPU comes
 /// out of reset with its FPU on as the silicon's does and whose every
-/// interrupt source, a timer's among them, reaches its handler.
+/// interrupt source, a timer's among them, reaches its handler. And it
+/// plays a signal: a table on a converter or in a sensor's registers,
+/// sample-exact against the firmware's own clock (`[rusty:wave@`, which a
+/// build before this one does not carry — the plan says so beside the
+/// Upgrade, rather than the marker making every older copy out of date).
 ///
 /// The tag is pinned for the reason in this module's header; the repository
 /// it hangs off is [`REPO`], named once for the whole crate. **It moves with
@@ -55,7 +59,7 @@ const QEMU_VERSION: &str = "esp_develop_9.2.2_20260417";
 /// Upgrade that would fix it would fetch the same old build again. The
 /// QEMU workflow's packaging step checks the same list, so a build that
 /// lacks one never becomes a release.
-const RUSTY_QEMU_TAG: &str = "qemu-v8";
+const RUSTY_QEMU_TAG: &str = "qemu-v9";
 
 /// An archive to fetch: where to put it, the URLs to try in order, and the
 /// extraction step. One shape for QEMU, the debuggers and the C toolchain —
