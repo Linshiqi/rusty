@@ -34,7 +34,6 @@ use std::time::{Duration, Instant};
 
 use common::connect;
 use rusty_embed::live::{Live, Pace};
-use rusty_embed::parse_adc_report;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -176,17 +175,20 @@ fn main() {
                 }
             }
             // And the firmware's own side, which is the witness: what its
-            // converter actually took off the pin.
+            // converter actually took off the pin. One witness, not two:
+            // the emulator reports each of these conversions as well, and
+            // counting both put every reading in twice — two equal
+            // neighbours that broke every climb into pairs — while the
+            // `try_recv` that fetched the emulator's report took a line off
+            // the pin channel that `absorb` never saw. A drive edge lost
+            // that way is a circuit that never charged, and the gate
+            // passed or failed on how the two streams happened to
+            // interleave.
             while let Ok(text) = from_console.try_recv() {
                 println!("  {text}");
                 if let Some(counts) = firmware_read(&text) {
                     read.push(counts);
                 }
-            }
-            // The emulator says the same thing on its channel; either is a
-            // reading, and both are the firmware's.
-            if let Some(report) = parse_adc_report(&from_pins.try_recv().unwrap_or_default()) {
-                read.push(report.counts);
             }
         }
         stopper.stop();

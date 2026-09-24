@@ -2215,6 +2215,15 @@ jobs:
       # rather than a proxy for it. Twenty-five seconds because the step
       # builds the firmware and the image first, through the same
       # `simulate::plan` the app runs.
+      #
+      # The readings are the firmware's own, and only those. The probe used
+      # to count the emulator's report of each conversion as well — every
+      # reading twice, equal neighbours that cut every climb into pairs —
+      # and fetched those reports off the pin channel ahead of the circuit,
+      # which then missed whichever drive edge it took. So the gate passed
+      # or failed on how two streams interleaved: green on the release run,
+      # red on the next push, with one climb of 0, 263, 514, 753, 979 read as
+      # a climb of two.
       - name: The firmware drives the circuit the sheet draws
         env:
           RUSTY_CONFIG_DIR: ${{ github.workspace }}
