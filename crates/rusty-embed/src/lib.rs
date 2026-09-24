@@ -1,9 +1,9 @@
 //! Embedded Rust domain logic for the rusty workbench.
 //!
 //! Split by the `backend` feature exactly as `rusty-core` is: [`model`],
-//! [`protocol`], [`plant`] and [`setup`] are pure data and arithmetic and
-//! compile to wasm so the Leptos frontend can `use` them; everything that
-//! reads files or spawns processes is backend-only.
+//! [`protocol`], [`plant`], [`setup`] and [`signal`] are pure data and
+//! arithmetic and compile to wasm so the Leptos frontend can `use` them;
+//! everything that reads files or spawns processes is backend-only.
 //!
 //! The chip catalogue is *not* on the wasm side, deliberately: the lookups
 //! need the TOML parser, and only the backend can see the user's and the
@@ -31,6 +31,10 @@ pub mod lcd;
 // reports crossing the bus. Wasm-safe with the rest: the frontend reads the
 // stream as it passes and draws the screen from it.
 pub mod screen;
+// What a signal generator produces — tones, sweeps, noise, spikes and steps
+// as one line of text — rendered into samples. Wasm-safe: the frontend draws
+// what the backend will play into the emulator's converter.
+pub mod signal;
 // What a fresh machine is missing, derived from the toolchain report. Pure,
 // and unconditional so the setup screen can reason about a report it already
 // holds rather than asking the backend what it just told it.
