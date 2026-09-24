@@ -42,6 +42,7 @@ fn ctx(root: &Path) -> ToolContext<'_> {
         root: Some(root),
         firmware: None,
         catalog: None,
+        live: None,
     }
 }
 

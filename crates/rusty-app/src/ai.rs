@@ -9,6 +9,7 @@ use std::time::Duration;
 use rusty_ai::{
     AgentEvent, Assistant, LazyWorkspace, Message, ProviderConfig, ToolContext, config,
 };
+use rusty_embed::spatial::sheet::Live;
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -41,10 +42,17 @@ const ASK_BUDGET: Duration = Duration::from_secs(20 * 60);
 ///
 /// The open-project handles are cloned out of the lock before the first token,
 /// so a slow model never blocks the rest of the window.
+///
+/// `live` is what a running simulation said as the question was asked — the
+/// window holds the telemetry and runs the plant, the backend neither — so a
+/// sheet the Math panel shows live is worked out by the tool with the same
+/// numbers. Frozen for the answer: a model that read two instants would
+/// compare an estimate with a truth from another moment.
 #[tauri::command]
 pub async fn ai_ask(
     config: ProviderConfig,
     history: Vec<Message>,
+    live: Option<Live>,
     on_event: Channel<AgentEvent>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Message>, CommandError> {
@@ -67,6 +75,7 @@ pub async fn ai_ask(
         root: open.root(),
         firmware: open.firmware.clone(),
         catalog: Some(&catalog),
+        live: live.as_ref(),
     };
 
     // The key and the proxy are the machine's to answer, off the async thread.

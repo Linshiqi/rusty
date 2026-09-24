@@ -2,6 +2,8 @@
 
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
+use serde::{Deserialize, Serialize};
+
 /// Shorter than this and a vector has a length but no usable direction:
 /// dividing by it turns rounding noise into an arbitrary unit vector.
 pub const TINY: f64 = 1e-12;
@@ -67,7 +69,7 @@ impl Vec2 {
 }
 
 /// A vector in space.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Vec3 {
     pub x: f64,
     pub y: f64,

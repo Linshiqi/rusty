@@ -221,10 +221,13 @@ impl Server {
                 "rusty's analyses of the embedded Rust project at {}: which chip and \
                  toolchain it builds for and every mismatch between them, where a built \
                  firmware's bytes went, the dependency graph and what a feature costs, the \
-                 chips and boards rusty knows, and the project's files as rusty's Files \
-                 panel sees them. The answers are computed, not inferred from the files — \
-                 prefer them to reading .cargo/config.toml or a linker error and guessing. \
-                 Every tool reads; none writes.",
+                 chips and boards rusty knows, the project's files as rusty's Files panel \
+                 sees them, and attitude arithmetic — quaternions, Euler angles, frames, \
+                 gravity — worked out exactly with its working, the project's own math \
+                 sheet included. The answers are computed, not inferred from the files — \
+                 prefer them to reading .cargo/config.toml or a linker error and guessing, \
+                 and to multiplying quaternions from memory. Every tool reads but \
+                 `simulate`, which builds and boots the firmware.",
                 self.root.display()
             ),
         })
@@ -284,6 +287,9 @@ impl Server {
             root: Some(&self.root),
             firmware,
             catalog: Some(&catalog),
+            // Nothing runs beside this server; `math_sheet` takes the
+            // telemetry a client has as an argument instead.
+            live: None,
         };
         let outcome = self.registry.call(name, &arguments, &context);
         if let Some(workspace) = lazy.loaded() {
@@ -430,6 +436,7 @@ mod tests {
                     root: Some(dir.path()),
                     firmware: None,
                     catalog: None,
+                    live: None,
                 },
             )
             .unwrap();

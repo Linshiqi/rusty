@@ -7,6 +7,7 @@ use rusty_ai::{
     AgentEvent, ChatEvent, Content, Message, Preset, ProviderCheck, ProviderConfig, StopReason,
     ToolDef,
 };
+use rusty_embed::spatial::sheet::Live;
 use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
@@ -196,6 +197,12 @@ pub fn ask(state: AppState, question: String, context: Option<(String, String)>)
     struct Args {
         config: ProviderConfig,
         history: Vec<Message>,
+        /// What a running simulation says as the question is asked, for
+        /// `math_sheet`: the backend holds no telemetry and runs no plant,
+        /// so without it a sheet the Math panel shows live would be worked
+        /// out with nothing in its live rows.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        live: Option<Live>,
     }
 
     let mut content = vec![Content::Text { text: question }];
@@ -226,9 +233,11 @@ pub fn ask(state: AppState, question: String, context: Option<(String, String)>)
     // call. One per question asked.
     on_event.forget();
 
+    let live = math_live(state);
     let args = Args {
         config,
         history: state.ai.conversation.get_untracked(),
+        live: (!live.channels.is_empty() || live.truth.is_some()).then_some(live),
     };
     track(
         state,

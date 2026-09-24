@@ -4,8 +4,13 @@
 //! signs mean opposite things in the two frames. A positive pitch is the
 //! nose down with Z up and the nose up with Z down; the attitude indicator
 //! is the same instrument in both.
+//!
+//! The Math panel draws it and the `math_sheet` tool reports it, so the
+//! picture and the words a model uses about an attitude are one reading.
 
-use rusty_embed::spatial::{Frame, Quat, Vec3};
+use super::frame::Frame;
+use super::rotation::Quat;
+use super::vector::Vec3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Reading {
@@ -52,7 +57,7 @@ pub fn read(q: Quat, frame: Frame) -> Reading {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_embed::spatial::Euler;
+    use crate::spatial::Euler;
 
     fn deg(d: f64) -> f64 {
         d.to_radians()

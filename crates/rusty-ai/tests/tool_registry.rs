@@ -59,6 +59,7 @@ fn project_ctx(root: &Path) -> ToolContext<'_> {
         // Left unset so the tool falls back to the built-in catalogue, which is
         // what makes these assertions deterministic.
         catalog: None,
+        live: None,
     }
 }
 

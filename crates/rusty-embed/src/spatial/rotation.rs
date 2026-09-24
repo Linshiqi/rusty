@@ -5,10 +5,13 @@
 use std::f64::consts::{FRAC_PI_2, PI};
 use std::ops::{Add, Mul, Neg, Sub};
 
+use serde::{Deserialize, Serialize};
+
 use super::vector::{TINY, Vec3};
 
-/// A quaternion, Hamilton's, `w` first. An attitude when it is unit.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A quaternion, Hamilton's, `w` first. An attitude when it is unit. On the
+/// wire its four parts go by name, so no reader has an order to assume.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Quat {
     pub w: f64,
     pub x: f64,

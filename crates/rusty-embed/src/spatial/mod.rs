@@ -26,6 +26,7 @@
 
 pub mod check;
 mod frame;
+pub mod instrument;
 mod rotation;
 pub mod sheet;
 // The sheet in the project, read and written: files, so the backend's.

@@ -7,7 +7,6 @@
 //! any zoom, takes the theme's colours through classes, and a path per
 //! shape is few enough that painting back to front is the whole of depth.
 
-pub mod instrument;
 pub mod model;
 
 use rusty_embed::spatial::{Frame, Vec3};

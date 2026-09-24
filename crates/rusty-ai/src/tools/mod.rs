@@ -16,6 +16,7 @@ mod cargo;
 mod context;
 mod embedded;
 mod files;
+mod math;
 mod simulate;
 
 use serde_json::Value;
@@ -48,6 +49,7 @@ impl ToolRegistry {
             .into_iter()
             .chain(embedded::tools())
             .chain(files::tools())
+            .chain(math::tools())
         {
             registry.register(tool);
         }

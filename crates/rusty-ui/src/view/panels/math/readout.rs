@@ -4,6 +4,7 @@
 
 use leptos::prelude::*;
 
+use rusty_embed::spatial::instrument;
 use rusty_embed::spatial::sheet::steps::{deg, num};
 use rusty_embed::spatial::sheet::{Row, Value};
 use rusty_embed::spatial::{Euler, Frame, Mat3, Quat};
@@ -11,7 +12,6 @@ use rusty_i18n::t;
 
 use super::rows::show;
 use super::words;
-use crate::scene::instrument;
 use crate::state::AppState;
 use crate::view::components::copy_to_clipboard;
 

@@ -6,6 +6,7 @@ use std::{
 
 use rusty_core::Workspace;
 use rusty_embed::catalog::Catalog;
+use rusty_embed::spatial::sheet::Live;
 
 use crate::error::{Error, Result};
 
@@ -37,6 +38,12 @@ pub struct ToolContext<'a> {
     /// catalogue the panels show. A model that cannot see the board a user
     /// added would tell them it does not exist.
     pub catalog: Option<&'a Catalog>,
+    /// What a running simulation said when the question was asked — the
+    /// firmware's newest telemetry and the plant's attitude — which the
+    /// window sends along so a sheet the Math panel shows live is worked out
+    /// with the same numbers. `None` wherever nothing runs, which is every
+    /// MCP call: a client there passes the values it has.
+    pub live: Option<&'a Live>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -47,6 +54,7 @@ impl<'a> ToolContext<'a> {
             root: None,
             firmware: None,
             catalog: None,
+            live: None,
         }
     }
 
@@ -57,6 +65,7 @@ impl<'a> ToolContext<'a> {
             root: Some(workspace.root().as_std_path()),
             firmware: None,
             catalog: None,
+            live: None,
         }
     }
 

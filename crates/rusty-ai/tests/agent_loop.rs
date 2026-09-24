@@ -154,6 +154,7 @@ async fn a_question_about_a_chapter_reads_the_chapter_before_answering() {
         root: Some(project.path()),
         firmware: None,
         catalog: None,
+        live: None,
     };
 
     // The user has another file open; it rides along with the question.

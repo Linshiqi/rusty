@@ -44,8 +44,11 @@ pub struct MathSheet {
 }
 
 /// What a running simulation offers a sheet: the firmware's newest value of
-/// every telemetry channel, and the plant's own attitude and rates.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// every telemetry channel, and the plant's own attitude and rates. The
+/// window sends it along with a question to the assistant, so a tool that
+/// works a sheet out reads what the Math panel shows.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Live {
     pub channels: HashMap<String, f64>,
     pub truth: Option<Quat>,

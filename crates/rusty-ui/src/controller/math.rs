@@ -218,6 +218,17 @@ pub fn refresh_math_live(state: AppState) {
     if !state.math.sheet.with_untracked(reads_live) {
         return;
     }
+    let live = math_live(state);
+    if state.math.live.with_untracked(|old| *old != live) {
+        state.math.live.set(live);
+    }
+}
+
+/// What a running simulation offers a sheet right now: the newest value on
+/// every telemetry channel, and the plant's attitude and rates while the
+/// Flight tab closes the loop. The panel's live rows read it, and so does
+/// the assistant's `math_sheet`, sent with the question.
+pub fn math_live(state: AppState) -> Live {
     let channels = state.sim.plot.with_untracked(|plot| {
         plot.channels
             .iter()
@@ -248,12 +259,9 @@ pub fn refresh_math_live(state: AppState) {
     } else {
         (None, None)
     };
-    let live = Live {
+    Live {
         channels,
         truth,
         truth_rate,
-    };
-    if state.math.live.with_untracked(|old| *old != live) {
-        state.math.live.set(live);
     }
 }
