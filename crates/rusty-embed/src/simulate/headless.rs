@@ -239,6 +239,22 @@ impl Outcome {
         }
     }
 
+    /// A run about to start, with the plan's limits and notes said, each
+    /// once. The notes are what the plan found on the way — a symbol
+    /// library or a part's declaration that would not read, a sheet drawn
+    /// for another chip.
+    fn opening(plan: &SimPlan, on: &mut dyn FnMut(Event<'_>)) -> Outcome {
+        let mut outcome = Outcome::unrunnable("");
+        outcome.limits = plan.limits.clone();
+        for limit in &plan.limits {
+            on(Event::Note(&limit.text));
+        }
+        for note in &plan.notes {
+            outcome.note(note.clone(), on);
+        }
+        outcome
+    }
+
     /// Said as the run goes, and kept with what it saw.
     fn note(&mut self, text: String, on: &mut dyn FnMut(Event<'_>)) {
         on(Event::Note(&text));
@@ -285,12 +301,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         Ok(ready) => ready,
         Err(reason) => return Outcome::unrunnable(reason),
     };
-    let mut outcome = Outcome::unrunnable("");
-    outcome.limits = plan.limits.clone();
-    outcome.notes = plan.notes.clone();
-    for limit in &plan.limits {
-        on(Event::Note(&limit.text));
-    }
+    let mut outcome = Outcome::opening(&plan, on);
     if plan
         .emulator
         .as_ref()
@@ -348,11 +359,9 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         .map(|sheet| kit_rows_for(root, &sheet.chip))
         .unwrap_or_default();
     // The parts the sheet's `model` props name, read from the same three
-    // layers the symbols are.
+    // layers the symbols are. A declaration that would not read is already
+    // among the plan's notes.
     let parts = crate::partfile::load(Some(root));
-    for warning in parts.warnings {
-        outcome.note(warning, on);
-    }
     let pins = pins_port.map(|port| {
         pin_channel(
             port,
@@ -914,6 +923,28 @@ write-serial = "Skp=2.5"
             waiting_for(&actions, 0, &scenario, &[false, false]),
             "step 1 was waiting for \"boot\""
         );
+    }
+
+    /// Everything the plan noted is said once and kept once. A part
+    /// declaration that would not read used to be noted by the plan and
+    /// again by the run, which read the declarations for itself, so the
+    /// assistant's `simulate` was told every such warning twice — and
+    /// `rusty-cli sim` heard none of the plan's other notes at all.
+    #[test]
+    fn a_plans_notes_are_said_and_kept_once() {
+        let mut plan = SimPlan::refused("");
+        plan.notes = vec![
+            "parts/imu.toml: a reading has no register".to_string(),
+            "the sheet is drawn for esp32; the project builds for esp32c3".to_string(),
+        ];
+        let mut said = Vec::new();
+        let outcome = Outcome::opening(&plan, &mut |event| {
+            if let Event::Note(text) = event {
+                said.push(text.to_string());
+            }
+        });
+        assert_eq!(outcome.notes, plan.notes);
+        assert_eq!(said, plan.notes);
     }
 
     /// What a board's console was sent, kept where the test can read it.
