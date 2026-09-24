@@ -18,9 +18,11 @@
 //! the exact version. An artifact whose version the lockfile no longer
 //! resolves is never read again unless the lockfile moves back; one whose
 //! package left the graph is never read again at all. Those two rules,
-//! plus an idle threshold for the incremental caches (which rustc rebuilds
-//! from nothing at the cost of one slower compile), are what "stale" means
-//! here. Anything the scan cannot classify with certainty is kept and said so
+//! plus two for the incremental caches — an idle threshold, and a cap on how
+//! many of a crate's caches are kept, since rustc keys a cache on the unit's
+//! flags and every feature set leaves one; rustc rebuilds either from
+//! nothing at the cost of one slower compile — are what "stale" means here.
+//! Anything the scan cannot classify with certainty is kept and said so
 //! in the report — refuse rather than guess, applied to deletion, where a
 //! guess costs a rebuild at best.
 //!

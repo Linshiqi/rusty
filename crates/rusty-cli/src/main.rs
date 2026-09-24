@@ -65,7 +65,9 @@ enum Command {
     Size {
         /// The linked ELF, e.g. target/riscv32imc-unknown-none-elf/release/blinky
         /// — or a project directory, whose newest firmware for its configured
-        /// target is analysed, the way the desktop app picks one.
+        /// target is analysed, found where the firmware is built (the
+        /// excluded firmware crate, in a host workspace) the way the desktop
+        /// app finds it.
         elf: PathBuf,
         /// The project the chip is read from, when `elf` is a file.
         #[arg(long, default_value = ".")]
@@ -76,7 +78,8 @@ enum Command {
 
     /// Where the project's builds went on disk, and what of it is stale:
     /// artifacts of dependency versions the lockfile no longer resolves, of
-    /// packages no longer in the graph, and idle incremental caches.
+    /// packages no longer in the graph, and incremental caches that are idle
+    /// or superseded by a crate's newer ones.
     Disk {
         #[arg(default_value = ".")]
         path: PathBuf,
