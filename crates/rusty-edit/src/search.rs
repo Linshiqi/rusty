@@ -850,25 +850,25 @@ mod tests {
     }
 
     /// A bulk edit that turns line endings over makes the diff unreviewable,
-    /// which is the failure this repository has already had twice.
+    /// which is the failure this repository has already had twice. A CRLF
+    /// file whose last line has no ending at all comes back as it was but
+    /// for the replacements — one of them hard against a `\r`. It was first
+    /// written with line breaks inside the quotes, each a `\n` and nothing
+    /// more, so the test named after CRLF held none.
     #[test]
     fn crlf_and_a_missing_final_newline_both_survive() {
         let dir = tempfile::tempdir().unwrap();
         write(
             dir.path(),
             "a.rs",
-            "let gain = 1;
-let b = 2;
-let c = gain;",
+            "let gain = 1;\r\nlet b = gain\r\nlet c = gain;",
         );
 
         let outcome = replace(dir.path(), &query("gain"), "kp", &[]);
-        assert_eq!(outcome.replaced, 2);
+        assert_eq!(outcome.replaced, 3);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
-            "let kp = 1;
-let b = 2;
-let c = kp;",
+            "let kp = 1;\r\nlet b = kp\r\nlet c = kp;",
             "line endings and the absent trailing newline are not the replace's business"
         );
     }
