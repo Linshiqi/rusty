@@ -174,6 +174,16 @@ impl Wire {
     }
 }
 
+/// Where the session's states go: the channel's only sender, in a slot the
+/// reader and the console thread share.
+///
+/// The reader empties the slot as the session's last state goes, so the
+/// channel closes behind it — which is how whoever reads the stream learns
+/// the session is over when there is no exit code to say so. A console line
+/// still on its way then finds the slot empty and is dropped, rather than
+/// arriving after the state that said the session had ended.
+type Outlet = Arc<Mutex<Option<Sender<DebugState>>>>;
+
 /// A live debug adapter.
 pub struct DapSession {
     child: Mutex<Child>,
@@ -205,6 +215,7 @@ impl DapSession {
 
         let state = Arc::new(Mutex::new(DebugState::default()));
         let (sender, receiver) = channel();
+        let outlet: Outlet = Arc::new(Mutex::new(Some(sender)));
         let wire = Arc::new(Wire {
             socket: Mutex::new(Some(socket)),
             seq: AtomicI64::new(1),
@@ -217,7 +228,7 @@ impl DapSession {
         let reader = Reader {
             state: Arc::clone(&state),
             wire: Arc::clone(&wire),
-            sender: sender.clone(),
+            outlet: Arc::clone(&outlet),
             root: launch.root.clone(),
             thread: Arc::clone(&thread),
             frames: Arc::clone(&frames),
@@ -230,13 +241,13 @@ impl DapSession {
         // this pipe is plain text.
         if let Some(stdout) = child.stdout.take() {
             let state = Arc::clone(&state);
-            let sender = sender.clone();
+            let outlet = Arc::clone(&outlet);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout)
                     .lines()
                     .map_while(std::result::Result::ok)
                 {
-                    if !push_line(&state, &sender, line) {
+                    if !console_line(&outlet, &state, line) {
                         return;
                     }
                 }
@@ -257,15 +268,19 @@ impl DapSession {
 
         // Attached, and running: the program starts the moment configuration
         // is done. The panel's first resume is therefore a no-op rather than
-        // an error about a program that is already going.
+        // an error about a program that is already going. Unless the session
+        // is already over — the adapter gone the moment it was configured —
+        // in which case its last state has been sent and nothing follows it.
         session.running.store(true, Ordering::SeqCst);
-        let snapshot = {
-            let mut state = session.state.lock().expect("dap state");
-            state.attached = true;
-            state.running = true;
-            state.clone()
-        };
-        let _ = sender.send(snapshot);
+        if let Some(sender) = outlet.lock().expect("dap outlet").as_ref() {
+            let snapshot = {
+                let mut state = session.state.lock().expect("dap state");
+                state.attached = true;
+                state.running = true;
+                state.clone()
+            };
+            let _ = sender.send(snapshot);
+        }
 
         Ok((session, Events::new(receiver)))
     }
@@ -544,13 +559,24 @@ fn connect(port: u16, child: &mut Child, adapter: &Path) -> Result<TcpStream> {
     })
 }
 
+/// One line of the program's console, out through the outlet. False once
+/// the session is over or nobody is listening, and the console thread
+/// stops there.
+fn console_line(outlet: &Outlet, state: &Mutex<DebugState>, line: String) -> bool {
+    let outlet = outlet.lock().expect("dap outlet");
+    match outlet.as_ref() {
+        Some(sender) => push_line(state, sender, line),
+        None => false,
+    }
+}
+
 /// The reader thread's half of the session: everything a message from the
 /// adapter can change, the wire its follow-up questions go out on, and the
-/// channel the states go down.
+/// outlet the states go down.
 struct Reader {
     state: Arc<Mutex<DebugState>>,
     wire: Arc<Wire>,
-    sender: Sender<DebugState>,
+    outlet: Outlet,
     root: PathBuf,
     thread: Arc<Mutex<i64>>,
     frames: Arc<Mutex<Vec<i64>>>,
@@ -564,24 +590,60 @@ impl Reader {
     fn pump(self, socket: TcpStream) {
         let mut socket = BufReader::new(socket);
         while let Some(message) = read_frame(&mut socket) {
-            let changed = self.apply(&message);
-            if changed {
-                let snapshot = self.state.lock().expect("dap state").clone();
-                if self.sender.send(snapshot).is_err() {
-                    break;
-                }
-            }
-            if self.state.lock().expect("dap state").exited.is_some() {
+            if !self.handle(&message) {
                 break;
             }
         }
-        let mut final_state = self.state.lock().expect("dap state").clone();
-        final_state.running = false;
-        final_state.attached = false;
-        if final_state.exited.is_none() && final_state.error.is_none() {
-            final_state.exited = Some(0);
+        self.finish();
+    }
+
+    /// Fold one message in, and send the state if it changed. False once
+    /// there is nothing more to read: the program exited, the adapter ended
+    /// the session, or nobody is listening.
+    fn handle(&self, message: &Value) -> bool {
+        if self.apply(message) && !self.publish() {
+            return false;
         }
-        let _ = self.sender.send(final_state);
+        let terminated = message.get("event").and_then(Value::as_str) == Some("terminated");
+        !terminated && self.state.lock().expect("dap state").exited.is_none()
+    }
+
+    /// The state as it stands, out through the outlet. False once nobody is
+    /// listening, or the session is over.
+    fn publish(&self) -> bool {
+        let outlet = self.outlet.lock().expect("dap outlet");
+        let Some(sender) = outlet.as_ref() else {
+            return false;
+        };
+        let snapshot = self.state.lock().expect("dap state").clone();
+        sender.send(snapshot).is_ok()
+    }
+
+    /// Say once that the session is over, and close the channel behind it.
+    ///
+    /// An adapter that ended the session without an `exited` event — or went
+    /// away altogether, the connection closing under the reader — has not
+    /// said how the program ended, and that is not a program that exited
+    /// cleanly. Inventing `Some(0)` here read a crashed adapter as a test
+    /// that finished normally, the mistake gdb's reader had already stopped
+    /// making; this says it the way gdb's does. What the adapter did report
+    /// stands: the code of an exit, or the words it refused something in.
+    ///
+    /// The last state takes the sender with it, so the channel closes as it
+    /// goes: with no exit code to stop on, its end is what says the session
+    /// is over.
+    fn finish(&self) {
+        let Some(sender) = self.outlet.lock().expect("dap outlet").take() else {
+            return;
+        };
+        let mut state = self.state.lock().expect("dap state");
+        state.running = false;
+        state.attached = false;
+        if state.exited.is_none() && state.error.is_none() {
+            state.error =
+                Some("the debug adapter ended the session without reporting an exit".to_string());
+        }
+        let _ = sender.send(state.clone());
     }
 
     /// Fold one message into the state. Returns whether anything changed.
@@ -637,14 +699,11 @@ impl Reader {
                 state.reason = Some(StopReason::Exited);
                 true
             }
-            "terminated" => {
-                let mut state = self.state.lock().expect("dap state");
-                if state.exited.is_none() {
-                    state.exited = Some(0);
-                }
-                state.running = false;
-                true
-            }
+            // The adapter ending the session, which is not an exit: an
+            // `exited` event carries the code, and when one came first the
+            // reading has already stopped. `handle` stops on this one too,
+            // and `finish` says what is known.
+            "terminated" => false,
             "output" => {
                 let Some(text) = body.get("output").and_then(Value::as_str) else {
                     return false;
@@ -827,10 +886,103 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::TryRecvError;
+
     use super::*;
 
     fn root() -> PathBuf {
         PathBuf::from(r"E:\CodeBase\proj")
+    }
+
+    /// The reader thread's half of a session with nothing at the other end
+    /// of its wire, and the stream its states go down.
+    fn unwired() -> (Reader, Receiver<DebugState>) {
+        let (sender, states) = channel();
+        let (ready, _) = channel();
+        let reader = Reader {
+            state: Arc::new(Mutex::new(DebugState::default())),
+            wire: Arc::new(Wire {
+                socket: Mutex::new(None),
+                seq: AtomicI64::new(1),
+            }),
+            outlet: Arc::new(Mutex::new(Some(sender))),
+            root: root(),
+            thread: Arc::new(Mutex::new(0)),
+            frames: Arc::new(Mutex::new(Vec::new())),
+            running: Arc::new(AtomicBool::new(false)),
+            ready,
+        };
+        (reader, states)
+    }
+
+    fn event(name: &str, body: Value) -> Value {
+        json!({ "seq": 1, "type": "event", "event": name, "body": body })
+    }
+
+    /// An adapter that ends the session without an `exited` event has not
+    /// said how the program ended. Read as a clean exit, a crashed adapter
+    /// was a test that finished normally — the mistake gdb's reader had
+    /// already stopped making. The session ends with the reason instead, and
+    /// the stream closes behind it, since there is no exit code to stop on.
+    #[test]
+    fn an_adapter_that_ends_without_an_exit_claims_none() {
+        let (reader, states) = unwired();
+        assert!(
+            !reader.handle(&event("terminated", json!({}))),
+            "the adapter ending the session ends the reading",
+        );
+        reader.finish();
+        let last = states.try_recv().expect("the session's last state");
+        assert_eq!(
+            last.exited, None,
+            "no exit was reported, so none is claimed"
+        );
+        assert_eq!(
+            last.error.as_deref(),
+            Some("the debug adapter ended the session without reporting an exit"),
+        );
+        assert!(!last.attached && !last.running);
+        assert_eq!(
+            states.try_recv(),
+            Err(TryRecvError::Disconnected),
+            "nothing follows the last state: the stream's end says the session is over",
+        );
+
+        // Gone without a word — the connection closed under the reader — is
+        // the same answer.
+        let (reader, states) = unwired();
+        reader.finish();
+        let last = states.try_recv().expect("the session's last state");
+        assert_eq!(last.exited, None);
+        assert!(last.error.is_some());
+    }
+
+    /// What the adapter did report stands: the code of an exit, with no
+    /// error beside it, and the words of a refusal rather than the general
+    /// sentence.
+    #[test]
+    fn what_the_adapter_reported_is_what_the_session_ends_with() {
+        let (reader, states) = unwired();
+        assert!(
+            !reader.handle(&event("exited", json!({ "exitCode": 101 }))),
+            "an exit ends the reading",
+        );
+        reader.finish();
+        let last = states.try_iter().last().expect("the session's last state");
+        assert_eq!(last.exited, Some(101));
+        assert_eq!(last.error, None);
+
+        let (reader, states) = unwired();
+        let refused = json!({
+            "seq": 2, "type": "response", "command": "launch", "success": false,
+            "message": "program not found",
+        });
+        assert!(reader.handle(&refused));
+        assert!(!reader.handle(&event("terminated", json!({}))));
+        reader.finish();
+        let last = states.try_iter().last().expect("the session's last state");
+        assert_eq!(last.exited, None);
+        assert_eq!(last.error.as_deref(), Some("program not found"));
     }
 
     #[test]
