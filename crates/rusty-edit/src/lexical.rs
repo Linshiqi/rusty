@@ -24,6 +24,13 @@ const PRIMITIVES: &[&str] = &[
     "i128", "isize", "f32", "f64",
 ];
 
+/// Whether `word` names one of Rust's primitive types. The one list for this
+/// pass and for the grammar's own scopes, which cannot tell `i32` from `let`
+/// (see `highlight`), so the two cannot disagree about which words are types.
+pub(crate) fn is_primitive(word: &str) -> bool {
+    PRIMITIVES.contains(&word)
+}
+
 /// Rust's keywords, for contexts where no grammar has run (hover snippets).
 const KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -76,7 +83,7 @@ fn split_plain(text: &str, out: &mut Vec<Span>) {
             let next = bytes.get(end).copied();
             let token = if KEYWORDS.contains(&word) {
                 Some(Token::Keyword)
-            } else if PRIMITIVES.contains(&word) {
+            } else if is_primitive(word) {
                 Some(Token::Type)
             } else if next == Some(b'!') && word.chars().next().is_some_and(char::is_lowercase) {
                 Some(Token::Macro)

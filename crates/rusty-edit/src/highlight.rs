@@ -99,10 +99,38 @@ pub struct Painting {
     /// The parser before each line, and after the last: one longer than
     /// `lines`. Empty for a grammar whose lines carry nothing to the next.
     between: Vec<Between>,
-    /// What each scope reads as. [`token_for`] builds a string per scope, and
+    /// What each scope reads as. [`class_for`] builds a string per scope, and
     /// a file pushes a few hundred distinct scopes several hundred thousand
     /// times.
-    tokens: HashMap<Scope, Option<Token>>,
+    classes: Classes,
+}
+
+/// What each scope reads as, remembered by scope — `None` for a scope that
+/// says nothing, so the one under it is asked.
+type Classes = HashMap<Scope, Option<Class>>;
+
+/// What a scope reads as. Nearly every scope names its token outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Is(Token),
+    /// A Rust `storage.type` scope. The bundled grammar gives `let`,
+    /// `const`, `static`, `i32` and `u8` the one scope `storage.type.rust`,
+    /// `fn` and `struct` scopes of the same family, and a literal's `1u8`
+    /// suffix `storage.type.numeric.rust`. No rule on the scope can tell a
+    /// keyword from a type there, so the word does: a primitive's name is a
+    /// type, anything else a keyword, as every storage scope was before.
+    RustStorage,
+}
+
+impl Class {
+    /// The token for `text` under this class.
+    fn token(self, text: &str) -> Token {
+        match self {
+            Class::Is(token) => token,
+            Class::RustStorage if crate::lexical::is_primitive(text.trim()) => Token::Type,
+            Class::RustStorage => Token::Keyword,
+        }
+    }
 }
 
 /// What a repaint changed: the lines from `from` on, painted for the text
@@ -136,7 +164,7 @@ impl Painting {
             grammar,
             lines: Vec::new(),
             between,
-            tokens: HashMap::new(),
+            classes: HashMap::new(),
         }
     }
 
@@ -188,7 +216,7 @@ impl Painting {
 
         let (lines, stop) = match self.grammar {
             Grammar::Syntax(_) => {
-                let mut scan = Scan::new(syntaxes, &mut self.tokens, &self.between[from]);
+                let mut scan = Scan::new(syntaxes, &mut self.classes, &self.between[from]);
                 let mut lines = Vec::new();
                 let mut after = Vec::new();
                 let mut at = from;
@@ -245,9 +273,9 @@ pub fn snippet(syntaxes: &SyntaxSet, lang: &str, text: &str) -> Vec<Line> {
     }
     match syntaxes.find_syntax_by_token(lang) {
         Some(syntax) if !lang.is_empty() => {
-            let mut tokens = HashMap::new();
+            let mut classes = HashMap::new();
             let start = Arc::new((ParseState::new(syntax), ScopeStack::new()));
-            let mut scan = Scan::new(syntaxes, &mut tokens, &start);
+            let mut scan = Scan::new(syntaxes, &mut classes, &start);
             source.map(|line| scan.line(line).0).collect()
         }
         _ => source.map(plain_line).collect(),
@@ -268,7 +296,7 @@ fn plain_line(line: &str) -> Line {
 /// across lines as syntect requires.
 struct Scan<'a> {
     syntaxes: &'a SyntaxSet,
-    tokens: &'a mut HashMap<Scope, Option<Token>>,
+    classes: &'a mut Classes,
     state: ParseState,
     stack: ScopeStack,
     /// The parser as last handed out. The next line most likely leaves it as
@@ -277,14 +305,10 @@ struct Scan<'a> {
 }
 
 impl<'a> Scan<'a> {
-    fn new(
-        syntaxes: &'a SyntaxSet,
-        tokens: &'a mut HashMap<Scope, Option<Token>>,
-        before: &Between,
-    ) -> Scan<'a> {
+    fn new(syntaxes: &'a SyntaxSet, classes: &'a mut Classes, before: &Between) -> Scan<'a> {
         Scan {
             syntaxes,
-            tokens,
+            classes,
             state: before.0.clone(),
             stack: before.1.clone(),
             shared: before.clone(),
@@ -309,7 +333,7 @@ impl<'a> Scan<'a> {
         let mut at = 0usize;
         for (offset, op) in ops {
             let text = &owned[at..offset.min(owned.len())];
-            push(&mut spans, text, &self.stack, self.tokens);
+            push(&mut spans, text, &self.stack, self.classes);
             let _ = self.stack.apply(&op);
             at = offset;
         }
@@ -317,7 +341,7 @@ impl<'a> Scan<'a> {
             &mut spans,
             &owned[at.min(owned.len())..],
             &self.stack,
-            self.tokens,
+            self.classes,
         );
 
         // The newline was only for the parser.
@@ -445,16 +469,14 @@ fn toml_line(line: &str) -> Line {
 }
 
 /// Append text, merging into the previous run when it means the same thing.
-fn push(
-    spans: &mut Vec<Span>,
-    text: &str,
-    stack: &ScopeStack,
-    tokens: &mut HashMap<Scope, Option<Token>>,
-) {
+///
+/// `text` is what the grammar put under one scope stack — a word, for the
+/// scopes that name one — which is what [`Class::RustStorage`] reads.
+fn push(spans: &mut Vec<Span>, text: &str, stack: &ScopeStack, classes: &mut Classes) {
     if text.is_empty() {
         return;
     }
-    let token = classify(stack, tokens);
+    let token = classify(stack, classes, text);
     match spans.last_mut() {
         Some(last) if last.token == token => last.text.push_str(text),
         _ => spans.push(Span {
@@ -464,21 +486,21 @@ fn push(
     }
 }
 
-/// What the grammar thinks this is.
+/// What the grammar thinks `text` is.
 ///
 /// Read from the top of the stack down, because the most specific scope is the
 /// one that matters: `meta.function.rust entity.name.function.rust` is a
 /// function name, and stopping at `meta.function` would paint the whole body.
-fn classify(stack: &ScopeStack, tokens: &mut HashMap<Scope, Option<Token>>) -> Token {
+fn classify(stack: &ScopeStack, classes: &mut Classes, text: &str) -> Token {
     for scope in stack.as_slice().iter().rev() {
-        if let Some(token) = *tokens.entry(*scope).or_insert_with(|| token_for(*scope)) {
-            return token;
+        if let Some(class) = *classes.entry(*scope).or_insert_with(|| class_for(*scope)) {
+            return class.token(text);
         }
     }
     Token::Plain
 }
 
-fn token_for(scope: Scope) -> Option<Token> {
+fn class_for(scope: Scope) -> Option<Class> {
     // Sublime scope names are dotted and hierarchical, so prefix matching is
     // how they are meant to be read.
     let name = scope.build_string();
@@ -493,6 +515,13 @@ fn token_for(scope: Scope) -> Option<Token> {
             Token::Macro
         }
         _ if name.contains("macro") => Token::Macro,
+        // Before the keyword rule, which would take it whole: `i32` is a
+        // type, and its scope is `let`'s. Rust's alone — C's `int` and
+        // `char`, and C++'s, which borrows C's scopes, are `storage.type.c`
+        // and stay keywords.
+        _ if name.starts_with("storage.type") && name.ends_with(".rust") => {
+            return Some(Class::RustStorage);
+        }
         _ if name.starts_with("keyword") || name.starts_with("storage") => Token::Keyword,
         _ if name.starts_with("entity.name.function") || name.starts_with("support.function") => {
             Token::Function
@@ -511,7 +540,7 @@ fn token_for(scope: Scope) -> Option<Token> {
         _ if name.starts_with("punctuation") => Token::Punctuation,
         _ => return None,
     };
-    Some(kind)
+    Some(Class::Is(kind))
 }
 
 #[cfg(test)]
@@ -752,6 +781,66 @@ void blinky_tick(void);
             .iter()
             .find(|(text, _)| text.trim() == needle)
             .map(|(_, token)| *token)
+    }
+
+    /// The tokens of every span that is `word` and nothing else.
+    fn tokens_of(spans: &[(String, Token)], word: &str) -> Vec<Token> {
+        spans
+            .iter()
+            .filter(|(text, _)| text.trim() == word)
+            .map(|(_, token)| *token)
+            .collect()
+    }
+
+    /// `i32` and `u8` are types and `let` is still a keyword, though the
+    /// bundled grammar gives all three one scope, `storage.type.rust`: a
+    /// rule on the scope alone painted every primitive as a keyword. Painted
+    /// whole, repainted and fenced alike, a `1u8` suffix included; C's and
+    /// C++'s `int`, `char` and `bool` stay keywords.
+    #[test]
+    fn a_primitive_type_is_a_type_and_let_is_still_a_keyword() {
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        let text = "let x: i32 = y as u8;\n\
+                    const N: usize = 1u8 as usize;\n\
+                    fn f(mut v: [f32; 2]) -> char {}\n";
+        let flat = |lines: Vec<Line>| -> Vec<(String, Token)> {
+            lines
+                .into_iter()
+                .flat_map(|line| line.spans)
+                .map(|span| (span.text, span.token))
+                .collect()
+        };
+        let whole = flat(Painting::new(&syntaxes, "main.rs", text).1);
+        let (mut painting, _) = Painting::new(&syntaxes, "main.rs", "fn f() {}\n");
+        let repainted = flat(painting.repaint(&syntaxes, text, 0..0).lines);
+        let fenced = flat(snippet(&syntaxes, "rust", text));
+
+        for spans in [&whole, &repainted, &fenced] {
+            for (word, times) in [("i32", 1), ("u8", 2), ("usize", 2), ("f32", 1), ("char", 1)] {
+                assert_eq!(
+                    tokens_of(spans, word),
+                    vec![Token::Type; times],
+                    "{word}: {spans:?}"
+                );
+            }
+            for word in ["let", "const", "fn", "mut", "as"] {
+                assert_eq!(
+                    token_of(spans, word),
+                    Some(Token::Keyword),
+                    "{word}: {spans:?}"
+                );
+            }
+        }
+
+        let c = tokens("main.c", "int main(char c) { const int x = 1; }\n");
+        let cpp = tokens("main.cpp", "bool f(char c);\n");
+        for (spans, word) in [(&c, "int"), (&c, "char"), (&cpp, "bool"), (&cpp, "char")] {
+            assert_eq!(
+                token_of(spans, word),
+                Some(Token::Keyword),
+                "{word}: {spans:?}"
+            );
+        }
     }
 
     #[test]
