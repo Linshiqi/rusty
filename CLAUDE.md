@@ -64,7 +64,7 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # and 1.10 V at the middle for anyone to check. A fifth: **a Rust map
 # crosses as a JS `Map`, not an object** — serde_wasm_bindgen writes one — so
 # a stub reading a part's `props.signal` reads nothing and plays its own
-# default while the frontend is right; read props with `.get()`. Four
+# default while the frontend is right; read props with `.get()`. Five
 # switches: set `mock.norecents` in localStorage to start on the welcome
 # screen (a launch that reopens the last project never shows it),
 # `__mock.pickFolder` to answer the folder picker instead of cancelling it,
@@ -74,7 +74,10 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # run then streams its conversions at 500 Hz on the firmware's clock, a
 # firmware printing `raw` and an exponential average `y` of it, declares a
 # console `gyro`, and answers `sim_signal_set` — every instrument in the
-# Signals tab, the sweep included, can be driven here.
+# Signals tab, the sweep included, can be driven here. And `__mock.attitude`
+# before Run: the firmware prints an attitude on its telemetry the way
+# cf-drone-rs names it (`roll`, `pitch`, `yaw` in radians, `gx` `gy` `gz`)
+# at 50 Hz, for the math toolbox's live rows.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -182,7 +185,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification. `disk/` is the build directory measured and judged (`tree.rs` counts one build tree, `judge.rs` decides what is stale and why, `sweep.rs` removes it, `fs.rs` the filesystem it reads) — the Crates panel's Disk section, `rusty-cli disk` / `sweep` and the `disk_report` tool are its three readers |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json` |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json`. `spatial` is the math toolbox's arithmetic — vectors, Hamilton quaternions, Z-Y-X Euler angles, matrices, the two frames flight code is written in, and `check`, which names the convention a wrong attitude crossed — with `spatial::sheet` its worksheet language (lexer, parser, evaluator, and every operation's working as steps) and `sheet_file` its `.rusty/math.toml` |
 | `rusty-ai` | Bring-your-own-LLM providers (both dialects authorise, send and read a line through `provider/mod.rs`), the tool registry, the agent loop (`agent.rs`: open a turn, read it, run its tools), and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -192,7 +195,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-ipc` | Command-name constants both sides `use`; a test in rusty-app pins each to a real handler |
 | `rusty-i18n` | The interface's languages: one TOML catalogue each, a `t!` macro, and the tests that keep them in step. Compiles to wasm — the frontend is the only caller, because backend text crosses the wire as a *name* the frontend translates |
 | `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
-| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it |
+| `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it. So is the math toolbox: `scene` is its 3-D view — a camera, a projection, shapes turned into SVG paths sorted back to front, the quadcopter, and an attitude indicator's readings — pure and tested, and `view/panels/math/` is the page |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
 
 ## The rules that are load-bearing
@@ -4621,6 +4624,83 @@ half, `view/lab/` the four instruments of the Signals tab and
   passed on qemu-v9's release run and failed on the next push with a clean
   climb read as a climb of two. One witness now, and every pin line reaches
   the circuit: **two accounts of one event are not two readings**.
+
+## The math toolbox
+
+The arithmetic a flight controller is made of, worked out a row at a time and
+drawn: an attitude as the aircraft it is, every step of the working in space,
+and the firmware's own estimate beside the plant's truth while a run goes on.
+`rusty_embed::spatial` is the arithmetic and the sheet's language, pure and
+tested; `crate::scene` the drawing; `view/panels/math/` the page. The sheet
+lives in the project as `.rusty/math.toml`, beside the board.
+
+- **Every convention is stated once, in `spatial`'s header, because each is
+  somebody's afternoon**: Hamilton quaternions, `w` first; a rotation turns a
+  vector, and an attitude turns the body's axes onto the world's; `a ⊗ b` is
+  `b` first; Euler angles Z-Y-X intrinsic; and which way is up (`Frame`).
+  cf-drone-rs flies Z up with the body forward-left-up — read off its
+  source, not assumed — and PX4 and ArduPilot fly Z down. The default is
+  the user's own firmware's.
+- **The same Euler angles are two physical attitudes.** A positive pitch is
+  the nose down with Z up (about a left wing) and up with Z down (about a
+  right one). The arithmetic is identical in both; gravity (`Frame::at_rest`,
+  `tilt`) and the picture are not. So the attitude indicator reads the nose's
+  elevation, the right wing's dip and the heading off where the body's axes
+  point (`scene::instrument`), never off the three angles.
+- **rusty's plant said "X forward, Y right, Z up" for months**, which is no
+  right-handed frame at all. Its numbers were always one consistent set —
+  the world's +Z in the body's axes, level `[0, 0, 1]` — and its tests are
+  worded in the Z-down reading. The comment says both readings now, and
+  `truth()` hands the plant's quaternion over as numbers: the frame changes
+  the words, not the numbers, so firmware integrating the plant's gyro
+  agrees with it either way.
+- **A worksheet, not a form.** Testing attitude code is a chain — an
+  attitude from three angles, gravity into the body with it, the tilt read
+  back, checked against what the firmware printed — and each link wants a
+  name the next can use. Rows read top to bottom: a name from below is
+  `Later`, one given twice is `Twice`, and a row that does not even parse
+  still says what it meant to be called, so the rows using it say *it* is
+  broken rather than that the name is unknown.
+- **The language refuses what it cannot decide, and says so by name.** A
+  vector times a vector names `dot` and `cross`; four numbers in brackets
+  are refused because `(w, x, y, z)` and `(x, y, z, w)` are both somebody's
+  convention; a plain number past a turn where an angle goes is taken as
+  radians *and said* (`Note::BareAngle` — it was probably degrees); an
+  attitude off the unit sphere is said where it turns something.
+- **Every operation leaves its working**: the formula with the numbers in,
+  what to draw, and the turn it makes. `euler` is three steps whose turns
+  chain — yaw, then pitch about the new Y, then roll about the newest X — so
+  playing the row shows the order, which is the thing people get wrong;
+  `rotate` is the sandwich product and then Rodrigues' three vectors head to
+  tail; `integrate_linear` says how far first order leaves the unit sphere.
+  **The formula lines are formulae and nothing else**: the first draft had
+  English clauses in them ("the area a and b span"), which a Chinese window
+  would have shown as English. Prose is a `Remark`, named in the arithmetic
+  and worded by the panel.
+- **`check` names the mistake, not the distance.** Attitude code is seldom
+  nearly right; it is right with one convention crossed — the inverse, `w`
+  written last, roll-first order, the other frame, degrees for radians — and
+  each is a closed form away from the answer. "Differs by 108°" sends
+  somebody through the code; "`w` written last" is the fix.
+- **Live rows are refreshed ten times a second, not per line of
+  telemetry** (`refresh_math_live`, only for a sheet whose text mentions
+  `tel(` or `truth`): a flight controller prints hundreds of lines a second,
+  and a sheet re-evaluated and redrawn per line is a window that stops
+  answering.
+- **The view is SVG, with no 3-D library**: a camera orbiting a target, a
+  perspective projection, and shapes sorted back to front — a few hundred
+  paths, crisp at any zoom and coloured by the theme. Its size follows a
+  `ResizeObserver` on its own element: taken from the window's resize
+  alone, it kept the height it had while the dock was open and drew into a
+  strip at the top once the dock was hidden. The plane's view is the same
+  renderer, flat.
+- **Side by side where there is room, stacked where there is not**
+  (`@container`, `@min-[640px]:`): the working squeezed beside the value in
+  a narrow window was a column one word wide.
+- **The sheet's file never reads as empty.** A `.rusty/math.toml` that does
+  not parse is refused by name and nothing is saved over it — the panel
+  saves as it is typed in, and an empty reading would be written back over
+  somebody's rows.
 
 ## Meeting C
 
