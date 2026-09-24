@@ -9,6 +9,65 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.66
+
+**A math toolbox for flight-control code.** A new panel, *Math toolbox*,
+works out the attitude arithmetic a flight controller is made of — a row at
+a time, with every step shown — and draws it on an aircraft you can turn
+around. It is for testing the code that estimates and controls an attitude:
+work the answer out here, and hold what your firmware computes to it.
+
+**A worksheet, not a calculator.** Write one `name = expression` a row, and
+each row can use the ones above it: `q = euler(roll, pitch, yaw)`,
+`acc = accel_at_rest(q)`, `back = tilt(acc)`. It knows quaternions, Euler
+angles, rotation matrices, vectors in space and in the plane, gyro
+integration (exact, and to first order as most firmware does it), slerp, the
+attitude error a controller closes, and gravity as a body-mounted
+accelerometer feels it. A row that is a single angle or fraction gets a
+slider, and everything below it follows as you drag. Angles take a unit
+(`30°`, `0.5 rad`). What the sheet cannot decide it refuses, and says what
+to write instead: a vector times a vector asks for `dot` or `cross`, and four
+numbers in brackets — `(w, x, y, z)` or `(x, y, z, w)`? — ask for
+`quat(w, x, y, z)`. A plain number larger than a whole turn where an angle
+goes is flagged as probably meant in degrees.
+
+**Every step, shown in space.** Each operation lists its working with the
+numbers in, and the 3-D view draws it: the axis a turn is about, the arc it
+sweeps, the vectors it adds. `euler` is three turns you can play one after
+another — yaw, then pitch about the new Y, then roll about the newest X —
+because the order is the thing people get wrong. Drag to orbit the view, or
+jump to chase, top, front or side; plane vectors get a flat view. Beside it
+is the value in full: the quaternion, its axis and angle, the Euler angles,
+the rotation matrix, an attitude indicator, and a button that copies it as
+an `f32` array.
+
+**Z up or Z down.** Crazyflie and ROS put Z up (FLU); PX4 and ArduPilot put
+Z down (NED/FRD). The same Euler angles are a different attitude in each — a
+positive pitch is the nose down with Z up and the nose up with Z down — and
+switching shows it, on the aircraft and on the instrument.
+
+**`check` names the mistake.** `check(mine, reference)` compares two
+attitudes, vectors or angles, and when they differ says which convention was
+crossed: the inverse rotation, `w` written last, the angles applied in the
+other order, the other frame, or degrees for radians.
+
+**Live against the simulator.** While a simulation runs, `tel("roll")` reads
+what your firmware prints on its telemetry, and `truth()` the simulator's own
+attitude while the Flight tab closes the loop — so `angle(estimate, truth())`
+is your estimator's error as it flies.
+
+The sheet is saved in the project as `.rusty/math.toml`, beside the board.
+The panel's examples are places to start: Euler angles to quaternion to
+matrix, gravity and tilt, a gyro step, two turns in both orders, the
+attitude error, slerp, and which convention a quaternion follows.
+
+**The assistant uses it too.** Its new `math_sheet` tool works rows out with
+the same arithmetic — or your own sheet, with the live values the panel
+shows — rather than multiplying quaternions in its head, and describes an
+attitude by what the instrument shows rather than by the signs of its
+angles. `rusty-cli mcp` offers the same tool to Claude Code, Cursor and other
+MCP clients.
+
 ## v0.6.65
 
 **A signal generator for the simulator, and a Signals tab to judge a filter
