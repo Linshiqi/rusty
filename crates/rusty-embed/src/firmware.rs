@@ -104,6 +104,19 @@ pub fn newest(root: &Path, configured_target: Option<&str>) -> Option<Firmware> 
         .or_else(|| all.into_iter().next())
 }
 
+/// [`newest`] for the project opened at `root`: looked for where its
+/// firmware is built ([`crate::project::firmware_root`]), preferring the
+/// target that directory is configured for. In the standard layout — host
+/// crates as members, the firmware crate excluded — that is one directory
+/// down, and a search at the opened root finds nothing at all.
+pub fn newest_in_project(root: &Path) -> Option<Firmware> {
+    let firmware_root = crate::project::firmware_root(root);
+    let configured = crate::project::detect(&firmware_root)
+        .ok()
+        .and_then(|project| project.configured_target);
+    newest(&firmware_root, configured.as_deref())
+}
+
 fn epoch_secs(time: SystemTime) -> Option<u64> {
     time.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
@@ -240,5 +253,38 @@ mod tests {
     fn a_project_that_never_built_is_empty_rather_than_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(list(dir.path(), None).is_empty());
+    }
+
+    /// The standard layout builds its firmware in the excluded crate, so
+    /// that is where the image is — the opened root's `target/` holds at
+    /// most the host crates' builds. The assistant looked at the root, and
+    /// told somebody with a freshly built image that nothing was built.
+    #[test]
+    fn a_workspace_finds_the_image_its_excluded_firmware_built() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let write = |path: &str, text: &[u8]| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write(
+            "Cargo.toml",
+            b"[workspace]\nmembers = [\"core\"]\nexclude = [\"firmware\"]\n",
+        );
+        write(
+            "firmware/Cargo.toml",
+            b"[package]\nname = \"fw\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+              [dependencies]\nesp-hal = { version = \"1\", features = [\"esp32c3\"] }\n",
+        );
+        write(
+            "firmware/target/riscv32imc-unknown-none-elf/release/fw",
+            b"\x7fELF\x01\x01\x01",
+        );
+
+        assert!(newest(root, None).is_none(), "nothing at the root");
+        let found = newest_in_project(root).expect("the firmware crate's image");
+        assert_eq!(found.name, "fw");
+        assert_eq!(found.target, "riscv32imc-unknown-none-elf");
     }
 }

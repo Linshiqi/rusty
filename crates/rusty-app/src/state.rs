@@ -660,17 +660,14 @@ impl AppState {
         // assistant's `memory_report` can only run *after* a human has visited
         // the memory panel — so the first time anyone asks "why is my binary so
         // big", the tool that answers it reports missing context instead.
+        // Looked for where the firmware is built, as the MCP server does: at
+        // the opened root, the standard layout has no image to find.
         let firmware = match open.firmware.clone() {
             Some(firmware) => Some(firmware),
             None => {
                 let root = open.root.clone();
                 blocking("firmware discovery", move || {
-                    let root = root?;
-                    let configured = rusty_embed::project::detect(&root)
-                        .ok()
-                        .and_then(|p| p.configured_target);
-                    rusty_embed::firmware::newest(&root, configured.as_deref())
-                        .map(|f| PathBuf::from(f.path))
+                    rusty_embed::firmware::newest_in_project(&root?).map(|f| PathBuf::from(f.path))
                 })
                 .await
                 .ok()

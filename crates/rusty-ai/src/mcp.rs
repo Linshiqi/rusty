@@ -270,7 +270,8 @@ impl Server {
         // project's `.rusty/` and a build finished a minute ago are both
         // things the next answer should know about.
         let catalog = Catalog::load(Some(&self.root));
-        let firmware = newest_firmware(&self.root);
+        let firmware = rusty_embed::firmware::newest_in_project(&self.root)
+            .map(|firmware| PathBuf::from(firmware.path));
         let lazy = match self.kept.take() {
             Some(kept) if kept.stamp.still_holds() => {
                 LazyWorkspace::holding(&self.root, kept.workspace)
@@ -299,18 +300,6 @@ impl Server {
             "isError": is_error,
         }))
     }
-}
-
-/// The newest firmware under the crate cargo builds the chip's image in,
-/// which for the standard layout is the excluded firmware crate rather than
-/// the directory the client opened.
-fn newest_firmware(root: &Path) -> Option<PathBuf> {
-    let firmware_root = rusty_embed::project::firmware_root(root);
-    let configured = rusty_embed::project::detect(&firmware_root)
-        .ok()
-        .and_then(|project| project.configured_target);
-    rusty_embed::firmware::newest(&firmware_root, configured.as_deref())
-        .map(|firmware| PathBuf::from(firmware.path))
 }
 
 fn failure(id: Value, code: i64, message: &str) -> Value {

@@ -51,23 +51,21 @@ pub(crate) fn size(elf: PathBuf, path: PathBuf, json: bool) -> Result<()> {
     } else {
         (Some(elf), path)
     };
-    let detected = project::detect(&project_dir).ok();
-    let chip = detected.as_ref().and_then(|p| p.chip.clone());
+    // Where the firmware is built, which in the standard layout is the
+    // excluded firmware crate: the chip is known there, and the image is
+    // under its `target/`, not the opened directory's.
+    let firmware_dir = project::firmware_root(&project_dir);
+    let chip = project::detect(&firmware_dir).ok().and_then(|p| p.chip);
     let elf = match elf {
         Some(elf) => elf,
-        None => {
-            let configured = detected
-                .as_ref()
-                .and_then(|p| p.configured_target.as_deref());
-            rusty_embed::firmware::newest(&project_dir, configured)
-                .map(|firmware| PathBuf::from(firmware.path))
-                .with_context(|| {
-                    format!(
-                        "no built firmware found under {}: build first, or name the ELF",
-                        project_dir.join("target").display()
-                    )
-                })?
-        }
+        None => rusty_embed::firmware::newest_in_project(&project_dir)
+            .map(|firmware| PathBuf::from(firmware.path))
+            .with_context(|| {
+                format!(
+                    "no built firmware found under {}: build first, or name the ELF",
+                    firmware_dir.join("target").display()
+                )
+            })?,
     };
     let report = memory::analyze(&elf, chip.as_deref())
         .with_context(|| format!("reading {}", elf.display()))?;
