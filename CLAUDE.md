@@ -80,7 +80,11 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # Signals tab, the sweep included, can be driven here. And `__mock.attitude`
 # before Run: the firmware prints an attitude on its telemetry the way
 # cf-drone-rs names it (`roll`, `pitch`, `yaw` in radians, `gx` `gy` `gz`)
-# at 50 Hz, for the math toolbox's live rows.
+# at 50 Hz, for the math toolbox's live rows. The assistant answers too,
+# once a model is chosen in Settings (the mock keeps the choice as the file
+# would): a tool call and then the reply, each round reporting its usage and
+# the second mostly cached, so the drawer's meter and the attachment chip
+# can be read here.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -150,6 +154,13 @@ cargo run -p rusty-cli -- sim <project> --scenario scenario.toml
 # The assistant's tools for somebody else's assistant: MCP on stdin and
 # stdout, what `claude mcp add rusty -- rusty-cli mcp <project>` runs.
 cargo run -p rusty-cli -- mcp <project>
+
+# What a question to the assistant costs before anybody spends it: the
+# prompt and every tool definition, what each tool answers about a
+# project, the open file as it would be attached, and two short questions
+# round by round with how much of each request repeats the one before --
+# the share a provider's prefix cache supplies. Estimated tokens.
+cargo run -p rusty-ai --example token_budget -- <project> [file-to-attach]
 
 # A shell in a pty the way the terminal starts one, and what it printed --
 # the check that the built-in shell comes up, pointed at any executable,
@@ -275,7 +286,11 @@ pins that is still there; it now pins the drawer's registry.
 **The project's files are tools as well** (`tools/files.rs`: `read_file`,
 `search_project`, `list_files`), through `rusty_edit` so the model sees the
 project exactly as the Files panel does — confined to the root, `.gitignore`
-honoured, dot entries and `target/` absent, nothing written. They exist
+honoured, dot entries and `target/` absent, nothing written. **A build
+directory is absent whatever the ignore files say** (`rusty_edit::hidden`,
+by the `CACHEDIR.TAG` cargo writes into every one): an example with no
+`.gitignore` of its own answered `list_files` with 708 files of `target/`,
+seven thousand tokens of object files on every round after. They exist
 because the assistant could name a project's chip and not read the README
 beside it, and told a user asking about a chapter of their own book that it
 had no way to open the file. Every answer is capped *and says so*
@@ -311,6 +326,40 @@ was worked out with nothing in its live rows. Frozen for the answer, since
 an estimate compared with a truth from another moment is a wrong
 comparison. An MCP client has no window; it passes `telemetry` — a
 `simulate` run's `[rusty:tel]` line, say.
+
+**A question costs every round of it, and every round sends everything.**
+The agent loop sends the system prompt, all thirteen definitions and the
+whole conversation so far each time it goes back to the model, so a
+question that calls one tool is two requests, and the history is paid for
+again in each. Reported as "a simple question uses a huge number of
+tokens", and measured before anything changed (`token_budget`, above): two
+short questions about `examples/rate-loop`, one tool call each, 41,302
+input tokens. Now 18,456, 65% of it a repeat of the request before — what a
+prefix cache supplies at a tenth of the price. What did it:
+
+- **Earlier questions go back without their bulk** (`agent::wire_history`).
+  A file attached to an earlier question becomes a line naming it, and a
+  tool answer longer than 1,500 characters a line naming the call, for the
+  model to make again if it needs it. The transcript keeps every word; only
+  the wire is shortened, and **the same way in every round**, because a
+  prefix that changes between two requests is a prefix no cache can serve.
+- **The open file goes whole only when it is short** (`Content::attach`,
+  8,000 bytes): otherwise the selection, or the cursor's line and sixty
+  either side, with which lines they are, so the model knows to read the
+  rest. It was the first sixty kilobytes, on every round of every question.
+- **Anthropic caches only where it is told** — three breakpoints: the
+  system prompt (which holds the tools before it), the end of the
+  conversation before the question, the last block. The OpenAI dialect's
+  servers cache prefixes by themselves and need only one that does not
+  move, which is the rule above.
+- **The prompt and the descriptions say each thing once.** A description
+  is what the tool is for; the prompt is only what holds across tools.
+- **The meter is the question's** (`state::Spend`): every round summed, the
+  cached share beside it. It was the last round's report — and from
+  Anthropic the half that arrives last, which carries no prompt, so a
+  question that cost thirty thousand tokens read `0 in`. Each provider now
+  reports once per round, before `Done`, because some servers repeat a
+  running total on every chunk.
 
 ### 5. The simulator's contract is one serial line
 
@@ -2613,11 +2662,14 @@ plumbing as every other divider; it was a fixed 400px for a release.
 
 **The open file goes with a question**, as VS Code sends the active editor:
 a chip above the composer names it, its × drops it for that question, and
-it travels as `Content::Attachment { path, text }` — its own block, so the
-transcript draws the chip and only the providers render it as prose
+it travels as `Content::Attachment { path, text, lines }` — its own block,
+so the transcript draws the chip and only the providers render it as prose
 (`Content::prose`, the one place the framing is spelled). The text is the
-focused group's *draft*, unsaved edits included, cut at
-`ATTACHMENT_CAP` on a character boundary and marked as cut.
+focused group's *draft*, unsaved edits included: whole when it is short,
+and the lines around the selection or the cursor when it is not
+(`Content::attach`, and *A question costs every round of it* above), read
+through the fold table because the textarea's selection is on the screen.
+The transcript's chip then names the lines — `main.rs:140–260`.
 
 **The board sheet is dark in both themes, on purpose.** The canvas, the
 devkit and the parts are drawn in hard-coded colours (`#101216` and

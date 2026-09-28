@@ -11,6 +11,37 @@ pub struct ToolRun {
     pub ok: Option<bool>,
 }
 
+/// What one question has cost: every round of the agent loop, summed.
+///
+/// Each round is a request of its own that sends the whole conversation
+/// again, and the provider bills every one. The meter showed the last
+/// round's report alone — the smallest part of a question that called three
+/// tools — and, from Anthropic, the half of it that arrives last, which
+/// carries no prompt: a question that had cost thirty thousand tokens read
+/// as `0 in`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Spend {
+    /// Every round's prompt.
+    pub input: u32,
+    /// Of `input`, what the provider's prompt cache supplied.
+    pub cached: u32,
+    pub output: u32,
+    pub rounds: u32,
+    /// The last round's output alone: where an answer cut short stopped.
+    pub last_output: u32,
+}
+
+impl Spend {
+    /// One round's report added in.
+    pub fn add(&mut self, input: u32, cached: u32, output: u32) {
+        self.input = self.input.saturating_add(input);
+        self.cached = self.cached.saturating_add(cached);
+        self.output = self.output.saturating_add(output);
+        self.rounds += 1;
+        self.last_output = output;
+    }
+}
+
 const PROVIDER_KEY: &str = "rusty.assistant.provider";
 
 /// Whatever this window still holds from before the profile became a file.
@@ -51,9 +82,10 @@ pub struct Assistant {
     /// while resolving a dependency graph looks broken unless it says so.
     pub activity: RwSignal<Vec<ToolRun>>,
     pub streaming: RwSignal<bool>,
-    /// Tokens the last answer cost, when the provider reported them. Surfaced
-    /// because with bring-your-own keys every token is the user's money.
-    pub usage: RwSignal<Option<(u32, u32)>>,
+    /// Tokens the last question cost, when the provider reported them.
+    /// Surfaced because with bring-your-own keys every token is the user's
+    /// money.
+    pub usage: RwSignal<Option<Spend>>,
     /// Whether the assistant profile has a key in the OS credential store.
     /// The key itself never comes back here — only whether one exists.
     pub key_stored: RwSignal<bool>,

@@ -432,6 +432,38 @@
     ai_check_provider: (a) => ({ verdict: "reachable", model: a.config.model, modelsListed: 3, modelListed: false }),
     pin_report: () => ({ chip: "esp32c3", pins: [], source: null, note: null, unknown: [] }),
     ai_cancel: () => null,
+    // The profile chosen in Settings, kept as the file keeps it, so the
+    // drawer has a model to ask once one is picked.
+    assistant_choice: () => window.__mock.assistant ?? null,
+    set_assistant_choice: (a) => { window.__mock.assistant = a.choice; return null; },
+    // A question answered the way the agent loop answers one: a tool call,
+    // then the reply, each round reporting its usage once — the second
+    // mostly from the provider's cache — so the drawer's meter shows the
+    // question's sum and its cached share. Resolves with the history as the
+    // backend returns it, attachment and all.
+    ai_ask: (a) => {
+      const send = (event) => a.onEvent.send(event);
+      const asked = a.history[a.history.length - 1].content;
+      const file = asked.find((c) => c.type === "attachment");
+      const answer = file
+        ? "An ESP32-C3. `" + file.path + "` came along" +
+          (file.lines ? ", lines " + file.lines.first + "–" + file.lines.last + " of " + file.lines.total + "." : ", whole.")
+        : "An ESP32-C3.";
+      send({ event: "toolStarted", id: "t1", name: "project_status", input: {} });
+      send({ event: "toolFinished", id: "t1", name: "project_status", ok: true });
+      send({ event: "chat", type: "usage", inputTokens: 4104, cachedTokens: 0, outputTokens: 18 });
+      return new Promise((resolve) => setTimeout(() => {
+        send({ event: "chat", type: "textDelta", text: answer });
+        send({ event: "chat", type: "usage", inputTokens: 4295, cachedTokens: 4096, outputTokens: 42 });
+        send({ event: "chat", type: "done", stop: "endTurn" });
+        resolve([
+          ...a.history,
+          { role: "assistant", content: [{ type: "toolUse", id: "t1", name: "project_status", input: {} }] },
+          { role: "tool", content: [{ type: "toolResult", id: "t1", content: "{\"chip\":\"esp32c3\"}", isError: false }] },
+          { role: "assistant", content: [{ type: "text", text: answer }] },
+        ]);
+      }, 400));
+    },
     lsp_start: (a) => { window.__mock.lspChannel = a.onEvent; a.onEvent.send({ event: "ready" }); return new Promise(() => {}); },
     // Also long-lived. The channel is kept so a change can be injected by
     // hand — `__mock.watchChannel.send({changed: ["src/main.rs"], tree: false})`

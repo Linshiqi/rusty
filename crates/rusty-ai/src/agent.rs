@@ -1,15 +1,118 @@
 //! The agent loop: ask, run whatever tools the model calls, ask again.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use futures_util::StreamExt;
+use serde_json::Value;
 
 use crate::{
     error::{Error, Result},
-    model::{AgentEvent, ChatEvent, Content, DEFAULT_MAX_TOKENS, Message, StopReason, ToolDef},
+    model::{
+        AgentEvent, ChatEvent, Content, DEFAULT_MAX_TOKENS, Message, Role, StopReason, ToolDef,
+    },
     provider::{ChatRequest, EventStream, Provider},
     tools::{ToolContext, ToolRegistry},
 };
+
+/// A tool's answer to an earlier question longer than this goes back as a
+/// note rather than whole: a chip's entry or a project's status is kept, a
+/// file read, a listing or a toolchain report is not.
+const KEPT_ANSWER: usize = 1_500;
+
+/// The conversation as it goes on the wire: the current question — the last
+/// thing the user asked, and every round since — whole, and what came before
+/// it without the bulk the model has already read and answered from.
+///
+/// Every round of every question sends the whole history, so a file attached
+/// to the first question, and every long tool answer, was paid for again in
+/// every round of every question after it. `examples/token_budget` measured
+/// two short questions about one open file at 41,000 input tokens, most of
+/// it the same file and the same answers sent over again. What the model
+/// concluded from them stays, in its own answers; a fact it did not say is
+/// one call away, since every tool here only reads.
+///
+/// The transcript the drawer keeps is untouched — this is the copy that is
+/// sent — and it is the same copy for every round of one question, so a
+/// provider's prefix cache still hits from the second round on.
+pub fn wire_history(history: &[Message]) -> Vec<Message> {
+    let current = history
+        .iter()
+        .rposition(|message| message.role == Role::User)
+        .unwrap_or(0);
+    // Which tool each call id named, and with what, for the note.
+    let calls: HashMap<&str, (&str, &Value)> = history
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|content| match content {
+            Content::ToolUse { id, name, input } => Some((id.as_str(), (name.as_str(), input))),
+            _ => None,
+        })
+        .collect();
+    history
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            if index >= current {
+                return message.clone();
+            }
+            Message {
+                role: message.role,
+                content: message
+                    .content
+                    .iter()
+                    .map(|content| earlier(content, &calls))
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// One block of an earlier question, as it is sent again.
+fn earlier(content: &Content, calls: &HashMap<&str, (&str, &Value)>) -> Content {
+    match content {
+        Content::Attachment { path, text, lines } => Content::Text {
+            text: match lines {
+                None => format!(
+                    "[`{path}` was attached to this question ({} lines) and is not repeated; \
+                     read_file has it]",
+                    text.lines().count()
+                ),
+                Some(lines) => format!(
+                    "[lines {}–{} of `{path}` were attached to this question and are not \
+                     repeated; read_file has them]",
+                    lines.first, lines.last
+                ),
+            },
+        },
+        Content::ToolResult {
+            id,
+            content: answer,
+            is_error,
+        } if answer.len() > KEPT_ANSWER => {
+            let (name, input) = calls
+                .get(id.as_str())
+                .copied()
+                .unwrap_or(("the tool", &Value::Null));
+            let asked = input.to_string();
+            let call = if asked.len() <= 160 && !input.is_null() {
+                format!("{name} {asked}")
+            } else {
+                name.to_string()
+            };
+            Content::ToolResult {
+                id: id.clone(),
+                content: format!(
+                    "[{call} answered {} characters here for an earlier question; they are not \
+                     repeated — call it again if they are needed]",
+                    answer.len()
+                ),
+                is_error: *is_error,
+            }
+        }
+        other => other.clone(),
+    }
+}
 
 /// The agent loop: ask, run whatever tools the model calls, ask again.
 pub struct Assistant {
@@ -109,10 +212,11 @@ impl Assistant {
         tools: &[ToolDef],
         max_tokens: &mut u32,
     ) -> Result<EventStream> {
+        let messages = wire_history(history);
         loop {
             let request = ChatRequest {
                 system: Some(self.system.clone()),
-                messages: history.to_vec(),
+                messages: messages.clone(),
                 tools: tools.to_vec(),
                 max_tokens: *max_tokens,
                 temperature: None,
@@ -321,6 +425,139 @@ fn output_cap_in(message: &str, asked: u32) -> Option<u32> {
         .filter_map(|token| token.replace(',', "").parse::<u32>().ok())
         .filter(|&n| n >= 256 && n < asked)
         .max()
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn question(text: &str, attached: Option<(&str, &str)>) -> Message {
+        let mut content = vec![Content::Text { text: text.into() }];
+        if let Some((path, text)) = attached {
+            content.push(Content::Attachment {
+                path: path.into(),
+                text: text.into(),
+                lines: None,
+            });
+        }
+        Message {
+            role: Role::User,
+            content,
+        }
+    }
+
+    fn called(id: &str, name: &str, answer: &str) -> [Message; 2] {
+        [
+            Message::assistant(vec![Content::ToolUse {
+                id: id.into(),
+                name: name.into(),
+                input: json!({ "path": "src/main.rs" }),
+            }]),
+            Message::tool_results(vec![Content::ToolResult {
+                id: id.into(),
+                content: answer.into(),
+                is_error: false,
+            }]),
+        ]
+    }
+
+    fn sent(messages: &[Message]) -> String {
+        serde_json::to_string(messages).unwrap()
+    }
+
+    /// The file and the long answers an earlier question was worked out from
+    /// go back as notes naming what they were; the question being answered
+    /// keeps everything, however long, since it is still being read.
+    #[test]
+    fn an_earlier_question_goes_back_without_its_bulk() {
+        let file = "fn main() {}\n".repeat(400);
+        let long = "x".repeat(KEPT_ANSWER + 1);
+        let mut history = vec![question("what chip?", Some(("src/main.rs", &file)))];
+        history.extend(called("a", "read_file", &long));
+        history.extend(called("b", "chip_catalogue", "{\"id\":\"esp32c3\"}"));
+        history.push(Message::assistant(vec![Content::Text {
+            text: "An ESP32-C3.".into(),
+        }]));
+        history.push(question("and the toolchain?", Some(("src/main.rs", &file))));
+        history.extend(called("c", "toolchain_status", &long));
+
+        let wire = wire_history(&history);
+        assert_eq!(wire.len(), history.len(), "no message is dropped");
+        let earlier = sent(&wire[..6]);
+        assert!(
+            !earlier.contains("fn main"),
+            "the earlier attachment went back whole"
+        );
+        assert!(earlier.contains("src/main.rs") && earlier.contains("400 lines"));
+        assert!(
+            !earlier.contains(&long),
+            "the earlier long answer went back whole"
+        );
+        assert!(
+            earlier.contains("read_file {\\\"path\\\":\\\"src/main.rs\\\"}"),
+            "the note names the call, so it can be made again: {earlier}"
+        );
+        assert!(earlier.contains("esp32c3"), "a short answer is kept");
+        assert!(
+            earlier.contains("An ESP32-C3."),
+            "and so is what the model said"
+        );
+
+        let current = sent(&wire[6..]);
+        assert!(
+            current.contains("fn main"),
+            "the question being asked keeps its file"
+        );
+        assert!(current.contains(&long), "and its own answers, however long");
+    }
+
+    /// Part of a long file went with the earlier question, and the note says
+    /// which part rather than counting the lines of the part as the file's.
+    #[test]
+    fn an_earlier_part_of_a_file_is_named_by_its_lines() {
+        let file = "let x = 1; // a line of ordinary length, and then some more\n".repeat(400);
+        let mut first = question("what is x?", None);
+        first
+            .content
+            .push(Content::attach("src/main.rs", &file, Some((200, 200))));
+        let history = vec![
+            first,
+            Message::assistant(vec![Content::Text { text: "1.".into() }]),
+            question("and y?", None),
+        ];
+        let earlier = sent(&wire_history(&history)[..1]);
+        assert!(
+            earlier.contains("lines 141–261 of `src/main.rs`"),
+            "{earlier}"
+        );
+        assert!(!earlier.contains("let x"), "{earlier}");
+    }
+
+    /// A call and its answer stay a pair — both dialects refuse an answer to
+    /// a call that is not there — and every round of a question is sent the
+    /// same earlier conversation, so a provider's prefix cache keeps hitting.
+    #[test]
+    fn the_notes_keep_every_pairing_and_do_not_change_between_rounds() {
+        let long = "y".repeat(KEPT_ANSWER * 2);
+        let mut history = vec![question("first", None)];
+        history.extend(called("a", "list_files", &long));
+        history.push(question("second", None));
+        let once = wire_history(&history);
+        history.extend(called("b", "project_status", "{}"));
+        let twice = wire_history(&history);
+        assert_eq!(sent(&once), sent(&twice[..once.len()]));
+        let ids: Vec<&str> = twice
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| match c {
+                Content::ToolUse { id, .. } | Content::ToolResult { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["a", "a", "b", "b"]);
+    }
 }
 
 #[cfg(test)]

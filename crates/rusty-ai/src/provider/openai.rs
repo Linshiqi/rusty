@@ -138,6 +138,10 @@ where
         // every later fragment identifies itself by index alone.
         let mut ids_by_index: HashMap<u64, String> = HashMap::new();
         let mut stop = StopReason::EndTurn;
+        // The last report wins and goes out once, before `Done`: OpenAI sends
+        // one chunk of usage at the end, and servers that send a running
+        // total on every chunk would otherwise be counted once per chunk.
+        let mut usage: Option<Usage> = None;
 
         while let Some(event) = events.next().await {
             let event = event.map_err(|e| Error::protocol(&profile, e.to_string()))?;
@@ -154,11 +158,8 @@ where
                 })?;
             }
 
-            if let Some(usage) = chunk.usage {
-                yield ChatEvent::Usage {
-                    input_tokens: usage.prompt_tokens,
-                    output_tokens: usage.completion_tokens,
-                };
+            if chunk.usage.is_some() {
+                usage = chunk.usage;
             }
 
             let Some(choice) = chunk.choices.into_iter().next() else {
@@ -214,6 +215,9 @@ where
             }
         }
 
+        if let Some(usage) = usage {
+            yield usage.event();
+        }
         yield ChatEvent::Done { stop };
     };
 
@@ -366,12 +370,45 @@ struct FunctionDelta {
     arguments: Option<String>,
 }
 
-#[derive(Deserialize)]
+/// A usage report. Every one of these servers caches a prompt's prefix by
+/// itself, and says how much of the prompt the cache supplied in one of
+/// three places: OpenAI's `prompt_tokens_details` (Zhipu, DashScope and
+/// OpenRouter copy it), DeepSeek's `prompt_cache_hit_tokens`, and Moonshot's
+/// bare `cached_tokens`. Counts are optional because some servers send
+/// `null` where they have nothing.
+#[derive(Deserialize, Clone, Copy)]
 struct Usage {
     #[serde(default)]
-    prompt_tokens: u32,
+    prompt_tokens: Option<u32>,
     #[serde(default)]
-    completion_tokens: u32,
+    completion_tokens: Option<u32>,
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptDetails>,
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u32>,
+    #[serde(default)]
+    cached_tokens: Option<u32>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+struct PromptDetails {
+    #[serde(default)]
+    cached_tokens: Option<u32>,
+}
+
+impl Usage {
+    fn event(self) -> ChatEvent {
+        let cached = self
+            .prompt_tokens_details
+            .and_then(|details| details.cached_tokens)
+            .or(self.prompt_cache_hit_tokens)
+            .or(self.cached_tokens);
+        ChatEvent::Usage {
+            input_tokens: self.prompt_tokens.unwrap_or(0),
+            cached_tokens: cached.unwrap_or(0),
+            output_tokens: self.completion_tokens.unwrap_or(0),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -382,9 +419,11 @@ mod tests {
 
     /// One SSE body through the decoder, exactly as the bytes off the socket
     /// would go.
-    async fn replay(body: &'static str) -> Vec<Result<ChatEvent>> {
+    async fn replay(body: impl Into<String>) -> Vec<Result<ChatEvent>> {
         decode(
-            stream::iter([Ok::<&[u8], std::convert::Infallible>(body.as_bytes())]),
+            stream::iter([Ok::<Vec<u8>, std::convert::Infallible>(
+                body.into().into_bytes(),
+            )]),
             "test".to_string(),
         )
         .collect()
@@ -465,6 +504,7 @@ mod tests {
             &events[5],
             ChatEvent::Usage {
                 input_tokens: 10,
+                cached_tokens: 0,
                 output_tokens: 5
             }
         ));
@@ -475,6 +515,96 @@ mod tests {
             })
         ));
         assert_eq!(events.len(), 7);
+    }
+
+    /// The share of the prompt the server's cache supplied, in each of the
+    /// three places servers put it.
+    #[tokio::test]
+    async fn the_cached_share_is_read_in_every_spelling() {
+        async fn cached(usage: &str) -> Vec<ChatEvent> {
+            let body = format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"ok\"}},\
+                 \"finish_reason\":\"stop\"}}]}}\n\n\
+                 data: {{\"choices\":[],\"usage\":{usage}}}\n\ndata: [DONE]\n\n"
+            );
+            replay(body)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()
+                .expect("a clean stream")
+                .into_iter()
+                .filter(|e| matches!(e, ChatEvent::Usage { .. }))
+                .collect()
+        }
+        for spelling in [
+            // OpenAI, and Zhipu, DashScope and OpenRouter after it.
+            r#"{"prompt_tokens":4000,"completion_tokens":9,"prompt_tokens_details":{"cached_tokens":3456}}"#,
+            // DeepSeek.
+            r#"{"prompt_tokens":4000,"completion_tokens":9,"prompt_cache_hit_tokens":3456,"prompt_cache_miss_tokens":544}"#,
+            // Moonshot.
+            r#"{"prompt_tokens":4000,"completion_tokens":9,"cached_tokens":3456}"#,
+        ] {
+            let events = cached(spelling).await;
+            assert!(
+                matches!(
+                    events[..],
+                    [ChatEvent::Usage {
+                        input_tokens: 4000,
+                        cached_tokens: 3456,
+                        output_tokens: 9
+                    }]
+                ),
+                "{spelling}: {events:?}"
+            );
+        }
+        let events =
+            cached(r#"{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":null}"#)
+                .await;
+        assert!(
+            matches!(
+                events[..],
+                [ChatEvent::Usage {
+                    cached_tokens: 0,
+                    ..
+                }]
+            ),
+            "a null is nothing cached, not a stream that fails: {events:?}"
+        );
+    }
+
+    /// A server that sends its running total on every chunk is one round,
+    /// reported once, at its last total.
+    #[tokio::test]
+    async fn a_running_total_on_every_chunk_is_reported_once() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}],",
+            "\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":1}}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}],",
+            "\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":2}}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],",
+            "\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":3}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let events: Vec<ChatEvent> = replay(body)
+            .await
+            .into_iter()
+            .collect::<Result<_>>()
+            .expect("a clean stream");
+        let usage: Vec<&ChatEvent> = events
+            .iter()
+            .filter(|e| matches!(e, ChatEvent::Usage { .. }))
+            .collect();
+        assert!(
+            matches!(
+                usage[..],
+                [ChatEvent::Usage {
+                    input_tokens: 100,
+                    output_tokens: 3,
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
     }
 
     /// The failure this is written against: a reasoning model that spent its

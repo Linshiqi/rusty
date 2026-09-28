@@ -33,12 +33,26 @@ pub(crate) fn hidden_entry(name: &str) -> bool {
     name.starts_with('.')
 }
 
+/// Whether a directory is a cache by the cache-directory standard: it holds
+/// a `CACHEDIR.TAG`, which cargo writes into every build directory it makes —
+/// `target/`, or wherever `build.target-dir` put it.
+///
+/// Asked because the ignore files cannot be trusted to: a project with no
+/// `.gitignore` of its own — an example inside a repository whose ignore file
+/// sits above it, where the walk does not look, or one nobody wrote one for —
+/// had its `target/` listed whole. The assistant's `list_files` handed a model
+/// seven hundred build artifacts for a project of three source files, about
+/// seven thousand tokens a call, and cut the real files off the list.
+pub(crate) fn cache_directory(dir: &Path) -> bool {
+    dir.join("CACHEDIR.TAG").is_file()
+}
+
 /// The walk every lister of the project's files starts from: ripgrep's
 /// walker over the project's own ignore files — nothing above the root,
 /// nothing from the user's global git config — no deeper than
-/// [`MAX_DEPTH`], with [`hidden_entry`] deciding the dot entries. Each
-/// caller adds only what is its own: include and exclude globs for search
-/// and replace.
+/// [`MAX_DEPTH`], with [`hidden_entry`] deciding the dot entries and
+/// [`cache_directory`] the build directories. Each caller adds only what is
+/// its own: include and exclude globs for search and replace.
 pub(crate) fn project_walk(root: &Path) -> WalkBuilder {
     let mut walk = WalkBuilder::new(root);
     walk.hidden(false) // our own filter below decides
@@ -55,7 +69,12 @@ pub(crate) fn project_walk(root: &Path) -> WalkBuilder {
         // no panel can name a file the tree cannot open. `.git` alone drowned
         // every search the moment a project had history.
         .filter_entry(|entry| {
-            entry.depth() == 0 || !hidden_entry(&entry.file_name().to_string_lossy())
+            if entry.depth() == 0 {
+                return true;
+            }
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            !hidden_entry(&entry.file_name().to_string_lossy())
+                && !(is_dir && cache_directory(entry.path()))
         });
     walk
 }
@@ -91,6 +110,44 @@ mod tests {
         for shown in ["src", "Cargo.toml", "target", "a.b.c"] {
             assert!(!hidden_entry(shown), "{shown}");
         }
+    }
+
+    /// A build directory stays out of every listing with no ignore file to
+    /// say so — the project nobody wrote a `.gitignore` for, or one inside a
+    /// repository whose ignore file sits above it — while a directory that
+    /// only shares the name is source like any other.
+    #[test]
+    fn a_build_directory_is_left_out_whatever_the_ignore_files_say() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/target")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "").unwrap();
+        std::fs::write(root.join("src/target/mod.rs"), "").unwrap();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(
+            root.join("target/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("target/debug/app.exe"), "").unwrap();
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        std::fs::write(root.join("build/CACHEDIR.TAG"), "").unwrap();
+        std::fs::write(root.join("build/out.rlib"), "").unwrap();
+
+        let found: Vec<String> = project_walk(root)
+            .build()
+            .flatten()
+            .filter_map(|entry| relative_slashed(root, entry.path()))
+            .filter(|path| !path.is_empty())
+            .collect();
+        assert!(
+            found
+                .iter()
+                .all(|p| !p.starts_with("target") && !p.starts_with("build")),
+            "cargo's build directories, by their tag: {found:?}"
+        );
+        assert!(found.contains(&"src/target/mod.rs".to_string()));
+        assert!(found.contains(&"src/main.rs".to_string()));
     }
 
     /// The name the tree, search and the module scan give a file: forward

@@ -167,6 +167,7 @@ async fn a_question_about_a_chapter_reads_the_chapter_before_answering() {
             Content::Attachment {
                 path: "src/lib.rs".into(),
                 text: OPEN_FILE.into(),
+                lines: None,
             },
         ],
     }];

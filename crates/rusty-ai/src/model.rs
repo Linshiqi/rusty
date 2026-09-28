@@ -94,7 +94,15 @@ pub enum Content {
     /// transcript never carries the file twice — once for the model and once
     /// for the eye.
     #[serde(rename_all = "camelCase")]
-    Attachment { path: String, text: String },
+    Attachment {
+        path: String,
+        text: String,
+        /// Which lines `text` is when it is not the whole file: the part
+        /// around the user's cursor or selection, from a file too long to
+        /// send whole with every round. `None` is the whole file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lines: Option<AttachedLines>,
+    },
     /// What the model thought before it answered, from models that stream
     /// their reasoning. Kept in the transcript so the reader can unfold it,
     /// and skipped by both providers when the history goes back: the OpenAI
@@ -103,19 +111,131 @@ pub enum Content {
     Thinking { text: String },
 }
 
+/// The lines of a file an attachment holds, 1-based and inclusive, and how
+/// many the file has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachedLines {
+    pub first: u32,
+    pub last: u32,
+    pub total: u32,
+}
+
 impl Content {
+    /// The file the user has open, as it goes with a question.
+    ///
+    /// A short file whole. Of a longer one, the lines the user is looking at
+    /// — the selection, or the cursor's line and up to [`ATTACH_AROUND`]
+    /// either side — to [`ATTACH_WHOLE`] bytes, with which lines they are, so
+    /// the model knows it holds a part and that `read_file` has the rest. The
+    /// whole file, up to sixty kilobytes, went with every question once, and
+    /// every round of the agent loop sends what the question carries: some
+    /// fifteen thousand tokens a round, spent again on a question that was
+    /// not about the file at all. VS Code's Copilot sends what is on screen,
+    /// not the file.
+    ///
+    /// `focus` is the selection's first and last line, 0-based; `None`
+    /// starts at the top.
+    pub fn attach(path: impl Into<String>, text: &str, focus: Option<(usize, usize)>) -> Content {
+        let (text, lines) = window(text, focus);
+        Content::Attachment {
+            path: path.into(),
+            text,
+            lines,
+        }
+    }
+
     /// What a provider sends for this block where it can only send text: the
-    /// prose itself, or an attachment framed as the file it is. Tool blocks
-    /// have their own wire shapes and answer `None`.
+    /// prose itself, or an attachment framed as the file it is — and as the
+    /// part of it that it is, when it is a part, so the model reads the rest
+    /// rather than taking a window for the whole. Tool blocks have their own
+    /// wire shapes and answer `None`.
     pub fn prose(&self) -> Option<std::borrow::Cow<'_, str>> {
         match self {
             Content::Text { text } => Some(std::borrow::Cow::Borrowed(text)),
-            Content::Attachment { path, text } => Some(std::borrow::Cow::Owned(format!(
+            Content::Attachment {
+                path,
+                text,
+                lines: None,
+            } => Some(std::borrow::Cow::Owned(format!(
                 "The user has this file open in the editor: `{path}`\n\n```\n{text}\n```"
+            ))),
+            Content::Attachment {
+                path,
+                text,
+                lines: Some(lines),
+            } => Some(std::borrow::Cow::Owned(format!(
+                "The user has `{path}` open in the editor. Below are lines {}–{} of its {}, \
+                 around their cursor; read_file has the rest.\n\n```\n{text}\n```",
+                lines.first, lines.last, lines.total
             ))),
             Content::ToolUse { .. } | Content::ToolResult { .. } | Content::Thinking { .. } => None,
         }
     }
+}
+
+/// A file this size or smaller goes whole with a question: about two
+/// thousand tokens of code.
+pub const ATTACH_WHOLE: usize = 8_000;
+
+/// Lines either side of the cursor sent from a longer file.
+pub const ATTACH_AROUND: usize = 60;
+
+/// The text [`Content::attach`] sends, and which lines it is when it is not
+/// the whole file.
+fn window(text: &str, focus: Option<(usize, usize)>) -> (String, Option<AttachedLines>) {
+    if text.len() <= ATTACH_WHOLE {
+        return (text.to_string(), None);
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let total = lines.len();
+    let (a, b) = focus.unwrap_or((0, 0));
+    let from = a.min(total - 1);
+    let to = b.clamp(from, total - 1);
+    let cost = |i: usize| lines[i].len() + 1;
+
+    // The selection first — a larger one than the budget keeps its start —
+    // then outwards a line each side at a time while the budget lasts.
+    let (mut first, mut last, mut size) = (from, from, cost(from));
+    while last < to && size + cost(last + 1) <= ATTACH_WHOLE {
+        last += 1;
+        size += cost(last);
+    }
+    let (mut up, mut down) = (0, 0);
+    loop {
+        let mut grew = false;
+        if up < ATTACH_AROUND && first > 0 && size + cost(first - 1) <= ATTACH_WHOLE {
+            first -= 1;
+            size += cost(first);
+            up += 1;
+            grew = true;
+        }
+        if down < ATTACH_AROUND && last + 1 < total && size + cost(last + 1) <= ATTACH_WHOLE {
+            last += 1;
+            size += cost(last);
+            down += 1;
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    let mut part = lines[first..=last].join("\n");
+    if part.len() > ATTACH_WHOLE {
+        // One line longer than the whole budget: cut it at a character.
+        let mut end = ATTACH_WHOLE;
+        while !part.is_char_boundary(end) {
+            end -= 1;
+        }
+        part.truncate(end);
+        part.push_str(" … [cut]");
+    }
+    let range = AttachedLines {
+        first: (first + 1) as u32,
+        last: (last + 1) as u32,
+        total: total as u32,
+    };
+    (part, Some(range))
 }
 
 /// Normalized stream events.
@@ -155,9 +275,16 @@ pub enum ChatEvent {
     },
     /// Token counts, when the provider reports them. Shown to the user because
     /// with BYO keys, every token is money out of their pocket.
+    ///
+    /// One per round, just before `Done`, whatever the provider streamed on
+    /// the way: some servers repeat a running total on every chunk, and a
+    /// window adding up every report would count each round many times.
+    /// `input_tokens` is the whole prompt; `cached_tokens` is how much of it
+    /// the provider's prompt cache supplied, billed at a fraction.
     #[serde(rename_all = "camelCase")]
     Usage {
         input_tokens: u32,
+        cached_tokens: u32,
         output_tokens: u32,
     },
     Done {
@@ -443,6 +570,11 @@ mod tests {
                 Content::Attachment {
                     path: "src/main.rs".into(),
                     text: "fn main() {}".into(),
+                    lines: Some(AttachedLines {
+                        first: 3,
+                        last: 9,
+                        total: 40,
+                    }),
                 },
                 Content::Thinking {
                     text: "the manifest names a chip".into(),
@@ -477,6 +609,20 @@ mod tests {
         assert!(
             framed.contains("src/main.rs") && framed.contains("fn main() {}"),
             "{framed}"
+        );
+        assert!(
+            framed.contains("lines 3–9 of its 40") && framed.contains("read_file"),
+            "a part says it is one, and where the rest is: {framed}"
+        );
+        let whole = Content::Attachment {
+            path: "src/main.rs".into(),
+            text: "fn main() {}".into(),
+            lines: None,
+        };
+        assert!(!whole.prose().unwrap().contains("lines"));
+        assert!(
+            !serde_json::to_string(&whole).unwrap().contains("lines"),
+            "a whole file carries no range on the wire"
         );
     }
 
@@ -514,6 +660,7 @@ mod tests {
             AgentEvent::Chat(ChatEvent::TextDelta { text: "hi".into() }),
             AgentEvent::Chat(ChatEvent::Usage {
                 input_tokens: 12,
+                cached_tokens: 8,
                 output_tokens: 34,
             }),
             AgentEvent::Chat(ChatEvent::Done {
@@ -534,5 +681,88 @@ mod tests {
             serde_json::from_str::<AgentEvent>(&json)
                 .unwrap_or_else(|e| panic!("{json} did not round-trip: {e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod attach_tests {
+    use super::{ATTACH_AROUND, ATTACH_WHOLE, AttachedLines, Content};
+
+    fn file(lines: usize) -> String {
+        (0..lines)
+            .map(|i| format!("let line_{i} = {i}; // a line of ordinary length\n"))
+            .collect()
+    }
+
+    fn attach(text: &str, focus: Option<(usize, usize)>) -> (String, Option<AttachedLines>) {
+        match Content::attach("src/main.rs", text, focus) {
+            Content::Attachment { text, lines, .. } => (text, lines),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_short_file_goes_whole() {
+        let (text, lines) = attach("fn main() {}\n", Some((0, 0)));
+        assert_eq!(text, "fn main() {}\n");
+        assert_eq!(lines, None);
+    }
+
+    /// The lines around the cursor, exactly as they are in the file, and
+    /// which ones they are.
+    #[test]
+    fn a_long_file_sends_the_lines_around_the_cursor() {
+        let file = file(1000);
+        let (text, lines) = attach(&file, Some((500, 500)));
+        let lines = lines.expect("a part says which");
+        assert_eq!(
+            lines.total, 1001,
+            "a text ending in a newline has an empty last line"
+        );
+        assert!(lines.first <= 501 && 501 <= lines.last, "{lines:?}");
+        assert!(lines.last - lines.first <= 2 * ATTACH_AROUND as u32);
+        assert!(text.len() <= ATTACH_WHOLE);
+        let expected: Vec<&str> = file
+            .split('\n')
+            .skip(lines.first as usize - 1)
+            .take((lines.last - lines.first + 1) as usize)
+            .collect();
+        assert_eq!(text, expected.join("\n"));
+        assert!(text.contains("let line_500 ="));
+    }
+
+    #[test]
+    fn with_no_cursor_or_at_the_top_the_part_runs_down() {
+        let file = file(1000);
+        for focus in [None, Some((0, 0))] {
+            let (text, lines) = attach(&file, focus);
+            assert_eq!(lines.unwrap().first, 1);
+            assert!(text.starts_with("let line_0 ="));
+        }
+    }
+
+    /// A selection is what the question is about: all of it when it fits,
+    /// from its start when it does not.
+    #[test]
+    fn a_selection_is_sent_and_a_long_one_from_its_start() {
+        let file = file(1000);
+        let (text, _) = attach(&file, Some((200, 210)));
+        assert!(text.contains("let line_200 =") && text.contains("let line_210 ="));
+        let (text, lines) = attach(&file, Some((100, 900)));
+        assert_eq!(lines.unwrap().first, 101);
+        assert!(text.starts_with("let line_100 ="));
+        assert!(text.len() <= ATTACH_WHOLE);
+    }
+
+    /// One line longer than the budget is cut at a character — the CJK
+    /// case is the one that panics when it is not — and says so.
+    #[test]
+    fn a_file_of_one_long_line_is_cut_at_a_character() {
+        let long: String = std::iter::repeat_n('中', ATTACH_WHOLE).collect();
+        let (text, lines) = attach(&long, Some((0, 0)));
+        assert!(text.ends_with("[cut]"));
+        assert!(text.starts_with("中中中"));
+        assert!(text.len() <= ATTACH_WHOLE + 12);
+        assert_eq!(lines.unwrap().total, 1);
     }
 }

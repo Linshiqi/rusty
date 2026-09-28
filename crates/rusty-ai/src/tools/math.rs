@@ -61,48 +61,28 @@ impl Tool for Sheet {
     fn def(&self) -> ToolDef {
         read_only(
             NAME,
-            "Work out rows of rusty's math sheet — the attitude arithmetic a flight \
-             controller is made of — exactly, with the working shown: quaternions, Euler \
-             angles, rotation matrices, vectors, gravity in the body, gyro integration, \
-             and `check`, which names the convention a wrong attitude crossed. Without \
-             `rows` it works out the open project's own sheet (.rusty/math.toml, what \
-             the user sees in the Math panel), with the values a running simulation \
-             gives it where the app has them. \
+            // Sent with every request of every question, whatever it is
+            // about, so it names the language rather than teaching it: a
+            // wrong call comes back refused by name, which teaches it then.
+            "Attitude arithmetic worked out exactly, with each step's working — \
+             quaternions, Euler angles, matrices, vectors, gravity in the body, gyro \
+             integration. Call it instead of rotating anything in your head: attitude \
+             code goes wrong by one crossed convention (w first or last, the inverse, \
+             Z-Y-X or X-Y-Z, Z up or down, degrees for radians), and arithmetic from \
+             memory crosses one silently. check(mine, reference) names the convention a \
+             wrong value crossed. Say what an attitude looks like from its `instrument` \
+             reading, never from the signs of its Euler angles. Without `rows`, works \
+             out the project's own sheet (the Math panel's). \
              \
-             Call this instead of doing rotation arithmetic in your head, and before \
-             saying what an attitude looks like. Attitude code is seldom nearly right: \
-             it is right with one convention crossed — w first or last, body-to-world \
-             or its inverse, Z-Y-X or X-Y-Z, Z up or Z down, degrees for radians — and \
-             arithmetic from memory crosses one silently. Each row comes back with its \
-             value (an attitude also as Euler angles, axis and angle, and `instrument`: \
-             nose up, bank and heading, which mean the same in both frames while the \
-             angles' signs do not), the working of each operation with the numbers in, \
-             and whatever was refused, by name. \
-             \
-             The language: one `name = expression` a row, read top to bottom, each \
-             seeing the rows above; `#` starts a remark. Angles take a unit — `30°`, \
-             `30 deg`, `0.5 rad` — and a plain number is radians. `(x, y, z)` is a \
-             vector and `(x, y)` a plane vector; four numbers in brackets are refused \
-             as ambiguous, write quat(w, x, y, z). Constants: X Y Z identity pi. \
-             Build: euler(roll, pitch, yaw), quat(w, x, y, z), axis_angle(axis, angle), \
-             from_rotvec(v), from_to(a, b), from_dcm(R). Read: to_euler(q), dcm(q), \
-             axis(q), angle(q), to_rotvec(q), norm, normalize, and fields q.w q.x q.y \
-             q.z, v.x v.y v.z, e.roll e.pitch e.yaw. Turn: to_world(q, v) = rotate(q, v) \
-             = q * v (body to world), to_body(q, v) (world to body), a * b, conj(q), \
-             inv(q), delta(a, b) = a* ⊗ b, angle(a, b), slerp(a, b, t), integrate(q, w, \
-             dt) (a body rate in rad/s, exactly) and integrate_linear(q, w, dt) (first \
-             order and not normalised, as most firmware does it). Gravity: \
-             accel_at_rest(q) (what an accelerometer reads at rest, in g, body axes), \
-             gravity_body(q), tilt(acc) (roll and pitch back from a reading). Vectors: \
-             dot, cross, project(a, b), rotate(angle, v) in the plane, mat(r0, r1, r2), \
-             transpose, det, R * v. Numbers: deg(x), rad(x), sin cos tan asin acos atan \
-             atan2 sqrt abs. check(mine, reference) takes two quaternions, Euler angles, \
-             vectors, angles or numbers. tel(\"name\") is a telemetry channel's newest \
-             value — give values in `telemetry`; truth() and truth_rate() are the \
-             simulator's plant, there only while the app's Flight tab runs one. \
-             \
-             For example: [\"q = euler(30°, 10°, 45°)\", \"acc = accel_at_rest(q)\", \
-             \"back = tilt(acc)\", \"check(quat(0.9, 0.2, 0.1, 0.3), q)\"].",
+             Rows are `name = expression`, top to bottom. Angles take a unit (30°, \
+             0.5 rad); a bare number is radians. (x, y, z) is a vector; a quaternion is \
+             only quat(w, x, y, z); a * b applies b first. Functions: euler(roll, pitch, \
+             yaw), axis_angle, from_rotvec, from_to, from_dcm, to_euler, dcm, axis, \
+             angle, to_rotvec, norm, normalize, rotate (body to world), to_body, conj, \
+             inv, delta, slerp, integrate(q, w, dt), integrate_linear, accel_at_rest, \
+             gravity_body, tilt, dot, cross, project, mat, transpose, det, deg, rad, \
+             sin cos tan asin acos atan atan2 sqrt abs, tel(\"channel\") (values via \
+             `telemetry`), truth(). Constants X Y Z identity pi.",
             json!({
                 "type": "object",
                 "properties": {

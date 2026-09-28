@@ -126,7 +126,7 @@ fn Transcript() -> impl IntoView {
                                     .ai
                                     .usage
                                     .get()
-                                    .map(|(_, output)| output)
+                                    .map(|spend| spend.last_output)
                                     .unwrap_or_else(|| {
                                         state
                                             .ai
@@ -258,12 +258,27 @@ fn Bubble(message: Message) -> impl IntoView {
         })
         .collect();
     // Files the user sent along, shown as what they are rather than as the
-    // pages of text the model received.
-    let attachments: Vec<String> = message
+    // pages of text the model received — and, of a long file, which lines.
+    let attachments: Vec<(String, String)> = message
         .content
         .iter()
         .filter_map(|c| match c {
-            Content::Attachment { path, .. } => Some(path.clone()),
+            Content::Attachment { path, lines, .. } => Some(match lines {
+                None => (
+                    file_name(path),
+                    t!("assistant.attached", path = path.clone()),
+                ),
+                Some(lines) => (
+                    format!("{}:{}–{}", file_name(path), lines.first, lines.last),
+                    t!(
+                        "assistant.attached-lines",
+                        path = path.clone(),
+                        first = lines.first,
+                        last = lines.last,
+                        total = lines.total
+                    ),
+                ),
+            }),
             _ => None,
         })
         .collect();
@@ -280,14 +295,14 @@ fn Bubble(message: Message) -> impl IntoView {
                             <div class="flex flex-wrap justify-end gap-1.5">
                                 {attachments
                                     .into_iter()
-                                    .map(|path| {
+                                    .map(|(label, title)| {
                                         view! {
                                             <span
-                                                title=t!("assistant.attached", path = path.clone())
+                                                title=title
                                                 class="inline-flex items-center gap-1 rounded-[6px] bg-sunken px-2 py-0.5 font-mono text-footnote text-label-3"
                                             >
                                                 <IconView icon=Icon::Files size=11 />
-                                                {file_name(&path)}
+                                                {label}
                                             </span>
                                         }
                                     })
@@ -472,10 +487,23 @@ fn Composer() -> impl IntoView {
                         state
                             .ai.usage
                             .get()
-                            .map(|(input, output)| {
+                            .map(|spend| {
+                                let text = if spend.cached > 0 {
+                                    t!(
+                                        "assistant.tokens-cached",
+                                        input = spend.input,
+                                        cached = spend.cached,
+                                        output = spend.output
+                                    )
+                                } else {
+                                    t!("assistant.tokens", input = spend.input, output = spend.output)
+                                };
                                 view! {
-                                    <span class="tnum">
-                                        {t!("assistant.tokens", input = input.to_string(), output = output.to_string())}
+                                    <span
+                                        class="tnum"
+                                        title=t!("assistant.tokens-rounds", rounds = spend.rounds)
+                                    >
+                                        {text}
                                     </span>
                                 }
                             })

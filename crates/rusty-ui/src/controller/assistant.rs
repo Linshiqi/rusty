@@ -184,8 +184,8 @@ pub fn cancel_ask(state: AppState) {
 }
 
 /// Ask a question, streaming the answer. `context` is the file the user had
-/// open, when they chose to send it along: its path and its text.
-pub fn ask(state: AppState, question: String, context: Option<(String, String)>) {
+/// open, when they chose to send it along (`open_file_context`).
+pub fn ask(state: AppState, question: String, context: Option<Content>) {
     use wasm_bindgen::{JsValue, prelude::Closure};
 
     let Some(config) = state.ai.config.get_untracked() else {
@@ -206,9 +206,7 @@ pub fn ask(state: AppState, question: String, context: Option<(String, String)>)
     }
 
     let mut content = vec![Content::Text { text: question }];
-    if let Some((path, text)) = context {
-        content.push(Content::Attachment { path, text });
-    }
+    content.extend(context);
     state.ai.conversation.update(|c| {
         c.push(Message {
             role: rusty_ai::Role::User,
@@ -293,10 +291,16 @@ fn apply_event(state: AppState, event: AgentEvent) {
         AgentEvent::Chat(ChatEvent::TextDelta { text }) => {
             state.ai.pending.update(|pending| pending.push_str(&text));
         }
+        // One report per round; the question's cost is their sum.
         AgentEvent::Chat(ChatEvent::Usage {
             input_tokens,
+            cached_tokens,
             output_tokens,
-        }) => state.ai.usage.set(Some((input_tokens, output_tokens))),
+        }) => state.ai.usage.update(|spend| {
+            spend
+                .get_or_insert_default()
+                .add(input_tokens, cached_tokens, output_tokens)
+        }),
         AgentEvent::ToolStarted { id, name, .. } => {
             state
                 .ai
@@ -340,57 +344,44 @@ pub fn clear_conversation(state: AppState) {
     state.ai.usage.set(None);
 }
 
-/// The file in front of the user, as the context sent with a question: its
-/// path and its *draft* — what is on screen, unsaved edits included — cut
-/// to a size a model can take. `None` when nothing is open, or what is open
-/// is not text.
-pub fn open_file_context(state: AppState) -> Option<(String, String)> {
+/// The file in front of the user, as it goes with a question: its path
+/// and its *draft* — what is on screen, unsaved edits included — whole when
+/// it is short, and the part around the cursor when it is not
+/// ([`Content::attach`]). `None` when nothing is open, or what is open is not
+/// text.
+pub fn open_file_context(state: AppState) -> Option<Content> {
     let group = state.focused();
     let document = group.editor.document.get_untracked()?;
     if document.binary {
         return None;
     }
-    let text = group.editor.draft.get_untracked();
-    Some((document.path, attachment_text(&text)))
+    let focus = focus_lines(group);
+    let draft = group.editor.draft.get_untracked();
+    Some(Content::attach(document.path, &draft, focus))
 }
 
-/// The most of a file that goes along with a question. Sixty kilobytes is
-/// about fifteen thousand tokens: a whole chapter or a long source file, and
-/// short of the point where the file crowds out the question.
-const ATTACHMENT_CAP: usize = 60_000;
+/// The document lines the selection runs over, 0-based — the caret's line
+/// twice when nothing is selected. `None` when no editor is on screen to
+/// have one: a Markdown page, a picture.
+///
+/// The textarea's selection indexes the screen, which is the draft less
+/// what is folded, so a row there is a line of the document only through
+/// the fold table — the identity with nothing folded.
+fn focus_lines(group: AppState) -> Option<(usize, usize)> {
+    use rusty_lsp::positions::{self, Encoding::Utf16};
 
-/// A file's text as sent: whole when it fits, otherwise the first
-/// `ATTACHMENT_CAP` bytes cut at a character boundary and marked as cut, so
-/// the model knows it is reading the start of something and not all of it.
-pub fn attachment_text(text: &str) -> String {
-    if text.len() <= ATTACHMENT_CAP {
-        return text.to_string();
-    }
-    let mut end = ATTACHMENT_CAP;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let omitted = text.len() - end;
-    format!("{}\n… [{omitted} bytes omitted]", &text[..end])
-}
-
-#[cfg(test)]
-mod attachment_tests {
-    use super::{ATTACHMENT_CAP, attachment_text};
-
-    /// A short file goes whole; a long one is cut at a character boundary —
-    /// the CJK case is the one that panics when it is not — and says so.
-    #[test]
-    fn a_long_file_is_cut_at_a_character_and_marked() {
-        assert_eq!(attachment_text("fn main() {}"), "fn main() {}");
-        let long: String = std::iter::repeat_n('中', ATTACHMENT_CAP).collect();
-        let sent = attachment_text(&long);
-        assert!(sent.len() < long.len());
-        assert!(
-            sent.contains("bytes omitted]"),
-            "{}",
-            &sent[sent.len() - 40..]
-        );
-        assert!(sent.starts_with("中中中"));
-    }
+    let element = editor_area(group.group)?;
+    let (start, end) = super::views::selection_now(group, &element)?;
+    group.editor.folds.with_untracked(|folds| {
+        let screen = group
+            .editor
+            .draft
+            .with_untracked(|draft| folds.view_text(draft));
+        let line = |units: u32| {
+            let byte = positions::byte_of_character(&screen, units as usize, Utf16);
+            let row = screen[..byte].matches('\n').count() as u32;
+            folds.doc_of_view(row) as usize
+        };
+        Some((line(start.min(end)), line(start.max(end))))
+    })
 }
