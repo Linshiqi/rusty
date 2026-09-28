@@ -15,7 +15,9 @@ exclude = ["crates/rusty-core/tests/fixtures"]
 # holds this, tauri.conf.json and the newest CHANGELOG heading to one number.
 version = "0.6.66"
 edition = "2024"
-rust-version = "1.88"
+# 1.89 for `File::lock`: rusty windows are separate processes sharing one
+# workbench.toml, and a lock the OS holds is what serialises their writes.
+rust-version = "1.89"
 # Not MIT/Apache: this is source you may read, run and change, but not sell.
 # `license-file` rather than `license` because PolyForm is not one of the SPDX
 # identifiers cargo validates, and a wrong identifier is worse than none.

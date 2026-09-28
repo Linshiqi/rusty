@@ -32,6 +32,9 @@ pub use rows::*;
 pub enum Action {
     ShowPanel(&'static str),
     OpenProject,
+    /// Another rusty, in a window of its own, on the welcome screen — a
+    /// second project beside this one.
+    NewWindow,
     /// The clone dialog: a URL, a folder, and a project at the end of it.
     CloneRepository,
     RefreshProject,
@@ -318,6 +321,7 @@ pub fn run(action: Action, state: AppState, chrome: Chrome) {
             }
         }
         Action::OpenProject => controller::choose_project(state),
+        Action::NewWindow => controller::new_window(state),
         Action::CloneRepository => controller::open_clone_dialog(state),
         Action::OpenRecent(index) => {
             if let Some(path) = state

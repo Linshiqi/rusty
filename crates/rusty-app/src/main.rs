@@ -9,6 +9,7 @@ mod error;
 mod files;
 mod flash;
 mod git;
+mod instances;
 mod lsp;
 mod simulate;
 mod state;
@@ -24,6 +25,10 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("--builtin-shell") {
         rusty_term::builtin::run();
     }
+    // Started by another window's New Window: open on the welcome screen.
+    let fresh = std::env::args()
+        .skip(1)
+        .any(|arg| arg == window::NEW_WINDOW);
 
     tauri::Builder::default()
         // The only OS capability the app asks for: picking a workspace folder.
@@ -36,6 +41,7 @@ fn main() {
         // and public key are `plugins.updater` in tauri.conf.json.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state::AppState::default())
+        .manage(window::Fresh(fresh))
         // The tools the installer shipped — the emulator, the debuggers,
         // the flasher and the LLDB adapter, under `bundled/` in the resource
         // directory — join the finder's ladder here, before any command can
@@ -47,6 +53,15 @@ fn main() {
             if let Ok(resources) = app.path().resource_dir() {
                 rusty_embed::tools::set_bundled_dir(resources.join("bundled"));
             }
+            // Counted by the other rusty windows on this machine, in the
+            // app's local data — never the data directory, which may be a
+            // folder another machine syncs.
+            let instance = app
+                .path()
+                .app_local_data_dir()
+                .ok()
+                .and_then(|dir| instances::Instance::register(&dir.join("instances")).ok());
+            app.manage(instances::Registered(instance));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +103,7 @@ fn main() {
             update::cancel_update,
             update::apply_update,
             update::skip_update,
+            update::update_closes,
             commands::open_url,
             commands::keybinds,
             commands::set_keybind,
@@ -220,6 +236,8 @@ fn main() {
             window::window_toggle_maximize,
             window::window_close,
             window::window_set_zoom,
+            window::window_new,
+            window::window_fresh,
         ])
         .build(tauri::generate_context!())
         .expect("rusty failed to start")
@@ -330,6 +348,7 @@ mod wire_names {
             cmd::workbench::UPDATE_CANCEL => update::cancel_update,
             cmd::workbench::UPDATE_APPLY => update::apply_update,
             cmd::workbench::UPDATE_SKIP => update::skip_update,
+            cmd::workbench::UPDATE_CLOSES => update::update_closes,
             cmd::workbench::OPEN_URL => commands::open_url,
             cmd::workbench::KEYBINDS => commands::keybinds,
             cmd::workbench::SET_KEYBIND => commands::set_keybind,
@@ -458,6 +477,8 @@ mod wire_names {
             cmd::window::TOGGLE_MAXIMIZE => window::window_toggle_maximize,
             cmd::window::CLOSE => window::window_close,
             cmd::window::SET_ZOOM => window::window_set_zoom,
+            cmd::window::NEW => window::window_new,
+            cmd::window::FRESH => window::window_fresh,
         }
     }
 

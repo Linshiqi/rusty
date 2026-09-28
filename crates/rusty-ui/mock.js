@@ -896,6 +896,11 @@
     ai_tools: () => [],
     window_minimize: () => null,
     window_toggle_maximize: () => null,
+    // New Window: `__mock.newWindows` counts the instances asked for, and
+    // `mock.fresh` in localStorage boots this page as one of them — on the
+    // welcome screen with the recents still listed, not in the last project.
+    window_new: () => { window.__mock.newWindows = (window.__mock.newWindows || 0) + 1; return null; },
+    window_fresh: () => !!localStorage.getItem("mock.fresh"),
     terminal_close: () => null,
     window_set_zoom: (a) => { document.documentElement.style.zoom = a.factor; return null; },
     terminal_shells: () => [
@@ -987,6 +992,8 @@
       setTimeout(() => { a.onProgress.send({ received: 100, total: 100 }); resolve(true); }, 300);
     }),
     apply_update: () => { window.__mock.applied = (window.__mock.applied || 0) + 1; return new Promise(() => {}); },
+    // The other rusty windows installing would close: `__mock.otherWindows`.
+    update_closes: () => window.__mock.otherWindows || 0,
     open_url: () => null,
     terminal_shell_info: () => ({
       active: window.__mock.shellPref === "system" ? "pwsh.exe" : "rusty's built-in shell",

@@ -566,12 +566,47 @@ pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<()> {
 /// Read, change, write — as one step, under the writers' lock. The one way
 /// to change the file from this crate, so no two writers can interleave.
 pub fn update(change: impl FnOnce(&mut WorkbenchState)) -> Result<()> {
+    match workbench_path() {
+        Some(path) => update_at(&path, change),
+        None => Ok(()),
+    }
+}
+
+/// [`update`] against a named file, so a test can hold the file's lock from
+/// elsewhere and watch a writer wait for it.
+fn update_at(path: &Path, change: impl FnOnce(&mut WorkbenchState)) -> Result<()> {
     let _held = WRITERS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut state = workbench();
+    let _across = hold_across_processes(path);
+    let mut state = workbench_at(path);
     change(&mut state);
-    save_workbench(&state)
+    save_workbench_at(path, &state)
+}
+
+/// An exclusive lock on `workbench.lock` beside the file, for as long as the
+/// handle lives: what keeps a writer in *another process* out of the
+/// read-modify-write. Every window New Window opens is another rusty process,
+/// sharing this file with the first and invisible to [`WRITERS`] — one
+/// window's tab switch could read the file, the other's keybinding change
+/// land, and the tab strip written back over it. The lock file is never
+/// written, so a data directory in a synced folder sees it once.
+///
+/// Best effort: a directory that cannot hold the file leaves the writers'
+/// lock doing what it always did.
+fn hold_across_processes(path: &Path) -> Option<std::fs::File> {
+    let lock = path.with_file_name("workbench.lock");
+    if let Some(parent) = lock.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
 }
 
 /// Record a project as the most recently opened.
@@ -715,6 +750,39 @@ mod tests {
         );
         save_workbench_at(&path, &state).unwrap();
         assert!(path.exists(), "the next save creates rather than clobbers");
+    }
+
+    /// Another rusty window is another process, out of reach of the
+    /// writers' mutex: the file's own lock is what keeps its
+    /// read-modify-write from landing inside this one's. Held here through a
+    /// handle of its own, which the OS counts as a second owner, as it would
+    /// the other window.
+    #[test]
+    fn a_writer_waits_while_another_window_holds_the_file() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench.toml");
+        let other = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.path().join("workbench.lock"))
+            .unwrap();
+        other.lock().unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(other);
+        });
+
+        let started = Instant::now();
+        update_at(&path, |state| state.vim = true).unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(250),
+            "the write went ahead while the other window held the file"
+        );
+        holder.join().unwrap();
+        assert!(workbench_at(&path).vim, "and it landed once it could");
     }
 
     /// The file records and the wire types are different structs now, and a

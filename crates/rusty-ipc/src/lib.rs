@@ -75,6 +75,8 @@ pub mod workbench {
     pub const UPDATE_APPLY: &str = "apply_update";
     /// Stop prompting about the version the last check found.
     pub const UPDATE_SKIP: &str = "skip_update";
+    /// How many other rusty windows installing closes along with this one.
+    pub const UPDATE_CLOSES: &str = "update_closes";
     pub const OPEN_URL: &str = "open_url";
 }
 
@@ -315,6 +317,11 @@ pub mod window {
     pub const TOGGLE_MAXIMIZE: &str = "window_toggle_maximize";
     pub const CLOSE: &str = "window_close";
     pub const SET_ZOOM: &str = "window_set_zoom";
+    /// Another rusty, with a project of its own: New Window.
+    pub const NEW: &str = "window_new";
+    /// Whether this instance was started by New Window, and so opens on the
+    /// welcome screen rather than on the last project.
+    pub const FRESH: &str = "window_fresh";
 }
 
 /// The assistant and its configuration.

@@ -65,6 +65,13 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                         &t!("menu.file.new-project"),
                         None,
                     ),
+                    // Where VS Code keeps it: beside the other ways to have
+                    // something new to work on.
+                    entry(
+                        Action::NewWindow,
+                        &t!("menu.file.new-window"),
+                        chord(Action::NewWindow),
+                    ),
                     entry(
                         Action::OpenProject,
                         &t!("menu.file.open-project"),

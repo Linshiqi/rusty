@@ -413,6 +413,13 @@ pub fn restore(state: AppState) {
             reload_project(state);
             return;
         }
+        // A window New Window opened starts on the welcome screen. The last
+        // project is open in the window it was asked from, and two windows
+        // on one project are two language servers taking turns at one build
+        // directory.
+        if ipc::get::<bool>(cmd::window::FRESH).await.unwrap_or(false) {
+            return;
+        }
         // A fresh launch: pick up where the last session left off. Quietly —
         // a moved folder degrades to the normal empty state plus a log line,
         // and stops being offered.
@@ -422,6 +429,19 @@ pub fn restore(state: AppState) {
             open_recent(state, last.clone(), false);
         }
     });
+}
+
+/// Another rusty in a window of its own: New Window.
+///
+/// A second *instance* of the app rather than a second window of this one:
+/// the backend holds one project — its language server, its watcher, its
+/// runs — and every window of an instance shares it. It opens on the welcome
+/// screen (`window_fresh`), and a failure to start it is the banner's.
+pub fn new_window(state: AppState) {
+    if !ipc::backend_available() {
+        return;
+    }
+    track(state, ipc::get::<()>(cmd::window::NEW), move |()| {});
 }
 
 // ─── chips ───────────────────────────────────────────────────────────────────

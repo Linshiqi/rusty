@@ -41,6 +41,11 @@ pub fn all(state: AppState) -> Vec<Command> {
         chord(Action::OpenProject),
     ));
     out.push(action(
+        Action::NewWindow,
+        &t!("menu.file.new-window"),
+        chord(Action::NewWindow),
+    ));
+    out.push(action(
         Action::CloneRepository,
         &t!("menu.file.clone"),
         chord(Action::CloneRepository),

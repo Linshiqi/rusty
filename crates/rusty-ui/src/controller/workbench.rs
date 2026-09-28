@@ -155,14 +155,22 @@ pub fn cancel_update(state: AppState) {
 /// toolchain whose components had been removed and an esp toolchain with
 /// no rustc, so every cargo command failed until both were reinstalled. A
 /// monitor or a simulation is only stopped, as its own Stop would.
+///
+/// **And while another rusty window is open, if installing closes it.** On
+/// Windows the installer ends every rusty process to replace the binary,
+/// whichever window asked (`update_closes`) — another window's unsaved
+/// edits, or its build, would go without a word from the one that asked.
 pub fn apply_update(state: AppState) {
     if state.app.update_stage.get_untracked() != UpdateStage::Ready {
         return;
     }
     let busy = running_work(state);
     spawn_local(async move {
-        if let Some(what) = busy
-            && !ipc::confirm(&t!("update.restart-while-running", what = what)).await
+        let others = ipc::get::<usize>(cmd::workbench::UPDATE_CLOSES)
+            .await
+            .unwrap_or(0);
+        if let Some(question) = restart_question(busy, others)
+            && !ipc::confirm(&question).await
         {
             return;
         }
@@ -179,6 +187,28 @@ pub fn apply_update(state: AppState) {
             move |()| {},
         );
     });
+}
+
+/// What the restart asks, when it has anything to ask: this window's work
+/// it would cut off, the other windows installing would close, or both — in
+/// one question, since a second dialog after the first reads as the first
+/// not having taken.
+fn restart_question(busy: Option<String>, others: usize) -> Option<String> {
+    let mut said = Vec::new();
+    if let Some(what) = busy {
+        said.push(t!("update.restart-while-running", what = what));
+    }
+    if others > 0 {
+        said.push(t!(
+            "update.restart-closes-others",
+            count = others.to_string()
+        ));
+    }
+    if said.is_empty() {
+        return None;
+    }
+    said.push(t!("update.restart-anyway"));
+    Some(said.join("\n\n"))
 }
 
 /// What is running that a restart would cut off halfway, in words for the

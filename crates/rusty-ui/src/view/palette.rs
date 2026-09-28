@@ -54,6 +54,13 @@ pub fn defaults() -> Vec<Binding> {
             default: "Ctrl+O".into(),
             action: Action::OpenProject,
         },
+        // VS Code's chord for its own New Window.
+        Binding {
+            id: "window.new".into(),
+            label: t!("bind.new-window"),
+            default: "Ctrl+Shift+N".into(),
+            action: Action::NewWindow,
+        },
         Binding {
             id: "project.recheck".into(),
             label: t!("bind.recheck"),

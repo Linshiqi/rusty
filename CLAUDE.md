@@ -64,9 +64,12 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # and 1.10 V at the middle for anyone to check. A fifth: **a Rust map
 # crosses as a JS `Map`, not an object** — serde_wasm_bindgen writes one — so
 # a stub reading a part's `props.signal` reads nothing and plays its own
-# default while the frontend is right; read props with `.get()`. Five
+# default while the frontend is right; read props with `.get()`. The
 # switches: set `mock.norecents` in localStorage to start on the welcome
-# screen (a launch that reopens the last project never shows it),
+# screen (a launch that reopens the last project never shows it), or
+# `mock.fresh` to boot as a window New Window opened (the welcome screen,
+# the recents still listed; `__mock.newWindows` counts the asks, and
+# `__mock.otherWindows` is how many windows an update would close),
 # `__mock.pickFolder` to answer the folder picker instead of cancelling it,
 # `__mock.breathe` before Run to have the playground breathe its LED through
 # `[rusty:pwm]` reports instead of blinking it, and `__mock.signal` before
@@ -2181,6 +2184,55 @@ per chip into `<data dir>/playground/<chip>/`; the window's half is
   simulation runs the title bar's Debug becomes Restart in place, so
   nothing beside it moves, and Ctrl+Shift+F5 is VS Code's restart.
 
+## More than one rusty
+
+File ▸ New window (Ctrl+Shift+N, VS Code's chord) opens another rusty on
+the welcome screen, beside the one it was asked from.
+
+- **A second project is a second process.** The backend holds one project —
+  its language server, its watcher, its runs, the emulator — and every
+  window of an instance shares it: the detached editor and the commit window
+  are windows of the project they came from. So New Window is `window_new`
+  starting this executable again with `--new-window`, which `window_fresh`
+  answers to the frontend, and `restore` then stays on the welcome screen
+  instead of reopening `recent_projects[0]`: that project is open in the
+  window it was asked from, and two windows on one project are two
+  rust-analyzers taking turns at one build directory. From an AppImage the
+  image is started, not the binary inside it — that lives in the mount the
+  running image made, which goes when it does. The child is reaped on a
+  thread, gets a process group of its own on Unix so a Ctrl+C in the
+  terminal that ran the first leaves it alone, and no console window (a
+  debug build is a console program).
+- **The instances share one `workbench.toml`, so `config::update` locks it
+  across processes** (`workbench.lock` beside it, `File::lock` — why
+  `rust-version` is 1.89). The in-process mutex was all there was: one
+  window's tab switch could read the file, the other's keybinding change
+  land, and the tab strip be written back over it. The lock file is never
+  written, so a data directory in a synced folder sees it once.
+- **On Windows an update's installer closes every rusty**, whichever window
+  asked: NSIS in passive mode ends each process running the binary it
+  replaces, without asking. So the restart's question counts them
+  (`update_closes`), with another window's unsaved edits named as what is
+  lost. `instances.rs` is the count: each instance holds an exclusive lock
+  on `<pid>.lock` under the app's local data dir — machine-local, never the
+  data directory another machine may sync — for as long as it lives. A file
+  nobody holds is an instance that has gone, and the next count removes it,
+  because nothing reliably tidies up on the way out. A registration is
+  locked under a `.pending` name and renamed into place, so a count running
+  at that moment cannot take it for a dead one. Elsewhere the bundle is
+  replaced in place and only the asking instance restarts; nothing else
+  closes, and the count is none.
+- **Proven in the app, not only in the mock**, on a dev build started
+  isolated (its own config, WebView2 data folder and debug port): File ▸
+  New window and Ctrl+Shift+N each started `rusty-app.exe --new-window` as
+  a child; the new window's page joined the first one's WebView2 browser
+  process — same executable, same data folder, which is the installed
+  app's shape — and opened on the welcome screen with the recents listed
+  while the first kept its project. A project opened in the new window
+  left the first's alone, `workbench.toml` kept both recents, each
+  window's `update_closes` answered 1, and a third window closed brought
+  the count back to 1 and took its file with it.
+
 ## Updating itself
 
 The running app asks the release feed a moment after launch, and when a
@@ -2222,7 +2274,10 @@ it needs no capability.
   with no `rustc.exe` (the next file, `rustc_driver.dll`, was loaded by
   something and could not be deleted, which is where the removal stopped),
   so every cargo command failed until both were reinstalled. A monitor or a
-  simulation is only stopped, as its own Stop would.
+  simulation is only stopped, as its own Stop would. **And it asks while
+  another rusty window is open, on Windows** — the installer closes that one
+  too (*More than one rusty*, above) — in one question with the rest, since
+  a second dialog after the first reads as the first not having taken.
 - **The whole flow is testable without a release.** Debug builds honour
   `RUSTY_UPDATE_FEED=<url>` as the endpoint (the plugin allows plain http in
   debug builds only, with a warning), and a fake installer signed with the

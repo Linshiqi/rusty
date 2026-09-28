@@ -218,6 +218,17 @@ pub async fn apply_update(app: AppHandle, state: State<'_, AppState>) -> Answer<
     app.restart()
 }
 
+/// How many other rusty windows installing the update closes along with
+/// this one. On Windows every one: the installer ends each process running
+/// the binary it replaces, whichever window asked for the update, so the
+/// restart has to say so before another window's unsaved edits go with it.
+/// Elsewhere none — the bundle is replaced in place, and only this instance
+/// restarts.
+#[tauri::command]
+pub fn update_closes(instance: State<'_, crate::instances::Registered>) -> usize {
+    if cfg!(windows) { instance.others() } else { 0 }
+}
+
 /// Stop prompting about this version. A check asked for by hand still
 /// reports it, and the next release is offered as usual.
 #[tauri::command]
