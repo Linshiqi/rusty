@@ -37,6 +37,11 @@ Anthropic it showed 0 tokens in.
 search, and handed the assistant hundreds of build files — thousands of
 tokens — whenever it listed the project.
 
+**Reveal in File Explorer finds the file.** On Windows, *Reveal in File
+Explorer* — on a tab or in the file tree — opened the Desktop instead of the
+file's folder for any file below the project's top level. It now opens the
+folder with the file selected.
+
 ## v0.6.67
 
 **New window.** File ▸ *New window* (Ctrl+Shift+N) opens another rusty

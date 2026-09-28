@@ -1841,10 +1841,18 @@ the root like every other write, every answer the relative path it produced
   no such history, and a panic there becomes an error.
   Every tab under the entry closes without a second question: the file is
   gone and a draft of it has nowhere to be saved.
-- **Reveal is Explorer's `/select,<path>` as one argument** — a space after
-  the comma makes Explorer open the home folder — `open -R` on macOS, and
-  the containing folder through `xdg-open` elsewhere, where no file manager
-  takes a selection portably.
+- **Reveal is Explorer's `/select,"<path>"` as one raw argument**
+  (`explorer_select`) — a space after the comma makes Explorer open the
+  home folder, and **so does a forward slash in the path**. The tree and the
+  tabs name a file relative to the project with `/`, and joined onto the
+  root that is `E:\proj\core/src/lib.rs`: every file API takes it, and
+  Explorer reads the slashes as switches. Measured with the Shell's own
+  window list, it opened the Desktop with Documents selected, for every file
+  below the project's top level, until the path went over with backslashes
+  and quoted through `raw_arg` so a space in a folder name holds. A path a
+  program takes and a command line is handed are two different contracts.
+  `open -R` on macOS, and the containing folder through `xdg-open`
+  elsewhere, where no file manager takes a selection portably.
 
 ## Two crates from the wizard
 

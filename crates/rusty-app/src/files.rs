@@ -119,17 +119,21 @@ pub async fn reveal_entry(path: String, state: State<'_, AppState>) -> Result<()
         } else {
             rusty_edit::absolute(&root, &path)?
         };
-        let mut command = if cfg!(target_os = "windows") {
+        #[cfg(windows)]
+        let mut command = {
+            use std::os::windows::process::CommandExt;
             let mut command = rusty_embed::process::command("explorer");
-            // One argument, no space after the comma: Explorer parses the
-            // switch and the path out of a single string.
-            command.arg(format!("/select,{}", target.display()));
+            command.raw_arg(explorer_select(&target));
             command
-        } else if cfg!(target_os = "macos") {
+        };
+        #[cfg(target_os = "macos")]
+        let mut command = {
             let mut command = rusty_embed::process::command("open");
             command.arg("-R").arg(&target);
             command
-        } else {
+        };
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let mut command = {
             let mut command = rusty_embed::process::command("xdg-open");
             command.arg(target.parent().unwrap_or(&target));
             command
@@ -140,6 +144,24 @@ pub async fn reveal_entry(path: String, state: State<'_, AppState>) -> Result<()
     })
     .await??;
     Ok(())
+}
+
+/// Explorer's argument for selecting `target`, in the form it documents:
+/// `/select,"<path>"` — the switch and the path in one argument with no
+/// space after the comma (a space made Explorer open the home folder), the
+/// path quoted so a space in it does not end it, and the path written the
+/// way Explorer reads one. The tree and the tabs name a file relative to
+/// the project, with forward slashes, so the path joined onto the root is
+/// `E:\proj\core/src/lib.rs`: every file API takes that, and Explorer reads
+/// the slashes as switches, finds nothing to select and opens its default
+/// folder — which is what reveal did for every file below the project's
+/// top level. The verbatim prefix (`\\?\`) it cannot read at all.
+#[cfg(any(windows, test))]
+fn explorer_select(target: &std::path::Path) -> String {
+    let path = rusty_embed::tools::plain(target)
+        .to_string_lossy()
+        .replace('/', "\\");
+    format!("/select,\"{path}\"")
 }
 
 /// A file in its own OS window — the same frontend, booted straight into
@@ -470,4 +492,26 @@ fn relevant_files(root: &std::path::Path) -> std::collections::BTreeSet<String> 
         gather(&tree, &mut out);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::explorer_select;
+
+    /// What `root.join("core/src/lib.rs")` is on Windows, and what a
+    /// canonical path is: Explorer is handed neither, but the same file in
+    /// the one form it reads, quoted so a space in a folder name holds.
+    #[test]
+    fn explorer_is_handed_a_path_it_reads() {
+        assert_eq!(
+            explorer_select(Path::new(r"E:\proj\core/src/lib.rs")),
+            r#"/select,"E:\proj\core\src\lib.rs""#
+        );
+        assert_eq!(
+            explorer_select(Path::new(r"\\?\E:\My Projects\src\main.rs")),
+            r#"/select,"E:\My Projects\src\main.rs""#
+        );
+    }
 }
