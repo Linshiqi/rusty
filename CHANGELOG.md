@@ -9,6 +9,34 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.68
+
+**The assistant spends far fewer tokens.** Every question used to carry the
+whole open file — up to sixty kilobytes — into every request, and each new
+question sent everything earlier in the conversation over again. Now a long
+file goes as the part you are looking at: your selection, or the lines
+around the cursor, with which lines they are, so the assistant reads the
+rest itself when it needs it. The chip under your question names the lines
+that went. Earlier questions go back without the files and long tool
+answers they were worked out from. Two short questions that each looked
+something up used about 41,000 input tokens; they now use about 18,000.
+
+**Prompt caching.** With Anthropic, the parts of a request that repeat —
+the instructions, the tools, the conversation so far — are now cached, so
+the second request of a question reads most of its prompt at a tenth of the
+price. DeepSeek, OpenAI and the other compatible services cache repeated
+prompts by themselves, and the requests are now built so that they can.
+
+**A meter that adds up.** The token count under the input is the whole
+question now — every request it took, added together — with how much of it
+came from the cache. It used to show the last request alone, and with
+Anthropic it showed 0 tokens in.
+
+**A project's build folder stays out of sight.** A project without a
+`.gitignore` of its own showed its `target/` folder in the file tree and in
+search, and handed the assistant hundreds of build files — thousands of
+tokens — whenever it listed the project.
+
 ## v0.6.67
 
 **New window.** File ▸ *New window* (Ctrl+Shift+N) opens another rusty
