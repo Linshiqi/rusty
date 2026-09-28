@@ -9,6 +9,19 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.67
+
+**New window.** File ▸ *New window* (Ctrl+Shift+N) opens another rusty
+beside the one you have, on the welcome screen, so two projects can be open
+at once — each window with its own editor, language server, builds and
+simulations. It is in the command palette too.
+
+**The windows look after each other.** They share your settings, recent
+projects and keyboard shortcuts, and a change made in one can no longer be
+overwritten by another window saving at the same moment. On Windows,
+installing an update closes every rusty window at once; *Restart now* says
+so when other windows are open, so you can save what is in them first.
+
 ## v0.6.66
 
 **A math toolbox for flight-control code.** A new panel, *Math toolbox*,
