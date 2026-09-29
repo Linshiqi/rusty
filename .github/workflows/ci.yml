@@ -111,18 +111,40 @@ jobs:
       # The failing tests, named where they can be read without signing in.
       # The job log needs a GitHub login; annotations and the step summary
       # are on the run page for anyone, and are what a bug report quotes.
+      #
+      # Each panic travels with the lines under it, as one annotation: a
+      # failed assertion's own words — the screen a pty test saw, the values
+      # it compared — are what say why, and the `panicked at` line alone
+      # names only the place. v0.6.70's release commit failed two ConPTY
+      # tests on Windows with nothing more than that to go on. `%` and the
+      # line breaks are escaped the way a workflow command wants them.
       - name: Name what failed
         if: failure()
         shell: bash
         run: |
-          grep -E "^test .* FAILED$|panicked at" test.log | head -40 | while IFS= read -r line; do
+          panics() {
+            awk -v escape="$1" '
+              function flush() { if (block != "") print block; block = ""; lines = 0 }
+              { sub(/\r$/, ""); if (escape) gsub(/%/, "%25") }
+              /panicked at/ { flush(); block = $0; next }
+              block != "" && /^(note: run with|---- |test result:|failures:)/ { flush(); next }
+              block != "" && lines < 30 { block = block (escape ? "%0A" : "\n") $0; lines++ }
+              END { flush() }
+            ' test.log
+          }
+          panics 1 | head -20 | while IFS= read -r block; do
+            echo "::error::${block}"
+          done
+          grep -E "^test .* FAILED$" test.log | head -40 | while IFS= read -r line; do
             echo "::error::${line}"
           done
           {
             echo "### Failing tests (${{ matrix.os }})"
             echo
             echo '```'
-            grep -E "^test .* FAILED$|panicked at|^  (left|right):|^failures:$|^    [a-z_:]+$|^error(\[E[0-9]+\])?: " test.log | head -80
+            grep -E "^test .* FAILED$|^failures:$|^    [a-z_:]+$|^error(\[E[0-9]+\])?: " test.log | head -60
+            echo
+            panics 0 | head -200
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
