@@ -9,6 +9,22 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.69
+
+**A quieter status bar.** The chip and the pin map at the two ends of the
+status bar are icons now. The chip's name is in their tooltips, and at the
+top of what each one opens.
+
+**Git's letters explain themselves.** A file git does not track yet was
+marked with a grey `?` — on a new repository, every row of the list. It is
+a green **U** now, as in VS Code, and every letter says what it means when
+you hover it: untracked, added, modified, deleted, renamed, conflicted. The
+stage and unstage buttons appear on the row under the pointer instead of
+on every row.
+
+**A tighter file tree.** Each folder level is indented eight pixels, as in
+VS Code, instead of twelve.
+
 ## v0.6.68
 
 **The assistant spends far fewer tokens.** Every question used to carry the
