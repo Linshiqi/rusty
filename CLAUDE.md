@@ -180,6 +180,13 @@ cargo run -p rusty-core --example open_cost -- <project>
 # server never sent it, or sent it and something took it away.
 cargo run -p rusty-lsp --example diag_probe -- <project> <file> [seconds]
 
+# What one save sets the server doing: open, settle, save the way the app
+# does (didSave and the watcher's didChangeWatchedFiles), and print every
+# check it starts and every runFlycheck of the client's own. Measured on
+# examples/rate-loop: one save, one check, none of ours -- and a save
+# landing while a check is still compiling a crate restarts it.
+cargo run -p rusty-lsp --example save_probe -- <project> <file> [seconds]
+
 # What painting a file costs: whole, after a one-line edit halfway down, and
 # after a block comment opened at the top — the check that a keystroke in a
 # long file repaints its own line and not the file (see "Large files").
@@ -913,6 +920,19 @@ is what it changed.
   `set_buffer` path as any other write, so undo, the echo and the folds
   cannot disagree with it. Vim's insert mode passes every key but Escape, so
   the rules hold there too.
+- **A pair is judged by the file's brackets, counted in code only**
+  (`code_brackets`: comments, strings, raw strings and character literals
+  skipped, a lifetime told from a character by the quote that closes one).
+  Reported as the editor "often putting in the wrong `}`", two rules had
+  been blind. An opener is not paired while the file holds a closer with
+  no opener — a `{` retyped after deleting one, or added to a line whose
+  block and `}` are already below, left the extra `}` — and a closer steps
+  over its twin only when this line opened it, which is what an auto-closed
+  pair always is: VS Code overtypes only the closers it inserted, and this
+  is that rule without a record of them. Stepped over any `}`, the brace
+  typed to close a block that was missing one vanished, and rustfmt said
+  `found <eof>`. The blank-line indent finds its opener the same way, so a
+  `"{"` above no longer sends a `}` under the wrong block.
 - **A prevented key never reaches the input event.** The completion and
   signature triggers lived in `on:input`; a `(` that opened a pair without
   asking for the signature would have taken a feature away by adding one.
@@ -1186,15 +1206,10 @@ is what it changed.
   Ctrl+V in Vim's modal states makes the textarea writable for that one
   paste (`open_for_paste`) and `paste_into` makes it read-only again the
   moment the text arrives; a timeout covers a paste that never does.
-- **Auto-save is not `save_file`, and it is not a format.** Off by default
-  (`auto_save` in `workbench.toml`), it writes a second after typing stops
-  — VS Code's `files.autoSave: afterDelay`. It cannot reuse Ctrl+S's path:
-  `save_file` re-reads the file afterwards and seeds `draft` from it, which
-  is right when the user has stopped and is an editor eating work when they
-  have not — the round trip takes tens of milliseconds and the keys pressed
-  during it would be replaced by the disk's copy. `format_then_save` is
-  worse: rustfmt rewrites the line being typed, and mid-expression it cannot
-  parse at all, so every second would put a failure in the dock. So
+- **Auto-save is not a format.** Off by default (`auto_save` in
+  `workbench.toml`), it writes a second after typing stops — VS Code's
+  `files.autoSave: afterDelay`. `format_then_save` would rewrite the line
+  being typed, and mid-expression rustfmt cannot parse at all. So
   `autosave_file` writes and moves the *document* forward to exactly the
   bytes written; the dirty dot is `draft != document.text`, so it clears
   itself and lights again on the next key, and the draft is never touched.
@@ -1202,6 +1217,24 @@ is what it changed.
   already goes through — a second list of edit sites would be a list that
   drifts — on a counter of its own, since the highlight pulse fires four
   times as often.
+- **Ctrl+S writes the same way, and never reads back** (`write_draft`,
+  shared). It used to write and then re-read the file into `draft`, and on
+  a machine busy with `cargo check` the two round trips were slow enough to
+  type through: the keys pressed in between went with the re-read, and a
+  save that lost them with the dirty dot still lit was reported as "sometimes
+  it will not save". The re-read also announced the open file to
+  rust-analyzer a second time and asked for its colours and hints afresh on
+  every save, which competed with the completion being typed. **The format
+  before it has a budget and a condition**: a second (`FORMAT_BUDGET`, VS
+  Code's rule for its own format-on-save), after which the save goes ahead
+  unformatted; and rustfmt's answer is used only while the draft is still
+  the text it was sent, since an answer about a draft typed on since would
+  put the old text back. **A file that does not parse is saved without a
+  word** (`format::unparsed`, rust-analyzer's reading of rustfmt's exit: 1,
+  or 101 with the parser's `error`): its syntax error is already a squiggle,
+  and saying so again in Output was a line per Ctrl+S — sixteen of them in
+  the report. A failure anybody can act on — no rustfmt, a bad
+  `rustfmt.toml` — still goes to the dock.
 
 ## Two editor groups
 
@@ -1898,9 +1931,16 @@ with a batch.
 - **An unsaved draft is never reloaded — it is marked.** The tab shows a
   warning beside its dirty dot and the reload is skipped. Silently replacing a
   draft with the disk's copy is an editor eating work, and a modal prompt per
-  file is unusable after a checkout that touched a dozen. The reload is
-  re-checked *after* the round trip too, because typing is synchronous and the
-  read is not.
+  file is unusable after a checkout that touched a dozen. **The disk is read
+  before anything is decided** (`reload_open`), against the state after the
+  read, because typing is synchronous and the read is not. It used to mark a
+  dirty draft the moment the watcher spoke — and the watcher speaks for this
+  window's own saves too, so a save followed by more typing put ⚠ beside a
+  tab only rusty had written. Now the disk holding what the document already
+  says, or what this window last wrote there (`Editor::written`, a hash
+  noted *before* the write, since the debounced watcher can overtake the
+  write's answer), is no news; only a disk that changed some other way
+  marks the draft.
 
 ## The build directory
 

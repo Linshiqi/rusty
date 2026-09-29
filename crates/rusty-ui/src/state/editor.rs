@@ -151,6 +151,30 @@ impl Editor {
             all.remove(path);
         });
     }
+
+    /// Note what is about to go to disk under `path` — before it goes, so
+    /// a watcher batch that overtakes the write's answer still knows it.
+    pub fn note_written(&self, path: &str, text: &str) {
+        let hash = text_hash(text);
+        self.written.update_value(|all| {
+            all.insert(path.to_string(), hash);
+        });
+    }
+
+    /// Whether `text`, read off the disk for `path`, is what this window
+    /// last wrote there.
+    pub fn wrote(&self, path: &str, text: &str) -> bool {
+        let hash = text_hash(text);
+        self.written.with_value(|all| all.get(path) == Some(&hash))
+    }
+}
+
+/// FNV-1a over a text: enough to tell one version of a file from another,
+/// where keeping every text written would keep a copy of each file.
+fn text_hash(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 impl EditHistory {
@@ -566,6 +590,13 @@ pub struct Editor {
     /// disk's text is an editor eating work, and a modal prompt per file
     /// would be unusable after a `git checkout` touching a dozen of them.
     pub stale: RwSignal<Vec<String>>,
+    /// What this window last wrote to each file, as a hash of the text —
+    /// so a change the watcher reports back can be told for one of its own.
+    /// The watcher is debounced and a save's answer can land after it, so
+    /// "the document already says so" is not enough: a save followed by
+    /// more typing was marked as the disk moving under the draft, the ⚠
+    /// beside a tab that only rusty had written.
+    pub written: StoredValue<HashMap<String, u64>>,
     /// Bumped each time the project's file watcher is started, so batches
     /// from the previous project's watcher can be told apart from the live
     /// one and dropped.
@@ -639,6 +670,7 @@ impl Editor {
             snippets: RwSignal::new(HashMap::new()),
             folds: RwSignal::new(rusty_edit::Folded::default()),
             stale: RwSignal::new(Vec::new()),
+            written: StoredValue::new(HashMap::new()),
             unlinked: RwSignal::new(None),
             watch_session: RwSignal::new(0),
             zoom: RwSignal::new(stored_zoom()),
@@ -678,6 +710,7 @@ impl Editor {
             snippets: self.snippets,
             histories: self.histories,
             stale: self.stale,
+            written: self.written,
             unlinked: self.unlinked,
             watch_session: self.watch_session,
             ..Self::fresh()

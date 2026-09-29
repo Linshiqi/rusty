@@ -95,8 +95,20 @@ pub(super) fn on_type(text: &str, from: usize, to: usize, key: char) -> Option<E
 
     // A closer typed where that closer already stands: step over it. Typing
     // `)` at `foo(|)` is finishing the call, not starting a second bracket.
+    //
+    // Only when what stands there closes something opened earlier on this
+    // line, which is what an auto-closed pair always is — VS Code steps
+    // over only the closers it inserted, and this is that rule without a
+    // record of them. A `}` at the start of a line closes a block opened
+    // above, and one typed in front of it is a block being closed that was
+    // missing its brace; stepped over, the typed brace vanished and the file
+    // ended one short, rustfmt's `found <eof>`.
     if key == '"' || opener(key).is_some() {
-        if next == Some(key) {
+        let ours = match opener(key) {
+            Some(open) => open_on_line(text, caret, open as u8, key as u8),
+            None => true,
+        };
+        if next == Some(key) && ours {
             return Some(Edit {
                 range: (caret, caret),
                 text: String::new(),
@@ -151,6 +163,14 @@ pub(super) fn on_type(text: &str, from: usize, to: usize, key: char) -> Option<E
     if !before_term {
         return None;
     }
+    // Not when the file already holds a closer with no opener: that closer
+    // is the one this opener is for — a `{` retyped after deleting one, or
+    // added to a line whose block and `}` are already below. Paired, it
+    // left a second `}` behind, the wrong brace reported. Counted in code
+    // only, so a `}` in a string, a character or a comment is not one.
+    if key != '"' && balance(text, key as u8, close as u8) < 0 {
+        return None;
+    }
     let mut pair = String::new();
     pair.push(key);
     pair.push(close);
@@ -181,14 +201,16 @@ fn unescaped_quotes(line: &str) -> usize {
 }
 
 /// The indentation of the line holding the unmatched `open` before `caret` —
-/// the line a closer typed at `caret` should line up with.
+/// the line a closer typed at `caret` should line up with. Brackets in a
+/// string or a comment are not counted: a `"{"` above would otherwise send
+/// the closer under the wrong block.
 fn opener_indent(text: &str, caret: usize, open: char, close: char) -> Option<String> {
     let mut depth = 0usize;
     let mut found = None;
-    for (index, c) in text[..caret].char_indices().rev() {
-        if c == close {
+    for (index, b) in code_brackets(text, caret).into_iter().rev() {
+        if b == close as u8 {
             depth += 1;
-        } else if c == open {
+        } else if b == open as u8 {
             if depth == 0 {
                 found = Some(index);
                 break;
@@ -204,6 +226,155 @@ fn opener_indent(text: &str, caret: usize, open: char, close: char) -> Option<St
             .take_while(|c| *c == ' ' || *c == '\t')
             .collect(),
     )
+}
+
+/// Openers less closers of one kind in the whole text, counting code only.
+/// Below zero, a closer somewhere has no opener.
+fn balance(text: &str, open: u8, close: u8) -> i64 {
+    code_brackets(text, text.len())
+        .into_iter()
+        .map(|(_, b)| match b {
+            b if b == open => 1,
+            b if b == close => -1,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Whether the line holding `caret` opens an `open` before it that nothing
+/// before the caret has closed yet — whether a `close` just after the caret
+/// belongs to this line.
+fn open_on_line(text: &str, caret: usize, open: u8, close: u8) -> bool {
+    let line_start = text[..caret].rfind('\n').map(|at| at + 1).unwrap_or(0);
+    let mut depth = 0u32;
+    for (at, b) in code_brackets(text, caret) {
+        if at < line_start {
+            continue;
+        }
+        if b == open {
+            depth += 1;
+        } else if b == close {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    depth > 0
+}
+
+/// Every bracket in `text[..end]` that is code, with its byte offset: not in
+/// a string, a character literal or a comment.
+///
+/// As much of Rust's lexer as brackets need — line comments, nested block
+/// comments, strings with their escapes, raw strings with any number of
+/// `#`, and a `'` that is a character literal only when a quote closes it
+/// one character (or an escape) later, which a lifetime never does. On
+/// bytes: every delimiter is ASCII, and no byte of a multi-byte character
+/// is one.
+fn code_brackets(text: &str, end: usize) -> Vec<(usize, u8)> {
+    let bytes = text.as_bytes();
+    let end = end.min(bytes.len());
+    let at = |i: usize| bytes.get(i).copied();
+    let word = |i: Option<usize>| {
+        i.and_then(at)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80)
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < end {
+        match bytes[i] {
+            b'/' if at(i + 1) == Some(b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if at(i + 1) == Some(b'*') => {
+                let mut depth = 1;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    match (bytes[i], at(i + 1)) {
+                        (b'/', Some(b'*')) => {
+                            depth += 1;
+                            i += 2;
+                        }
+                        (b'*', Some(b'/')) => {
+                            depth -= 1;
+                            i += 2;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'\\' => i += 2,
+                        b'"' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            // `r"…"`, `r#"…"#`, `br"…"`: raw, so no escapes, and closed only
+            // by a quote with as many `#` after it as opened it. Not the `r`
+            // at the end of a word, nor a raw identifier's `r#type`.
+            b'r' if !word(i.checked_sub(1))
+                || (at(i.wrapping_sub(1)) == Some(b'b') && !word(i.checked_sub(2))) =>
+            {
+                let mut j = i + 1;
+                while at(j) == Some(b'#') {
+                    j += 1;
+                }
+                let hashes = j - i - 1;
+                if at(j) != Some(b'"') {
+                    i += 1;
+                    continue;
+                }
+                j += 1;
+                while j < bytes.len() {
+                    if bytes[j] == b'"' && (1..=hashes).all(|k| at(j + k) == Some(b'#')) {
+                        j += 1 + hashes;
+                        break;
+                    }
+                    j += 1;
+                }
+                i = j;
+            }
+            b'\'' => {
+                if at(i + 1) == Some(b'\\') {
+                    // An escape: `'\n'`, `'\''`, `'\u{7b}'` — to the quote
+                    // after the escaped character, never past the line.
+                    let mut j = i + 3;
+                    while let Some(b) = at(j) {
+                        j += 1;
+                        if b == b'\'' || b == b'\n' {
+                            break;
+                        }
+                    }
+                    i = j;
+                } else {
+                    let len = match at(i + 1) {
+                        Some(b) if b >= 0xF0 => 4,
+                        Some(b) if b >= 0xE0 => 3,
+                        Some(b) if b >= 0xC0 => 2,
+                        _ => 1,
+                    };
+                    i += if at(i + 1 + len) == Some(b'\'') {
+                        2 + len
+                    } else {
+                        1
+                    };
+                }
+            }
+            b @ (b'{' | b'}' | b'(' | b')' | b'[' | b']') => {
+                out.push((i, b));
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out
 }
 
 /// What Enter at `caret` should insert.
@@ -311,6 +482,56 @@ mod tests {
         assert_eq!(typed("\"\"", 1, '"'), Some(("\"\"".into(), 2)));
         // A closer with nothing to step over is typed as it is.
         assert_eq!(typed("foo(a", 5, ')'), None);
+    }
+
+    /// The wrong brace: a `{` added to a line whose block and `}` are
+    /// already below — or retyped after deleting one — was paired, and the
+    /// file ended with a `}` too many.
+    #[test]
+    fn an_opener_whose_closer_is_already_waiting_is_not_paired() {
+        let text = "impl Rate \n    fn a() {}\n}\n";
+        assert_eq!(typed(text, 10, '{'), None);
+        // A balanced file still pairs, as ever.
+        assert_eq!(typed("fn a() \n", 7, '{'), Some(("fn a() {}\n".into(), 8)));
+        // And a file one closer short pairs too: that is a file being
+        // written, and the new block needs its own.
+        let short = "fn a() {\n    if x \n";
+        assert!(typed(short, short.len() - 1, '{').is_some());
+    }
+
+    /// Only code counts: a brace in a string, a character, a comment or a
+    /// raw string is text, a lifetime is not a character literal, and a
+    /// character literal can be any character.
+    #[test]
+    fn brackets_in_strings_characters_and_comments_are_not_counted() {
+        let text = "let s = \"}\\\"}\";\nlet c = '}';\nlet e = '\\u{7d}';\n// }\n\
+                    /* } /* } */ } */\nlet r = r#\"}\"#;\nlet z = '中';\n\
+                    fn f<'a>(x: &'a str) {}\n";
+        assert_eq!(balance(text, b'{', b'}'), 0);
+        assert_eq!(balance(text, b'(', b')'), 0);
+        // So an opener after all of it still pairs.
+        let then = format!("{text}let v = ");
+        assert!(typed(&then, then.len(), '{').is_some());
+        // And a closer on a blank line finds its opener past a `"{"`.
+        let quoted = "fn a() {\n    let s = \"{\";\n    ";
+        let (out, _) = typed(quoted, quoted.len(), '}').expect("outdents");
+        assert_eq!(out, "fn a() {\n    let s = \"{\";\n}");
+    }
+
+    /// A closer steps over only what its own line opened, the pair an
+    /// auto-close makes. In front of a `}` that closes a block opened
+    /// above, the one typed is a block's missing brace, and stepping over
+    /// it left the file one short.
+    #[test]
+    fn a_closer_steps_over_only_what_its_line_opened() {
+        assert_eq!(typed("Self { x }", 9, '}'), Some(("Self { x }".into(), 10)));
+        let short = "impl A {\n    fn b() {\n        x\n}";
+        let caret = short.len() - 1;
+        let (out, _) = typed(short, caret, '}').expect("typed, not stepped over");
+        assert_eq!(out, "impl A {\n    fn b() {\n        x\n    }}");
+        // A call closed on a line of its own: typed as it is, not skipped.
+        let call = "foo(\n    a\n)";
+        assert_eq!(typed(call, call.len() - 1, ')'), None);
     }
 
     #[test]

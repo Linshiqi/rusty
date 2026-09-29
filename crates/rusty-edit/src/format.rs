@@ -56,10 +56,23 @@ pub fn format_rust(root: &Path, rel_path: &str, text: &str) -> Result<Formatted>
     })?;
 
     if !output.status.success() {
-        // Usually a parse error, which is normal mid-edit. The first real
-        // line is the one that names it; the rest is context nobody reads
-        // in a status bar.
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // A file that does not parse is a file being written, and its
+        // syntax error is already on screen as a squiggle and in Problems.
+        // Said again on every save it was a line in Output per Ctrl+S —
+        // sixteen of them, reported as "always a pile of notices". So it is
+        // "nothing to format", rust-analyzer's own rule: rustfmt exits 1 for
+        // a parse error, or 101 with the parser's `error` when it panics on
+        // one. Anything else — no rustfmt, a bad `rustfmt.toml` — is a
+        // failure somebody can act on, and still says so.
+        if unparsed(output.status.code(), &stderr) {
+            return Ok(Formatted {
+                changed: false,
+                text: text.to_string(),
+            });
+        }
+        // The first real line is the one that names it; the rest is context
+        // nobody reads in a status bar.
         let reason = stderr
             .lines()
             .find(|line| !line.trim().is_empty())
@@ -73,6 +86,19 @@ pub fn format_rust(root: &Path, rel_path: &str, text: &str) -> Result<Formatted>
         changed: formatted != text,
         text: formatted,
     })
+}
+
+/// Whether rustfmt stopped because the text does not parse — rust-analyzer's
+/// reading of its exit (`handlers::run_rustfmt`): 1 is how rustfmt ends on
+/// a parse error, and 101 is its panic, which counts only when what it
+/// printed is the parser's `error`.
+fn unparsed(code: Option<i32>, stderr: &str) -> bool {
+    let said = stderr.trim_start();
+    match code {
+        Some(1) => true,
+        Some(101) => said.starts_with("error[") || said.starts_with("error:"),
+        _ => false,
+    }
 }
 
 /// The rustfmt to run: stable's own binary when rustup can name it, else
@@ -215,8 +241,11 @@ mod tests {
         assert!(!again.changed, "formatting twice must be a fixpoint");
     }
 
+    /// A file being written does not parse, and saving it is not an error:
+    /// the text goes to disk as it is, and nothing is said — the syntax
+    /// error is already a squiggle. It was a line in Output per save.
     #[test]
-    fn a_parse_error_names_the_problem() {
+    fn a_file_that_does_not_parse_is_saved_as_it_is() {
         if !rustfmt_available() {
             return;
         }
@@ -224,12 +253,35 @@ mod tests {
             .prefix("rusty-fmt")
             .tempdir()
             .expect("tempdir");
-        let error = format_rust(dir.path(), "src/main.rs", "fn main( {").unwrap_err();
-        let message = error.to_string();
-        assert!(
-            message.contains("error") || message.contains("expected"),
-            "the caller needs rustfmt's reason, got: {message}"
-        );
+        for half_written in [
+            "fn main( {",
+            "fn main() {\n    let x = 1\n}\npub fn y() {}\n",
+            "impl A {\n    fn b() {}\n",
+        ] {
+            let result = format_rust(dir.path(), "src/main.rs", half_written)
+                .unwrap_or_else(|error| panic!("{half_written:?} is not a failure: {error}"));
+            assert!(!result.changed, "{half_written:?}");
+            assert_eq!(result.text, half_written);
+        }
+    }
+
+    /// rust-analyzer's reading of rustfmt's exit: 1 is a parse error, 101 is
+    /// a panic that counts only when the parser said `error`, and anything
+    /// else is a failure worth reporting.
+    #[test]
+    fn only_a_parse_error_is_passed_over() {
+        assert!(unparsed(
+            Some(1),
+            "error: expected `;`, found keyword `pub`"
+        ));
+        assert!(unparsed(
+            Some(101),
+            "error: this file contains an unclosed delimiter"
+        ));
+        assert!(unparsed(Some(101), "error[E0000]: something"));
+        assert!(!unparsed(Some(101), "thread 'main' panicked at src/lib.rs"));
+        assert!(!unparsed(Some(2), "error: unknown option `--frob`"));
+        assert!(!unparsed(None, ""));
     }
 
     #[test]

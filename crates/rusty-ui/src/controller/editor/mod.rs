@@ -174,17 +174,6 @@ pub fn highlight_snippet(state: AppState, lang: String, text: String) {
     });
 }
 
-/// Re-read the active document from disk and replace it in place — the tail
-/// of a save, where disk and draft have just been made equal.
-fn reload_active(state: AppState, path: String) {
-    let args = PathArg { path };
-    track(
-        state,
-        async move { ipc::call::<_, Document>(cmd::files::OPEN, &args).await },
-        move |document| show_document(state, document, true),
-    );
-}
-
 /// Put a freshly loaded document on screen.
 ///
 /// A different path parks the current editor first; the same path replaces it

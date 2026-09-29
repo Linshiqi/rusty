@@ -5,31 +5,36 @@ use super::*;
 
 /// Write the draft back without being asked, a beat after typing stopped.
 ///
-/// Not [`save_file`]: that one re-reads the file afterwards, which is right
-/// for Ctrl+S — the user has stopped — and is an editor eating work here.
-/// The round trip takes tens of milliseconds, typing continues through it,
-/// and the re-read then puts the disk's copy into `draft` over the keys
-/// pressed since. Nor [`format_then_save`]: rustfmt under the fingers
-/// rewrites the line being typed, and mid-expression it cannot parse at all,
-/// so every second would put a failure in the dock.
-///
-/// So: write, and move the *document* forward to exactly the bytes written.
-/// The dirty dot is `draft != document.text`, so it clears by itself and
-/// stays honest — it lights again the moment the next key is pressed. The
-/// draft is never touched.
+/// Not [`format_then_save`]: rustfmt under the fingers rewrites the line
+/// being typed, and mid-expression it cannot parse at all. So: write, and
+/// move the *document* forward to exactly the bytes written — the same
+/// write Ctrl+S makes (`write_draft`), less the write of a draft the disk
+/// already holds. The dirty dot is `draft != document.text`, so it clears
+/// by itself and stays honest — it lights again the moment the next key is
+/// pressed. The draft is never touched.
 pub fn autosave_file(state: AppState) {
+    write_draft(state, false);
+}
+
+/// Write the draft to disk and move the document forward to exactly the
+/// bytes written — what both a save and an auto-save do. `always` is a save
+/// somebody asked for, which writes even a draft the disk already holds.
+fn write_draft(state: AppState, always: bool) {
     let Some(document) = state.editor.document.with_untracked(Clone::clone) else {
         return;
     };
-    // The refusal a manual save makes: a library's source is not ours.
+    // A dependency's source is not this project's to change; the backend
+    // would refuse the path anyway, but a red banner for pressing Ctrl+S in
+    // a file that *looks* editable would blame the user for our affordance.
     if document.read_only {
         return;
     }
     let path = document.path.clone();
     let text = state.editor.draft.get_untracked();
-    if text == document.text {
+    if !always && text == document.text {
         return;
     }
+    state.editor.note_written(&path, &text);
     let args = PathText {
         path: path.clone(),
         text: text.clone(),
@@ -102,6 +107,9 @@ pub fn save_all_then(state: AppState, then: impl FnOnce() + 'static) {
     }
 
     state.app.in_flight.update(|n| *n += 1);
+    for (path, text) in &writes {
+        state.editor.note_written(path, text);
+    }
     spawn_local(async move {
         for (path, text) in writes {
             let args = PathText {
@@ -139,53 +147,42 @@ pub fn save_all_then(state: AppState, then: impl FnOnce() + 'static) {
     });
 }
 
-/// Write the current draft back.
+/// Write the current draft back — Ctrl+S.
+///
+/// Written the way auto-save writes, not written and then read back. The
+/// read-back put the disk's copy into `draft`, and every key pressed
+/// during the two round trips went with it; on a machine busy with `cargo
+/// check` those trips are slow enough to type through, and a save that
+/// lost the last few keys, with the dirty dot still lit, read as a save
+/// that did not happen. It also announced the open file to rust-analyzer
+/// again and asked for its colours and hints afresh, on every save.
 pub fn save_file(state: AppState) {
-    // A dependency's source is not this project's to change; the backend would
-    // refuse the path anyway, but a red banner for pressing Ctrl+S in a file
-    // that *looks* editable would blame the user for our affordance.
-    if state
-        .editor
-        .document
-        .with_untracked(|d| d.as_ref().is_some_and(|d| d.read_only))
-    {
-        return;
-    }
-
-    let Some(path) = state.active_path_now() else {
-        return;
-    };
-    let args = PathText {
-        path: path.clone(),
-        text: state.editor.draft.get_untracked(),
-    };
-    track(
-        state,
-        async move { ipc::call::<_, ()>(cmd::files::SAVE, &args).await },
-        move |()| {
-            lsp_saved_doc(path.clone());
-            // Whatever the disk held is gone now — the user chose this write
-            // over it, so the warning has done its job and must not linger.
-            clear_stale(state, &path);
-            // Re-read so the highlighting matches what is now on disk, and so
-            // the saved/unsaved marker clears against real content rather than
-            // against an assumption that the write did what was asked.
-            reload_active(state, path.clone());
-        },
-    );
+    write_draft(state, true);
 }
+
+/// How long a save waits for rustfmt, and no longer — VS Code's rule for
+/// its own format-on-save. rustfmt answers in a tenth of that; a machine
+/// busy with `cargo check` can make it wait, and the save goes ahead
+/// unformatted rather than wait with it.
+const FORMAT_BUDGET: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// Format with rustfmt, then save.
 ///
-/// A rustfmt failure — usually a parse error mid-edit — never blocks the
-/// save; the reason goes to the dock instead. `apply` is the editor's own
-/// hand: it re-echoes the text and puts the caret back, because the DOM
-/// element lives with the view, not here.
+/// The save never waits on the format for long ([`FORMAT_BUDGET`]), and a
+/// format is used only when it is of the text still on screen: rustfmt
+/// answering about a draft that has been typed on since would put back the
+/// text from before the typing. A file that does not parse comes back
+/// unformatted without a word (`rusty_edit::format_rust`); a real failure —
+/// no rustfmt, a bad `rustfmt.toml` — goes to the dock, and the save still
+/// happens. `apply` is the editor's own hand: it re-echoes the text and puts
+/// the caret back, because the DOM element lives with the view, not here.
 pub fn format_then_save(
     state: AppState,
     caret: Option<(u32, u32)>,
     apply: impl Fn(&str, Option<(u32, u32)>) + 'static,
 ) {
+    use std::{cell::Cell, rc::Rc};
+
     let Some(document) = state.editor.document.with_untracked(Clone::clone) else {
         return;
     };
@@ -203,13 +200,36 @@ pub fn format_then_save(
         return;
     }
 
+    let path = document.path;
+    let sent = state.editor.draft.get_untracked();
+    // Whichever comes first, the answer or the budget, saves; the other
+    // then does nothing.
+    let settled = Rc::new(Cell::new(false));
+    let still_here = move |path: &str| state.active_path_now().as_deref() == Some(path);
+    {
+        let (settled, path) = (Rc::clone(&settled), path.clone());
+        set_timeout(
+            move || {
+                if !settled.replace(true) && still_here(&path) {
+                    save_file(state);
+                }
+            },
+            FORMAT_BUDGET,
+        );
+    }
     let args = PathText {
-        path: document.path,
-        text: state.editor.draft.get_untracked(),
+        path: path.clone(),
+        text: sent.clone(),
     };
     spawn_local(async move {
-        match ipc::call::<_, rusty_edit::Formatted>(cmd::files::FORMAT, &args).await {
-            Ok(formatted) if formatted.changed => {
+        let answer = ipc::call::<_, rusty_edit::Formatted>(cmd::files::FORMAT, &args).await;
+        if settled.replace(true) || !still_here(&path) {
+            return;
+        }
+        match answer {
+            Ok(formatted)
+                if formatted.changed && state.editor.draft.with_untracked(|d| *d == sent) =>
+            {
                 state.editor.draft.set(formatted.text.clone());
                 apply(&formatted.text, caret);
             }

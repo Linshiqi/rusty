@@ -122,38 +122,20 @@ pub fn follow(state: AppState, path: String) {
 }
 
 fn follow_in(state: AppState, path: String) {
-    let active = state.active_path_now();
-
-    if active.as_deref() == Some(path.as_str()) {
-        let dirty = state.editor.document.with_untracked(|d| {
-            d.as_ref().is_some_and(|d| {
-                !d.read_only && state.editor.draft.with_untracked(|draft| draft != &d.text)
-            })
-        });
-        if dirty {
-            mark_stale(state, path);
-        } else {
-            reload_open(state, path);
-        }
-        return;
-    }
-
+    let active = state.active_path_now().as_deref() == Some(path.as_str());
     // Parked tabs are reloaded in place rather than dropped: a tab that
     // vanished from the strip because a file changed would be a tab the user
     // has to find again, and the caret and history it is holding are the
     // point of parking.
-    let parked = state.editor.parked.with_untracked(|list| {
-        list.iter()
-            .find(|e| e.document.path == path)
-            .map(|e| !e.document.read_only && e.draft != e.document.text)
-    });
-    match parked {
-        Some(true) => mark_stale(state, path),
-        Some(false) => reload_open(state, path),
-        // Not open. The tree refresh above, if there was one, is all that is
-        // owed — re-reading a file nobody is looking at costs an IPC round
-        // trip per file `cargo add` touched.
-        None => {}
+    let parked = state
+        .editor
+        .parked
+        .with_untracked(|list| list.iter().any(|e| e.document.path == path));
+    // Not open: the tree refresh above, if there was one, is all that is
+    // owed — re-reading a file nobody is looking at costs an IPC round trip
+    // per file `cargo add` touched.
+    if active || parked {
+        reload_open(state, path);
     }
 }
 
@@ -175,27 +157,47 @@ pub fn clear_stale(state: AppState, path: &str) {
     state.editor.stale.update(|list| list.retain(|p| p != path));
 }
 
-/// Re-read a file this window has open, active or parked.
+/// Re-read a file this window has open, active or parked, and decide what
+/// the disk's copy means for it.
 ///
-/// Discard the result if the tab went dirty while the read was in flight. The
-/// read is asynchronous and typing is not, so without this a keystroke landing
-/// during the round trip would be overwritten by an answer about the text as
-/// it was before.
+/// Read first, decided after. A draft with edits of its own was marked
+/// stale the moment the watcher spoke, before anybody looked at the disk —
+/// and the watcher speaks for this window's own saves too, so a save
+/// followed by more typing put ⚠ beside a tab only rusty had written. Now:
+/// the disk holding what the document already says, or what this window
+/// last wrote there (`Editor::wrote` — the watcher can overtake a save's
+/// answer), is no news; a draft with edits of its own is marked, never
+/// replaced; anything else is reloaded. Decided against the state after
+/// the read, because the read is asynchronous and typing is not.
 fn reload_open(state: AppState, path: String) {
     let args = PathArg { path: path.clone() };
     spawn_local(async move {
         let Ok(document) = ipc::call::<_, Document>(cmd::files::OPEN, &args).await else {
             return;
         };
-        let active = state.active_path_now();
+        let ours = state.editor.wrote(&path, &document.text);
 
-        if active.as_deref() == Some(path.as_str()) {
-            let dirty = state.editor.draft.with_untracked(|draft| {
-                state
-                    .editor
-                    .document
-                    .with_untracked(|d| d.as_ref().is_some_and(|d| draft != &d.text))
+        if state.active_path_now().as_deref() == Some(path.as_str()) {
+            let (known, dirty) = state.editor.document.with_untracked(|open| match open {
+                Some(open) => (
+                    open.text == document.text,
+                    !open.read_only && state.editor.draft.with_untracked(|d| *d != open.text),
+                ),
+                None => (true, false),
             });
+            if known {
+                return;
+            }
+            if ours {
+                state.editor.document.update(|open| {
+                    if let Some(open) = open
+                        && open.path == path
+                    {
+                        open.text = document.text.clone();
+                    }
+                });
+                return;
+            }
             if dirty {
                 mark_stale(state, path);
                 return;
@@ -204,10 +206,19 @@ fn reload_open(state: AppState, path: String) {
             return;
         }
 
+        let mut dirty = false;
         state.editor.parked.update(|list| {
             if let Some(entry) = list.iter_mut().find(|e| e.document.path == path) {
-                if entry.draft != entry.document.text {
-                    return; // went dirty in flight
+                if entry.document.text == document.text {
+                    return;
+                }
+                if ours {
+                    entry.document.text = document.text.clone();
+                    return;
+                }
+                if !entry.document.read_only && entry.draft != entry.document.text {
+                    dirty = true;
+                    return;
                 }
                 entry.draft = document.text.clone();
                 entry.highlighted = document.lines.clone();
@@ -222,6 +233,9 @@ fn reload_open(state: AppState, path: String) {
                 // time a formatter runs elsewhere.
             }
         });
+        if dirty {
+            mark_stale(state, path);
+        }
     });
 }
 
