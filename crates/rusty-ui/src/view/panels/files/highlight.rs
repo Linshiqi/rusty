@@ -28,30 +28,17 @@ pub(super) fn decorate(
     hints: &[Placed],
     link: Option<(u32, u32)>,
 ) -> AnyView {
-    let mut segments: Vec<(u32, u32, DiagSeverity, String)> = Vec::new();
-    let length = line
-        .spans
+    let text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+    let length = text.chars().count() as u32;
+    // Where each squiggle is drawn is `squiggle`'s rule, which the hover
+    // card reads too; a point at the end of the line ends past it.
+    let segments: Vec<(u32, u32, DiagSeverity, String)> = diags
         .iter()
-        .map(|s| s.text.chars().count() as u32)
-        .sum::<u32>();
-    for d in diags {
-        if index < d.start_line || index > d.end_line {
-            continue;
-        }
-        let from = if index == d.start_line {
-            d.start_col
-        } else {
-            0
-        };
-        let to = if index == d.end_line {
-            d.end_col
-        } else {
-            length
-        };
-        // A zero-width diagnostic still deserves a visible squiggle.
-        let to = to.max(from + 1).min(length.max(from + 1));
-        segments.push((from, to, d.severity, d.message.clone()));
-    }
+        .filter_map(|d| {
+            let (from, to) = crate::squiggle::drawn_on(d, index, &text)?;
+            Some((from, to, d.severity, d.message.clone()))
+        })
+        .collect();
 
     if segments.is_empty() && hints.is_empty() && link.is_none() {
         return line
@@ -102,6 +89,18 @@ pub(super) fn decorate(
     // At the end of the line, and past it: a line shortened under a hint
     // before the next answer draws the hint at its end.
     out.extend(hints[next.min(hints.len())..].iter().map(Piece::Hint));
+    // A problem at the line's end is a cell after everything on it — after
+    // its hints too, so nothing the overlays measure moves: the textarea
+    // has no such cell, and a space drawn before a hint would put the hint
+    // a cell away from where the caret and the pointer think it is.
+    if let Some((severity, message)) = mark_at(length) {
+        out.push(Piece::Run(
+            " ".to_string(),
+            Token::Plain,
+            Some((severity, message.to_string())),
+            false,
+        ));
+    }
 
     out.into_iter()
         .map(|piece| {

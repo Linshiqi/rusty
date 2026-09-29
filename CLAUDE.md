@@ -3094,6 +3094,22 @@ usty`) holds `location.toml`
   the normal state of every crate that supports more than one chip. They were
   in the list while the count beside the tab already excluded them, so the
   two disagreed. Hints stay in the editor, where `diag-hint` dims the span.
+- **A problem at a point is no columns wide, and it was drawn over none.**
+  rust-analyzer's `expected SEMICOLON` and rustc's ``expected `;` `` are
+  both ranges of no width at the end of the line the `;` is missing from.
+  The echo marked the characters a range covers and widened a point to the
+  one after it — which, at the end of a line, does not exist. So Problems
+  listed two errors on line 16 of a file the editor drew clean, the only
+  mark on screen being rustc's `unexpected token` hint dotted under the
+  next line's `pub`; and the hover matched a problem by its own half-open
+  range, which a point never satisfies, so it could not be asked about
+  either. `crate::squiggle::drawn_on` is now the one reading of where a
+  squiggle stands, VS Code's (`_createDecorationRange`): a point past the
+  last thing written on its line is a cell after everything on the line —
+  after its hints too, so nothing the overlays measure moves — and anywhere
+  else it widens to the word it touches. The echo draws it there, the hover
+  finds it there, and the card's range is the drawn span, since "moved
+  away" measured against a range of no width is moved away already.
 - **rust-analyzer's `check.allTargets` default buries no_std projects.** It
   builds tests and benches, which need a test harness `no_std` does not have,
   so every real diagnostic drowns in "can't find crate for `test`". The client

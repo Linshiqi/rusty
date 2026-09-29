@@ -116,7 +116,7 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
         }
 
         let mut text = String::new();
-        if let Some(problem) = &problem {
+        if let Some((problem, _)) = &problem {
             let label = match problem.severity {
                 rusty_lsp::DiagSeverity::Error => "error",
                 rusty_lsp::DiagSeverity::Warning => "warning",
@@ -135,15 +135,17 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
             text.push_str(&info.text);
         }
 
-        // The diagnostic's own span when there is one: it is what the reader
-        // pointed at, and it is what "moved away" has to be measured against
-        // or the card closes while the pointer is still over the red line.
+        // Where the problem's squiggle is drawn on this line when there is
+        // one: it is what the reader pointed at, and it is what "moved away"
+        // has to be measured against or the card closes while the pointer
+        // is still over the red line — a point's own range is no width at
+        // all.
         let range = match (&problem, info.as_ref().and_then(|i| i.range)) {
-            (Some(problem), _) => rusty_lsp::EditRange {
-                start_line: problem.start_line,
-                start_col: problem.start_col,
-                end_line: problem.end_line,
-                end_col: problem.end_col,
+            (Some((_, (from, to))), _) => rusty_lsp::EditRange {
+                start_line: line,
+                start_col: *from,
+                end_line: line,
+                end_col: *to,
             },
             (None, Some(range)) => range,
             // No range from the server means "just this cell" — the card
@@ -204,43 +206,53 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
     });
 }
 
-/// The diagnostic under a position, worst first.
+/// The diagnostic under a position, worst first, with the columns its
+/// squiggle covers on that line.
 ///
 /// Errors outrank warnings at the same spot: two squiggles overlap often —
 /// an unused import that is also a type error — and the one that stops the
-/// build is the one being asked about.
+/// build is the one being asked about. Found where the echo *draws* it
+/// (`squiggle::drawn_on`), read off the same draft: a problem at the end of
+/// a line is no columns wide, and matched by its own range it could never
+/// be hovered at all.
 fn problem_at(
     state: AppState,
     path: &str,
     line: u32,
     col: u32,
-) -> Option<rusty_lsp::FileDiagnostic> {
-    state
-        .lsp
-        .diagnostics
-        .with_untracked(|by_file| worst_at(by_file.get(path)?, line, col).cloned())
+) -> Option<(rusty_lsp::FileDiagnostic, (u32, u32))> {
+    let text = state
+        .editor
+        .draft
+        .with_untracked(|draft| draft.split('\n').nth(line as usize).map(str::to_string))?;
+    state.lsp.diagnostics.with_untracked(|by_file| {
+        worst_at(by_file.get(path)?, line, col, &text)
+            .map(|(diagnostic, span)| (diagnostic.clone(), span))
+    })
 }
 
 /// The pure half of [`problem_at`], so the ranking is pinned by tests rather
 /// than by eye — overlapping squiggles are exactly where it would go wrong.
-fn worst_at(
-    diagnostics: &[rusty_lsp::FileDiagnostic],
+fn worst_at<'d>(
+    diagnostics: &'d [rusty_lsp::FileDiagnostic],
     line: u32,
     col: u32,
-) -> Option<&rusty_lsp::FileDiagnostic> {
-    let mut found: Option<&rusty_lsp::FileDiagnostic> = None;
+    text: &str,
+) -> Option<(&'d rusty_lsp::FileDiagnostic, (u32, u32))> {
+    let mut found: Option<(&rusty_lsp::FileDiagnostic, (u32, u32))> = None;
     for diagnostic in diagnostics {
-        let after_start = (diagnostic.start_line, diagnostic.start_col) <= (line, col);
-        let before_end = (line, col) < (diagnostic.end_line, diagnostic.end_col);
-        if !(after_start && before_end) {
+        let Some((from, to)) = crate::squiggle::drawn_on(diagnostic, line, text) else {
+            continue;
+        };
+        if !(from..to).contains(&col) {
             continue;
         }
-        let better = found.is_none_or(|best| {
+        let better = found.is_none_or(|(best, _)| {
             matches!(diagnostic.severity, rusty_lsp::DiagSeverity::Error)
                 && !matches!(best.severity, rusty_lsp::DiagSeverity::Error)
         });
         if better {
-            found = Some(diagnostic);
+            found = Some((diagnostic, (from, to)));
         }
     }
     found
@@ -250,6 +262,9 @@ fn worst_at(
 mod hover_tests {
     use super::worst_at;
     use rusty_lsp::{DiagSeverity, FileDiagnostic};
+
+    /// Long enough for every column the tests below point at.
+    const LINE: &str = "let value = compute(first, second);";
 
     fn diag(severity: DiagSeverity, line: u32, from: u32, to: u32) -> FileDiagnostic {
         FileDiagnostic {
@@ -268,17 +283,47 @@ mod hover_tests {
     fn only_a_diagnostic_covering_the_position_counts() {
         let diagnostics = [diag(DiagSeverity::Error, 3, 4, 9)];
         assert!(
-            worst_at(&diagnostics, 3, 4).is_some(),
+            worst_at(&diagnostics, 3, 4, LINE).is_some(),
             "the first column is inside"
         );
-        assert!(worst_at(&diagnostics, 3, 8).is_some());
+        assert!(worst_at(&diagnostics, 3, 8, LINE).is_some());
         // Half-open: the end column is where the squiggle stops, so hovering
         // there is hovering past it.
-        assert!(worst_at(&diagnostics, 3, 9).is_none());
-        assert!(worst_at(&diagnostics, 3, 3).is_none());
+        assert!(worst_at(&diagnostics, 3, 9, LINE).is_none());
+        assert!(worst_at(&diagnostics, 3, 3, LINE).is_none());
         assert!(
-            worst_at(&diagnostics, 2, 5).is_none(),
+            worst_at(&diagnostics, 2, 5, LINE).is_none(),
             "another line entirely"
+        );
+    }
+
+    /// The report: `expected SEMICOLON` is a point at the end of a line,
+    /// drawn one cell past it, and the pointer past the end of that line —
+    /// which the editor reads as the line's last column — finds it there,
+    /// with the drawn cell as the card's span. Matched by its own range of
+    /// no width it could never be found.
+    #[test]
+    fn a_point_at_the_end_of_a_line_is_found_where_it_is_drawn() {
+        let line = "    pub const UP: Vector = Vector::new(0.0, 0.0, 1.0)";
+        let end = line.chars().count() as u32;
+        let diagnostics = [diag(DiagSeverity::Error, 15, end, end)];
+        let (found, span) = worst_at(&diagnostics, 15, end, line).expect("drawn past the `)`");
+        assert_eq!(found.start_col, end);
+        assert_eq!(span, (end, end + 1));
+        assert!(
+            worst_at(&diagnostics, 15, end - 1, line).is_none(),
+            "the `)`"
+        );
+        // Inside a line a point is drawn over the word it touches, and
+        // found anywhere on it.
+        let inside = [diag(DiagSeverity::Error, 0, 6, 6)];
+        for col in [4, 8] {
+            let (_, span) = worst_at(&inside, 0, col, LINE).expect("on `value`");
+            assert_eq!(span, (4, 9));
+        }
+        assert!(
+            worst_at(&inside, 0, 9, LINE).is_none(),
+            "the space after it"
         );
     }
 
@@ -297,7 +342,7 @@ mod hover_tests {
             diag(DiagSeverity::Warning, 1, 0, 10),
         ];
         for diagnostics in [warning_first, error_first] {
-            let found = worst_at(&diagnostics, 1, 4).expect("one covers this");
+            let (found, _) = worst_at(&diagnostics, 1, 4, LINE).expect("one covers this");
             assert!(
                 matches!(found.severity, DiagSeverity::Error),
                 "the warning won at column 4",
@@ -311,7 +356,7 @@ mod hover_tests {
             diag(DiagSeverity::Warning, 1, 0, 10),
             diag(DiagSeverity::Error, 1, 2, 6),
         ];
-        let found = worst_at(&diagnostics, 1, 8).expect("the warning covers this");
+        let (found, _) = worst_at(&diagnostics, 1, 8, LINE).expect("the warning covers this");
         assert!(matches!(found.severity, DiagSeverity::Warning));
     }
 }
