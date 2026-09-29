@@ -9,6 +9,47 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.70
+
+**Draw from your code.** A new crate, `rusty-draw`, lets a test or an
+example draw what it computes:
+`Scene::new("cross product").vector("a", a).vector("b", b).vector("a × b", c)`.
+Run it — **▶ Run Test** above a test, or the new **▶ Run** above `main` in a
+file under `examples/` — and the new **Draw** tab below the editor shows the
+arrows in 3-D. Drag to turn the view, or pick Iso, Top, Front or Side.
+Beside the picture every vector is listed with its numbers, and the angles
+between vectors drawn from one point are worked out from those numbers: a
+right angle is marked with a small square only where the arithmetic finds
+one, and three vectors are said to be right- or left-handed, which is how a
+cross product taken the wrong way round shows itself. Firmware can draw too,
+over the serial port, in the simulator or on a board. Add it under
+`[dev-dependencies]` with
+`rusty-draw = { git = "https://github.com/Linshiqi/rusty" }`;
+`examples/draw-vectors` in the repository is a worked example.
+
+**A missing semicolon is underlined where it is missing.** Errors that point
+at a place rather than at some text — rust-analyzer's "expected SEMICOLON",
+rustc's "expected `;`" — sit at the end of a line, and the editor drew
+nothing for them: the Problems list named an error on a line that looked
+clean. They are drawn now as a short squiggle just after the line's last
+character, and hovering it shows the error.
+
+**Saving keeps every key you type.** Ctrl+S used to read the file back after
+writing it, and on a machine busy with `cargo check` whatever was typed in
+between could be lost. It now saves the way auto-save does and never
+touches what you are typing. A file saved and then edited further no longer
+gets the "changed on disk" warning either.
+
+**Format-on-save waits a second at most**, then saves unformatted, as VS Code
+does — and a file that does not parse yet is saved without a line in Output
+every time.
+
+**Braces that add up.** Typing `{` no longer adds a `}` when the file already
+has a `}` waiting for it — retyping a deleted brace used to leave an extra
+one — and typing `}` steps over a brace only when the same line opened it,
+so the brace that closes a block is never swallowed. Brackets inside
+strings, characters and comments are no longer counted.
+
 ## v0.6.69
 
 **A quieter status bar.** The chip and the pin map at the two ends of the
