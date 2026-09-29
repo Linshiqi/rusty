@@ -38,6 +38,8 @@ pub enum Icon {
     /// repository's history.
     Branch,
     Plus,
+    /// The plus's other half: unstage, beside stage.
+    Minus,
     /// Arrows against a baseline: down into it is pull, up out of it is
     /// push, and down between brackets is fetch — brought in, not applied.
     Pull,
@@ -69,6 +71,12 @@ pub enum Icon {
     Warn,
     /// Three axes from a corner and a turn about them: the math toolbox.
     Math,
+    /// A square package with legs on every side and the die inside it: the
+    /// chip the project is built for, in the status bar.
+    Chip,
+    /// A dual-inline package, notch at the top and legs down both sides: the
+    /// pin map, whose two columns are drawn the way a DIP numbers its pins.
+    Pins,
 }
 
 impl Icon {
@@ -142,6 +150,7 @@ impl Icon {
                 "M6.5 5.5a1.75 1.75 0 1 0 0 .01zM6.5 14.5a1.75 1.75 0 1 0 0 .01zM13.5 6.5a1.75 1.75 0 1 0 0 .01zM6.5 7.25v5.5M13.5 8.25c0 3-7 2.5-7 5.5"
             }
             Icon::Plus => "M10 4.5v11M4.5 10h11",
+            Icon::Minus => "M4.5 10h11",
             Icon::Pull => "M10 4v9.5M6.5 10l3.5 3.5 3.5-3.5M4.5 16.5h11",
             Icon::Push => "M10 16V6.5M6.5 10 10 6.5 13.5 10M4.5 3.5h11",
             Icon::Fetch => "M10 4v9M7 10l3 3 3-3M4.5 4v12M15.5 4v12",
@@ -160,6 +169,16 @@ impl Icon {
             Icon::Warn => "M10 3.2 17.3 16.3H2.7zM10 8.3v3.8M10 14.3v.2",
             Icon::Math => {
                 "M6.5 13V3.5M6.5 13H17M6.5 13 3 16.5M10.5 4.6a6 6 0 0 1 4.9 4.9M15.4 9.5l.3-2.2M15.4 9.5l-2.1-.7"
+            }
+            // Two legs a side, four units apart, so they stay apart at the
+            // status bar's fourteen pixels; the die is what makes it a chip
+            // rather than a box with whiskers.
+            Icon::Chip => {
+                "M5 5h10v10H5zM8 8h4v4H8zM8 5V2.5M12 5V2.5M8 15v2.5M12 15v2.5M5 8H2.5M5 12H2.5M15 8h2.5M15 12h2.5"
+            }
+            // The outline breaks for the notch, which dips into the body.
+            Icon::Pins => {
+                "M8.5 3H6v14h8V3h-2.5a1.5 1.5 0 0 1-3 0zM6 6.5H3.5M6 10H3.5M6 13.5H3.5M14 6.5h2.5M14 10h2.5M14 13.5h2.5"
             }
             // A chevron pointing down; callers rotate it for the other ways.
             Icon::Chevron => "M5.5 8 10 12.5 14.5 8",

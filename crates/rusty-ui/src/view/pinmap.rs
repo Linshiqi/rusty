@@ -28,11 +28,15 @@ use rusty_embed::{PinInfo, PinReport};
 
 use rusty_i18n::t;
 
-use crate::{controller, state::AppState};
+use crate::{
+    controller,
+    state::AppState,
+    view::icon::{Icon, IconView},
+};
 
-/// The status bar's pin item: the chip's name, and the pin map above it on
-/// click. Nothing while no chip has a pin report — an item for a project
-/// with no chip would name nothing.
+/// The status bar's pin item: an icon, and the pin map above it on click,
+/// headed by the chip it is the pins of. Nothing while no chip has a pin
+/// report — an item for a project with no chip would name nothing.
 #[component]
 pub fn PinStatus() -> impl IntoView {
     let state = AppState::expect();
@@ -52,29 +56,30 @@ pub fn PinStatus() -> impl IntoView {
     move || {
         let report = state.project.pins.get()?;
         let chip = report.chip.to_uppercase();
-        let label = t!("pinmap.pins", chip = chip);
+        let heading = t!("pinmap.pins", chip = chip.clone());
+        let show = t!("pinmap.show", chip = chip);
         Some(view! {
-            // Full width, one line, like every item in the status bar.
+            // Full height, one line, like every item in the status bar.
             <div class="relative h-full shrink-0">
                 <button
                     type="button"
-                    title=move || if open.get() { t!("pinmap.hide") } else { t!("pinmap.show") }
+                    title=move || if open.get() { t!("pinmap.hide") } else { show.clone() }
                     on:click=move |_| open.update(|it| *it = !*it)
                     class=move || {
                         format!(
-                            "flex h-full items-center gap-1.5 whitespace-nowrap border-l border-line px-3 \
+                            "flex h-full items-center border-l border-line px-2.5 \
                              transition-colors hover:bg-sunken hover:text-label {}",
                             if open.get() { "bg-sunken text-label" } else { "" },
                         )
                     }
                 >
-                    {label}
-                    <span class="text-label-4">"▴"</span>
+                    <IconView icon=Icon::Pins size=14 />
                 </button>
                 {move || {
                     open.get()
                         .then(|| {
                             let report = report.clone();
+                            let heading = heading.clone();
                             view! {
                                 // Full-screen catcher, so clicking anywhere
                                 // else closes it — the behaviour every menu
@@ -96,6 +101,11 @@ pub fn PinStatus() -> impl IntoView {
                                         }
                                     }
                                 >
+                                    // The button is an icon, so the map says
+                                    // whose pins these are.
+                                    <div class="shrink-0 px-2 pb-1.5 text-footnote text-label-2">
+                                        {heading}
+                                    </div>
                                     <Body report=report />
                                 </div>
                             }

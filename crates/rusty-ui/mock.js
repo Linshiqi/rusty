@@ -432,6 +432,28 @@
     ai_check_provider: (a) => ({ verdict: "reachable", model: a.config.model, modelsListed: 3, modelListed: false }),
     pin_report: () => ({ chip: "esp32c3", pins: [], source: null, note: null, unknown: [] }),
     ai_cancel: () => null,
+    // The Git panel on a repository nobody has committed to yet — the state
+    // it was reported in, a list of untracked files — with one change of
+    // each other kind beside them, so every letter in the Changes list and
+    // the row's stage button can be read here. The rest of the panel's
+    // reads are quiet on failure; the history's is not, so it answers empty.
+    git_history: () => ({ rows: [], lanes: 0, truncated: false, head: "master" }),
+    git_status: () => ({
+      head: "master", detached: false, upstream: null, ahead: 0, behind: 0, operation: null,
+      entries: [
+        { path: "Cargo.toml", staged: "added", unstaged: null, untracked: false, conflicted: false, nested: false },
+        { path: "src/main.rs", staged: null, unstaged: "modified", untracked: false, conflicted: false, nested: false },
+        { path: "README.md", staged: null, unstaged: "deleted", untracked: false, conflicted: false, nested: false },
+        // As `parse::status` reads git's `?`: added to the working tree, and
+        // untracked — a stub with no `unstaged` here lists nothing.
+        { path: ".gitignore", staged: null, unstaged: "added", untracked: true, conflicted: false, nested: false },
+        { path: "core/src/lib.rs", staged: null, unstaged: "added", untracked: true, conflicted: false, nested: false },
+      ],
+    }),
+    git_refs: () => ({ branches: [], tags: [] }),
+    git_stashes: () => [],
+    git_remotes: () => [],
+    git_identity: () => ({ name: "Mock", email: "mock@example.com" }),
     // The profile chosen in Settings, kept as the file keeps it, so the
     // drawer has a model to ask once one is picked.
     assistant_choice: () => window.__mock.assistant ?? null,

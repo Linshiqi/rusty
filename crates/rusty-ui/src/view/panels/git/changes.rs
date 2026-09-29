@@ -18,7 +18,10 @@ use crate::view::split;
 use crate::{
     controller,
     state::{AppState, Divider, GitMenu, GitTarget},
-    view::components::{Button, ButtonKind},
+    view::{
+        components::{Button, ButtonKind},
+        icon::{Icon, IconView},
+    },
 };
 
 use super::diff::{change_glyph, diff_pane};
@@ -154,15 +157,8 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
             .into_iter()
             .map(|entry| {
                 let kind = if staged { entry.staged } else { entry.unstaged };
-                let (glyph, ink) = change_glyph(kind, entry.untracked && !staged, entry.conflicted);
-                // The two glyphs that are not a letter get a word on hover.
-                let hint = if entry.conflicted {
-                    Some(t!("git.conflicted"))
-                } else if entry.untracked && !staged {
-                    Some(t!("git.untracked"))
-                } else {
-                    None
-                };
+                let (glyph, ink, hint) =
+                    change_glyph(kind, entry.untracked && !staged, entry.conflicted);
                 let path = entry.path.clone();
                 let (show, open, menu, toggle, lit) =
                     (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
@@ -217,13 +213,19 @@ fn change_list(state: AppState, title: String, entries: Vec<StatusEntry>, staged
                                     </span>
                                 }
                             })}
+                        // Shown on the row under the pointer, as VS Code's
+                        // inline actions are: a box on every row of a new
+                        // repository's nineteen files was a column of
+                        // clutter beside the one row anybody was looking at.
+                        // Keyboard focus shows it too, or a tab stop would be
+                        // an invisible button.
                         <button
                             type="button"
                             title=title
-                            class="shrink-0 rounded-[4px] px-1.5 text-label-4 ring-1 ring-line hover:bg-raised hover:text-label"
+                            class="flex shrink-0 items-center rounded-[4px] p-0.5 text-label-3 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-label focus-visible:opacity-100"
                             on:click=move |_| controller::stage(state, vec![toggle.clone()], !staged)
                         >
-                            {if staged { "−" } else { "+" }}
+                            <IconView icon=if staged { Icon::Minus } else { Icon::Plus } size=13 />
                         </button>
                     </div>
                 }

@@ -62,43 +62,63 @@ pub(super) fn Status(
     }
 }
 
-/// What this project is built for: the chip in the bar, the rest on click.
+/// What this project is built for: the chip as an icon in the bar, the chip,
+/// the target and the toolchain on click.
 ///
+/// An icon, where the chip's name used to be written out: the bar is for what
+/// changes while somebody works, and the chip does not. The name is in the
+/// tooltip and heads the popover, which is where it is read when it matters.
 /// The popover opens upwards because the bar is the last row on screen — a
 /// menu that renders below it is a menu nobody sees.
 #[component]
-pub(super) fn BuiltFor(chip: String, target: String, toolchain: String) -> impl IntoView {
+pub(super) fn BuiltFor(chip: Option<String>, target: String, toolchain: String) -> impl IntoView {
     let open = RwSignal::new(false);
     // The proposed switch, once one has been planned. Held here rather than
     // applied on click: what a chip switch touches is exactly what somebody
     // needs to read before it happens.
     let proposal = RwSignal::new(None::<rusty_embed::Migration>);
     let picking = RwSignal::new(false);
-    let current = chip.clone();
-    let row = |label: String, value: String, note: String| {
+    let hint = match &chip {
+        Some(chip) => t!("status.built-for-hint", chip = chip),
+        None => t!("status.no-chip-hint"),
+    };
+    let named = chip.unwrap_or_else(|| t!("status.no-chip"));
+    let current = named.clone();
+    let row = |label: String, value: String, note: Option<String>| {
         view! {
             <div class="flex flex-col gap-0.5 px-3 py-1.5">
                 <div class="flex items-baseline gap-2">
                     <span class="w-[4.5rem] shrink-0 text-label-3">{label}</span>
                     <span class="min-w-0 break-all text-label select-text">{value}</span>
                 </div>
-                <span class="pl-[calc(4.5rem+0.5rem)] text-caption text-label-4">{note}</span>
+                {note
+                    .map(|note| {
+                        view! {
+                            <span class="pl-[calc(4.5rem+0.5rem)] text-caption text-label-4">
+                                {note}
+                            </span>
+                        }
+                    })}
             </div>
         }
     };
 
     view! {
-        // Full width, one line, like every item in the bar (`Status`).
+        // Full height, one line, like every item in the bar (`Status`).
         <div class="relative h-full shrink-0">
             <button
                 type="button"
-                title=t!("status.built-for-hint")
+                title=hint
                 on:click=move |_| open.update(|it| *it = !*it)
-                class="flex h-full items-center gap-1.5 whitespace-nowrap border-r border-line px-3 transition-colors hover:bg-sunken hover:text-label"
+                class=move || {
+                    format!(
+                        "flex h-full items-center border-r border-line px-2.5 transition-colors \
+                         hover:bg-sunken hover:text-label {}",
+                        if open.get() { "bg-sunken text-label" } else { "" },
+                    )
+                }
             >
-                <span class="text-label-3">{t!("status.chip")}</span>
-                {chip}
-                <span class="text-label-4">"▴"</span>
+                <IconView icon=Icon::Chip size=14 />
             </button>
             {move || {
                 open.get()
@@ -118,15 +138,16 @@ pub(super) fn BuiltFor(chip: String, target: String, toolchain: String) -> impl 
                             // wide enough for the plan left two short rows
                             // sitting in an otherwise empty box.
                             <div class="absolute bottom-full left-0 z-50 mb-px max-h-[70vh] w-max max-w-[34rem] min-w-[14rem] overflow-y-auto rounded-t-[8px] border border-line bg-raised py-1.5 shadow-lg">
+                                {row(t!("status.chip"), named.clone(), None)}
                                 {row(
                                     t!("status.target"),
                                     target.clone(),
-                                    t!("status.target-note"),
+                                    Some(t!("status.target-note")),
                                 )}
                                 {row(
                                     t!("status.toolchain"),
                                     toolchain.clone(),
-                                    t!("status.toolchain-note"),
+                                    Some(t!("status.toolchain-note")),
                                 )}
                                 <div class="my-1 h-px bg-line" />
                                 <SwitchChip current=current picking=picking proposal=proposal />
@@ -473,10 +494,7 @@ pub(super) fn StatusBar() -> impl IntoView {
                     .project.detected
                     .get()
                     .map(|project| {
-                        let chip = project
-                            .chip
-                            .clone()
-                            .unwrap_or_else(|| t!("status.no-chip"));
+                        let chip = project.chip.clone();
                         let target = project
                             .configured_target
                             .clone()
@@ -485,16 +503,16 @@ pub(super) fn StatusBar() -> impl IntoView {
                             .configured_toolchain
                             .clone()
                             .unwrap_or_else(|| t!("status.unpinned"));
-                        // One chip, not three. The three values answer one
-                        // question — what is this project built for — and the
-                        // chip is the part of the answer anyone reads at a
-                        // glance; the triple and the channel are what you look
-                        // up when something is wrong, which is a click away.
+                        // One icon, not three values. The three answer one
+                        // question — what is this project built for — and none
+                        // of them changes while somebody works: the chip is in
+                        // the icon's tooltip, and all three are a click away,
+                        // labelled, in the popover.
                         //
-                        // They were still labelled inline when they sat in the
-                        // bar, because three bare values reading "esp32 ·
-                        // xtensa-esp32-none-elf · esp" are a riddle. Inside the
-                        // popover there is room to label them properly.
+                        // They sat in the bar once as three bare values reading
+                        // "esp32 · xtensa-esp32-none-elf · esp", a riddle, and
+                        // then as the chip written out, which the user traded
+                        // for an icon.
                         view! {
                             <BuiltFor chip=chip target=target toolchain=toolchain />
                         }

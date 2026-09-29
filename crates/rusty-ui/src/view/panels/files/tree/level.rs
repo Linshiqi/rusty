@@ -4,6 +4,15 @@
 
 use super::*;
 
+/// Where a row `depth` folders down starts: VS Code's eight pixels a level
+/// (`workbench.tree.indent`). It was twelve, and three folders down a name
+/// sat a whole column of the sidebar to the right, which the user set beside
+/// a screenshot of VS Code's tree. One rule for the rows, the naming box and
+/// the renaming box, so a new entry is always drawn where it will land.
+fn indent(depth: usize) -> String {
+    format!("padding-left: {}px", 10 + depth * 8)
+}
+
 /// One level of the tree, and every level under it.
 ///
 /// Returns `AnyView` rather than `impl IntoView` because it calls itself: an
@@ -241,7 +250,7 @@ pub(super) fn Level(entries: Vec<Entry>, depth: usize, parent: String) -> AnyVie
                             on:dragend=on_dragend
                             on:dragover=on_dragover.clone()
                             on:drop=on_drop.clone()
-                            style=format!("padding-left: {}px", 10 + depth * 12)
+                            style=indent(depth)
                             class=move || {
                                 let base = "flex w-full items-center gap-1.5 py-[3px] pr-2 text-left \
                                             text-callout transition-colors";
@@ -392,7 +401,7 @@ fn NewBox(parent: String, dir: bool, depth: usize) -> impl IntoView {
     view! {
         <div
             class="flex w-full items-center gap-1.5 py-[2px] pr-2"
-            style=format!("padding-left: {}px", 10 + depth * 12)
+            style=indent(depth)
         >
             <span class="w-3 shrink-0 text-center text-footnote text-label-3">
                 {if dir { "\u{25b8}" } else { "" }}
@@ -455,7 +464,7 @@ fn RenameBox(path: String, original: String, depth: usize, is_dir: bool) -> impl
     view! {
         <div
             class="flex w-full items-center gap-1.5 py-[2px] pr-2"
-            style=format!("padding-left: {}px", 10 + depth * 12)
+            style=indent(depth)
         >
             <span class="w-3 shrink-0"></span>
             <input

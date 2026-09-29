@@ -117,7 +117,7 @@ pub(super) fn Detail(#[prop(default = false)] standalone: bool) -> impl IntoView
                 .map(|file| {
                     let path = file.path.clone();
                     let (pick, open, menu, lit) = (path.clone(), path.clone(), path.clone(), path.clone());
-                    let (glyph, ink) = change_glyph(Some(file.kind), false, false);
+                    let (glyph, ink, hint) = change_glyph(Some(file.kind), false, false);
                     let counts = match (file.added, file.removed) {
                         (Some(a), Some(r)) => format!("+{a} −{r}"),
                         _ => t!("git.binary"),
@@ -145,7 +145,7 @@ pub(super) fn Detail(#[prop(default = false)] standalone: bool) -> impl IntoView
                                 }));
                             }
                         >
-                            <span class=format!("w-3 shrink-0 {ink}")>{glyph}</span>
+                            <span class=format!("w-3 shrink-0 {ink}") title=hint>{glyph}</span>
                             <span class="min-w-0 flex-1 truncate text-label-2">{path}</span>
                             <span class="shrink-0 text-label-4 tnum">{counts}</span>
                         </button>

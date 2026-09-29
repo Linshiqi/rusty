@@ -380,23 +380,30 @@ fn shown(text: &str) -> String {
     }
 }
 
-/// The letter and colour a change wears in a file list.
+/// The letter and colour a change wears in a file list, and the words it
+/// stands for, for its tooltip — every letter, not only the odd ones, since
+/// a column of letters nobody can decode is a column nobody reads.
+///
+/// VS Code's letters: an untracked file is a green `U`. It was git's own
+/// porcelain code, a grey `?`, which on a new repository is every row of
+/// the list and was asked about in exactly those words — what does a column
+/// of question marks mean.
 pub(super) fn change_glyph(
     kind: Option<ChangeKind>,
     untracked: bool,
     conflicted: bool,
-) -> (&'static str, &'static str) {
+) -> (&'static str, &'static str, String) {
     if conflicted {
-        return ("!", "text-crimson");
+        return ("!", "text-crimson", t!("git.kind-conflicted"));
     }
     if untracked {
-        return ("?", "text-label-3");
+        return ("U", "text-patina", t!("git.kind-untracked"));
     }
     match kind {
-        Some(ChangeKind::Added) => ("A", "text-patina"),
-        Some(ChangeKind::Modified) => ("M", "text-amber"),
-        Some(ChangeKind::Deleted) => ("D", "text-crimson"),
-        Some(ChangeKind::Renamed) => ("R", "text-slate"),
-        Some(ChangeKind::Other) | None => ("·", "text-label-4"),
+        Some(ChangeKind::Added) => ("A", "text-patina", t!("git.kind-added")),
+        Some(ChangeKind::Modified) => ("M", "text-amber", t!("git.kind-modified")),
+        Some(ChangeKind::Deleted) => ("D", "text-crimson", t!("git.kind-deleted")),
+        Some(ChangeKind::Renamed) => ("R", "text-slate", t!("git.kind-renamed")),
+        Some(ChangeKind::Other) | None => ("·", "text-label-4", t!("git.kind-other")),
     }
 }

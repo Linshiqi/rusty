@@ -84,7 +84,10 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # once a model is chosen in Settings (the mock keeps the choice as the file
 # would): a tool call and then the reply, each round reporting its usage and
 # the second mostly cached, so the drawer's meter and the attachment chip
-# can be read here.
+# can be read here. So does the Git panel: a repository with nothing
+# committed, its Changes one file of every kind — an untracked file is
+# `unstaged: "added"` with `untracked`, as `parse::status` reads git's `?`,
+# and a stub without the first lists nothing.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -1707,6 +1710,15 @@ The view is a directory, one module per region, where it was one file of
   a contract: branch headers, `1`/`2`/`u`/`?` entries, a rename carrying its
   old path as the next NUL-separated token. Parsed once, in `parse::status`,
   under tests pinning the real output.
+- **A letter in a file list says what it means, and git's `?` is not one.**
+  The Changes list wore porcelain's own code for an untracked file, a grey
+  `?`, and on a new repository that is every row — asked about in exactly
+  those words. It is VS Code's green `U` now, and every letter carries its
+  meaning on hover (`change_glyph`, shared with a commit's file list), not
+  only the two odd ones. **A row's stage button shows on the row under the
+  pointer**, as VS Code's inline actions do, and on keyboard focus: a boxed
+  `+` on every row was a column of clutter beside the one row anybody was
+  looking at.
 - **Branch delete is `-d`, never `-D`.** A branch whose work is merged
   nowhere is refused, and that refusal in the dock is the right answer;
   force-deleting is a decision for a terminal, not a button.
@@ -2540,7 +2552,10 @@ every panel; the title bar is the row that already exists.
 Chrome actions are icon buttons with a `title` tooltip — flat like VSCode's,
 no ring, no fill; colour lands on the glyph (accent Play, crimson Stop). Text
 appears in a control only when it carries state (a zoom %, a grid size).
-Dot-entries never show in the file tree. Every dock surface answers a
+Dot-entries never show in the file tree, and a level of it is eight pixels,
+VS Code's `workbench.tree.indent` (`tree::level::indent`, one rule for the
+rows and the boxes that name and rename in them): at twelve, three folders
+down sat a column of the sidebar to the right. Every dock surface answers a
 right-click with its own menu or not at all — the browser's default menu is
 always a bug.
 
@@ -2563,7 +2578,10 @@ bar's other items off the edge. It is cut with an ellipsis at 22rem, is the
 first thing to give way when the bar is short of room (the interface zoom
 makes a 960 px window narrower than that), and carries the whole line in its
 tooltip. The chip item was wrapping onto two lines at the same width before
-it was given the same rule.
+it was given the same rule. **The chip and the pin map are icons**, the
+user's call over their written-out names: the bar is for what changes while
+somebody works, and the chip does not. The name is in both tooltips and
+heads both popovers, where it is read when it matters.
 
 **Lists of things the shell has are generated from the thing.** The View
 menu and the palette iterate `DockTab::ALL` and the panel registry; five of
