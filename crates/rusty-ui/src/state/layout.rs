@@ -18,6 +18,9 @@ pub enum DockTab {
     /// Named numeric channels over time — what a control loop is doing, and
     /// the tunables it exposes.
     Plot,
+    /// What a program drew with `rusty-draw`: vectors, points and frames in
+    /// space, and the angles between them.
+    Draw,
     /// The signal lab: what the sheet's signals play, and what a filter in
     /// the firmware made of them — in time, as a spectrum, as a measured
     /// response, and against a design.
@@ -37,13 +40,14 @@ impl DockTab {
     /// Every tab there is, in the order the strip draws them. The View menu
     /// and the palette list these; the strip itself carries a subset
     /// ([`Layout::dock_tabs`]).
-    pub const ALL: [DockTab; 10] = [
+    pub const ALL: [DockTab; 11] = [
         DockTab::Problems,
         DockTab::Output,
         DockTab::Terminal,
         DockTab::Calls,
         DockTab::Waves,
         DockTab::Plot,
+        DockTab::Draw,
         DockTab::Signals,
         DockTab::Debug,
         DockTab::Registers,
@@ -98,6 +102,7 @@ impl DockTab {
             DockTab::Terminal => t!("dock.tab.terminal"),
             DockTab::Waves => t!("dock.tab.waves"),
             DockTab::Plot => t!("dock.tab.plot"),
+            DockTab::Draw => t!("dock.tab.draw"),
             DockTab::Signals => t!("dock.tab.signals"),
             DockTab::Debug => t!("dock.tab.debug"),
             DockTab::Registers => t!("dock.tab.registers"),

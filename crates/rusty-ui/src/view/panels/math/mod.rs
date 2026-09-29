@@ -24,15 +24,9 @@ use rusty_i18n::t;
 
 use crate::{controller, state::AppState};
 
-/// A row's colour in the view and beside it: eight that read apart on the
-/// dark and the light theme alike, fixed for the reason the Git lanes are —
-/// a row that changed colour with the theme would read as another row.
-pub(super) const PALETTE: [&str; 8] = [
-    "#5b9df0", "#e8a33d", "#3fb68b", "#d9658a", "#9a7bf0", "#4fc1d1", "#c7b14a", "#e06c4f",
-];
-
+/// A row's colour in the view and beside it (`view::space`'s palette).
 pub(super) fn row_colour(index: usize) -> &'static str {
-    PALETTE[index % PALETTE.len()]
+    crate::view::space::palette(index)
 }
 
 #[component]

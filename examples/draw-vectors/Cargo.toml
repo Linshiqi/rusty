@@ -1,0 +1,17 @@
+# `[workspace]` on its own detaches this from rusty's workspace. Without it
+# cargo refuses to build anything under a workspace root it is not a member
+# of, with an error about believing it is in a workspace.
+[workspace]
+
+[package]
+name = "draw-vectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The tests and the example draw; the library itself depends on nothing, as
+# a flight library's vector type would not. A project outside this
+# repository takes it from git instead:
+#   rusty-draw = { git = "https://github.com/Linshiqi/rusty" }
+[dev-dependencies]
+rusty-draw = { path = "../../crates/rusty-draw" }

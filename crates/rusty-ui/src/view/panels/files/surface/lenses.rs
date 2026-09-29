@@ -1,5 +1,6 @@
 //! `▶ Run Test | Debug` beside every test and every module holding one,
-//! where VS Code puts it (`lens.rs` places it).
+//! and `▶ Run` beside an example's `main`, where VS Code puts them
+//! (`lens.rs` places them).
 
 use super::*;
 
@@ -53,7 +54,15 @@ pub(super) fn Lenses(pane: Pane) -> impl IntoView {
                             t!("files.lens-run-test"),
                             t!("files.run-test", name = r.name.clone()),
                         ),
+                        rusty_edit::RunnableKind::Example => (
+                            t!("files.lens-run"),
+                            t!("files.run-example", name = r.name.clone()),
+                        ),
                     };
+                    // An example runs; debugging is the tests' — the host
+                    // debugger finds a test's binary by asking the test
+                    // binaries, and an example is not one of them.
+                    let example = r.kind == rusty_edit::RunnableKind::Example;
                     let debug_title = t!("files.debug-test", name = r.name.clone());
                     let run_filter = r.filter.clone();
                     let debug_filter = r.filter.clone();
@@ -70,27 +79,33 @@ pub(super) fn Lenses(pane: Pane) -> impl IntoView {
                                 on:mousedown=|event: ev::MouseEvent| event.prevent_default()
                                 on:click=move |event: ev::MouseEvent| {
                                     event.stop_propagation();
-                                    controller::run_test(state, run_filter.clone());
+                                    if example {
+                                        controller::run_example(state, run_filter.clone());
+                                    } else {
+                                        controller::run_test(state, run_filter.clone());
+                                    }
                                 }
                                 class="pointer-events-auto flex items-center gap-1 hover:text-label"
                             >
                                 <IconView icon=Icon::Play size=icon_px />
                                 {run_label}
                             </button>
-                            <span class="text-label-4">"|"</span>
-                            <button
-                                type="button"
-                                title=debug_title
-                                on:mousedown=|event: ev::MouseEvent| event.prevent_default()
-                                on:click=move |event: ev::MouseEvent| {
-                                    event.stop_propagation();
-                                    controller::debug_test(state, debug_filter.clone());
-                                }
-                                class="pointer-events-auto flex items-center gap-1 hover:text-label"
-                            >
-                                <IconView icon=Icon::Bug size=icon_px />
-                                {t!("files.lens-debug")}
-                            </button>
+                            {(!example).then(|| view! {
+                                <span class="text-label-4">"|"</span>
+                                <button
+                                    type="button"
+                                    title=debug_title
+                                    on:mousedown=|event: ev::MouseEvent| event.prevent_default()
+                                    on:click=move |event: ev::MouseEvent| {
+                                        event.stop_propagation();
+                                        controller::debug_test(state, debug_filter.clone());
+                                    }
+                                    class="pointer-events-auto flex items-center gap-1 hover:text-label"
+                                >
+                                    <IconView icon=Icon::Bug size=icon_px />
+                                    {t!("files.lens-debug")}
+                                </button>
+                            })}
                         </div>
                     })
                 })

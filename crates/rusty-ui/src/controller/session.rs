@@ -324,6 +324,19 @@ pub(super) fn absorb(state: AppState, line: LogLine) {
         if start_us.is_some() {
             state.reveal_tab(crate::state::DockTab::Signals);
         }
+    } else if let Some((before, drawing)) = rusty_embed::draw::split_draw(&line.text) {
+        // What a program drew with `rusty-draw`. Anything before the marker
+        // is somebody else's — a test harness running one test at a time
+        // writes `test name ... ` and then what the test prints — and goes
+        // to the log as the rest of that line would have.
+        let before = before.trim_end().to_string();
+        drawn(state, drawing);
+        if !before.is_empty() {
+            state.push_log(LogLine {
+                text: before,
+                ..line
+            });
+        }
     } else {
         state.push_log(line);
     }

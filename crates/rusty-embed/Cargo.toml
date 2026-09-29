@@ -58,5 +58,8 @@ backend = [
 workspace = true
 
 [dev-dependencies]
+# The writer of the drawing protocol, so a test can hold `draw`'s reader to
+# what the crate actually writes rather than to a copy of its format.
+rusty-draw = { path = "../rusty-draw" }
 object = { version = "0.40.0", features = ["write"] }
 tempfile = "3.27.0"

@@ -261,7 +261,7 @@ pub fn extent(items: &[Item]) -> f64 {
             Item::Line { a, b, .. } => vec![*a, *b],
             Item::Arrow { from, to, .. } => vec![*from, *to],
             Item::Polyline { points, .. } | Item::Polygon { points, .. } => points.clone(),
-            Item::Label { at, .. } => vec![*at],
+            Item::Label { at, .. } | Item::Dot { at, .. } => vec![*at],
         })
         .map(Vec3::norm)
         .fold(0.0, f64::max)
@@ -279,7 +279,7 @@ mod tests {
                 Item::Line { a, b, .. } => vec![*a, *b],
                 Item::Arrow { from, to, .. } => vec![*from, *to],
                 Item::Polyline { points, .. } | Item::Polygon { points, .. } => points.clone(),
-                Item::Label { at, .. } => vec![*at],
+                Item::Label { at, .. } | Item::Dot { at, .. } => vec![*at],
             })
             .collect()
     }

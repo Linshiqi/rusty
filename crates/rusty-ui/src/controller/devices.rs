@@ -607,6 +607,8 @@ pub(super) fn note_exit(state: AppState, code: Option<i32>) {
     // Nothing is running, so nothing is paused. Left set, the next run
     // would start with a Resume button over a simulation nobody stopped.
     state.sim.paused.set(false);
+    // A scene the run began and never ended is shown as far as it got.
+    drawing_ends(state);
     end_activity(state, code);
     let source = state.dock.source;
     set_timeout(move || source.set("app"), std::time::Duration::ZERO);

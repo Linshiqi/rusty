@@ -23,6 +23,7 @@ use rusty_i18n::t;
 use crate::ipc::IpcError;
 
 mod assistant;
+mod draw;
 mod editor;
 mod git;
 mod lab;
@@ -36,6 +37,7 @@ mod window;
 mod workbench;
 
 pub use assistant::*;
+pub use draw::*;
 pub use editor::*;
 pub use git::*;
 pub use lab::*;
@@ -92,6 +94,8 @@ pub struct AppState {
     pub lab: Lab,
     /// The math toolbox's sheet and the view of it.
     pub math: Math,
+    /// What programs drew with `rusty-draw`, for the Draw tab.
+    pub draw: Drawing,
     pub debug: Debug,
     pub git: Git,
     pub term: Terminal,
@@ -266,6 +270,7 @@ impl AppState {
             },
             lab: Lab::fresh(),
             math: Math::fresh(),
+            draw: Drawing::fresh(),
             debug: Debug {
                 session: RwSignal::new(None),
                 epoch: RwSignal::new(0),

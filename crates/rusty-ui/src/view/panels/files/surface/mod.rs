@@ -302,12 +302,26 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
     // is typed rather than on the next save, and goes with it when it is
     // deleted. The scan is lexical and cheap; a `Memo` keeps it to once per
     // edit rather than once per gutter row.
-    let runnables = Memo::new(move |_| {
-        if !is_rust {
-            return Vec::new();
-        }
-        rusty_edit::tests_in::runnables(&state.editor.draft.get())
-    });
+    let runnables = {
+        let path = path.clone();
+        Memo::new(move |_| {
+            if !is_rust {
+                return Vec::new();
+            }
+            state.editor.draft.with(|text| {
+                let mut found = rusty_edit::tests_in::runnables(text);
+                // An example's `main` too, with ▶ Run — where running it
+                // runs it here rather than on a board.
+                if runs_examples(state, &path)
+                    && let Some(main) = rusty_edit::tests_in::example_main(&path, text)
+                {
+                    found.push(main);
+                    found.sort_by_key(|r| r.line);
+                }
+                found
+            })
+        })
+    };
 
     // Which lines head a foldable region. Memoised for the same reason and a
     // sharper one: the scan walks forward from every line, so asking it once
@@ -825,6 +839,29 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
         </div>
         </div>
     }
+}
+
+/// Whether `cargo run --example` at the project root runs the example at
+/// `path` on this machine. Not where the root is its own firmware — there
+/// `cargo run` builds for the chip and hands the image to the flasher — and
+/// not inside the excluded firmware crate, which cargo at the root does not
+/// see. A host project, or one with no chip at all, runs its examples.
+fn runs_examples(state: AppState, path: &str) -> bool {
+    state.project.detected.with(|project| match project {
+        None => true,
+        Some(project) => {
+            let inside = |dir: &str| {
+                let dir = dir.replace('\\', "/");
+                let dir = dir.trim_end_matches('/');
+                path == dir || path.starts_with(&format!("{dir}/"))
+            };
+            !project.root_is_firmware()
+                && project
+                    .firmware_dir
+                    .as_deref()
+                    .is_none_or(|dir| !inside(dir))
+        }
+    })
 }
 
 /// What a change to the text asks the server for, judged by what now sits

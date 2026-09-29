@@ -342,6 +342,24 @@ pub fn run_test(state: AppState, filter: String) {
     run_tests_at_root(state, line);
 }
 
+/// Run an example in the dock: `cargo run --example <name>` at the project,
+/// where the host crates are, as a test is run — and what it draws with
+/// `rusty-draw` reaches the Draw tab the way a test's does, through
+/// `absorb`. What is run is what is on screen, so every draft is saved
+/// first. Offered only where that runs it on this machine
+/// (`runs_examples`): a firmware crate's `cargo run` flashes a board.
+pub fn run_example(state: AppState, name: String) {
+    save_all_then(state, move || {
+        run_command_in(
+            state,
+            format!("cargo run --example {name}"),
+            true,
+            "commands",
+            |_| {},
+        );
+    });
+}
+
 /// The whole suite — the title bar's Test. The same path as the lens with
 /// an empty filter, so the two cannot disagree about where tests run; and
 /// no `--nocapture`, because a suite's `println!`s are noise and the harness

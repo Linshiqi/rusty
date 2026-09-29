@@ -1,0 +1,26 @@
+[package]
+name = "rusty-draw"
+description = "Draw vectors, points and frames from Rust code into rusty's 3-D view — one line of text per shape, on stdout or any fmt::Write"
+# Its own number, not the workbench's: this is a library other projects
+# depend on, and it changes when its lines change, not when the app ships.
+version = "0.1.0"
+edition = "2021"
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["vector", "plot", "3d", "no-std", "embedded"]
+categories = ["visualization", "no-std", "embedded"]
+
+[features]
+# `Scene`, which prints itself; without it only `SceneOn`, which writes to
+# whatever `fmt::Write` it is handed — a UART, esp-println's `Printer`.
+default = ["std"]
+std = []
+
+# Nothing: a crate a firmware links to say "draw this" should cost it no
+# dependency graph.
+[dependencies]
+
+[lints]
+workspace = true

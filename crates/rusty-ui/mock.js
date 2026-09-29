@@ -143,6 +143,41 @@
     },
   ];
 
+  // An example that draws with rusty-draw: `cargo run --example cross`
+  // answers with the scene below (`run_command`), and with `mock.workspace`
+  // set the project is the standard layout, whose examples get ▶ Run.
+  const CROSS = [
+    "use rusty_draw::Scene;",
+    "",
+    "fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {",
+    "    [",
+    "        a[1] * b[2] - a[2] * b[1],",
+    "        a[2] * b[0] - a[0] * b[2],",
+    "        a[0] * b[1] - a[1] * b[0],",
+    "    ]",
+    "}",
+    "",
+    "fn main() {",
+    "    let a = [1.0, 0.4, 0.0];",
+    "    let b = [0.3, 1.0, 0.5];",
+    "    Scene::new(\"cross product\")",
+    "        .vector(\"a\", a)",
+    "        .vector(\"b\", b)",
+    "        .vector(\"a × b\", cross(a, b))",
+    "        .span(\"a, b\", a, b);",
+    "}",
+    "",
+  ].join("\n");
+  const CROSS_SCENE = [
+    "[rusty:draw] scene cross product",
+    "[rusty:draw] vector 1 0.4 0 a",
+    "[rusty:draw] vector 0.3 1 0.5 b",
+    "[rusty:draw] vector 0.2 -0.5 0.88 a × b",
+    "[rusty:draw] span 1 0.4 0 0.3 1 0.5 a, b",
+    "[rusty:draw] end",
+  ];
+  const WORKSPACE = !!localStorage.getItem("mock.workspace");
+
   const RS = [
     "#![no_std]",
     "#![no_main]",
@@ -250,6 +285,7 @@
     configuredTarget: playground === "esp32" ? "xtensa-esp32-none-elf" : "riscv32imc-unknown-none-elf",
     configuredToolchain: null, frameworks: ["esp-hal"], usesDefmt: false, usesEmbassy: false,
     evidence: [], problems: [], playground,
+    firmwareDir: WORKSPACE && !playground ? "firmware" : null,
   });
   // The playground's own board, as its template draws it: an LED behind a
   // resistor on the chip's LED pin, and a button to ground on GPIO4.
@@ -397,6 +433,9 @@
     file_tree: (a) => {
       window.__mock.trees.push(a);
       return [
+      { name: "examples", path: "examples", isDir: true, children: [
+        { name: "cross.rs", path: "examples/cross.rs", isDir: false, children: [] },
+      ]},
       { name: "src", path: "src", isDir: true, children: [
         { name: "main.rs", path: MAIN, isDir: false, children: [] },
       ]},
@@ -411,6 +450,7 @@
       let fallback = RS;
       if (a.path.endsWith("Cargo.toml")) fallback = TOML;
       if (a.path.endsWith(".md")) fallback = MD;
+      if (a.path === "examples/cross.rs") fallback = CROSS;
       return docOf(a.path, window.__mock.saved[a.path] || fallback);
     },
     // Every repaint answered whole, which is always a correct answer.
@@ -779,6 +819,18 @@
         window.__mock.toolchain.requiredTargetInstalled = true;
         send(`info: installing component for ${a.args[2]}`);
         resolve(0);
+        return;
+      }
+      // An example that draws: cargo's own lines on stderr, the program's
+      // scene on stdout, the way `cargo run --example cross` prints them.
+      if (a.program === "cargo" && a.args[0] === "run" && a.args.includes("--example")) {
+        send("   Compiling mock v0.1.0");
+        send("    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s");
+        send("     Running `target\\debug\\examples\\cross.exe`");
+        setTimeout(() => {
+          CROSS_SCENE.forEach((text) => a.onLine.send({ stream: "stdout", text, level: null }));
+          resolve(0);
+        }, 150);
         return;
       }
       send("warning: unused variable: `state`");

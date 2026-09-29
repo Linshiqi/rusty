@@ -43,6 +43,21 @@ pub enum Preset {
     Side,
 }
 
+/// The views of plain space a drawing is looked at from: the axes where a
+/// textbook puts them, rather than where an aircraft's are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// From above and between X and Y: X coming out to the lower left, Y to
+    /// the right, Z up — every axis at once.
+    Iso,
+    /// Straight down: X to the right, Y up the page.
+    Top,
+    /// From −Y: X to the right, Z up.
+    Front,
+    /// From +X: Y to the right, Z up.
+    Side,
+}
+
 const MAX_ELEVATION: f64 = 89.5 * std::f64::consts::PI / 180.0;
 
 impl Camera {
@@ -62,6 +77,22 @@ impl Camera {
             Preset::Top => (std::f64::consts::PI, MAX_ELEVATION),
             Preset::Front => (0.0, 0.0),
             Preset::Side => (wing * std::f64::consts::FRAC_PI_2, 0.0),
+        };
+        Camera {
+            azimuth,
+            elevation,
+            distance: 4.5,
+            target: Vec3::ZERO,
+        }
+    }
+
+    /// A drawing's view, in right-handed space with Z up.
+    pub fn look(look: Look) -> Camera {
+        let (azimuth, elevation) = match look {
+            Look::Iso => (30f64.to_radians(), 25f64.to_radians()),
+            Look::Top => (-std::f64::consts::FRAC_PI_2, MAX_ELEVATION),
+            Look::Front => (-std::f64::consts::FRAC_PI_2, 0.0),
+            Look::Side => (0.0, 0.0),
         };
         Camera {
             azimuth,
@@ -95,6 +126,53 @@ impl Camera {
     pub fn zoomed(self, factor: f64) -> Camera {
         Camera {
             distance: (self.distance * factor).clamp(0.3, 500.0),
+            ..self
+        }
+    }
+
+    /// As near as keeps every one of `points` on a page `width` by `height`
+    /// and `margin` pixels in from its edges — across, then down — looking
+    /// the same way at the same target: the page's own shape used, where a
+    /// sphere about the target would leave a short, wide page mostly empty.
+    /// Perspective moves a point on the page as the distance changes, so the
+    /// distance is found by halving between too near and far enough rather
+    /// than solved; one that fits nowhere gets the furthest there is.
+    pub fn framing(
+        self,
+        points: &[Vec3],
+        frame: Frame,
+        width: f64,
+        height: f64,
+        margin: (f64, f64),
+    ) -> Camera {
+        let (across, down) = margin;
+        let fits = |distance: f64| {
+            let camera = Camera { distance, ..self };
+            let lens = Projector::new(&camera, frame, width, height);
+            points.iter().all(|&point| {
+                lens.project(point).is_some_and(|q| {
+                    (across..=width - across).contains(&q.x)
+                        && (down..=height - down).contains(&q.y)
+                })
+            })
+        };
+        let (mut near, mut far) = (0.3_f64, 500.0_f64);
+        if points.is_empty() || !fits(far) {
+            return Camera {
+                distance: far,
+                ..self
+            };
+        }
+        for _ in 0..40 {
+            let middle = (near * far).sqrt();
+            if fits(middle) {
+                far = middle;
+            } else {
+                near = middle;
+            }
+        }
+        Camera {
+            distance: far,
             ..self
         }
     }
@@ -247,6 +325,13 @@ pub enum Item {
         text: String,
         ink: Ink,
     },
+    /// A point, as a filled dot `radius` pixels across on the page whatever
+    /// its distance: a point has no size to shrink.
+    Dot {
+        at: Vec3,
+        ink: Ink,
+        radius: f64,
+    },
 }
 
 /// One thing, ready for the page.
@@ -274,6 +359,12 @@ pub enum Svg {
         x: f64,
         y: f64,
         text: String,
+    },
+    /// A filled circle's centre and radius.
+    Dot {
+        x: f64,
+        y: f64,
+        r: f64,
     },
 }
 
@@ -392,6 +483,23 @@ fn draw(item: &Item, opacity: f64, p: &Projector) -> Vec<Drawn> {
                 // Labels last among their neighbours, so a line through one
                 // does not cross its writing.
                 q.depth - 0.01,
+            )]
+        }
+        Item::Dot { at, ink, radius } => {
+            let Some(q) = p.project(*at) else {
+                return Vec::new();
+            };
+            vec![base(
+                Svg::Dot {
+                    x: q.x,
+                    y: q.y,
+                    r: *radius,
+                },
+                *ink,
+                0.0,
+                false,
+                1.0,
+                q.depth,
             )]
         }
     }
@@ -633,6 +741,65 @@ mod tests {
         // No perspective: far and near are the same size.
         let far = p.project(Vec3::new(2.0, 3.0, -50.0)).unwrap();
         assert_eq!((far.x, far.y), (q.x, q.y));
+    }
+
+    /// Each of a drawing's views puts the axes where its name says, and the
+    /// isometric one shows all three: X out to the left, Y right, Z up.
+    #[test]
+    fn a_drawings_views_put_the_axes_where_they_say() {
+        let at = |look: Look, p: Vec3| {
+            let projector = Projector::new(&Camera::look(look), Frame::ZUp, 800.0, 600.0);
+            let q = projector.project(p).unwrap();
+            let o = projector.project(Vec3::ZERO).unwrap();
+            (q.x - o.x, q.y - o.y)
+        };
+        let right = |(x, _): (f64, f64)| x > 1.0;
+        let left = |(x, _): (f64, f64)| x < -1.0;
+        let up = |(_, y): (f64, f64)| y < -1.0;
+        let flat = |(x, y): (f64, f64)| x.abs() < 1e-6 && y.abs() < 1e-6;
+        assert!(right(at(Look::Top, Vec3::X)) && up(at(Look::Top, Vec3::Y)));
+        assert!(right(at(Look::Front, Vec3::X)) && up(at(Look::Front, Vec3::Z)));
+        assert!(flat(at(Look::Front, Vec3::Y)), "Y points into the page");
+        assert!(right(at(Look::Side, Vec3::Y)) && up(at(Look::Side, Vec3::Z)));
+        assert!(left(at(Look::Iso, Vec3::X)));
+        assert!(right(at(Look::Iso, Vec3::Y)));
+        assert!(up(at(Look::Iso, Vec3::Z)));
+    }
+
+    /// Framed, every point is on the page inside the margin, and a little
+    /// nearer one is not: the camera is as close as the page allows, on a
+    /// short, wide page as on a square one.
+    #[test]
+    fn framing_brings_everything_as_near_as_the_page_allows() {
+        let points = [
+            Vec3::ZERO,
+            Vec3::new(1.0, 0.4, 0.0),
+            Vec3::new(0.3, 1.0, 0.5),
+            Vec3::new(0.2, -0.5, 0.88),
+            Vec3::new(1.3, 1.4, 0.5),
+        ];
+        for (width, height) in [(900.0, 220.0), (600.0, 600.0)] {
+            let framed =
+                Camera::look(Look::Iso).framing(&points, Frame::ZUp, width, height, (30.0, 16.0));
+            let inside = |camera: &Camera| {
+                let lens = Projector::new(camera, Frame::ZUp, width, height);
+                points.iter().all(|&p| {
+                    lens.project(p).is_some_and(|q| {
+                        (30.0..=width - 30.0).contains(&q.x)
+                            && (16.0..=height - 16.0).contains(&q.y)
+                    })
+                })
+            };
+            assert!(inside(&framed), "{width}×{height}");
+            let nearer = Camera {
+                distance: framed.distance * 0.97,
+                ..framed
+            };
+            assert!(!inside(&nearer), "{width}×{height}: no nearer camera fits");
+        }
+        let untouched =
+            Camera::look(Look::Iso).framing(&[], Frame::ZUp, 400.0, 300.0, (30.0, 16.0));
+        assert!(untouched.distance.is_finite());
     }
 
     #[test]

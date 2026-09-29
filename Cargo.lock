@@ -5480,6 +5480,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty-draw"
+version = "0.1.0"
+
+[[package]]
 name = "rusty-edit"
 version = "0.6.69"
 dependencies = [
@@ -5503,6 +5507,7 @@ dependencies = [
  "object",
  "quick-xml",
  "rustc-demangle",
+ "rusty-draw",
  "rusty-git",
  "serde",
  "serde_json",

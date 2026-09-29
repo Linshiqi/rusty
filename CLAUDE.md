@@ -87,7 +87,11 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # can be read here. So does the Git panel: a repository with nothing
 # committed, its Changes one file of every kind — an untracked file is
 # `unstaged: "added"` with `untracked`, as `parse::status` reads git's `?`,
-# and a stub without the first lists nothing.
+# and a stub without the first lists nothing. And `mock.workspace` in
+# localStorage makes the project the standard layout, a `firmware/` beside
+# the host crates, so `examples/cross.rs` in its tree gets ▶ Run — which
+# answers with a cross product's scene for the Draw tab. Without the switch
+# the project is its own firmware, and the lens is rightly withheld.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -202,6 +206,12 @@ cargo run -p rusty-edit --features backend --example unlinked_probe -- <project>
 # What EasyEDA actually answers for a part, record by record, beside what
 # the reader made of it -- how tests/fixtures/easyeda/ was captured
 cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
+
+# Drawing from code, the worked end: an f32 vector type, an example that
+# draws two vectors and their cross product, and a test that draws and
+# asserts it. In rusty, ▶ Run above `main`; from a shell, the lines rusty
+# reads. (Its own `[workspace]`, as every example here has.)
+cd examples/draw-vectors && cargo run --example cross
 ```
 
 ## Layout
@@ -209,7 +219,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | Crate | Does |
 |---|---|
 | `rusty-core` | Cargo workspace analysis: dependency graph, duplicates, feature unification. `disk/` is the build directory measured and judged (`tree.rs` counts one build tree, `judge.rs` decides what is stale and why, `sweep.rs` removes it, `fs.rs` the filesystem it reads) — the Crates panel's Disk section, `rusty-cli disk` / `sweep` and the `disk_report` tool are its three readers |
-| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json`. `spatial` is the math toolbox's arithmetic — vectors, Hamilton quaternions, Z-Y-X Euler angles, matrices, the two frames flight code is written in, and `check`, which names the convention a wrong attitude crossed — with `spatial::sheet` its worksheet language (lexer, parser, evaluator, and every operation's working as steps), `spatial::instrument` what an attitude indicator reads off an attitude, and `sheet_file` its `.rusty/math.toml` |
+| `rusty-embed` | Chips, boards, project detection, toolchain, memory, flashing, wizard, simulation. `screen` reads a monochrome OLED's command stream back into pixels, `sensor` runs a part's own conversion backwards. `model/` is a directory now, one file per concern, re-exported flat so `rusty_embed::X` still names everything; `simulate/` likewise, with the `.rusty/sim.toml` format in `board_file.rs` beside the planner (`plan.rs`), the chips QEMU models and where this machine keeps the tools (`machine.rs`), which peripherals an emulator binary carries (`models.rs`), its extra arguments and a free port (`qemu.rs`) and the sheet a project declares (`sheet.rs`). `nets/` is the reading of the wires the same way — `graph.rs` the three partitions, `evaluate.rs` the rules, `analog.rs` dividers and knobs, `bus.rs` what sits on I2C and SPI, `switch.rs` presses and ties. Two helpers are shared rather than copied: `union_find` (every partition of pins is one) and `layers` (the catalogue, the parts and the symbol library all layer definitions the same way). Three things that are *not* simulation have their own modules, because `simulate.rs` had grown into the place they lived and every other module was importing "the simulator" to reach them: `tools` (finding a binary — one ladder, one order, for every tool), `install` (fetching QEMU/gdb/gcc, version pins), `net` (proxy policy, and the one `ureq` agent builder); `schematic/` is KiCad and EasyEDA — `.kicad_sym` read and written, `.kicad_sch` read and *patched* back (`docs/kicad.md`), an LCSC part fetched — over `model/symbol.rs`, the drawing the frontend renders. And the sheet answers in numbers now: `solve` is modified nodal analysis (DC, a Shockley junction, backward-Euler transient), `circuit` turns a sheet into one and names what the sheet did not say, `live` walks it in step with a running firmware. `sensor` is an I2C sensor's registers from the readings a slider sets; `signal` is what a generator produces, as one line of text rendered sample for sample, `dsp` the spectrum, the single tone and the filter designs a firmware runs (each held to its closed form, and exported as `no_std` Rust), `generator` the tables a run plays — through the circuit to a converter, or into a sensor's registers — and `wave` the lines that put a table on the emulator and read its account of playing it (`docs/signals.md`); `simulate/channel.rs` is the pin channel from the host's side and `simulate/headless.rs` a run without the window, both shared by the app, the CLI and the assistant; `schematic/wokwi.rs` reads a Wokwi `diagram.json`. `spatial` is the math toolbox's arithmetic — vectors, Hamilton quaternions, Z-Y-X Euler angles, matrices, the two frames flight code is written in, and `check`, which names the convention a wrong attitude crossed — with `spatial::sheet` its worksheet language (lexer, parser, evaluator, and every operation's working as steps), `spatial::instrument` what an attitude indicator reads off an attitude, and `sheet_file` its `.rusty/math.toml`. `draw` reads what a program drew with `rusty-draw` into sketches and measures the angles between what it drew |
 | `rusty-ai` | Bring-your-own-LLM providers (both dialects authorise, send and read a line through `provider/mod.rs`), the tool registry, the agent loop (`agent.rs`: open a turn, read it, run its tools), and `mcp` — the registry served over the Model Context Protocol |
 | `rusty-term` | A real terminal: portable-pty (ConPTY) + vt100, rendered by the frontend; the built-in shell (`builtin.rs`), and `rusty-shell`, the same as a console program of its own for Windows |
 | `rusty-edit` | File tree, syntax highlighting (semantic tokens, not colours), read/write, rustfmt, project search on ripgrep's engine |
@@ -221,6 +231,7 @@ cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 | `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it. So is the math toolbox: `scene` is its 3-D view — a camera, a projection, shapes turned into SVG paths sorted back to front, the quadcopter — pure and tested, and `view/panels/math/` is the page |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
+| `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
 
 ## The rules that are load-bearing
 
@@ -4921,6 +4932,79 @@ lives in the project as `.rusty/math.toml`, beside the board.
   every MCP client work rows out through the panel's evaluator, the
   project's sheet included, with the window's live values sent along with a
   question to the drawer.
+
+## Drawing from code
+
+A program draws into rusty the way it plots: by printing. `rusty-draw`
+writes `[rusty:draw] vector 1 0.4 0 a` — a verb, the fixed count of numbers
+that verb takes, and a label that is the rest of the line — `rusty_embed::draw`
+reads it, `controller::draw` gathers the lines into scenes, and
+`view/draw.rs` is the dock's Draw tab. Asked for as "I want to see the cross
+product of two vectors": the Math panel draws what its own language
+computes, and the vectors in question were the user's, in a flight library
+of their own. So the picture comes from their code.
+
+- **One reader, every stream.** The lines go through `absorb` as telemetry
+  does, so a test run from its lens, an example run from its lens, the
+  simulator's console and a board's port all draw — firmware too, through
+  `SceneOn` and esp-println's `Printer`; the crate builds for
+  `riscv32imc-unknown-none-elf` with no `std`. Text before the marker is
+  kept for the log (`split_draw`): a harness running one test at a time
+  writes `test name ... ` on the line the test's first print lands on.
+- **A scene is printed whole, in one `print!`.** `cargo test` runs tests on
+  threads, and two scenes written a line at a time interleave, each getting
+  the other's arrows; one call holds stdout for the whole scene. Dropped by
+  a panic, it goes out without its `end` and is shown as unfinished — what
+  a failing test had drawn is the thing to look at — and so is a scene a
+  run began and never ended (`note_exit` calls `drawing_ends`).
+- **Shown when it ends, not mark by mark.** The scene being received is a
+  `StoredValue`, so a mark wakes nothing; only a finished scene reaches a
+  signal. A scene drawn again under its title replaces itself in place: a
+  firmware drawing its attitude every loop is one scene fifty times a
+  second, not fifty scenes. The first scene of a run brings the tab
+  forward, and only the first — after that it would take the dock back
+  every time somebody looked at Output.
+- **The angles are worked out, not left to the eye.** Perspective
+  foreshortens every angle, so a right angle cannot be judged in a turned
+  view. `draw::angles` measures every pair of arrows sharing a tail from
+  the numbers printed, the list writes the angles in degrees, and the view
+  draws its little square only where the cosine is under 1e-4 — a
+  two-hundredth of a degree, a thousand times the rounding in an `f32`
+  cross product and thousands of times smaller than a product with a
+  component in the wrong place. **A right angle cannot tell `a × b` from
+  `b × a`**, which is at right angles to both as well; `draw::handedness`
+  can, and says which hand three arrows from one tail make, in amber when
+  it is the left.
+- **A number an `f32` held is written as that `f32`.** Widened for
+  printing, `0.4_f32` is `0.4000000059604645`, and every line an `f32`
+  library drew read like that. `Number` writes the `f32`'s own shortest text
+  when an `f32` holds the value exactly and the `f64`'s otherwise; a `NaN`
+  stays `NaN`, drawn as broken rather than as a zero.
+- **Framed to the page, not to a sphere** (`Camera::framing`). The dock is
+  short and wide, and a sphere fitted round the scene left most of it empty
+  with the arrows the size of a thumbnail. The distance is found by halving
+  until every mark, every name and every axis's end is inside the page, a
+  margin in from the edge. **Each axis is as long as the marks reach along
+  it** (`axis_lengths`): one length for all three let the tallest decide
+  the page. A new scene, one grown or shrunk past a factor of two, or a
+  view reshaped by a third is framed again (`Framed::stale`); anything less
+  keeps the zoom somebody chose.
+- **▶ Run over an example's `main`** (`tests_in::example_main`), beside the
+  tests' lenses: `cargo run --example <name>` at the project root, which
+  cargo resolves across the workspace's members. **Withheld wherever
+  `cargo run` would flash a board** — a root that is its own firmware, and
+  anything inside the excluded firmware crate (`runs_examples`) — because
+  `cargo run` there hands the image to espflash. An example has no Debug:
+  the host debugger finds a test's binary by asking the test binaries.
+- **The crate carries the workspace's license, PolyForm Noncommercial.**
+  For the one crate here that other people link into their own firmware
+  that is a real restriction. Whether it should be permissive, and whether
+  to publish it to crates.io rather than be taken by git, is the owner's
+  call and not made here.
+- **`view/space.rs` is the page half of `crate::scene`** — the palette, each
+  `Ink`'s colour, the SVG element each drawn piece becomes, the size
+  observer — shared by the Math panel and the Draw tab, so a vector is the
+  same arrow in the same colours in both.
 
 ## Meeting C
 

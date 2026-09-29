@@ -41,6 +41,40 @@ pub enum RunnableKind {
     Test,
     /// A `mod` holding some — running it runs everything inside.
     Module,
+    /// An example's `fn main`: `cargo run --example <filter>`.
+    Example,
+}
+
+/// The `fn main` of an example — `examples/<name>.rs`, or
+/// `examples/<name>/main.rs` — which `cargo run --example <name>` runs:
+/// the name is the one cargo gives the target, the file's stem or its
+/// directory's. Only a `main` at the top level of the file counts; one
+/// inside a module or a test is some other function that happens to be
+/// called that.
+pub fn example_main(path: &str, text: &str) -> Option<Runnable> {
+    let parts: Vec<&str> = path.split(['/', '\\']).collect();
+    let name = match parts[..] {
+        [.., "examples", file] => file.strip_suffix(".rs")?,
+        [.., "examples", directory, "main.rs"] => directory,
+        _ => return None,
+    };
+    if name.is_empty() || !text.contains("main") {
+        return None;
+    }
+    let mut depth = 0;
+    for (index, raw) in text.lines().enumerate() {
+        let line = strip_comment(raw);
+        if depth == 0 && declared_fn(line.trim()) == Some("main") {
+            return Some(Runnable {
+                line: index as u32,
+                name: name.to_string(),
+                filter: name.to_string(),
+                kind: RunnableKind::Example,
+            });
+        }
+        depth += braces(line);
+    }
+    None
 }
 
 /// Every test and test module in `text`.
@@ -123,7 +157,7 @@ pub fn runnables(text: &str) -> Vec<Runnable> {
     let keep: Vec<bool> = found
         .iter()
         .map(|r| match r.kind {
-            RunnableKind::Test => true,
+            RunnableKind::Test | RunnableKind::Example => true,
             RunnableKind::Module => tests
                 .iter()
                 .any(|t| t.filter.starts_with(&format!("{}::", r.filter))),
@@ -439,6 +473,44 @@ struct NotATest;
 fn ordinary() {}
 ";
         assert_eq!(names(text), vec![]);
+    }
+
+    /// An example's `main` is offered under the name cargo gives the
+    /// example — the file's stem, or its directory's — and nothing else is.
+    #[test]
+    fn an_examples_main_runs_under_the_name_cargo_gives_it() {
+        let text = "use rusty_draw::Scene;\n\nfn main() {\n    Scene::new(\"x\");\n}\n";
+        let found = example_main("core/examples/cross.rs", text).unwrap();
+        assert_eq!(
+            (found.line, found.filter.as_str(), found.kind),
+            (2, "cross", RunnableKind::Example)
+        );
+        assert_eq!(
+            example_main("examples/tour/main.rs", text).unwrap().filter,
+            "tour"
+        );
+        assert_eq!(
+            example_main(r"core\examples\cross.rs", text)
+                .unwrap()
+                .filter,
+            "cross",
+            "a Windows spelling of the same path"
+        );
+        assert_eq!(example_main("src/main.rs", text), None, "not an example");
+        assert_eq!(example_main("examples/tour/util.rs", text), None);
+        assert_eq!(example_main("examples/notes.md", text), None);
+        let async_main = "#[tokio::main]\nasync fn main() {}\n";
+        assert_eq!(example_main("examples/a.rs", async_main).unwrap().line, 1);
+    }
+
+    /// A `main` inside a module, or one mentioned in a comment, is not the
+    /// example's entry point.
+    #[test]
+    fn only_a_main_at_the_top_level_counts() {
+        let nested = "mod inner {\n    fn main() {}\n}\n";
+        assert_eq!(example_main("examples/a.rs", nested), None);
+        let commented = "// fn main() {}\nfn helper() {}\n";
+        assert_eq!(example_main("examples/a.rs", commented), None);
     }
 
     #[test]

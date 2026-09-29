@@ -61,6 +61,9 @@ pub fn Dock() -> impl IntoView {
                         DockTab::Plot => {
                             view! { <crate::view::plot::Plot /> }.into_any()
                         }
+                        DockTab::Draw => {
+                            view! { <crate::view::draw::DrawTab /> }.into_any()
+                        }
                         DockTab::Signals => {
                             view! { <crate::view::lab::SignalsTab /> }.into_any()
                         }
@@ -255,6 +258,9 @@ fn DockCount(tab: DockTab) -> impl IntoView {
             // one number worth glancing at from another tab: it says whether
             // the telemetry is arriving at all.
             DockTab::Plot => (state.sim.plot.with(|p| p.channels.len()), Tone::Neutral),
+            // How many scenes have been drawn: from another tab, whether the
+            // program drew anything at all.
+            DockTab::Draw => (state.draw.sketches.with(Vec::len), Tone::Neutral),
             DockTab::Calls => (0, Tone::Neutral),
             // How many tables are playing: a signal the firmware is being
             // fed right now, which is worth knowing from another tab.
