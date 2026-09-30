@@ -9,6 +9,29 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.72
+
+**Tab indents the lines you selected.** Select two or more lines, or the
+whole of one, and Tab moves them a level in; Shift+Tab moves them a level
+out, and with nothing selected it takes the caret's line back a level.
+Before, Tab replaced the selection with four spaces, and so did Shift+Tab.
+A level is the next multiple of four, the selection stays on the lines so
+you can press again, and Ctrl+Z puts them back. A caret on its own still
+types four spaces.
+
+**Inlay hints stay on their code.** After an edit that added or removed a
+line — Enter, a paste, an undo, a Tab over a selection — the hints below it
+could be drawn a line above or below the code they describe, and stayed
+there until the next keystroke. A set of hints is now drawn only when
+rust-analyzer answered about the text that is on screen, and asked for
+again when it did not.
+
+**rust-analyzer gets your edits in the order you made them.** Two edits sent
+close together could reach it the wrong way round, leaving it with a
+slightly different file from the one on screen — hints, colours or errors a
+little out of place until the file was closed and opened again. They now
+always arrive in order.
+
 ## v0.6.71
 
 **A failed test is marked where it failed.** After **▶ Run Test**, the line
