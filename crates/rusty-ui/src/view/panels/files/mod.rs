@@ -27,6 +27,7 @@ mod folding;
 mod guides;
 pub(crate) mod highlight;
 mod hints;
+mod indent;
 mod lens;
 mod minimap;
 mod modal;

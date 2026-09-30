@@ -385,10 +385,40 @@ impl Pane {
         // Alt is somebody else's — Ctrl+Tab switches files,
         // and in a window with no switcher (a detached
         // editor) it must not indent either.
+        //
+        // Over a selection that holds lines it moves them
+        // a level in, and with Shift a level out
+        // (`indent.rs`), as VS Code's does: typed over
+        // them, the lines picked out to be indented were
+        // replaced by their indentation.
         if event.key() == "Tab" && !event.ctrl_key() && !event.alt_key() && !event.meta_key() {
             event.prevent_default();
             if let Some(element) = area.get_untracked() {
-                insert_at_caret(&element, state, "    ");
+                let (from, to) = doc_selection(&element, state);
+                let back = event.shift_key();
+                let edit = state.editor.draft.with_untracked(|draft| {
+                    indent::shifts_lines(draft, from, to, back)
+                        .then(|| indent::shift(draft, from, to, back))
+                });
+                match edit {
+                    // Lines already at the margin: nothing to take off.
+                    Some(None) => {}
+                    Some(Some(edit)) => {
+                        // The end the selection grows from stays the
+                        // end it grows from.
+                        let backward = element.selection_direction().ok().flatten().as_deref()
+                            == Some("backward");
+                        apply_edit(&element, state, &edit);
+                        if backward
+                            && let (Ok(Some(start)), Ok(Some(end))) =
+                                (element.selection_start(), element.selection_end())
+                        {
+                            let _ =
+                                element.set_selection_range_with_direction(start, end, "backward");
+                        }
+                    }
+                    None => insert_at_caret(&element, state, "    "),
+                }
             }
         }
     }

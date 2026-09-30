@@ -1221,6 +1221,19 @@ is what it changed.
   Ctrl+V in Vim's modal states makes the textarea writable for that one
   paste (`open_for_paste`) and `paste_into` makes it read-only again the
   moment the text arrives; a timeout covers a paste that never does.
+- **Tab over a selection moves its lines** (`files/indent.rs`, pure and
+  tested), VS Code's rule. A selection that reaches more than one line, or
+  holds the whole of one, is indented a level; Shift+Tab takes a level off
+  every line the selection touches, or off the caret's line. A caret still
+  types four spaces, and a selection inside one line is typed over. It
+  typed four spaces over *any* selection, so two lines picked out to be
+  pushed in were replaced by the indentation meant for them — and Shift+Tab
+  typed the same four. A level is the next stop, not four more columns; a
+  line the selection only reaches the first column of is not in it; an
+  empty line is given nothing to carry; a line indented with tabs moves by
+  a tab, so a Makefile's recipe stays one. One `Edit` through `apply_edit`,
+  with the selection still holding what it held and growing from the end it
+  grew from.
 - **Auto-save is not a format.** Off by default (`auto_save` in
   `workbench.toml`), it writes a second after typing stops — VS Code's
   `files.autoSave: afterDelay`. `format_then_save` would rewrite the line
