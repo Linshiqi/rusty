@@ -261,6 +261,16 @@
 
   const TOML = ['[package]', 'name = "firmware"', 'version = "0.1.0"', ''].join("\n");
   const plain = (text) => ({ spans: text.length ? [{ text, token: "plain" }] : [] });
+  // `rusty_lsp::text_mark`: FNV-1a over the text's bytes, folded to the 53
+  // bits a JSON number holds. What a hints answer names its text by.
+  const textMark = (text) => {
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of new TextEncoder().encode(text)) {
+      hash ^= BigInt(byte);
+      hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+    }
+    return Number((hash >> 53n) ^ (hash & ((1n << 53n) - 1n)));
+  };
   const docOf = (path, text) => ({
     path,
     lines: text.split("\n").map(plain),
@@ -346,6 +356,7 @@
 
   window.__mock = {
     locale: null, toolchain: TOOLCHAIN, installs: [], completes: [], changes: [], calls: [],
+    serverText: {}, serverBefore: {}, hintAsks: [],
     signatures: [], saved: {}, searches: [], trees: [], traces: [], created: [], sent: [], params: {},
     runs: [], buildFails: false, playground: null, resets: 0, simRuns: [],
     // One board and a port that is not one: Flash picks the board by itself.
@@ -548,10 +559,48 @@
         resolve(0);
       }, window.__mock.installDelay || 0);
     }),
-    lsp_open: () => null,
+    // The server's copy of each file, as the last change left it: a hint
+    // is a line and a column, so it is answered where that text has it and
+    // marked with the text it is about.
+    lsp_open: (a) => {
+      const m = window.__mock;
+      if (!(a.path in m.serverText)) m.serverText[a.path] = a.text;
+      return null;
+    },
     lsp_saved: () => null,
-    lsp_close: () => null,
-    lsp_change: (a) => { window.__mock.changes.push(a); return null; },
+    lsp_close: (a) => { delete window.__mock.serverText[a.path]; return null; },
+    lsp_change: (a) => {
+      const m = window.__mock;
+      m.changes.push(a);
+      m.serverBefore[a.path] = m.serverText[a.path];
+      m.serverText[a.path] = a.text;
+      return null;
+    },
+    // A type after every `let name =`, where rust-analyzer writes one.
+    // `__mock.hintsLate` answers the next ask about the text before the last
+    // change, as a question written ahead of its change is answered: the
+    // editor must not draw that answer — it is a line off wherever the
+    // change added or took one — and must ask again.
+    lsp_inlay_hints: (a) => {
+      const m = window.__mock;
+      m.hintAsks.push(a);
+      let text = m.serverText[a.path] ?? "";
+      if (m.hintsLate && m.serverBefore[a.path] !== undefined) {
+        text = m.serverBefore[a.path];
+        m.hintsLate = false;
+      }
+      const hints = [];
+      text.split("\n").forEach((line, index) => {
+        const found = /^(\s*let\s+)(\w+)\s*=/.exec(line);
+        if (found && index >= a.from && index < a.to) {
+          hints.push({
+            line: index, col: found[1].length + found[2].length, label: ": Radio",
+            parameter: false, padLeft: false, padRight: false,
+          });
+        }
+      });
+      return { hints, about: textMark(text) };
+    },
     // Edits carry the range as of *this* request, which is what the real
     // server does and what the stale-range bug depended on: ask while two
     // characters are typed and the range covers two, however many more

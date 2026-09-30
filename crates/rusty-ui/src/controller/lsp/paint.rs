@@ -48,7 +48,23 @@ pub fn request_semantic(state: AppState, path: String) {
 /// Ask for the inlay hints over the lines of this group's file on screen —
 /// the whole file when it is short enough to be asked about whole, as its
 /// semantic colours are — when hints are on.
+///
+/// **An answer is drawn only over the text it is about.** A hint is a line
+/// and a column; the answer names its text (`InlayHints::about`) and is
+/// carried from the text asked over to the one on screen. The server's
+/// text is not always the one asked over — a change on its way, typing the
+/// pulse has not sent yet — and an answer about another text, drawn anyway,
+/// put every hint below an edit a line off its code and left it there until
+/// the next edit: reported after two lines were replaced by one. Such an
+/// answer is asked for again, once the text on screen has been sent.
 pub fn request_hints(state: AppState, path: String) {
+    ask_hints(state, path, true);
+}
+
+/// [`request_hints`], with whether an answer about another text is followed
+/// by one more ask — once, so a server that keeps another text cannot be
+/// asked for ever.
+fn ask_hints(state: AppState, path: String, again: bool) {
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
@@ -83,17 +99,33 @@ pub fn request_hints(state: AppState, path: String) {
     spawn_local(async move {
         // The warm-up answers with errors and empties; the hints on screen
         // stay until an answer replaces them.
-        let Ok(mut hints) =
-            ipc::call::<_, Vec<rusty_lsp::InlayHint>>(cmd::lsp::INLAY_HINTS, &args).await
+        let Ok(answer) = ipc::call::<_, rusty_lsp::InlayHints>(cmd::lsp::INLAY_HINTS, &args).await
         else {
             return;
         };
         if state.active_path_now().as_deref() != Some(path.as_str()) {
             return;
         }
+        if answer.about != rusty_lsp::text_mark(&asked) {
+            // About another text. The hints on screen have moved with every
+            // edit and stand where they should; these would not. Send what
+            // is on screen, and ask once it has gone.
+            if again && let Some(text) = state.editor.draft.try_get_untracked() {
+                let sync = PathText {
+                    path: path.clone(),
+                    text,
+                };
+                let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
+                if state.active_path_now().as_deref() == Some(path.as_str()) {
+                    ask_hints(state, path, false);
+                }
+            }
+            return;
+        }
         let Some(now) = state.editor.draft.try_get_untracked() else {
             return;
         };
+        let mut hints = answer.hints;
         crate::inlay::follow(&mut hints, &asked, &now);
         hints.sort_by_key(|hint| (hint.line, hint.col));
         let _ = state.editor.hints.try_set(Some(crate::state::HintSet {

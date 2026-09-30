@@ -2,12 +2,29 @@
 //! closing them, the text each was last sent as, and what the frontend is
 //! told about each one's diagnostics. A position in a request is converted
 //! here too, against that text.
+//!
+//! **What this client records about a document and what it writes to the
+//! server go in one order** (`Shared::order`). Every call runs on its own
+//! thread of the blocking pool, and each of these used to record first and
+//! write afterwards with nothing held between: two changes could reach the
+//! server in the other order — a delta worked out against a text the server
+//! had not been sent yet, and its copy of the file wrong from then on — a
+//! close could land after the open that followed it, and a question asked
+//! after a change could be written ahead of it and answered about the text
+//! before. That last one is how inlay hints came to be drawn a line below
+//! their code: the answer was about the file before two lines became one.
+//!
+//! A lock of its own, and not the documents': the thread that reads the
+//! server takes the documents' lock for every pushed diagnostic, and a
+//! write to a server whose pipe is full waits for that thread to read. Held
+//! across the write, the documents' lock would be two pipes waiting on each
+//! other. Nothing the reader does takes the order.
 
 use std::sync::atomic::Ordering;
 
 use serde_json::{Value, json};
 
-use super::{LspClient, Shared};
+use super::{LspClient, Shared, transport::Asked};
 use crate::{
     error::Result,
     model::LspEvent,
@@ -27,10 +44,27 @@ impl LspClient {
     /// Show the server a document. Idempotent: opening what is already open is
     /// a no-op, so "reopen after save" needs no bookkeeping in the caller.
     pub fn did_open(&self, path: &str, text: &str) -> Result<()> {
+        let opened = {
+            let _order = self.shared.order.lock().expect("lsp order");
+            self.open_in_order(path, text)?
+        };
+        if opened {
+            // After the notification is on the wire, never before: the
+            // puller's request races for the writer, and a pull that
+            // overtakes the open is answered for a document the server has
+            // not seen.
+            self.shared.poke_pull(path);
+        }
+        Ok(())
+    }
+
+    /// [`Self::did_open`] with the order held: recorded and written. Whether
+    /// anything was opened.
+    fn open_in_order(&self, path: &str, text: &str) -> Result<bool> {
         {
             let mut docs = self.shared.docs.lock().expect("lsp docs");
             if docs.contains_key(path) {
-                return Ok(());
+                return Ok(false);
             }
             docs.insert(
                 path.to_string(),
@@ -56,11 +90,7 @@ impl LspClient {
                 }
             }),
         )?;
-        // After the notification is on the wire, never before: the puller's
-        // request races for the writer, and a pull that overtakes the open
-        // is answered for a document the server has not seen.
-        self.shared.poke_pull(path);
-        Ok(())
+        Ok(true)
     }
 
     /// Tell the server the document now reads `new_text`.
@@ -70,34 +100,44 @@ impl LspClient {
     /// character.
     pub fn did_change(&self, path: &str, new_text: &str) -> Result<()> {
         let encoding = self.shared.encoding();
-        let (version, start, end, replacement) = {
-            let mut docs = self.shared.docs.lock().expect("lsp docs");
-            let Some(doc) = docs.get_mut(path) else {
-                drop(docs);
-                return self.did_open(path, new_text);
+        {
+            // The delta is against the text before it, so it has to arrive
+            // after that text did: recorded and written in one turn.
+            let _order = self.shared.order.lock().expect("lsp order");
+            let change = {
+                let mut docs = self.shared.docs.lock().expect("lsp docs");
+                docs.get_mut(path).map(|doc| {
+                    (doc.text != new_text).then(|| {
+                        let change = content_change(&doc.text, new_text, encoding);
+                        doc.version += 1;
+                        doc.text = new_text.to_string();
+                        (doc.version, change)
+                    })
+                })
             };
-            if doc.text == new_text {
-                return Ok(());
+            match change {
+                // Not open: opening it is how the server comes to have this
+                // text.
+                None => {
+                    self.open_in_order(path, new_text)?;
+                }
+                // What the server has already.
+                Some(None) => return Ok(()),
+                Some(Some((version, (start, end, replacement)))) => self.shared.notify(
+                    "textDocument/didChange",
+                    json!({
+                        "textDocument": { "uri": self.shared.uri(path), "version": version },
+                        "contentChanges": [{
+                            "range": {
+                                "start": { "line": start.0, "character": start.1 },
+                                "end": { "line": end.0, "character": end.1 },
+                            },
+                            "text": replacement,
+                        }],
+                    }),
+                )?,
             }
-            let (start, end, replacement) = content_change(&doc.text, new_text, encoding);
-            doc.version += 1;
-            doc.text = new_text.to_string();
-            (doc.version, start, end, replacement)
-        };
-
-        self.shared.notify(
-            "textDocument/didChange",
-            json!({
-                "textDocument": { "uri": self.shared.uri(path), "version": version },
-                "contentChanges": [{
-                    "range": {
-                        "start": { "line": start.0, "character": start.1 },
-                        "end": { "line": end.0, "character": end.1 },
-                    },
-                    "text": replacement,
-                }],
-            }),
-        )?;
+        }
         // Same ordering as `did_open`: a pull that overtakes the change on
         // the wire is answered for the previous version.
         self.shared.poke_pull(path);
@@ -144,21 +184,27 @@ impl LspClient {
     /// per open document, and nothing would keep it current. What the check
     /// found stands, as it does for any file nobody opened.
     pub fn did_close(&self, path: &str) -> Result<()> {
-        let was_open = self
-            .shared
-            .docs
-            .lock()
-            .expect("lsp docs")
-            .remove(path)
-            .is_some();
-        if !was_open {
-            return Ok(());
+        {
+            // In its turn: an open that follows this close must reach the
+            // server after it, or the server ends with the file closed and
+            // every change to it after that refused.
+            let _order = self.shared.order.lock().expect("lsp order");
+            let was_open = self
+                .shared
+                .docs
+                .lock()
+                .expect("lsp docs")
+                .remove(path)
+                .is_some();
+            if !was_open {
+                return Ok(());
+            }
+            self.shared.notify(
+                "textDocument/didClose",
+                json!({ "textDocument": { "uri": self.shared.uri(path) } }),
+            )?;
         }
         self.shared.pulled.lock().expect("lsp pulled").remove(path);
-        self.shared.notify(
-            "textDocument/didClose",
-            json!({ "textDocument": { "uri": self.shared.uri(path) } }),
-        )?;
         self.shared.emit_diagnostics(path);
         Ok(())
     }
@@ -242,6 +288,23 @@ impl Shared {
             .expect("lsp docs")
             .get(path)
             .map(|doc| doc.text.clone())
+    }
+
+    /// Ask about a document as it stands: its text — what the server was
+    /// last sent, or what is on disk for a file it was never shown — and a
+    /// request made from that text, written in the same turn. No change can
+    /// be sent between the two, so the text returned is the text the answer
+    /// is about; the answer is waited for after the turn is given up.
+    pub(crate) fn ask_about(
+        &self,
+        path: &str,
+        method: &str,
+        params: impl FnOnce(&str) -> Value,
+    ) -> Result<(String, Asked)> {
+        let _order = self.order.lock().expect("lsp order");
+        let text = self.text_of(path).unwrap_or_default();
+        let asked = self.ask(method, params(&text))?;
+        Ok((text, asked))
     }
 
     /// The document's text: what was last sent when it is open, what is on

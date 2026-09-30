@@ -78,29 +78,29 @@ fn edit_pulse(state: AppState) {
     let Some(path) = state.active_path_now() else {
         return;
     };
-    let text = state.editor.draft.get_untracked();
-
     if path.ends_with(".rs") && state.lsp.status.get_untracked() == LspStatus::Ready {
-        // Each view of the file asks for its own colours: a long file's are
-        // asked for around the lines that view is drawing.
-        for group in state.open_groups() {
-            if group.active_path_now().as_deref() == Some(path.as_str()) {
-                request_semantic(group, path.clone());
+        // The change, and only once it has gone what is asked about the
+        // text: colours and hints are lines and columns, right for one text
+        // alone. Called one after the other, the question could be written
+        // ahead of the change — each call is a thread of its own on the
+        // backend, and the change carries the whole file — and the colours
+        // were asked for before the change was even sent.
+        let sync = PathText {
+            path: path.clone(),
+            text: state.editor.draft.get_untracked(),
+        };
+        let about = path.clone();
+        spawn_local(async move {
+            let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
+            // Each view of the file asks for its own: a long file's colours
+            // and hints are asked for around the lines that view is drawing.
+            for group in state.open_groups() {
+                if group.active_path_now().as_deref() == Some(about.as_str()) {
+                    request_semantic(group, about.clone());
+                    request_hints(group, about.clone());
+                }
             }
-        }
-        lsp_sync(
-            cmd::lsp::CHANGE,
-            PathText {
-                path: path.clone(),
-                text: text.clone(),
-            },
-        );
-        // After the change, so the server answers about this text.
-        for group in state.open_groups() {
-            if group.active_path_now().as_deref() == Some(path.as_str()) {
-                request_hints(group, path.clone());
-            }
-        }
+        });
     }
 
     repaint(state, path);

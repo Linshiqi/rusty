@@ -308,14 +308,15 @@ pub async fn lsp_call_hierarchy(
     .await
 }
 
-/// The inlay hints over lines `from..to` of a file.
+/// The inlay hints over lines `from..to` of a file, and the mark of the
+/// text they are about — the editor draws them only over that text.
 #[tauri::command]
 pub async fn lsp_inlay_hints(
     path: String,
     from: u32,
     to: u32,
     state: State<'_, AppState>,
-) -> Result<Vec<rusty_lsp::InlayHint>, CommandError> {
+) -> Result<rusty_lsp::InlayHints, CommandError> {
     ask(&state, move |client| client.inlay_hints(&path, from, to)).await
 }
 

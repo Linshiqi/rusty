@@ -7,7 +7,7 @@ use std::{
     sync::{
         Arc,
         atomic::Ordering,
-        mpsc::{self, Sender},
+        mpsc::{self, Receiver, Sender},
     },
     thread,
     time::Duration,
@@ -26,6 +26,13 @@ use crate::{
 /// waiting. Generous because a cold index answers slowly; callers that want to
 /// retry — completion during startup — retry above this.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A request on the wire, not yet answered.
+pub(crate) struct Asked {
+    id: i64,
+    method: String,
+    answer: Receiver<Option<Value>>,
+}
 
 impl Shared {
     fn write(&self, message: &Value) -> Result<()> {
@@ -51,6 +58,17 @@ impl Shared {
         params: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        let asked = self.ask(method, params)?;
+        self.answer_within(asked, timeout)
+    }
+
+    /// Put a request on the wire and come back before it is answered.
+    ///
+    /// For a caller that has to know what the server had been told when the
+    /// question reached it (`Shared::ask_about`): it writes the request
+    /// while it still holds what it read, and waits for the answer after
+    /// letting go.
+    pub(super) fn ask(&self, method: &str, params: Value) -> Result<Asked> {
         let gone = || Error::Exited {
             method: method.to_string(),
         };
@@ -74,12 +92,25 @@ impl Shared {
             self.pending.lock().expect("lsp pending").remove(&id);
             return Err(error);
         }
+        Ok(Asked {
+            id,
+            method: method.to_string(),
+            answer: rx,
+        })
+    }
 
-        match rx.recv_timeout(timeout) {
+    /// The answer to a request [`Shared::ask`] put on the wire.
+    pub(super) fn answer(&self, asked: Asked) -> Result<Value> {
+        self.answer_within(asked, REQUEST_TIMEOUT)
+    }
+
+    fn answer_within(&self, asked: Asked, timeout: Duration) -> Result<Value> {
+        let Asked { id, method, answer } = asked;
+        match answer.recv_timeout(timeout) {
             Ok(Some(response)) => {
                 if let Some(error) = response.get("error") {
                     Err(Error::Server {
-                        method: method.to_string(),
+                        method,
                         message: error["message"]
                             .as_str()
                             .unwrap_or("unknown error")
@@ -89,12 +120,10 @@ impl Shared {
                     Ok(response.get("result").cloned().unwrap_or(Value::Null))
                 }
             }
-            Ok(None) => Err(gone()),
+            Ok(None) => Err(Error::Exited { method }),
             Err(_) => {
                 self.pending.lock().expect("lsp pending").remove(&id);
-                Err(Error::Timeout {
-                    method: method.to_string(),
-                })
+                Err(Error::Timeout { method })
             }
         }
     }

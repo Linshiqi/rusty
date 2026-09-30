@@ -108,6 +108,11 @@ pub(crate) struct Shared {
     /// reader is gone and no reply will come.
     pending: Mutex<HashMap<i64, Sender<Option<Value>>>>,
     docs: Mutex<HashMap<String, Doc>>,
+    /// Held while a change to what the server holds is recorded and written,
+    /// and while a question about a document's text is — so the wire carries
+    /// them in the order they were made (`documents.rs`). Never taken by the
+    /// thread that reads the server.
+    order: Mutex<()>,
     /// The latest completion answers, raw, each with the path it answered
     /// for and its number: the items the frontend sees are converted copies,
     /// and `completionItem/resolve` needs the server's own item — its `data`
@@ -203,6 +208,7 @@ impl LspClient {
             poke: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             docs: Mutex::new(HashMap::new()),
+            order: Mutex::new(()),
             completions: Kept::default(),
             replies: AtomicU64::new(1),
             actions: Kept::default(),

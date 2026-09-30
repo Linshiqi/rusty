@@ -95,7 +95,11 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # Run Test in `src/main.rs` answers as `cargo test -- --show-output` prints,
 # one of its two tests failing at a line of the file — its mark, its note,
 # the lens's cross, the dock's colours; `__mock.testsPass` has both pass,
-# which is how a mark is seen to go.
+# which is how a mark is seen to go. The mock keeps a server's copy of each
+# file too (`__mock.serverText`), and answers inlay hints about it — a type
+# after every `let name =` — marked with the text they are about;
+# `__mock.hintsLate` answers one ask about the text before the last change,
+# which the editor must refuse to draw and ask for again.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -1491,6 +1495,24 @@ off) — and a name held under Ctrl drawn as the link it is.
   nothing more, the hints appearing only once somebody typed. The client
   sends `Refresh` itself on the turn to `quiescent` as well, once per
   settling; the editor asks again 300 ms after the last.
+- **A hints answer is drawn only over the text it is about.** A hint is a
+  line and a column, right for one text alone, and the editor carries an
+  answer from the text it asked over to the one on screen
+  (`crate::inlay::follow`) — which assumed the server answered about the
+  text asked over. It did not always: reported as every hint a line below
+  its code, after a Tab replaced two selected lines with one. The pulse
+  sent the change and asked straight after it, each call a thread of its
+  own on the backend, and the question reached the server first. So the
+  answer names its text (`InlayHints::about`, `rusty_lsp::text_mark` of
+  what the client had sent when the question went out, read and written in
+  one turn — see *What the client records and what it writes go in one
+  order*), and `request_hints` draws only an answer about the text it asked
+  over; any other it asks for again, once, after sending the text on
+  screen. The hints already there have followed every edit and are left
+  standing meanwhile. The pulse waits for its change before asking for
+  colours or hints — the colours used to be asked for *before* the change
+  was sent. `mock.js` keeps a server's copy of each file for this, and
+  `__mock.hintsLate` answers one ask about the text before the last change.
 - **Ctrl over a name draws it as a link** — underlined, the link colour,
   the hand — when the server says it has a definition (`has_definition`;
   VS Code's behaviour, and the user's request). Asked when the pointer
@@ -2989,6 +3011,28 @@ usty`) holds `location.toml`
   and a moved file's old name close now (`lsp_closed_doc`), the client drops
   the file's pulled analysis with it, and the puller skips a file closed
   while its pull was on the way.
+- **What the client records and what it writes go in one order.** Every
+  command runs on its own thread of the blocking pool, and `did_open`,
+  `did_change` and `did_close` each recorded the document and then wrote
+  to the server with nothing held between. Two changes could swap on the
+  wire — each is a delta against the text before it, so the server's copy
+  was wrong from then on and said nothing — a close could land after the
+  open that followed it, and a question asked after a change could be
+  written ahead of it and answered about the text before. Each now records
+  and writes in one turn (`Shared::order`), and a question whose answer is
+  positions (`Shared::ask_about`: the text read and the request written in
+  the same turn, the answer waited for outside it — `transport::ask` and
+  `answer` are `request` in two halves) knows which text it was answered
+  about. **A lock of its own, not the documents'**: the thread reading the
+  server takes the documents' lock for every pushed diagnostic, and a write
+  to a server whose pipe is full waits on that thread — the documents'
+  lock held across the write would be two pipes waiting on each other.
+  **The two tests that hold it fail five runs in five with the old
+  ordering put back**: four threads changing one file and the server's copy
+  rebuilt from what it was sent, and a file changed as fast as a thread can
+  while another asks about it. A race that needs two threads is not rare
+  when every keystroke's completion, the pulse and a hover each send a
+  change of their own.
 - **`procMacro.enable: false` is not a lighter mode — it is poison.** It
   takes the built-in derives down with it, sysroot trait resolution collapses,
   and any open file containing an `impl` with `&self` gets *no diagnostics at

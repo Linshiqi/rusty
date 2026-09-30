@@ -7,6 +7,7 @@
 //! `std::io::pipe` and answers only what each test needs.
 
 use std::{
+    collections::HashMap,
     io::{BufReader, PipeWriter, Read, Write},
     path::Path,
     sync::{
@@ -1076,4 +1077,102 @@ fn a_rename_whose_second_file_cannot_be_written_puts_the_first_back() {
             file.display()
         );
     }
+}
+
+/// The server's copy of the one document a test opens, rebuilt from what the
+/// server was sent in the order it was sent — and, by request id, the copy
+/// it had when each `asked` request reached it. The fake negotiates utf-8,
+/// so a character is a byte.
+pub(super) fn server_copy(seen: &Seen, asked: &str) -> (String, HashMap<String, String>) {
+    let mut text = String::new();
+    let mut when_asked = HashMap::new();
+    for message in seen.lock().unwrap().iter() {
+        let params = &message["params"];
+        match method(message) {
+            "textDocument/didOpen" => {
+                text = params["textDocument"]["text"].as_str().unwrap().to_string();
+            }
+            "textDocument/didChange" => {
+                let change = &params["contentChanges"][0];
+                let offset = |position: &Value| -> usize {
+                    let line = position["line"].as_u64().unwrap() as usize;
+                    let lines: usize = text.split('\n').take(line).map(|l| l.len() + 1).sum();
+                    lines + position["character"].as_u64().unwrap() as usize
+                };
+                let (from, to) = (
+                    offset(&change["range"]["start"]),
+                    offset(&change["range"]["end"]),
+                );
+                text.replace_range(from..to, change["text"].as_str().unwrap());
+            }
+            name if name == asked => {
+                when_asked.insert(message["id"].to_string(), text.clone());
+            }
+            _ => {}
+        }
+    }
+    (text, when_asked)
+}
+
+/// Changes made from several threads at once, as the blocking pool makes
+/// them. Each is a delta against the text before it, so they have to reach
+/// the server in the order this client recorded them: recorded under the
+/// lock and written after it was let go, two could swap on the wire, and
+/// the server's copy of the file was wrong from then on with nothing to say
+/// so — every hint, colour and diagnostic after it a little out of place.
+#[test]
+fn changes_made_at_once_reach_the_server_in_the_order_they_were_recorded() {
+    let first = "fn main() {\n}\n";
+    let (client, _root, seen) = client_with(&[("src/main.rs", first)], |message, _| {
+        (method(message) == "textDocument/diagnostic")
+            .then(|| json!({ "kind": "full", "items": [] }))
+    });
+    client.did_open("src/main.rs", first).unwrap();
+    let client = Arc::new(client);
+    let writers: Vec<_> = (0..4)
+        .map(|writer| {
+            let client = Arc::clone(&client);
+            thread::spawn(move || {
+                for round in 0..150 {
+                    let body = format!("    step_{writer}({round});\n").repeat(1 + round % 5);
+                    let text = format!("fn main() {{\n{body}}}\n");
+                    client.did_change("src/main.rs", &text).unwrap();
+                }
+            })
+        })
+        .collect();
+    for writer in writers {
+        writer.join().unwrap();
+    }
+    // One last change, and a wait for it to arrive: the server reads on a
+    // thread of its own. Only what differs travels, so `done` is what the
+    // change is known by.
+    client
+        .did_change("src/main.rs", "fn main() {\n    done();\n}\n")
+        .unwrap();
+    assert!(saw_change_to(&seen, "done"));
+    let (copy, _) = server_copy(&seen, "");
+    assert_eq!(
+        Some(copy.as_str()),
+        client.shared.open_text("src/main.rs").as_deref(),
+        "the server's copy is this client's",
+    );
+}
+
+/// Wait until the server has been sent a change whose text holds `wanted`.
+fn saw_change_to(seen: &Seen, wanted: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let arrived = seen.lock().unwrap().iter().any(|m| {
+            method(m) == "textDocument/didChange"
+                && m["params"]["contentChanges"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(wanted))
+        });
+        if arrived {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    false
 }

@@ -248,6 +248,35 @@ pub struct InlayHint {
     pub pad_right: bool,
 }
 
+/// The hints over a range of a file, and which text they are about.
+///
+/// A hint is a line and a column, so it is right for exactly one text. The
+/// editor asks over the text on screen and carries the answer to wherever
+/// typing has gone since — which holds only while the server answered about
+/// that same text. It does not always: the change the question followed may
+/// not have reached it yet, or a later one has. So the answer names its
+/// text, and one about another text is asked for again rather than drawn.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlayHints {
+    pub hints: Vec<InlayHint>,
+    /// [`text_mark`] of the text the server had when it was asked.
+    pub about: u64,
+}
+
+/// A number that stands for a text, for telling one text from another
+/// across the wire without sending either: FNV-1a, folded to 53 bits
+/// because it crosses as a JSON number and a full 64 is not an integer
+/// JavaScript can hold.
+pub fn text_mark(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash >> 53) ^ (hash & ((1 << 53) - 1))
+}
+
 /// What a macro call turns into, fully expanded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -364,4 +393,51 @@ pub struct HoverInfo {
     /// Scalar columns, like everything the frontend touches. Absent when the
     /// server did not say; the caller falls back to the queried cell.
     pub range: Option<EditRange>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mark is compared across the wire, and `mock.js` computes it for
+    /// the answers it stands in for: the numbers here are the ones its
+    /// `textMark` gives, so the two cannot come to disagree unnoticed — a
+    /// disagreement is every hints answer refused as about another text.
+    /// Each fits the 53 bits a JSON number holds.
+    #[test]
+    fn a_text_is_marked_the_same_on_both_sides_of_the_wire() {
+        assert_eq!(text_mark(""), 5_239_054_864_098_682);
+        assert_eq!(text_mark("fn main() {}\n"), 5_739_256_811_920_085);
+        assert_eq!(text_mark("let 名 = \"中文\";\r\n"), 1_981_000_941_703_271);
+        for text in ["", "fn main() {}\n", "let 名 = \"中文\";\r\n"] {
+            assert!(text_mark(text) < 1 << 53, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn one_character_is_another_text() {
+        assert_ne!(text_mark("let a = 1;"), text_mark("let a = 2;"));
+        assert_ne!(text_mark("a\nb"), text_mark("a\n\nb"));
+    }
+
+    /// The wire names, which the mock writes by hand.
+    #[cfg(feature = "backend")]
+    #[test]
+    fn a_hints_answer_crosses_the_wire_and_back() {
+        let answer = InlayHints {
+            hints: vec![InlayHint {
+                line: 3,
+                col: 13,
+                label: ": Radio".to_string(),
+                parameter: false,
+                pad_left: true,
+                pad_right: false,
+            }],
+            about: text_mark("let radio = Radio::new();"),
+        };
+        let json = serde_json::to_value(&answer).unwrap();
+        assert_eq!(json["hints"][0]["padLeft"], true);
+        assert!(json["about"].is_u64());
+        assert_eq!(serde_json::from_value::<InlayHints>(json).unwrap(), answer);
+    }
 }
