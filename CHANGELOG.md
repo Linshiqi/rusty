@@ -9,6 +9,33 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.71
+
+**A failed test is marked where it failed.** After **▶ Run Test**, the line
+the test stopped at gets a red squiggle with the first line of what it said
+written after it — `` ✗ assertion `left == right` failed `` — and hovering it
+shows the whole message, `left:` and `right:` lined up. Each test's lens
+shows a green tick or a red cross from its last run, and a test module's
+lens shows the worst of its tests. Run the test again and a pass takes the
+mark away; editing the file takes it away too.
+
+**Test output says why a test failed.** Run Test now runs with
+`--show-output`, as VS Code's lens does, so each test's output and its
+panic are printed under the test's own name in `failures:`. Before, the
+panic was printed on its own at the top, mixed in with every other test's
+lines, and `failures:` was empty. Output starts empty for each run, and
+`ok` is green, `FAILED` red and `ignored` amber, as in a terminal.
+
+**Debug stops on an assertion.** A breakpoint on the first line of a
+multi-line `assert!(` never stopped: the compiler puts only the code for a
+*failing* assertion on that line, so a test whose assertion held ran
+straight to its end and Debug looked as though it had not started. Such a
+breakpoint is now placed on the assertion's condition, and its dot moves
+there when debugging starts. On Windows the dot now also follows a
+breakpoint the debugger moved to the nearest line with code, which it did
+not before. A program that runs to its end without stopping says so in
+Output.
+
 ## v0.6.70
 
 **Draw from your code.** A new crate, `rusty-draw`, lets a test or an
