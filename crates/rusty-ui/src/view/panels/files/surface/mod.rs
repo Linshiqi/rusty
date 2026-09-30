@@ -18,6 +18,7 @@ use super::*;
 mod completions;
 mod cursor;
 mod echo;
+mod failures;
 mod fixes;
 mod gutter;
 mod hover;
@@ -38,6 +39,7 @@ use crate::{
 use completions::Completions;
 use cursor::VimCursor;
 use echo::Echo;
+use failures::FailureNotes;
 use fixes::QuickFixes;
 use gutter::Gutter;
 use hover::Hover;
@@ -796,6 +798,10 @@ pub(super) fn Surface(document: Document, area: NodeRef<html::Textarea>) -> impl
                     // VS Code draws its lens on), after that line's text, or
                     // on the item's own line when nothing is above it.
                     <Lenses pane=pane />
+
+                    // What a failing test said, after the line it failed
+                    // at, as VS Code writes a test's message there.
+                    <FailureNotes pane=pane />
 
                     // Where the target is stopped. Drawn under the text like
                     // a find match rather than as a border, so it survives

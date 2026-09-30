@@ -833,6 +833,41 @@
         }, 150);
         return;
       }
+      // A test run, as `cargo test <filter> -- --show-output` prints it: the
+      // harness on stdout, cargo on stderr, one test failing at a line of
+      // `src/main.rs` so its mark, its note, the lens's cross and the dock's
+      // colours can be driven. `__mock.testsPass` makes both pass, which is
+      // how a mark is seen to go.
+      if (a.program === "cargo" && a.args[0] === "test") {
+        const say = (text) => a.onLine.send({ stream: "stdout", text, level: null });
+        const line = RS.split("\n").findIndex((l) => l.includes("assert_eq!(Radio::new().flags(), 0)")) + 1;
+        const pass = !!window.__mock.testsPass;
+        send("   Compiling mock v0.1.0");
+        send("    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s");
+        send("     Running unittests src\\main.rs (target\\debug\\deps\\mock-5f1c2e.exe)");
+        setTimeout(() => {
+          const failing = [
+            "failures:", "",
+            "---- tests::a_radio_starts_with_no_flags stdout ----", "",
+            `thread 'tests::a_radio_starts_with_no_flags' (4242) panicked at src\\main.rs:${line}:9:`,
+            "assertion `left == right` failed", "  left: 1", " right: 0",
+            "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace", "", "",
+            "failures:", "    tests::a_radio_starts_with_no_flags", "",
+          ];
+          [
+            "", "running 2 tests",
+            "test tests::a_radio_frobnicates ... ok",
+            `test tests::a_radio_starts_with_no_flags ... ${pass ? "ok" : "FAILED"}`,
+            "", "successes:", "", "successes:", "    tests::a_radio_frobnicates",
+            ...(pass ? ["    tests::a_radio_starts_with_no_flags", ""] : ["", ...failing]),
+            `test result: ${pass ? "ok. 2 passed; 0 failed" : "FAILED. 1 passed; 1 failed"}; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s`,
+            "",
+          ].forEach(say);
+          if (!pass) send("error: test failed, to rerun pass `--bin mock`");
+          resolve(pass ? 0 : 101);
+        }, 150);
+        return;
+      }
       send("warning: unused variable: `state`");
       send("  --> src\\bin\\main.rs:62:33");
       resolve(0);
@@ -1055,6 +1090,26 @@
       window.__mock.debugStarted?.onState.send(window.__mock.stopped);
       return null;
     },
+    // Debug beside a test: the build, the test run to its end without once
+    // stopping and failing on the way, which is what the dock then says
+    // (`dock.debug.ran-past`) — the panel it leaves is the one a session
+    // that never started leaves.
+    debug_test: (a) => new Promise((resolve) => {
+      window.__mock.debugTest = a;
+      const state = (over) => ({
+        running: false, attached: false, reason: null, stack: [], variables: [], frame: 0,
+        breakpoints: [], error: null, exited: null, memory: [], output: [], ...over,
+      });
+      a.onState.send(state({ output: ["   Compiling mock v0.1.0", "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s"] }));
+      setTimeout(() => a.onState.send(state({ attached: true, running: true, output: ["", "running 1 test"] })), 60);
+      setTimeout(() => {
+        a.onState.send(state({
+          reason: "exited", exited: 101,
+          output: [`test ${a.filter} ... FAILED`, "", "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out"],
+        }));
+        resolve(null);
+      }, 200);
+    }),
     debug_control: (a) => { (window.__mock.control = window.__mock.control || []).push(a.action); return null; },
     debug_frame: (a) => {
       window.__mock.frame = a.level;

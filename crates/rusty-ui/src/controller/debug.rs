@@ -2,6 +2,7 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use rusty_i18n::t;
 
 // The sibling modules, flat: `controller` re-exports every one of them,
 // so a call between two of them reads the same as a call from a view.
@@ -49,7 +50,9 @@ pub fn debug_test(state: AppState, filter: String) {
     // attach. A debug adapter only accepts breakpoints between `initialized`
     // and `configurationDone`; after that the program is running, and a
     // breakpoint placed then is one a short test has already run past. The
-    // test is built from what is on screen, so the drafts are written first.
+    // test is built from what is on screen, so the drafts are written first,
+    // and its build and output go to an empty dock, as a run's do.
+    state.clear_log();
     save_all_then(state, move || {
         attach_session(
             state,
@@ -82,6 +85,10 @@ fn attach_session<A: serde::Serialize + 'static>(
     let placed = RwSignal::new(false);
     // Frame 0's address at the last stop the editor was moved to.
     let stopped_at = RwSignal::new(None::<String>);
+    // Whether the program ever came to rest short of its end — what tells
+    // a test that ran past every breakpoint from one somebody stepped
+    // through, once the panel has gone back to "nothing is being debugged".
+    let halted = RwSignal::new(false);
     state
         .debug
         .session
@@ -156,6 +163,12 @@ fn attach_session<A: serde::Serialize + 'static>(
             //
             // Cleared while running, so stopping twice in the same place —
             // a breakpoint in a loop — still reveals.
+            if update
+                .reason
+                .is_some_and(|reason| reason != rusty_dbg::StopReason::Exited)
+            {
+                halted.set(true);
+            }
             if update.running {
                 stopped_at.set(None);
             } else if let Some(frame) = update.stack.first() {
@@ -181,6 +194,28 @@ fn attach_session<A: serde::Serialize + 'static>(
         }
         if let Err(error) = outcome {
             state.app.error.set(Some(error));
+        }
+        // A program that ran to its end without once stopping leaves the
+        // panel exactly as a session that never started does, which is how
+        // a test run past its breakpoints was reported: "Debug does not
+        // start". Said in the dock, beside what the program printed.
+        let exited = state
+            .debug
+            .session
+            .with_untracked(|session| session.as_ref().and_then(|session| session.exited));
+        if let Some(code) = exited
+            && !halted.get_untracked()
+        {
+            let text = if state.debug.breakpoints.with_untracked(Vec::is_empty) {
+                t!("dock.debug.ran-unstopped", code = code)
+            } else {
+                t!("dock.debug.ran-past", code = code)
+            };
+            state.push_log(rusty_embed::LogLine {
+                stream: rusty_embed::LogStream::Stdout,
+                text,
+                level: Some(rusty_embed::LogLevel::Warn),
+            });
         }
         state.debug.session.set(None);
     });

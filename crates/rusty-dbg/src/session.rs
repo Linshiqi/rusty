@@ -17,6 +17,7 @@
 //! and doing it here means the frontend cannot get it subtly wrong in its
 //! own way.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -26,6 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::mi::{self, Record, Value};
 use crate::model::{Breakpoint, DebugState, MemoryRead, StackFrame, StopReason, Variable};
+use crate::placement::placed_line;
 
 /// What gdb connects to — or, for a program built for this machine, starts.
 #[derive(Debug, Clone)]
@@ -126,6 +128,11 @@ struct Wire {
     stdin: Mutex<Option<ChildStdin>>,
     /// Numbers each command, as MI has it; nothing reads the number back.
     token: AtomicU32,
+    /// Breakpoints placed somewhere other than the line clicked
+    /// (`placement`): `(file, line placed on)` to the line clicked, because
+    /// gdb's `original-location` quotes the request, which named the line
+    /// it was placed on.
+    moved: Mutex<HashMap<(String, u32), u32>>,
 }
 
 impl Wire {
@@ -136,12 +143,31 @@ impl Wire {
         writeln!(stdin, "{token}{command}").map_err(|_| Error::Closed)?;
         stdin.flush().map_err(|_| Error::Closed)
     }
+
+    /// Give each breakpoint placed off its line the line it was clicked on
+    /// as `requested`, which is what the margin moves its dot from.
+    fn clicked(&self, state: &mut DebugState) {
+        let moved = self.moved.lock().expect("moved breakpoints");
+        if moved.is_empty() {
+            return;
+        }
+        for breakpoint in &mut state.breakpoints {
+            let Some(asked) = breakpoint.requested else {
+                continue;
+            };
+            if let Some(&clicked) = moved.get(&(breakpoint.file.clone(), asked)) {
+                breakpoint.requested = Some(clicked);
+            }
+        }
+    }
 }
 
 pub struct Debugger {
     child: Mutex<Child>,
     wire: Arc<Wire>,
     state: Arc<Mutex<DebugState>>,
+    /// What a breakpoint's file is relative to, and read from to place it.
+    root: PathBuf,
     /// A program gdb runs itself, as opposed to a target it attached to.
     host: bool,
     /// Whether that program has been started — the first resume is the run.
@@ -193,6 +219,7 @@ impl Debugger {
         let wire = Arc::new(Wire {
             stdin: Mutex::new(stdin),
             token: AtomicU32::new(1),
+            moved: Mutex::new(HashMap::new()),
         });
 
         let host = launch.target.is_host();
@@ -208,6 +235,7 @@ impl Debugger {
             child: Mutex::new(child),
             wire,
             state,
+            root: launch.root.clone(),
             host,
             launched: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
@@ -247,8 +275,21 @@ impl Debugger {
 
     /// Place a breakpoint. Lines cross this boundary zero-based; gdb counts
     /// from one, and the conversion belongs at exactly one edge.
+    ///
+    /// Where `placement` puts it, read off the file as saved — which is
+    /// what was built — and the line clicked kept for the answer, which
+    /// quotes the line the request named.
     pub fn add_breakpoint(&self, file: &str, line: u32) -> Result<()> {
-        self.send(&format!("-break-insert {file}:{}", line + 1))
+        let placed = std::fs::read_to_string(self.root.join(file))
+            .map_or(line, |source| placed_line(&source, line));
+        if placed != line {
+            self.wire
+                .moved
+                .lock()
+                .expect("moved breakpoints")
+                .insert((file.to_string(), placed), line);
+        }
+        self.send(&format!("-break-insert {file}:{}", placed + 1))
     }
 
     pub fn remove_breakpoint(&self, number: u32) -> Result<()> {
@@ -376,8 +417,11 @@ fn pump(
             let _ = wire.send("-stack-list-variables --all-values");
         }
         let mut current = state.lock().expect("state");
-        if apply(&mut current, &record, &root) && !publish(&mut current, &sender) {
-            break;
+        if apply(&mut current, &record, &root) {
+            wire.clicked(&mut current);
+            if !publish(&mut current, &sender) {
+                break;
+            }
         }
         let exited = current.exited.is_some();
         drop(current);
@@ -754,8 +798,10 @@ pub(crate) mod tests {
             wire: Arc::new(Wire {
                 stdin: Mutex::new(stdin),
                 token: AtomicU32::new(1),
+                moved: Mutex::new(HashMap::new()),
             }),
             state: Arc::new(Mutex::new(DebugState::default())),
+            root: PathBuf::new(),
             host: false,
             launched: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
@@ -975,6 +1021,35 @@ pub(crate) mod tests {
             !apply(&mut state, &again, &root),
             "deleting what is gone changes nothing"
         );
+    }
+
+    /// A breakpoint `placement` put off the line clicked: gdb's
+    /// `original-location` quotes the request, which named the line it was
+    /// placed on, so the line clicked comes from what the wire sent — or
+    /// the margin could not move its dot to where it will stop.
+    #[test]
+    fn a_placed_off_breakpoint_reports_the_line_clicked() {
+        let wire = Wire {
+            stdin: Mutex::new(None),
+            token: AtomicU32::new(1),
+            moved: Mutex::new(HashMap::from([(
+                ("core/src/math/vector.rs".to_string(), 139),
+                138,
+            )])),
+        };
+        let mut state = DebugState::default();
+        let placed = mi::parse(
+            r#"^done,bkpt={number="1",type="breakpoint",enabled="y",file="core/src/math/vector.rs",line="140",original-location="core/src/math/vector.rs:140"}"#,
+        )
+        .unwrap();
+        apply(&mut state, &placed, &root());
+        wire.clicked(&mut state);
+        let breakpoint = &state.breakpoints[0];
+        assert_eq!((breakpoint.requested, breakpoint.line), (Some(138), 139));
+
+        // Read again — a stop re-reports it — the line clicked stays.
+        wire.clicked(&mut state);
+        assert_eq!(state.breakpoints[0].requested, Some(138));
     }
 
     /// gdb writes `exit-code` in octal. `"012"` is ten, not twelve, and an

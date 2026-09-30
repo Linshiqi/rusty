@@ -66,6 +66,10 @@ fn main() {
     let deadline = started + Duration::from_secs(90);
     let mut stopped_where = None;
     let mut printed = Vec::new();
+    // Where the breakpoint was placed, which is not always the line asked
+    // for: `rusty_dbg::placement`, or a line with no code the adapter moved
+    // it off. The stop is judged against where it landed.
+    let mut landed = line - 1;
 
     while Instant::now() < deadline {
         let Some(state) = events.next() else { break };
@@ -75,6 +79,15 @@ fn main() {
         }
         if let Some(error) = &state.error {
             eprintln!("  [error] {error}");
+        }
+        if let Some(placed) = state
+            .breakpoints
+            .iter()
+            .find(|b| b.file == file && b.requested == Some(line - 1))
+            && placed.line != landed
+        {
+            landed = placed.line;
+            eprintln!("  the breakpoint on {line} was placed on {}", landed + 1);
         }
         if !state.running
             && stopped_where.is_none()
@@ -116,14 +129,15 @@ fn main() {
     session.stop();
 
     match stopped_where {
-        Some((Some(at), Some(hit))) if at == file && hit + 1 == line => {
+        Some((Some(at), Some(hit))) if at == file && hit == landed => {
             eprintln!("PROBE OK: stopped at {at}:{}", hit + 1);
         }
         Some((at, hit)) => {
             eprintln!(
-                "PROBE FAILED: stopped at {:?}:{:?}, expected {file}:{line}",
+                "PROBE FAILED: stopped at {:?}:{:?}, expected {file}:{}",
                 at,
                 hit.map(|l| l + 1),
+                landed + 1,
             );
             std::process::exit(1);
         }

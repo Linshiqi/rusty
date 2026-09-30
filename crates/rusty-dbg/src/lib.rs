@@ -7,6 +7,7 @@
 
 pub mod mi;
 pub mod model;
+pub mod placement;
 pub mod pretty;
 
 pub use model::*;

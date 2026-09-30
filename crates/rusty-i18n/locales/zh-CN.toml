@@ -428,7 +428,10 @@ lens-run-tests = "运行全部测试"
 lens-run = "运行"
 run-example = "运行示例 {name}——cargo run --example {name}"
 lens-debug = "调试"
-debug-test = "在 gdb 下调试 {name}，在你的断点处停下"
+debug-test = "调试 {name}，在你的断点处停下"
+lens-passed = "上次运行通过"
+lens-failed = "上次运行失败"
+test-failed = "测试 {name} 失败"
 
 [toolbar]
 save = "格式化并保存（Ctrl+S）"
@@ -682,8 +685,10 @@ empty = "烧录、监视，以及你在下面运行的任何东西，输出都�
 open-in-editor = "在编辑器中打开"
 
 [dock.debug]
-idle = "当前没有在调试。仿真面板的「调试」按钮会冻结启动固件并挂到这里；编辑器里测试旁的「调试」会在 gdb 下运行那个测试。"
+idle = "当前没有在调试。仿真面板的「调试」按钮会冻结启动固件并挂到这里；编辑器里测试旁的「调试」会在调试器下运行那个测试。"
 running = "运行中——暂停或命中断点后才能读调用栈。"
+ran-past = "程序已运行结束（退出码 {code}），没有停在任何断点上。"
+ran-unstopped = "程序已运行结束（退出码 {code}）。没有设断点——在行号旁点一下，程序就会停在那里。"
 call-stack = "调用栈"
 variables = "变量"
 show-whole = "显示完整值"

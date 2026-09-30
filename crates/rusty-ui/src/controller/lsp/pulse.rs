@@ -28,6 +28,10 @@ pub fn schedule_pulse(state: AppState) {
     if state.editor.occurrences.with_untracked(Option::is_some) {
         state.editor.occurrences.set(None);
     }
+    // So is where a test failed, until the test runs again.
+    if let Some(path) = state.active_path_now() {
+        tests_edited(state, &path);
+    }
     let generation = state.editor.pulse_gen.get_untracked() + 1;
     state.editor.pulse_gen.set(generation);
     set_timeout(

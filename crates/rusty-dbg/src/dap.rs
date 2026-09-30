@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::model::{Breakpoint, DebugState, StackFrame, StopReason, Variable};
+use crate::placement::placed_line;
 use crate::session::{Error, Events, Result, publish, push_line, relative};
 
 /// How long the adapter has to answer `initialized`. Generous: the first
@@ -184,14 +185,28 @@ impl Wire {
 /// arriving after the state that said the session had ended.
 type Outlet = Arc<Mutex<Option<Sender<DebugState>>>>;
 
+/// The lines one `setBreakpoints` was sent for, as they were clicked and in
+/// the order the request listed them: the answer lists its breakpoints in
+/// that same order, and says only where each one landed.
+struct Asked {
+    file: String,
+    clicked: Vec<u32>,
+}
+
+/// Every `setBreakpoints` still waiting for its answer, by the request's
+/// `seq`, which the answer carries back as `request_seq`.
+type Pending = Arc<Mutex<HashMap<i64, Asked>>>;
+
 /// A live debug adapter.
 pub struct DapSession {
     child: Mutex<Child>,
     wire: Arc<Wire>,
     state: Arc<Mutex<DebugState>>,
-    /// The whole list per file: `setBreakpoints` replaces a source's
-    /// breakpoints rather than adding one, so the client owns the set.
+    /// The whole list per file, as clicked: `setBreakpoints` replaces a
+    /// source's breakpoints rather than adding one, so the client owns the
+    /// set. Where each is placed is `placement`'s to say, when it is sent.
     placed: Mutex<HashMap<String, Vec<u32>>>,
+    pending: Pending,
     /// The thread the last stop named — every control request needs it.
     thread: Arc<Mutex<i64>>,
     /// Frame ids by level, from the last `stackTrace`: the panel selects a
@@ -229,6 +244,7 @@ impl DapSession {
             }),
             state: Arc::new(Mutex::new(DebugState::default())),
             placed: Mutex::new(HashMap::new()),
+            pending: Arc::new(Mutex::new(HashMap::new())),
             thread: Arc::new(Mutex::new(0)),
             frames: Arc::new(Mutex::new(Vec::new())),
             root: launch.root.clone(),
@@ -256,6 +272,7 @@ impl DapSession {
             thread: Arc::clone(&session.thread),
             frames: Arc::clone(&session.frames),
             running: Arc::clone(&session.running),
+            pending: Arc::clone(&session.pending),
             ready: ready_tx,
         };
         std::thread::spawn(move || reader.pump(reader_half));
@@ -371,9 +388,11 @@ impl DapSession {
         Ok(())
     }
 
-    /// One source's whole breakpoint list.
+    /// One source's whole breakpoint list, each where `placement` puts it
+    /// — read off the file as saved, which is what was built — and what was
+    /// clicked kept for the answer, which says only where each one landed.
     fn send_source(&self, file: &str) -> Result<()> {
-        let lines = self
+        let clicked = self
             .placed
             .lock()
             .expect("dap breakpoints")
@@ -381,13 +400,33 @@ impl DapSession {
             .cloned()
             .unwrap_or_default();
         let absolute = self.root.join(file);
-        self.wire.send(
+        let source = std::fs::read_to_string(&absolute).ok();
+        let lines: Vec<u32> = clicked
+            .iter()
+            .map(|&line| {
+                source
+                    .as_deref()
+                    .map_or(line, |source| placed_line(source, line))
+            })
+            .collect();
+        // Held across the send, so an answer the reader has already taken
+        // off the socket waits here for what it answers rather than finding
+        // nothing.
+        let mut pending = self.pending.lock().expect("dap pending");
+        let seq = self.wire.send(
             "setBreakpoints",
             json!({
                 "source": { "path": absolute.to_string_lossy() },
                 "breakpoints": lines.iter().map(|l| json!({"line": l + 1})).collect::<Vec<_>>(),
             }),
         )?;
+        pending.insert(
+            seq,
+            Asked {
+                file: file.to_string(),
+                clicked,
+            },
+        );
         Ok(())
     }
 
@@ -617,6 +656,8 @@ struct Reader {
     thread: Arc<Mutex<i64>>,
     frames: Arc<Mutex<Vec<i64>>>,
     running: Arc<AtomicBool>,
+    /// What each `setBreakpoints` still unanswered was clicked on.
+    pending: Pending,
     /// Told when the adapter says it will take configuration.
     ready: Sender<()>,
 }
@@ -759,7 +800,7 @@ impl Reader {
                     return false;
                 };
                 let mut state = self.state.lock().expect("dap state");
-                upsert_breakpoint(&mut state, bkpt, &self.root);
+                upsert_breakpoint(&mut state, bkpt, &self.root, None);
                 true
             }
             _ => false,
@@ -771,6 +812,12 @@ impl Reader {
     fn on_response(&self, message: &Value) -> bool {
         let command = message.get("command").and_then(Value::as_str).unwrap_or("");
         let body = message.get("body").cloned().unwrap_or(Value::Null);
+        // What a `setBreakpoints` was clicked on, answered or refused alike:
+        // taken either way, so nothing waits for an answer that came.
+        let asked = (command == "setBreakpoints")
+            .then(|| message.get("request_seq").and_then(Value::as_i64))
+            .flatten()
+            .and_then(|seq| self.pending.lock().expect("dap pending").remove(&seq));
         if message.get("success").and_then(Value::as_bool) == Some(false) {
             // `pause` on an already-stopped program and `continue` on a
             // running one are races the panel can lose harmlessly; the
@@ -842,8 +889,14 @@ impl Reader {
                     .cloned()
                     .unwrap_or_default();
                 let mut state = self.state.lock().expect("dap state");
-                for bkpt in &listed {
-                    upsert_breakpoint(&mut state, bkpt, &self.root);
+                // In the order they were asked for, which is how each is
+                // told apart from the line it landed on.
+                for (index, bkpt) in listed.iter().enumerate() {
+                    let clicked = asked.as_ref().and_then(|asked| {
+                        let line = asked.clicked.get(index)?;
+                        Some((asked.file.as_str(), *line))
+                    });
+                    upsert_breakpoint(&mut state, bkpt, &self.root, clicked);
                 }
                 true
             }
@@ -871,8 +924,16 @@ fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<Value> {
     serde_json::from_slice(&body).ok()
 }
 
-/// Add or update one breakpoint, keyed by the adapter's id.
-fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
+/// Add or update one breakpoint, keyed by the adapter's id. `clicked` is
+/// the file and line it was asked for on, when this is the answer to the
+/// request that asked: the adapter says where a breakpoint landed, which is
+/// not always the line clicked (`placement`, or a line with no code).
+fn upsert_breakpoint(
+    state: &mut DebugState,
+    bkpt: &Value,
+    root: &Path,
+    clicked: Option<(&str, u32)>,
+) {
     let number = bkpt
         .get("id")
         .and_then(Value::as_i64)
@@ -882,7 +943,8 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
         .get("source")
         .and_then(|s| s.get("path"))
         .and_then(Value::as_str)
-        .map(|path| relative(path, root));
+        .map(|path| relative(path, root))
+        .or_else(|| clicked.map(|(file, _)| file.to_string()));
 
     let previous = state
         .breakpoints
@@ -898,10 +960,12 @@ fn upsert_breakpoint(state: &mut DebugState, bkpt: &Value, root: &Path) {
             .or_else(|| previous.as_ref().map(|b| b.line))
             .unwrap_or(0),
         // Where it was asked for, kept across updates so the margin can move
-        // its dot to where the adapter actually put it.
-        requested: previous
-            .as_ref()
-            .and_then(|b| b.requested)
+        // its dot to where the adapter actually put it. Taken as the line of
+        // the first report without a request to read it from — the adapter
+        // re-reporting one it has resolved.
+        requested: clicked
+            .map(|(_, line)| line)
+            .or_else(|| previous.as_ref().and_then(|b| b.requested))
             .or_else(|| previous.as_ref().map(|b| b.line))
             .or(line),
         verified: bkpt
@@ -943,6 +1007,7 @@ mod tests {
             thread: Arc::new(Mutex::new(0)),
             frames: Arc::new(Mutex::new(Vec::new())),
             running: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
             ready,
         };
         (reader, states)
@@ -1293,6 +1358,7 @@ mod tests {
                 "source": { "path": r"E:\CodeBase\proj\core\src\math\quaternion.rs" },
             }),
             &root(),
+            None,
         );
         assert_eq!(state.breakpoints.len(), 1);
         assert_eq!(state.breakpoints[0].line, 243);
@@ -1302,6 +1368,7 @@ mod tests {
             &mut state,
             &json!({ "id": 1, "verified": true, "line": 246, "message": "Resolved locations: 1" }),
             &root(),
+            None,
         );
         assert_eq!(state.breakpoints.len(), 1, "one id is one breakpoint");
         assert_eq!(state.breakpoints[0].line, 245, "it moved to where code is");
@@ -1314,5 +1381,67 @@ mod tests {
             state.breakpoints[0].file, "core/src/math/quaternion.rs",
             "an update without a source keeps the one it had",
         );
+    }
+
+    /// The answer to `setBreakpoints` says where each breakpoint landed, in
+    /// the order they were asked for, and nothing about what was clicked.
+    /// Taken as the line asked for, a breakpoint the adapter moved in its
+    /// first answer — a line with no code, or `placement`'s — left the dot
+    /// where nothing would stop. Paired with the request by `request_seq`,
+    /// each carries the line clicked, and the file when the answer has none.
+    #[test]
+    fn an_answer_is_read_against_the_lines_its_request_was_clicked_on() {
+        let (reader, states) = unwired();
+        reader.pending.lock().unwrap().insert(
+            7,
+            Asked {
+                file: "core/src/math/vector.rs".to_string(),
+                clicked: vec![138, 144],
+            },
+        );
+        let answer = json!({
+            "seq": 12, "type": "response", "request_seq": 7, "success": true,
+            "command": "setBreakpoints",
+            "body": { "breakpoints": [
+                { "id": 1, "verified": true, "line": 140 },
+                {
+                    "id": 2, "verified": true, "line": 145,
+                    "source": { "path": r"E:\CodeBase\proj\core\src\math\vector.rs" },
+                },
+            ] },
+        });
+        assert!(reader.handle(&answer));
+        let state = states.try_iter().last().expect("a state");
+        let placed: Vec<_> = state
+            .breakpoints
+            .iter()
+            .map(|b| (b.file.as_str(), b.requested, b.line))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                ("core/src/math/vector.rs", Some(138), 139),
+                ("core/src/math/vector.rs", Some(144), 144),
+            ],
+        );
+        assert!(
+            reader.pending.lock().unwrap().is_empty(),
+            "an answered request waits for nothing",
+        );
+
+        // A refusal answers its request too.
+        reader.pending.lock().unwrap().insert(
+            8,
+            Asked {
+                file: "core/src/lib.rs".to_string(),
+                clicked: vec![3],
+            },
+        );
+        let refused = json!({
+            "seq": 13, "type": "response", "request_seq": 8, "success": false,
+            "command": "setBreakpoints", "message": "no such file",
+        });
+        reader.handle(&refused);
+        assert!(reader.pending.lock().unwrap().is_empty());
     }
 }

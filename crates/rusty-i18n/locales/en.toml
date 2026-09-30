@@ -449,7 +449,10 @@ lens-run-tests = "Run Tests"
 lens-run = "Run"
 run-example = "Run the example {name} — cargo run --example {name}"
 lens-debug = "Debug"
-debug-test = "Debug {name} under gdb, stopping at your breakpoints"
+debug-test = "Debug {name}, stopping at your breakpoints"
+lens-passed = "Passed in the last run"
+lens-failed = "Failed in the last run"
+test-failed = "Test {name} failed"
 
 [toolbar]
 save = "Format and save (Ctrl+S)"
@@ -720,8 +723,10 @@ empty = "Output from flashing, monitoring and anything you run below lands here,
 open-in-editor = "Open in the editor"
 
 [dock.debug]
-idle = "Nothing is being debugged. The Simulate panel's Debug button boots the firmware frozen and attaches here; Debug beside a test in the editor runs that test under gdb."
+idle = "Nothing is being debugged. The Simulate panel's Debug button boots the firmware frozen and attaches here; Debug beside a test in the editor runs that test under the debugger."
 running = "Running — pause or hit a breakpoint to read the stack."
+ran-past = "The program ran to its end (exit code {code}) without stopping at a breakpoint."
+ran-unstopped = "The program ran to its end (exit code {code}). No breakpoint is set — click beside a line number to stop there."
 call-stack = "Call stack"
 variables = "Variables"
 show-whole = "Show the whole value"

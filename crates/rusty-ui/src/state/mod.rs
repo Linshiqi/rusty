@@ -33,6 +33,7 @@ mod project;
 mod services;
 mod sim;
 mod storage;
+mod verdicts;
 mod window;
 mod workbench;
 
@@ -47,6 +48,7 @@ pub use project::*;
 pub use services::*;
 pub use sim::*;
 pub use storage::*;
+pub use verdicts::*;
 use window::{detached_path, query_param};
 pub use workbench::*;
 
@@ -96,6 +98,8 @@ pub struct AppState {
     pub math: Math,
     /// What programs drew with `rusty-draw`, for the Draw tab.
     pub draw: Drawing,
+    /// How the tests came out, for the lenses and the failing lines.
+    pub tests: Tests,
     pub debug: Debug,
     pub git: Git,
     pub term: Terminal,
@@ -271,6 +275,7 @@ impl AppState {
             lab: Lab::fresh(),
             math: Math::fresh(),
             draw: Drawing::fresh(),
+            tests: Tests::fresh(),
             debug: Debug {
                 session: RwSignal::new(None),
                 epoch: RwSignal::new(0),

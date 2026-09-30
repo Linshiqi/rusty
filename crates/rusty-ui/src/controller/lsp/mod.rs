@@ -17,7 +17,7 @@ use rusty_lsp::{HoverInfo, LspEvent};
 use super::*;
 use crate::{
     ipc::{self, cmd},
-    state::{AppState, HoverCard, LspStatus, PaintAsk, PaintState},
+    state::{AppState, HoverCard, LspStatus, PaintAsk, PaintState, TEST_SOURCE},
 };
 
 mod complete;

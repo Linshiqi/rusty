@@ -160,11 +160,14 @@ impl Pane {
         } = self;
         let path = self.path.get_value();
         let range = window.get();
-        let diagnostics = state
+        // The compiler's problems, and where a test failed: one red line,
+        // drawn and hovered the same way.
+        let mut diagnostics = state
             .lsp
             .diagnostics
             .with(|by_file| by_file.get(&path).cloned())
             .unwrap_or_default();
+        diagnostics.extend(state.tests.marks_in(&path));
         state.editor.folds.with(|folds| {
             // The compiler's colours, when they have arrived for this
             // document.

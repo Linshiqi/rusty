@@ -66,11 +66,39 @@ pub(super) fn Lenses(pane: Pane) -> impl IntoView {
                     let debug_title = t!("files.debug-test", name = r.name.clone());
                     let run_filter = r.filter.clone();
                     let debug_filter = r.filter.clone();
+                    // How it came out last time, where VS Code's gutter
+                    // says so: a tick, or a cross over one that failed —
+                    // or a module with a failure in it.
+                    let module = r.kind == rusty_edit::RunnableKind::Module;
+                    let verdict = (!example)
+                        .then(|| {
+                            state.tests.verdicts.with(|known| {
+                                crate::testrun::verdict_of_lens(known, &lens_path, &r.filter, module)
+                            })
+                        })
+                        .flatten();
+                    let verdict = verdict.and_then(|verdict| match verdict {
+                        crate::testrun::Verdict::Passed => {
+                            Some((Icon::Check, "text-patina", t!("files.lens-passed")))
+                        }
+                        crate::testrun::Verdict::Failed => {
+                            Some((Icon::Close, "text-crimson", t!("files.lens-failed")))
+                        }
+                        crate::testrun::Verdict::Ignored => None,
+                    });
                     Some(view! {
                         <div
                             class="pointer-events-none absolute z-10 flex items-center gap-2 font-sans text-footnote leading-none text-label-3 select-none"
                             style=format!("left: {x}px; top: {y}px; height: {height}px")
                         >
+                            {verdict.map(|(icon, colour, title)| view! {
+                                <span
+                                    class=format!("pointer-events-auto -mr-1 flex items-center {colour}")
+                                    title=title
+                                >
+                                    <IconView icon=icon size=icon_px />
+                                </span>
+                            })}
                             <button
                                 type="button"
                                 title=run_title

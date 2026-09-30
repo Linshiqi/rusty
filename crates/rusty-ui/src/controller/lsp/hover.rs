@@ -116,7 +116,22 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
         }
 
         let mut text = String::new();
-        if let Some((problem, _)) = &problem {
+        // A failed test's mark: the test's name, and the panic's message as
+        // printed — in a block, since `left:` and `right:` line up.
+        let test_failure = problem
+            .as_ref()
+            .filter(|(problem, _)| problem.source.as_deref() == Some(TEST_SOURCE));
+        if let Some((problem, _)) = test_failure {
+            let name = problem.code.clone().unwrap_or_default();
+            text.push_str(&format!(
+                "**{}**\n\n```text\n{}\n```",
+                t!("files.test-failed", name = name),
+                problem.message,
+            ));
+            if info.is_some() {
+                text.push_str("\n\n---\n\n");
+            }
+        } else if let Some((problem, _)) = &problem {
             let label = match problem.severity {
                 rusty_lsp::DiagSeverity::Error => "error",
                 rusty_lsp::DiagSeverity::Warning => "warning",
@@ -179,8 +194,10 @@ pub fn request_hover(state: AppState, path: String, line: u32, col: u32) {
         // more on a cold index, and a tooltip that waits for it is a
         // tooltip that does not appear. The buttons grow onto the card
         // that is already up, and only if it is still that card — the
-        // pointer moves on while this is in flight.
-        if problem.is_none() {
+        // pointer moves on while this is in flight. Not for a test's
+        // failure: the compiler has nothing to fix about an assertion that
+        // did not hold.
+        if problem.is_none() || test_failure.is_some() {
             return;
         }
         let ask = PathAt {
@@ -225,10 +242,15 @@ fn problem_at(
         .editor
         .draft
         .with_untracked(|draft| draft.split('\n').nth(line as usize).map(str::to_string))?;
-    state.lsp.diagnostics.with_untracked(|by_file| {
-        worst_at(by_file.get(path)?, line, col, &text)
-            .map(|(diagnostic, span)| (diagnostic.clone(), span))
-    })
+    // The compiler's problems and where tests failed: both drawn by the
+    // echo, so both found here.
+    let mut problems = state
+        .lsp
+        .diagnostics
+        .with_untracked(|by_file| by_file.get(path).cloned())
+        .unwrap_or_default();
+    problems.extend(state.tests.marks_in_now(path));
+    worst_at(&problems, line, col, &text).map(|(diagnostic, span)| (diagnostic.clone(), span))
 }
 
 /// The pure half of [`problem_at`], so the ranking is pinned by tests rather

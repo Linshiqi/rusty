@@ -16,6 +16,41 @@ use crate::{
     view::loclink::{self, Piece},
 };
 
+/// Log text with every source location in it a link into the editor —
+/// cargo's ` --> src\main.rs:62:33`, a panic's `src/lib.rs:5:9`.
+fn located(state: AppState, text: &str) -> AnyView {
+    loclink::split_locations(text)
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => text.into_any(),
+            Piece::Loc {
+                display,
+                path,
+                line,
+                col,
+            } => view! {
+                <button
+                    type="button"
+                    title=t!("dock.output.open-in-editor")
+                    class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-rust"
+                    on:click=move |_| {
+                        controller::open_at(
+                            state.focused(),
+                            path.clone(),
+                            line.saturating_sub(1),
+                            col.saturating_sub(1),
+                        );
+                    }
+                >
+                    {display}
+                </button>
+            }
+            .into_any(),
+        })
+        .collect_view()
+        .into_any()
+}
+
 /// What flashing and monitoring printed.
 ///
 /// Not a terminal emulator: there is no pty, so anything that wants a prompt or
@@ -181,6 +216,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                                         let text = line.text.trim_start();
                                         if text.starts_with("error:")
                                             || text.starts_with("error[")
+                                            || crate::testrun::is_panic_header(text)
                                         {
                                             "text-crimson"
                                         } else if text.starts_with("warning:") {
@@ -189,6 +225,26 @@ pub(super) fn OutputTab() -> impl IntoView {
                                             "text-label-2"
                                         }
                                     }
+                                };
+                                // A test's verdict in the colour a terminal
+                                // gives it — `ok` green, `FAILED` red — and
+                                // the rest of the line as it was.
+                                let verdict = crate::testrun::verdict_word(&line.text);
+                                let text = match verdict {
+                                    Some((from, to, verdict)) => {
+                                        let tone = match verdict {
+                                            crate::testrun::Verdict::Passed => "text-patina",
+                                            crate::testrun::Verdict::Failed => "text-crimson",
+                                            crate::testrun::Verdict::Ignored => "text-amber",
+                                        };
+                                        view! {
+                                            {located(state, &line.text[..from])}
+                                            <span class=tone>{line.text[from..to].to_string()}</span>
+                                            {located(state, &line.text[to..])}
+                                        }
+                                            .into_any()
+                                    }
+                                    None => located(state, &line.text),
                                 };
                                 let for_menu = line.text.clone();
                                 view! {
@@ -206,32 +262,7 @@ pub(super) fn OutputTab() -> impl IntoView {
                                             );
                                         }
                                     >
-                                        {loclink::split_locations(&line.text)
-                                            .into_iter()
-                                            .map(|piece| match piece {
-                                                Piece::Text(text) => text.into_any(),
-                                                Piece::Loc { display, path, line, col } => {
-                                                    view! {
-                                                        <button
-                                                            type="button"
-                                                            title=t!("dock.output.open-in-editor")
-                                                            class="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-rust"
-                                                            on:click=move |_| {
-                                                                controller::open_at(
-                                                                    state.focused(),
-                                                                    path.clone(),
-                                                                    line.saturating_sub(1),
-                                                                    col.saturating_sub(1),
-                                                                );
-                                                            }
-                                                        >
-                                                            {display}
-                                                        </button>
-                                                    }
-                                                        .into_any()
-                                                }
-                                            })
-                                            .collect_view()}
+                                        {text}
                                     </div>
                                 }
                             })

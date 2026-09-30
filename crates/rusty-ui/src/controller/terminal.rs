@@ -183,8 +183,14 @@ pub(super) fn run_command_on(
 /// For the host half: `cargo test` in a bare-metal crate cannot link a test
 /// harness, and that crate is excluded from the workspace for exactly that
 /// reason. See `run_command` on the backend.
+///
+/// The dock starts empty, as rust-analyzer's runnables clear their
+/// terminal: runs appended under each other were one scroll of several
+/// runs' verdicts, and which `FAILED` was this run's was a search.
 pub(super) fn run_tests_at_root(state: AppState, line: String) {
+    state.clear_log();
     save_all_then(state, move || {
+        tests_begin(state);
         run_command_in(state, line, true, "test", |_| {});
     });
 }
@@ -330,13 +336,18 @@ pub fn window_action(command: &'static str) {
 /// the broader filter is the safe one. Running a same-named test in a sibling
 /// module too is a visible extra line of output; a silent green tick is not.
 ///
-/// `--nocapture` because the reason to click one test rather than run the
-/// suite is usually to read what it prints.
+/// `--show-output`, rust-analyzer's own default for its lens, because the
+/// reason to click one test rather than run the suite is usually to read
+/// what it prints — and with the output captured, each test's is printed
+/// under its own name at the end. `--nocapture` printed everything as it
+/// happened: a panic on stderr ahead of the verdicts, among every other
+/// test's lines, and a `failures:` section with nothing in it, which read
+/// as "it failed and nothing says why".
 pub fn run_test(state: AppState, filter: String) {
     let line = if filter.is_empty() {
         "cargo test".to_string()
     } else {
-        format!("cargo test {filter} -- --nocapture")
+        format!("cargo test {filter} -- --show-output")
     };
     // At the project, not at the firmware crate: see `run_tests_at_root`.
     run_tests_at_root(state, line);
@@ -349,6 +360,8 @@ pub fn run_test(state: AppState, filter: String) {
 /// first. Offered only where that runs it on this machine
 /// (`runs_examples`): a firmware crate's `cargo run` flashes a board.
 pub fn run_example(state: AppState, name: String) {
+    // A run of its own in an empty dock, as a test's is.
+    state.clear_log();
     save_all_then(state, move || {
         run_command_in(
             state,
@@ -362,10 +375,10 @@ pub fn run_example(state: AppState, name: String) {
 
 /// The whole suite — the title bar's Test. The same path as the lens with
 /// an empty filter, so the two cannot disagree about where tests run; and
-/// no `--nocapture`, because a suite's `println!`s are noise and the harness
-/// prints a failing test's output regardless. Refused while something runs,
-/// as Build is: the backend's slot would stop it, and a test run that
-/// silently killed a flash is worse than a button that waits.
+/// no `--show-output`, because a suite's `println!`s are noise and the
+/// harness prints a failing test's output regardless. Refused while
+/// something runs, as Build is: the backend's slot would stop it, and a
+/// test run that silently killed a flash is worse than a button that waits.
 ///
 /// A root that is its own firmware is refused *out loud*: the reason goes
 /// to the dock, which comes forward, and to the banner. The first version

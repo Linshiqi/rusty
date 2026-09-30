@@ -91,7 +91,11 @@ cargo check -p rusty-core -p rusty-embed -p rusty-ai -p rusty-term \
 # localStorage makes the project the standard layout, a `firmware/` beside
 # the host crates, so `examples/cross.rs` in its tree gets ▶ Run — which
 # answers with a cross product's scene for the Draw tab. Without the switch
-# the project is its own firmware, and the lens is rightly withheld.
+# the project is its own firmware, and the lens is rightly withheld. And
+# Run Test in `src/main.rs` answers as `cargo test -- --show-output` prints,
+# one of its two tests failing at a line of the file — its mark, its note,
+# the lens's cross, the dock's colours; `__mock.testsPass` has both pass,
+# which is how a mark is seen to go.
 cd crates/rusty-ui && trunk serve
 
 # The whole app
@@ -2456,7 +2460,32 @@ where anyone looks for it, and the margin had no room to say "Debug".
   Positioned through `row_top` like every overlay, skipped when its line is
   inside a collapsed fold.
 - **Run is what the arrow did**: `controller::run_test`, a substring filter
-  with `--nocapture`, for the reasons written above that function.
+  with `--show-output`, rust-analyzer's own default for its lens. It was
+  `--nocapture`, and every panic went to stderr the moment it happened,
+  ahead of the verdicts and among every other test's lines, while
+  `failures:` came out with nothing under it — reported as "it failed and
+  nothing says why". Captured, each test's output and its panic are printed
+  under its own `---- name stdout ----` at the end. A test run, an example
+  run and a debugged test start with an empty dock, as rust-analyzer's
+  runnables clear their terminal: appended, the dock was several runs'
+  `FAILED`s in one scroll.
+- **What a run says is read as it goes** (`crate::testrun`, pure and
+  tested against a captured run; `controller/testrun.rs` feeds it from
+  `absorb` while the channel is `test`): each test's verdict, and for each
+  failed one where it panicked and what it said. The lens carries a tick or
+  a cross from the last run — a module's is the worst of its tests', found
+  by the file's module path (`module_of`) and never by a bare suffix, which
+  would put another file's result on this lens. The failing line gets the
+  red line every problem gets, the panic's first line after it (VS Code's
+  test message; an overlay, `surface/failures.rs`, so no glyph moves) and
+  the whole message on the card, which asks for no quick fix. The dock
+  paints `ok` green and `FAILED` red where a terminal would, and the
+  `panicked at` line as an error. **A panic is a failure only where the
+  verdict says so**: a `#[should_panic]` test that passed prints its panic
+  under `successes:`. A run replaces the verdicts of the tests it ran and
+  keeps the rest, as VS Code's do; an edit to a file takes the marks off it,
+  since they were about the text before. Not in Problems, which lists what
+  stops the build.
 - **Debug builds, asks, then runs.** `debug_test` (rusty-app) runs `cargo
   test --no-run` visibly, then the same with `--message-format=json` to learn
   where each test executable landed, then asks each binary `<exe> <filter>
@@ -2485,6 +2514,23 @@ where anyone looks for it, and the margin had no room to say "Debug".
   `output` to the dock whatever produced it. The Output tab shows first and
   the Debug tab takes over on attach; a Debug panel saying "starting" over a
   two-minute compile looked hung.
+- **A breakpoint on the first line of a multi-line `assert!(` is placed on
+  its condition** (`rusty_dbg::placement`, both debuggers). The compiler
+  gives that line no code but the call to the panic handler: in a Windows
+  test binary's line table, line 139 (`assert!(`) had four addresses, all
+  after line 142's `r.norm()` on the failing path, and line 140's condition
+  came first. LLDB bound the breakpoint there, the assertion held, and the
+  test ran to its end — reported as "Debug does not start". `debug_assert!`
+  is the same; `assert_eq!(`, `assert_ne!(`, `println!(` and `vec![` do
+  their work on their first line and stop there as clicked, each measured
+  with `dap_probe`. The line clicked stays `Breakpoint::requested`, so the
+  dot moves to where the session will stop: the DAP answer is paired with
+  its request by `request_seq`, in order — taken as the adapter's line, a
+  breakpoint moved in its first answer never moved its dot — and gdb's
+  `original-location`, which quotes the line placed on, is mapped back.
+  **A program that ran to its end without once stopping says so** in the
+  dock (`dock.debug.ran-past`), since the panel it leaves behind is the one
+  a session that never started leaves.
 
 ## Languages
 

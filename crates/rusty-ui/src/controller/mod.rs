@@ -35,6 +35,7 @@ mod setup;
 mod simulate;
 mod storage;
 mod terminal;
+mod testrun;
 mod views;
 mod watch;
 mod wizard;
@@ -64,6 +65,8 @@ pub use views::*;
 pub use watch::*;
 pub use wizard::*;
 pub use workbench::*;
+// Nothing outside the controllers calls it: a run is read as it passes.
+use testrun::*;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;

@@ -172,6 +172,11 @@ pub(super) fn clear_capture(state: AppState) {
 /// gives it (`rusty_embed::period`).
 pub(super) fn absorb(state: AppState, line: LogLine) {
     follow_activity(state, &line.text);
+    // A test run's own reading, beside the protocol's: every line of it in
+    // order, whichever arm below then takes it.
+    if state.dock.source.get_untracked() == "test" {
+        tests_heard(state, &line.text);
+    }
     if let Some(sample) = rusty_embed::protocol::parse_telemetry(&line.text) {
         record_plot(state, sample);
         state.reveal_tab(crate::state::DockTab::Plot);
