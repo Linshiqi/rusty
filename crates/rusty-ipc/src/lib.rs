@@ -226,6 +226,8 @@ pub mod lsp {
     pub const INLAY_HINTS: &str = "lsp_inlay_hints";
     pub const SIGNATURE: &str = "lsp_signature";
     pub const SEMANTIC: &str = "lsp_semantic";
+    /// After an edit: the edit, then the colours and the hints, in one call.
+    pub const PAINTED: &str = "lsp_painted";
     pub const ACTIONS: &str = "lsp_code_actions";
     /// Write the part of an accepted quick fix that lands in other files.
     pub const APPLY_ACTION: &str = "lsp_apply_action";

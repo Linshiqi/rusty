@@ -15,10 +15,10 @@ const RETRY_AFTER: Duration = Duration::from_millis(150);
 /// with the caret at `col` — at once, or after [`REASK_AFTER`] unless a later
 /// keystroke asks first.
 ///
-/// The buffer is synced to the server first, without waiting for the pulse:
+/// The buffer travels with the question, without waiting for the pulse:
 /// completion after typing `.` is about the text as of *that keystroke*, and a
-/// 250ms-stale server answers about the wrong world. `did_change` dedups, so
-/// the extra sync costs nothing when the pulse already ran.
+/// 250ms-stale server answers about the wrong world. The client dedups, so
+/// the text costs nothing when the pulse already sent it.
 ///
 /// Every ask is numbered and anchored (`state::CompletionAsk`). An answer is
 /// shown while its word is still the word being typed and nothing newer is
@@ -82,13 +82,17 @@ fn latest_ask(state: AppState) -> Option<u64> {
 }
 
 fn ask_completion(state: AppState, at: PathAt, word_start: u32, asked: u64, retry: bool) {
-    let sync = PathText {
+    // The text the question is about goes with it, given to the server in
+    // the same command (`rusty_lsp::Draft`): one round trip per keystroke,
+    // and no change of another flow's between the two.
+    let question = AtDraft {
         path: at.path.clone(),
-        text: state.editor.draft.get_untracked(),
+        line: at.line,
+        col: at.col,
+        draft: draft(state.editor.draft.get_untracked()),
     };
     spawn_local(async move {
-        let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
-        let answer = ipc::call::<_, rusty_lsp::CompletionList>(cmd::lsp::COMPLETE, &at).await;
+        let answer = ipc::call::<_, rusty_lsp::CompletionList>(cmd::lsp::COMPLETE, &question).await;
         let anchor = (at.path.clone(), at.line, word_start);
         let still = state
             .editor
@@ -177,23 +181,19 @@ pub fn resolve_completion(
 
 /// Ask what call the caret sits inside, for the signature card.
 ///
-/// Syncs the draft first, like completion does: an answer about stale text
+/// Carries the draft, like completion does: an answer about stale text
 /// highlights the wrong parameter.
 pub fn request_signature(state: AppState, path: String, line: u32, col: u32) {
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let sync = PathText {
-        path: path.clone(),
-        text: state.editor.draft.get_untracked(),
-    };
-    let ask = PathAt {
+    let ask = AtDraft {
         path: path.clone(),
         line,
         col,
+        draft: draft(state.editor.draft.get_untracked()),
     };
     spawn_local(async move {
-        let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
         let answer = ipc::call::<_, Option<rusty_lsp::SignatureInfo>>(cmd::lsp::SIGNATURE, &ask)
             .await
             .ok()

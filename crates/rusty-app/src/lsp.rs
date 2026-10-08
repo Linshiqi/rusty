@@ -4,10 +4,17 @@
 //! for the life of the server, and short calls for everything else. The client
 //! blocks on a pipe, so every call crosses onto a blocking thread rather than
 //! starving an async worker.
+//!
+//! **A question about a file's text carries the text** (`rusty_lsp::Draft`)
+//! and is given to the server first, in the same task (`synced`). Sent as a
+//! change and then a question, the two were two calls, two tasks on the
+//! blocking pool and two round trips per keystroke for completion — and two
+//! flows' changes could arrive in either order, the older written over the
+//! newer. The client skips a draft older than the one it holds.
 
 use std::sync::Arc;
 
-use rusty_lsp::{CompletionList, HoverInfo, Location, LspClient, LspEvent};
+use rusty_lsp::{CompletionList, Draft, HoverInfo, Location, LspClient, LspEvent};
 use tauri::{State, ipc::Channel};
 
 use crate::{
@@ -109,10 +116,10 @@ pub async fn lsp_open(
 #[tauri::command]
 pub async fn lsp_change(
     path: String,
-    text: String,
+    draft: Draft,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    ask(&state, move |client| client.did_change(&path, &text)).await
+    ask(&state, move |client| client.sync_draft(&path, &draft)).await
 }
 
 #[tauri::command]
@@ -130,9 +137,14 @@ pub async fn lsp_complete(
     path: String,
     line: u32,
     col: u32,
+    draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<CompletionList, CommandError> {
-    ask(&state, move |client| client.completion(&path, line, col)).await
+    ask(&state, move |client| {
+        synced(client, &path, draft.as_ref())?;
+        client.completion(&path, line, col)
+    })
+    .await
 }
 
 /// The edits an accepted completion makes besides the insertion — the
@@ -167,9 +179,14 @@ pub async fn lsp_code_actions(
     path: String,
     line: u32,
     col: u32,
+    draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<rusty_lsp::CodeActions, CommandError> {
-    ask(&state, move |client| client.code_actions(&path, line, col)).await
+    ask(&state, move |client| {
+        synced(client, &path, draft.as_ref())?;
+        client.code_actions(&path, line, col)
+    })
+    .await
 }
 
 /// The part of an accepted quick fix that lands in other files, written
@@ -198,15 +215,40 @@ pub async fn lsp_semantic(
     ask(&state, move |client| client.semantic_tokens(&path, lines)).await
 }
 
+/// The pulse after an edit, in one command: the edit given to the server,
+/// then the semantic colours over `lines` (the whole file when `None`) and,
+/// when `hints` names a range, the inlay hints over it. Each answer is
+/// `None` when the server did not give one — an error here is the warm-up
+/// or an edit overtaking the question, and the editor keeps what it shows.
+#[tauri::command]
+pub async fn lsp_painted(
+    path: String,
+    draft: Draft,
+    lines: Option<(u32, u32)>,
+    hints: Option<(u32, u32)>,
+    state: State<'_, AppState>,
+) -> Result<rusty_lsp::Painted, CommandError> {
+    ask(&state, move |client| {
+        client.sync_draft(&path, &draft)?;
+        Ok(rusty_lsp::Painted {
+            semantic: client.semantic_tokens(&path, lines).ok(),
+            hints: hints.and_then(|(from, to)| client.inlay_hints(&path, from, to).ok()),
+        })
+    })
+    .await
+}
+
 /// The signature of the call the caret is inside, for parameter hints.
 #[tauri::command]
 pub async fn lsp_signature(
     path: String,
     line: u32,
     col: u32,
+    draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<Option<rusty_lsp::SignatureInfo>, CommandError> {
     ask(&state, move |client| {
+        synced(client, &path, draft.as_ref())?;
         client.signature_help(&path, line, col)
     })
     .await
@@ -315,9 +357,14 @@ pub async fn lsp_inlay_hints(
     path: String,
     from: u32,
     to: u32,
+    draft: Option<Draft>,
     state: State<'_, AppState>,
 ) -> Result<rusty_lsp::InlayHints, CommandError> {
-    ask(&state, move |client| client.inlay_hints(&path, from, to)).await
+    ask(&state, move |client| {
+        synced(client, &path, draft.as_ref())?;
+        client.inlay_hints(&path, from, to)
+    })
+    .await
 }
 
 /// Who calls the function `item` names, or what it calls: `item` is the
@@ -369,6 +416,16 @@ pub async fn lsp_expand_macro(
         Ok(Some(files.virtual_document(&shown, "expansion.rs", text)))
     })
     .await
+}
+
+/// The draft a question was asked over, given to the server before the
+/// question in the same task. Without one the question is about whatever
+/// the server holds.
+fn synced(client: &LspClient, path: &str, draft: Option<&Draft>) -> rusty_lsp::Result<()> {
+    match draft {
+        Some(draft) => client.sync_draft(path, draft),
+        None => Ok(()),
+    }
 }
 
 /// Ask the server, on the blocking pool — the client waits on a pipe — and

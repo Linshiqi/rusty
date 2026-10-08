@@ -281,6 +281,19 @@
     readOnly: false,
   });
 
+  // A question's draft given to the server first, as `LspClient::sync_draft`
+  // does: one older than the server's last is skipped, and only a text that
+  // differs is a change.
+  const syncDraft = (path, draft) => {
+    if (!draft) return;
+    const m = window.__mock;
+    m.drafted = m.drafted || {};
+    if (draft.seq < (m.drafted[path] || 0)) return;
+    m.drafted[path] = draft.seq;
+    if (m.serverText[path] === draft.text) return;
+    m.serverBefore[path] = m.serverText[path];
+    m.serverText[path] = draft.text;
+  };
   const ITEMS = [
     { label: "frobnicate", kind: "method", detail: "fn frobnicate(&self) -> u32", insert: "frobnicate()", edit: null },
     { label: "free_heap", kind: "method", detail: "fn free_heap(&self) -> usize", insert: "free_heap()", edit: null },
@@ -570,11 +583,17 @@
     lsp_saved: () => null,
     lsp_close: (a) => { delete window.__mock.serverText[a.path]; return null; },
     lsp_change: (a) => {
-      const m = window.__mock;
-      m.changes.push(a);
-      m.serverBefore[a.path] = m.serverText[a.path];
-      m.serverText[a.path] = a.text;
+      window.__mock.changes.push(a);
+      syncDraft(a.path, a.draft);
       return null;
+    },
+    // The pulse: the draft, then the colours and the hints, in one command.
+    lsp_painted: (a) => {
+      syncDraft(a.path, a.draft);
+      return {
+        semantic: handlers.lsp_semantic(),
+        hints: a.hints ? handlers.lsp_inlay_hints({ path: a.path, from: a.hints[0], to: a.hints[1] }) : null,
+      };
     },
     // A type after every `let name =`, where rust-analyzer writes one.
     // `__mock.hintsLate` answers the next ask about the text before the last
@@ -584,6 +603,7 @@
     lsp_inlay_hints: (a) => {
       const m = window.__mock;
       m.hintAsks.push(a);
+      syncDraft(a.path, a.draft);
       let text = m.serverText[a.path] ?? "";
       if (m.hintsLate && m.serverBefore[a.path] !== undefined) {
         text = m.serverBefore[a.path];
@@ -607,6 +627,7 @@
     // arrive before the item is accepted.
     lsp_complete: (a) => {
       window.__mock.completes.push(a);
+      syncDraft(a.path, a.draft);
       const start = a.col - 2;
       const items = ITEMS.map((i, index) => ({ ...i, index, edit: { startLine: a.line, startCol: start, endLine: a.line, endCol: a.col, newText: i.insert } }));
       return { items, incomplete: false, reply: 1 };
@@ -616,11 +637,11 @@
       range: { startLine: a.line, startCol: 4, endLine: a.line, endCol: 9 },
     }),
     lsp_definition: () => null,
-    lsp_code_actions: (a) => [{
+    lsp_code_actions: (a) => (syncDraft(a.path, a.draft), [{
       title: "Import `std::collections::HashMap`",
       kind: "quickfix",
       edits: [{ range: { startLine: 0, startCol: 0, endLine: 0, endCol: 0 }, newText: ["use std::collections::HashMap;", "", ""].join("\n") }],
-    }],
+    }]),
     // Navigation answers nothing in the browser: an empty list is what a
     // server still loading says, and the finder shows it as such.
     lsp_references: () => [],
@@ -633,7 +654,7 @@
       { line: 47, startCol: 8, length: 5, kind: "variable" },
       { line: 51, startCol: 7, length: 5, kind: "struct" },
     ],
-    lsp_signature: (a) => { window.__mock.signatures.push(a); return {
+    lsp_signature: (a) => { window.__mock.signatures.push(a); syncDraft(a.path, a.draft); return {
       label: "fn mix(&self, gain: u32, bias: i32) -> u32",
       paramStart: 25, paramEnd: 34, doc: "Blends the two inputs.",
     }; },

@@ -15,14 +15,7 @@ pub fn request_semantic(state: AppState, path: String) {
     if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
-    let lines = (count > SEMANTIC_WHOLE_LINES).then(|| {
-        let (from, to) = state.editor.drawn_lines.get_value();
-        (
-            from.saturating_sub(SEMANTIC_MARGIN),
-            to.saturating_add(SEMANTIC_MARGIN).min(count),
-        )
-    });
+    let lines = semantic_lines(state);
     let args = Args {
         path: path.clone(),
         lines,
@@ -30,19 +23,44 @@ pub fn request_semantic(state: AppState, path: String) {
     spawn_local(async move {
         // Errors and empties are the warm-up talking; the lexical base colour
         // stays up either way, so there is nothing to report.
-        let Ok(mut spans) =
+        if let Ok(spans) =
             ipc::call::<_, Vec<rusty_lsp::SemanticSpan>>(cmd::lsp::SEMANTIC, &args).await
-        else {
-            return;
-        };
-        // In order, which the echo finds a line's spans by halving.
-        spans.sort_by_key(|span| (span.line, span.start_col));
-        let current = state.active_path_now();
-        if current.as_deref() == Some(path.as_str()) && !spans.is_empty() {
-            state.editor.semantic.set(Some((path, spans)));
-            state.editor.semantic_lines.set_value(lines);
+        {
+            take_semantic(state, path, lines, spans);
         }
     });
+}
+
+/// The lines a semantic ask covers: the whole file (`None`) when it is short
+/// enough, the lines on screen and a margin either side when it is not.
+fn semantic_lines(state: AppState) -> Option<(u32, u32)> {
+    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
+    (count > SEMANTIC_WHOLE_LINES).then(|| around_drawn(state, count))
+}
+
+/// The lines on screen and [`SEMANTIC_MARGIN`] either side, within the file.
+fn around_drawn(state: AppState, count: u32) -> (u32, u32) {
+    let (from, to) = state.editor.drawn_lines.get_value();
+    (
+        from.saturating_sub(SEMANTIC_MARGIN),
+        to.saturating_add(SEMANTIC_MARGIN).min(count),
+    )
+}
+
+/// Put an answer's semantic colours on screen, while its file is.
+fn take_semantic(
+    state: AppState,
+    path: String,
+    lines: Option<(u32, u32)>,
+    mut spans: Vec<rusty_lsp::SemanticSpan>,
+) {
+    // In order, which the echo finds a line's spans by halving.
+    spans.sort_by_key(|span| (span.line, span.start_col));
+    let current = state.active_path_now();
+    if current.as_deref() == Some(path.as_str()) && !spans.is_empty() {
+        let _ = state.editor.semantic.try_set(Some((path, spans)));
+        state.editor.semantic_lines.set_value(lines);
+    }
 }
 
 /// Ask for the inlay hints over the lines of this group's file on screen —
@@ -56,83 +74,132 @@ pub fn request_semantic(state: AppState, path: String) {
 /// pulse has not sent yet — and an answer about another text, drawn anyway,
 /// put every hint below an edit a line off its code and left it there until
 /// the next edit: reported after two lines were replaced by one. Such an
-/// answer is asked for again, once the text on screen has been sent.
+/// answer is asked for again, this time carrying the text on screen.
 pub fn request_hints(state: AppState, path: String) {
-    ask_hints(state, path, true);
+    ask_hints(state, path, false);
 }
 
-/// [`request_hints`], with whether an answer about another text is followed
-/// by one more ask — once, so a server that keeps another text cannot be
-/// asked for ever.
-fn ask_hints(state: AppState, path: String, again: bool) {
+/// [`request_hints`], with whether the ask carries the text on screen
+/// (`rusty_lsp::Draft`) — which only the second ask does, so a server that
+/// keeps another text cannot be asked for ever, and a scroll does not send
+/// the whole file.
+fn ask_hints(state: AppState, path: String, carry: bool) {
     #[derive(serde::Serialize)]
     struct Args {
         path: String,
         from: u32,
         to: u32,
+        draft: Option<rusty_lsp::Draft>,
     }
 
-    if !path.ends_with(".rs")
-        || state.lsp.status.get_untracked() != LspStatus::Ready
-        || !state.editor.view.with_untracked(|view| view.inlay_hints)
-    {
+    if !path.ends_with(".rs") || state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
-    let (from, to) = if count > SEMANTIC_WHOLE_LINES {
-        let (from, to) = state.editor.drawn_lines.get_value();
-        (
-            from.saturating_sub(SEMANTIC_MARGIN),
-            to.saturating_add(SEMANTIC_MARGIN).min(count),
-        )
-    } else {
-        (0, count)
-    };
-    let args = Args {
-        path: path.clone(),
-        from,
-        to,
+    let Some((from, to)) = hint_lines(state) else {
+        return;
     };
     // What the server was asked about: an answer that lands after more
     // typing is about this text, and is carried to the one on screen.
     let asked = state.editor.draft.get_untracked();
+    let args = Args {
+        path: path.clone(),
+        from,
+        to,
+        draft: carry.then(|| draft(asked.clone())),
+    };
     spawn_local(async move {
         // The warm-up answers with errors and empties; the hints on screen
         // stay until an answer replaces them.
-        let Ok(answer) = ipc::call::<_, rusty_lsp::InlayHints>(cmd::lsp::INLAY_HINTS, &args).await
-        else {
+        if let Ok(answer) =
+            ipc::call::<_, rusty_lsp::InlayHints>(cmd::lsp::INLAY_HINTS, &args).await
+        {
+            take_hints(state, path, (from, to), &asked, answer, !carry);
+        }
+    });
+}
+
+/// The lines a hints ask covers — the whole file when it is short enough to
+/// be asked about whole, as its semantic colours are — or `None` with hints
+/// off.
+fn hint_lines(state: AppState) -> Option<(u32, u32)> {
+    if !state.editor.view.with_untracked(|view| view.inlay_hints) {
+        return None;
+    }
+    let count = state.editor.highlighted.with_untracked(Vec::len) as u32;
+    Some(if count > SEMANTIC_WHOLE_LINES {
+        around_drawn(state, count)
+    } else {
+        (0, count)
+    })
+}
+
+/// Put an answer's hints on screen, carried from `asked` to the text there
+/// now — when the answer is about `asked`. One about another text is asked
+/// for again, carrying the text on screen, when `again` says it may be.
+fn take_hints(
+    state: AppState,
+    path: String,
+    lines: (u32, u32),
+    asked: &str,
+    answer: rusty_lsp::InlayHints,
+    again: bool,
+) {
+    if state.active_path_now().as_deref() != Some(path.as_str()) {
+        return;
+    }
+    if answer.about != rusty_lsp::text_mark(asked) {
+        // About another text. The hints on screen have moved with every
+        // edit and stand where they should; these would not.
+        if again {
+            ask_hints(state, path, true);
+        }
+        return;
+    }
+    let Some(now) = state.editor.draft.try_get_untracked() else {
+        return;
+    };
+    let mut hints = answer.hints;
+    crate::inlay::follow(&mut hints, asked, &now);
+    hints.sort_by_key(|hint| (hint.line, hint.col));
+    let _ = state
+        .editor
+        .hints
+        .try_set(Some(crate::state::HintSet { path, lines, hints }));
+}
+
+/// The pulse's questions, in one command with the edit they follow
+/// (`lsp_painted`): the draft, then the colours and the hints over the lines
+/// this group is drawing. Two commands — a change, then the questions — were
+/// two tasks on the backend, and each group's questions could reach the
+/// server ahead of the change, or another flow's older change after it.
+pub(super) fn request_painted(state: AppState, path: String, draft: rusty_lsp::Draft) {
+    #[derive(serde::Serialize)]
+    struct Args {
+        path: String,
+        draft: rusty_lsp::Draft,
+        lines: Option<(u32, u32)>,
+        hints: Option<(u32, u32)>,
+    }
+
+    let lines = semantic_lines(state);
+    let hints = hint_lines(state);
+    let asked = draft.text.clone();
+    let args = Args {
+        path: path.clone(),
+        draft,
+        lines,
+        hints,
+    };
+    spawn_local(async move {
+        let Ok(answer) = ipc::call::<_, rusty_lsp::Painted>(cmd::lsp::PAINTED, &args).await else {
             return;
         };
-        if state.active_path_now().as_deref() != Some(path.as_str()) {
-            return;
+        if let Some(spans) = answer.semantic {
+            take_semantic(state, path.clone(), lines, spans);
         }
-        if answer.about != rusty_lsp::text_mark(&asked) {
-            // About another text. The hints on screen have moved with every
-            // edit and stand where they should; these would not. Send what
-            // is on screen, and ask once it has gone.
-            if again && let Some(text) = state.editor.draft.try_get_untracked() {
-                let sync = PathText {
-                    path: path.clone(),
-                    text,
-                };
-                let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
-                if state.active_path_now().as_deref() == Some(path.as_str()) {
-                    ask_hints(state, path, false);
-                }
-            }
-            return;
+        if let (Some(range), Some(found)) = (hints, answer.hints) {
+            take_hints(state, path, range, &asked, found, true);
         }
-        let Some(now) = state.editor.draft.try_get_untracked() else {
-            return;
-        };
-        let mut hints = answer.hints;
-        crate::inlay::follow(&mut hints, &asked, &now);
-        hints.sort_by_key(|hint| (hint.line, hint.col));
-        let _ = state.editor.hints.try_set(Some(crate::state::HintSet {
-            path,
-            lines: (from, to),
-            hints,
-        }));
     });
 }
 

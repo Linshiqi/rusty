@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use super::{LspClient, Shared, transport::Asked};
 use crate::{
     error::Result,
-    model::LspEvent,
+    model::{Draft, LspEvent},
     positions::{content_change, scalar_to_character},
     pull,
     uri::path_to_uri,
@@ -38,6 +38,9 @@ use crate::{
 pub(super) struct Doc {
     version: i64,
     text: String,
+    /// `Draft::seq` of the editor's text this is, or 0 for a text that came
+    /// with none. A draft older than this is skipped.
+    drafted: u64,
 }
 
 impl LspClient {
@@ -46,7 +49,7 @@ impl LspClient {
     pub fn did_open(&self, path: &str, text: &str) -> Result<()> {
         let opened = {
             let _order = self.shared.order.lock().expect("lsp order");
-            self.open_in_order(path, text)?
+            self.open_in_order(path, text, 0)?
         };
         if opened {
             // After the notification is on the wire, never before: the
@@ -60,7 +63,7 @@ impl LspClient {
 
     /// [`Self::did_open`] with the order held: recorded and written. Whether
     /// anything was opened.
-    fn open_in_order(&self, path: &str, text: &str) -> Result<bool> {
+    fn open_in_order(&self, path: &str, text: &str, drafted: u64) -> Result<bool> {
         {
             let mut docs = self.shared.docs.lock().expect("lsp docs");
             if docs.contains_key(path) {
@@ -71,6 +74,7 @@ impl LspClient {
                 Doc {
                     version: 1,
                     text: text.to_string(),
+                    drafted,
                 },
             );
         }
@@ -99,6 +103,18 @@ impl LspClient {
     /// hand over the whole buffer and a keystroke still travels as one
     /// character.
     pub fn did_change(&self, path: &str, new_text: &str) -> Result<()> {
+        self.change(path, new_text, None)
+    }
+
+    /// The editor's text of a file, given to the server unless the client
+    /// already holds a newer one (`Draft`): two drafts sent at once reach
+    /// here in either order, and the older written last would leave the
+    /// server with a text the editor has moved on from until the next edit.
+    pub fn sync_draft(&self, path: &str, draft: &Draft) -> Result<()> {
+        self.change(path, &draft.text, Some(draft.seq))
+    }
+
+    fn change(&self, path: &str, new_text: &str, seq: Option<u64>) -> Result<()> {
         let encoding = self.shared.encoding();
         {
             // The delta is against the text before it, so it has to arrive
@@ -107,6 +123,10 @@ impl LspClient {
             let change = {
                 let mut docs = self.shared.docs.lock().expect("lsp docs");
                 docs.get_mut(path).map(|doc| {
+                    if seq.is_some_and(|seq| seq < doc.drafted) {
+                        return None;
+                    }
+                    doc.drafted = seq.unwrap_or(doc.drafted);
                     (doc.text != new_text).then(|| {
                         let change = content_change(&doc.text, new_text, encoding);
                         doc.version += 1;
@@ -119,7 +139,7 @@ impl LspClient {
                 // Not open: opening it is how the server comes to have this
                 // text.
                 None => {
-                    self.open_in_order(path, new_text)?;
+                    self.open_in_order(path, new_text, seq.unwrap_or(0))?;
                 }
                 // What the server has already.
                 Some(None) => return Ok(()),

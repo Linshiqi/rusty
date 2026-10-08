@@ -1176,3 +1176,101 @@ fn saw_change_to(seen: &Seen, wanted: &str) -> bool {
     }
     false
 }
+
+/// A draft is the editor's text when it was taken, and the client keeps the
+/// newest it has been given: an older one arriving after it — two flows'
+/// commands on two threads of the blocking pool — is skipped, where it used
+/// to be written over the newer and leave the server a step behind the
+/// editor until the next edit.
+#[test]
+fn an_older_draft_never_replaces_a_newer_one() {
+    let first = "fn main() {}\n";
+    let (client, _root, seen) = client_with(&[("src/main.rs", first)], |message, _| {
+        (method(message) == "textDocument/diagnostic")
+            .then(|| json!({ "kind": "full", "items": [] }))
+    });
+    client.did_open("src/main.rs", first).unwrap();
+    let draft = |seq: u64, text: &str| crate::model::Draft {
+        text: text.to_string(),
+        seq,
+    };
+    client
+        .sync_draft("src/main.rs", &draft(10, "fn main() { newer(); }\n"))
+        .unwrap();
+    client
+        .sync_draft("src/main.rs", &draft(5, "fn main() { older(); }\n"))
+        .unwrap();
+    assert_eq!(
+        client.shared.open_text("src/main.rs").as_deref(),
+        Some("fn main() { newer(); }\n")
+    );
+    // The same text again under a newer number: nothing to send, and the
+    // number still moves, so a draft between the two is older than both.
+    client
+        .sync_draft("src/main.rs", &draft(20, "fn main() { newer(); }\n"))
+        .unwrap();
+    client
+        .sync_draft("src/main.rs", &draft(15, "fn main() { between(); }\n"))
+        .unwrap();
+    client
+        .did_change("src/main.rs", "fn main() { done(); }\n")
+        .unwrap();
+    assert!(saw_change_to(&seen, "done"));
+    let (copy, _) = server_copy(&seen, "");
+    assert_eq!(copy, "fn main() { done(); }\n");
+    assert!(
+        !seen.lock().unwrap().iter().any(|m| {
+            m["params"]["contentChanges"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("older") || text.contains("between"))
+        }),
+        "neither older draft reached the server",
+    );
+}
+
+/// Drafts taken one after another, as the editor's one thread takes them,
+/// and each sent on a thread of its own, as each command is: one taken
+/// earlier can arrive later. Whichever arrives last, the server ends with
+/// the newest.
+#[test]
+fn drafts_sent_at_once_leave_the_server_with_the_newest() {
+    let first = "fn main() {}\n";
+    let (client, _root, seen) = client_with(&[("src/main.rs", first)], |message, _| {
+        (method(message) == "textDocument/diagnostic")
+            .then(|| json!({ "kind": "full", "items": [] }))
+    });
+    client.did_open("src/main.rs", first).unwrap();
+    let client = Arc::new(client);
+    let text_of = |seq: u64| format!("fn main() {{\n    step({seq});\n}}\n");
+    const DRAFTS: u64 = 120;
+    let senders: Vec<_> = (1..=DRAFTS)
+        .map(|seq| {
+            let client = Arc::clone(&client);
+            let text = text_of(seq);
+            thread::spawn(move || {
+                // The way across: the newest, a multiple of four, is the
+                // quickest, so the three taken just before it arrive after.
+                thread::sleep(Duration::from_micros(seq % 4 * 2_000));
+                let draft = crate::model::Draft { text, seq };
+                client.sync_draft("src/main.rs", &draft).unwrap();
+            })
+        })
+        .collect();
+    for sender in senders {
+        sender.join().unwrap();
+    }
+    let newest = text_of(DRAFTS);
+    assert_eq!(
+        client.shared.open_text("src/main.rs").as_deref(),
+        Some(newest.as_str())
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server_copy(&seen, "").0 != newest && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        server_copy(&seen, "").0,
+        newest,
+        "the server's copy is the newest"
+    );
+}

@@ -1507,12 +1507,14 @@ off) — and a name held under Ctrl drawn as the link it is.
   what the client had sent when the question went out, read and written in
   one turn — see *What the client records and what it writes go in one
   order*), and `request_hints` draws only an answer about the text it asked
-  over; any other it asks for again, once, after sending the text on
-  screen. The hints already there have followed every edit and are left
-  standing meanwhile. The pulse waits for its change before asking for
-  colours or hints — the colours used to be asked for *before* the change
-  was sent. `mock.js` keeps a server's copy of each file for this, and
-  `__mock.hintsLate` answers one ask about the text before the last change.
+  over; any other it asks for again, once, carrying the text on screen.
+  The hints already there have followed every edit and are left standing
+  meanwhile. The pulse is one command, `lsp_painted`: the draft, then the
+  colours and the hints, in one task on the backend — the colours used to
+  be asked for *before* the change was sent, and then after it as a second
+  call that could still overtake it. `mock.js` keeps a server's copy of
+  each file for this, and `__mock.hintsLate` answers one ask about the text
+  before the last change.
 - **Ctrl over a name draws it as a link** — underlined, the link colour,
   the hand — when the server says it has a definition (`has_definition`;
   VS Code's behaviour, and the user's request). Asked when the pointer
@@ -3033,6 +3035,19 @@ usty`) holds `location.toml`
   while another asks about it. A race that needs two threads is not rare
   when every keystroke's completion, the pulse and a hover each send a
   change of their own.
+  **And a question carries its text** (`rusty_lsp::Draft`), because the
+  lock orders what reaches the client and nothing orders what reaches the
+  backend: a change and then a question were two IPC calls, two tasks on
+  the blocking pool, and either could start first — as could two flows'
+  changes, the older written over the newer. Completion, signature help,
+  quick fixes and a hints retry take `draft` beside their position and give
+  it to the server in the same task (`synced`); the pulse is one command,
+  `lsp_painted`. A draft is numbered by the window's clock in microseconds
+  (`controller::draft`, never a count, since a reloaded window would start
+  again below the client's), and `sync_draft` skips one older than the
+  number the document holds — `drafts_sent_at_once_leave_the_server_with_
+  the_newest` fails five runs in five without that line. Completion is one
+  round trip per keystroke where it was two.
 - **`procMacro.enable: false` is not a lighter mode — it is poison.** It
   takes the built-in derives down with it, sysroot trait resolution collapses,
   and any open file containing an `impl` with `&self` gets *no diagnostics at

@@ -3,23 +3,19 @@
 
 use super::*;
 
-/// Ask what quick fixes exist at the caret, after syncing the draft — an
-/// answer about stale text splices into the wrong place.
+/// Ask what quick fixes exist at the caret, with the draft they are about —
+/// an answer about stale text splices into the wrong place.
 pub fn request_actions(state: AppState, path: String, line: u32, col: u32) {
     if state.lsp.status.get_untracked() != LspStatus::Ready {
         return;
     }
-    let sync = PathText {
-        path: path.clone(),
-        text: state.editor.draft.get_untracked(),
-    };
-    let ask = PathAt {
+    let ask = AtDraft {
         path: path.clone(),
         line,
         col,
+        draft: draft(state.editor.draft.get_untracked()),
     };
     spawn_local(async move {
-        let _ = ipc::call::<_, ()>(cmd::lsp::CHANGE, &sync).await;
         let Ok(answer) = ipc::call::<_, rusty_lsp::CodeActions>(cmd::lsp::ACTIONS, &ask).await
         else {
             return;

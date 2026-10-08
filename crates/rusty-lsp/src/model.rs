@@ -264,6 +264,35 @@ pub struct InlayHints {
     pub about: u64,
 }
 
+/// The editor's text of a file, sent with the question asked about it so the
+/// server is given the text and then asked in one turn of one command.
+///
+/// Sent as two calls, a change and then a question, the two were two tasks on
+/// the backend, and two flows' changes — a keystroke's completion and the
+/// pulse after an edit — could reach the server in the other order: the
+/// older text written over the newer. `seq` is when the editor took the text,
+/// counted up across every window of the instance (`controller::lsp`), and
+/// the client skips a draft older than the one it holds
+/// (`LspClient::sync_draft`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Draft {
+    pub text: String,
+    pub seq: u64,
+}
+
+/// What the pulse after an edit asks for in one command, after sending the
+/// edit: the semantic colours and, while they are shown, the inlay hints.
+/// `None` where it was not asked for or the server did not answer — the
+/// warm-up and a request an edit overtook both answer with an error, and
+/// what is on screen stays until an answer replaces it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Painted {
+    pub semantic: Option<Vec<SemanticSpan>>,
+    pub hints: Option<InlayHints>,
+}
+
 /// A number that stands for a text, for telling one text from another
 /// across the wire without sending either: FNV-1a, folded to 53 bits
 /// because it crosses as a JSON number and a full 64 is not an integer

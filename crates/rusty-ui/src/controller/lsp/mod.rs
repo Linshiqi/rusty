@@ -163,6 +163,37 @@ fn apply_lsp_event(state: AppState, event: LspEvent) {
     }
 }
 
+/// The editor's text of a file as the server is given it: the text, and when
+/// it was taken (`rusty_lsp::Draft`), so a draft that arrives after a newer
+/// one is skipped rather than written over it.
+pub(super) fn draft(text: String) -> rusty_lsp::Draft {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let seq = seq_after(LAST.load(Relaxed), js_sys::Date::now());
+    LAST.store(seq, Relaxed);
+    rusty_lsp::Draft { text, seq }
+}
+
+/// A draft's number: the clock in microseconds, or one past the last when the
+/// clock has not moved on. The clock and not a count from nothing, because
+/// every window of an instance sends to one client, and a window reloaded —
+/// a change of language is a reload — would count again from zero while the
+/// client held a larger number, and every draft after would be skipped as
+/// older. A microsecond count of today is far inside the 53 bits a JSON
+/// number holds.
+fn seq_after(last: u64, now_ms: f64) -> u64 {
+    ((now_ms * 1000.0) as u64).max(last + 1)
+}
+
+/// A question asked at a position of a file's text, with the text.
+#[derive(serde::Serialize)]
+pub(super) struct AtDraft {
+    pub path: String,
+    pub line: u32,
+    pub col: u32,
+    pub draft: rusty_lsp::Draft,
+}
+
 /// Fire-and-forget document sync. Failures are dropped, not bannered: the
 /// editor works without a server, and every keystroke would otherwise be a
 /// chance to cry wolf.
@@ -189,10 +220,16 @@ pub fn lsp_open_doc(path: String, text: String) {
 /// leaves the server answering about the previous text — completions at
 /// offsets that no longer exist, diagnostics on lines that are gone.
 pub(super) fn lsp_changed_doc(path: String, text: String) {
+    #[derive(serde::Serialize)]
+    struct Change {
+        path: String,
+        draft: rusty_lsp::Draft,
+    }
     if !path.ends_with(".rs") {
         return;
     }
-    lsp_sync(cmd::lsp::CHANGE, PathText { path, text });
+    let draft = draft(text);
+    lsp_sync(cmd::lsp::CHANGE, Change { path, draft });
 }
 
 pub(super) fn lsp_saved_doc(path: String) {
@@ -211,4 +248,26 @@ pub(super) fn lsp_closed_doc(path: String) {
         return;
     }
     lsp_sync(cmd::lsp::CLOSE, PathArg { path });
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::seq_after;
+
+    /// The clock is the number while it moves on, and one past the last
+    /// while it stands still or steps back: never a number already given.
+    #[test]
+    fn a_drafts_number_only_ever_grows() {
+        let now = 1_791_000_000_000.0;
+        let first = seq_after(0, now);
+        assert_eq!(first, 1_791_000_000_000_000);
+        assert_eq!(seq_after(first, now), first + 1, "the same millisecond");
+        assert_eq!(
+            seq_after(first, now - 5.0),
+            first + 1,
+            "the clock stepped back"
+        );
+        assert!(seq_after(first, now + 1.0) > first);
+        assert!(first < 1 << 53, "a JSON number holds it");
+    }
 }
