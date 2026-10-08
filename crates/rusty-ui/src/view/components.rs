@@ -285,10 +285,15 @@ pub fn Empty(
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     view! {
-        <div class="flex flex-1 flex-col items-center justify-center gap-3 p-12 text-center">
-            <div class="text-strong font-semibold">{title}</div>
-            <p class="max-w-[46ch] text-body text-label-2">{detail}</p>
-            {children.map(|c| c())}
+        // Scrolls when the room is short — a tall dock under the welcome
+        // screen — and is centred by `m-auto` rather than `justify-center`,
+        // which would push the top out of reach of the scroll.
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div class="m-auto flex w-full flex-col items-center gap-3 p-12 text-center">
+                <div class="text-strong font-semibold">{title}</div>
+                <p class="max-w-[46ch] text-body text-label-2">{detail}</p>
+                {children.map(|c| c())}
+            </div>
         </div>
     }
 }

@@ -263,7 +263,12 @@ pub fn App() -> impl IntoView {
                     // window, as Xcode's debug area does: the sidebar is
                     // navigation and stays whole, the output belongs to the
                     // thing being worked on.
-                    <div class="relative flex min-h-0 flex-1 flex-col">
+                    //
+                    // Clipped: it is positioned and the dock is not, so it
+                    // paints over the dock, and anything taller than the room
+                    // the dock leaves it — the welcome screen's recents —
+                    // was drawn across the dock's tabs and text.
+                    <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                         {move || {
                             if settings_open.get() {
                                 view! { <settings::Settings /> }.into_any()
