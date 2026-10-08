@@ -9,6 +9,21 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.73
+
+**Completion, hints and quick fixes always answer about the text on
+screen.** Each question to rust-analyzer now carries the text it is about,
+and the edit you typed and the question about it reach the server
+together. Before, the two travelled separately and could arrive in either
+order — an older edit could even land after a newer one — so an answer
+could be about a version of the file a keystroke or two old. Completion
+also takes one round trip per keystroke instead of two.
+
+**The welcome screen no longer draws over the panel below.** With recent
+projects listed and the bottom panel open, the list spilled across the
+panel's tabs and text. The welcome page now stops at the panel's edge and
+scrolls when there is not room for all of it.
+
 ## v0.6.72
 
 **Tab indents the lines you selected.** Select two or more lines, or the

@@ -13,7 +13,7 @@ exclude = ["crates/rusty-core/tests/fixtures"]
 # `cargo tauri dev` at HEAD would still call itself the old one and be
 # offered its own release as an update. `tests/version_sync.rs` in rusty-app
 # holds this, tauri.conf.json and the newest CHANGELOG heading to one number.
-version = "0.6.72"
+version = "0.6.73"
 edition = "2024"
 # 1.89 for `File::lock`: rusty windows are separate processes sharing one
 # workbench.toml, and a lock the OS holds is what serialises their writes.
