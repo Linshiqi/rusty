@@ -291,7 +291,7 @@ fn chip_catalogue_answers_without_a_project_and_admits_ignorance() {
     // this tool exists to prevent.
     let unknown = call(
         "chip_catalogue",
-        json!({ "chip": "nrf52840" }),
+        json!({ "chip": "nrf9160" }),
         &ToolContext::empty(),
     );
     assert_eq!(unknown["known"], false);

@@ -1,0 +1,34 @@
+# A Raspberry Pi Pico: embassy-rp blinking GPIO25, faster while a button
+# from GPIO15 to ground is held, logging defmt over a debug probe. Built for
+# thumbv6m-none-eabi with stable Rust (the image carries its .boot2); not
+# run on a board here.
+
+chip = "rp2040"
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "memory.x"
+from = "memory.x.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"

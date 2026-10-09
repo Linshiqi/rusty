@@ -1196,3 +1196,23 @@ fn a_part_with_a_chip_select_and_wires_is_a_device_on_the_wire() {
         [Warning::WireNotWired { .. }]
     ));
 }
+
+/// A part's pins are named the way its vendor prints them: by number on an
+/// ESP32, by lettered port on an STM32 or a CH32, by numbered port on an
+/// nRF — `P0.13`, two digits, as Nordic writes it.
+#[test]
+fn pins_are_named_by_their_vendors_ports() {
+    use crate::model::Ports;
+    assert_eq!(pin_label(None, 4), "GPIO4");
+    let lettered = Ports {
+        width: 16,
+        numbered: false,
+    };
+    assert_eq!(pin_label(Some(lettered), 45), "PC13");
+    let numbered = Ports {
+        width: 32,
+        numbered: true,
+    };
+    assert_eq!(pin_label(Some(numbered), 13), "P0.13");
+    assert_eq!(pin_label(Some(numbered), 37), "P1.05");
+}

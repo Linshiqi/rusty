@@ -566,7 +566,7 @@ mod tests {
             probe_rs_target: None,
             radios: Vec::new(),
             gpio: Vec::new(),
-            port_width: None,
+            ports: None,
             header: Vec::new(),
             kit: None,
             emulation: None,

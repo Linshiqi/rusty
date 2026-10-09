@@ -85,7 +85,7 @@ entry now says, beside the die's facts:
 |---|---|---|
 | `generator`, `std_generator` | how the wizard starts a project: `"esp-generate"`, `"esp-idf-template"`, or `{ template = "<name>" }`, one of rusty's own (`data/templates/`) | the wizard refuses — every STM32 used to be handed to esp-generate |
 | `emulator` | `{ kind = "qemu", binary = "qemu-system-riscv32" }` or `{ kind = "rusty-mcu" }`, with the `limit` said before every run and the `limit_outdated` said on an older emulator | the plan refuses by name |
-| `port_width` | pins named by port, that many to a port (`PC4`); the pin channel's numbering | pins named by number (`GPIO4`) |
+| `ports` | pins named by port: `{ width = 16 }` names them `PC13`, `{ width = 32, numbered = true }` names them `P0.13`; the width is the pin channel's numbering | pins named by number (`GPIO4`) |
 | `header` | the one module's row order rusty draws as a module: `"EN"`, `"36"`, `"RX:3"` | the die's pins, drawn as a chip |
 | `kit` | the devkit around the pins: module, connector, buttons, RGB LED | a bare chip |
 | `gdb` | the debugger the plan and the debug session look for | no debugger offered |

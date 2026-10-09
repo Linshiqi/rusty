@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::model::{
     Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, Emulation, EmulatorKind, Flasher,
-    Generator, Kit, KitUsb, PinAssignment, ToolchainRequirement, UsbMatch, Vendor,
+    Generator, Kit, KitUsb, PinAssignment, Ports, ToolchainRequirement, UsbMatch, Vendor,
 };
 
 const BUILTIN_CHIPS: &str = include_str!("../data/chips.toml");
@@ -346,7 +346,7 @@ struct ChipEntry {
     #[serde(default)]
     hal: Option<String>,
     #[serde(default)]
-    port_width: Option<u8>,
+    ports: Option<PortsEntry>,
     #[serde(default)]
     header: Vec<String>,
     #[serde(default)]
@@ -386,7 +386,10 @@ impl ChipEntry {
             radios: self.radios,
             gpio: self.gpio,
             hal: self.hal,
-            port_width: self.port_width,
+            ports: self.ports.map(|p| Ports {
+                width: p.width,
+                numbered: p.numbered,
+            }),
             header: self.header,
             kit: self.kit.map(KitEntry::build),
             emulation: self.emulator.map(EmulatorEntry::build),
@@ -400,6 +403,14 @@ impl ChipEntry {
             svd: self.svd,
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PortsEntry {
+    width: u8,
+    #[serde(default)]
+    numbered: bool,
 }
 
 #[derive(Deserialize)]

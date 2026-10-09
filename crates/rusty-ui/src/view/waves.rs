@@ -270,13 +270,13 @@ pub fn WavesTab() -> impl IntoView {
                                                 p.as_ref().and_then(|p| p.chip.clone())
                                             })
                                             .unwrap_or_default();
-                                        let width = state.project.chips.with_untracked(|chips| {
+                                        let ports = state.project.chips.with_untracked(|chips| {
                                             chips
                                                 .iter()
                                                 .find(|c| c.id == chip)
-                                                .and_then(|c| c.port_width)
+                                                .and_then(|c| c.ports)
                                         });
-                                        rusty_embed::nets::pin_label(width, *pin)
+                                        rusty_embed::nets::pin_label(ports, *pin)
                                     }
                                 </text>
                                 <g transform=format!("translate({LABEL_W}, 0)")>

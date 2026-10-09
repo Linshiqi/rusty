@@ -256,8 +256,8 @@ pub struct Outcome {
     /// The part that ran, for naming its pins (`nets::pin_label`). Empty
     /// when the run never got as far as knowing.
     pub chip: String,
-    /// How that part names its pins ([`crate::model::Chip::port_width`]).
-    pub port_width: Option<u8>,
+    /// How that part names its pins ([`crate::model::Chip::ports`]).
+    pub ports: Option<crate::model::Ports>,
 }
 
 impl Outcome {
@@ -271,7 +271,7 @@ impl Outcome {
             limits: Vec::new(),
             notes: Vec::new(),
             chip: String::new(),
-            port_width: None,
+            ports: None,
         }
     }
 
@@ -299,7 +299,7 @@ impl Outcome {
 
     /// What `pin` is called on the part that ran: `PC4`, `GPIO4`.
     pub fn pin_name(&self, pin: u8) -> String {
-        crate::nets::pin_label(self.port_width, pin)
+        crate::nets::pin_label(self.ports, pin)
     }
 
     /// The last level reported for each GPIO.
@@ -347,7 +347,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     let part = crate::catalog::Catalog::load(Some(root))
         .chip(&chip)
         .cloned();
-    outcome.port_width = part.as_ref().and_then(|c| c.port_width);
+    outcome.ports = part.as_ref().and_then(|c| c.ports);
     let emulation = part.and_then(|c| c.emulation);
     let waves = plan
         .emulator

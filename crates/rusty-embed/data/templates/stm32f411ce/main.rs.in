@@ -1,0 +1,27 @@
+//! A WeAct "Black Pill" STM32F411CE: the LED on PC13 blinks, faster
+//! while the KEY button on PA0 is held. Embassy's async executor and
+//! timer; the log is defmt over the debug probe (`cargo run`).
+
+#![no_std]
+#![no_main]
+
+use defmt::info;
+use embassy_executor::Spawner;
+use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
+use embassy_time::Timer;
+use {defmt_rtt as _, panic_probe as _};
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_stm32::init(Default::default());
+    // The Black Pill's LED lights when PC13 is low, and its KEY button
+    // pulls PA0 to ground.
+    let mut led = Output::new(p.PC13, Level::High, Speed::Low);
+    let key = Input::new(p.PA0, Pull::Up);
+    info!("blinking PC13");
+    loop {
+        led.toggle();
+        let pause = if key.is_low() { 100 } else { 500 };
+        Timer::after_millis(pause).await;
+    }
+}

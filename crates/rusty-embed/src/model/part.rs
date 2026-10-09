@@ -227,6 +227,30 @@ pub struct Emulation {
     pub limit_outdated: Option<String>,
 }
 
+/// A part whose pins are named by port: how many pins a port is in rusty's
+/// numbering — the width of the part's GPIO registers, which is how pins
+/// travel on the pin channel (`PC4` is 20 at eight) — and whether ports are
+/// lettered (`PC4`, ST's and WCH's) or numbered (`P0.13`, Nordic's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ports {
+    pub width: u8,
+    #[serde(default)]
+    pub numbered: bool,
+}
+
+impl Ports {
+    /// What pin `gpio` is called: `PC4`, or `P1.05`.
+    pub fn name(self, gpio: u8) -> String {
+        let (port, pin) = (gpio / self.width, gpio % self.width);
+        if self.numbered {
+            format!("P{port}.{pin:02}")
+        } else {
+            format!("P{}{pin}", (b'A' + port) as char)
+        }
+    }
+}
+
 /// A cross C compiler for a part, and how to get it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -311,11 +335,9 @@ pub struct Chip {
     #[serde(default)]
     pub hal: Option<String>,
     /// How rusty numbers and names the part's pins: `None` names them by
-    /// number (`GPIO4`), a width names them by port with that many pins to a
-    /// port (`PC4` is 20 at eight) — the width of the part's GPIO registers,
-    /// which is how pins travel on the pin channel.
+    /// number (`GPIO4`); [`Ports`] names them by port, so many to a port.
     #[serde(default)]
-    pub port_width: Option<u8>,
+    pub ports: Option<Ports>,
     /// The header of the one module whose row order rusty knows, top to
     /// bottom, left then right: a number is that GPIO, `RX:3` is GPIO3
     /// printed `RX`, anything else a rail or a plain row. Empty draws the

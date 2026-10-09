@@ -200,8 +200,8 @@ fn a_project_can_add_a_chip_the_build_does_not_know() {
         chips.join("nordic.toml"),
         r#"
 [[chip]]
-id = "nrf52840"
-name = "nRF52840"
+id = "nrf9160"
+name = "nRF9160"
 vendor = "st"
 arch = "cortex-m"
 cores = 1
@@ -210,7 +210,7 @@ flash_bytes = 1048576
 bare_metal_target = "thumbv7em-none-eabihf"
 toolchain = "stock"
 flashers = ["probe-rs"]
-probe_rs_target = "nRF52840_xxAA"
+probe_rs_target = "nRF9160_xxAA"
 radios = ["BLE 5", "802.15.4"]
 "#,
     )
@@ -219,9 +219,9 @@ radios = ["BLE 5", "802.15.4"]
     let catalog = Catalog::load(Some(dir.path()));
     assert!(catalog.problems().is_empty(), "{:?}", catalog.problems());
 
-    let chip = catalog.chip("nRF52840").expect("added chip should resolve");
-    assert_eq!(chip.id, "nrf52840", "ids are normalized on load");
-    assert_eq!(chip.probe_rs_target.as_deref(), Some("nRF52840_xxAA"));
+    let chip = catalog.chip("nRF9160").expect("added chip should resolve");
+    assert_eq!(chip.id, "nrf9160", "ids are normalized on load");
+    assert_eq!(chip.probe_rs_target.as_deref(), Some("nRF9160_xxAA"));
 }
 
 #[test]

@@ -1,0 +1,26 @@
+//! An nRF52840 DK: LED1 on P0.13 blinks, faster while Button 1 on P0.11
+//! is held. Embassy's async executor and timer; the log is defmt over the
+//! DK's on-board probe (`cargo run`).
+
+#![no_std]
+#![no_main]
+
+use defmt::info;
+use embassy_executor::Spawner;
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
+use embassy_time::Timer;
+use {defmt_rtt as _, panic_probe as _};
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_nrf::init(Default::default());
+    // The DK's LEDs light when their pin is low; its buttons pull to ground.
+    let mut led = Output::new(p.P0_13, Level::High, OutputDrive::Standard);
+    let button = Input::new(p.P0_11, Pull::Up);
+    info!("blinking P0.13");
+    loop {
+        led.toggle();
+        let pause = if button.is_low() { 100 } else { 500 };
+        Timer::after_millis(pause).await;
+    }
+}

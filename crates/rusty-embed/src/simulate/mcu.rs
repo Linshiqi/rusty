@@ -492,11 +492,11 @@ mod tests {
     fn the_window_and_the_emulator_count_a_port_alike() {
         for chip in ["ch32v003j4m6", "ch32v003f4p6", "ch32x035f8u6"] {
             let part = Part::for_chip(chip).expect(chip);
-            let width = crate::chip::by_id(chip).expect(chip).port_width;
-            assert_eq!(width, Some(part.width), "{chip}");
+            let ports = crate::chip::by_id(chip).expect(chip).ports;
+            assert_eq!(ports.map(|p| p.width), Some(part.width), "{chip}");
             for pin in part.pins() {
                 assert_eq!(
-                    crate::nets::pin_label(width, pin),
+                    crate::nets::pin_label(ports, pin),
                     part.pin_name(pin),
                     "{chip}"
                 );
@@ -532,8 +532,8 @@ mod tests {
         let pwm = crate::protocol::parse_pwm_report(&first)
             .unwrap_or_else(|| panic!("a PWM report: {first}"));
         assert_eq!(pwm.pins[0].0, 36, "PB12");
-        let width = crate::chip::by_id("ch32x035f8u6").unwrap().port_width;
-        assert_eq!(crate::nets::pin_label(width, 36), "PB12");
+        let ports = crate::chip::by_id("ch32x035f8u6").unwrap().ports;
+        assert_eq!(crate::nets::pin_label(ports, 36), "PB12");
         let console = session.recv().expect("a line");
         assert_eq!(console.text, "pwm max duty 8000");
         session.stopper().stop();

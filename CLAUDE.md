@@ -742,7 +742,7 @@ declarative — extensions never ship markup or styles.
 
 **A part is data, and so is a vendor.** Everything rusty does differently
 per part — how a project is started (`generator`), which emulator runs it
-and what that cannot do (`emulator`), how its pins are named (`port_width`),
+and what that cannot do (`emulator`), how its pins are named (`ports`),
 the devkit drawn around them (`header`, `kit`), its debugger, its cross C
 compiler, where its SVD is published — is a key of its `[[chip]]` entry,
 and a vendor is a `[[vendor]]` table (its HAL, and the crates detection
@@ -5196,7 +5196,7 @@ debugging, and the simulator is its own.
   it by package, and the package decides which pins exist. A pin is
   numbered eight to a port (PC4 is 20) everywhere it travels, and *named*
   by port wherever it becomes words — `nets::pin_label` over the part's
-  catalogue `port_width`, the one place, used
+  catalogue `ports`, the one place, used
   by the devkit's rows, the Waves panel, `rusty-cli sim` and the assistant's
   `simulate`. `gpio_named` does **not** read `PC4` as a pin: chip-agnostic,
   it would bind an imported STM32 schematic's `PA1` to an ESP32's GPIO1.
@@ -5288,7 +5288,7 @@ debugging, and the simulator is its own.
 - **The X035's ports are twenty-four pins wide, so it is numbered
   twenty-four to a port** (PB12 is 36, PC19 67), where the V003 is eight.
   The width is per part on both sides of the wire — `Part::width` in the
-  emulator, the catalogue's `port_width` for every name a pin is given — and a test
+  emulator, the catalogue's `ports` for every name a pin is given — and a test
   holds the two equal for every pin either part has; a WCH family nobody
   has measured gets no port names at all rather than eight to a port.
 - **The V4C is not the V2A with more registers.** RV32IMAC: thirty-two
@@ -5315,6 +5315,49 @@ debugging, and the simulator is its own.
   flash said so of every part without espflash, and an STM32 has a UART
   bootloader, the X035 WCH's ISP. What is true is that espflash speaks only
   Espressif's ROM protocol; the refusal says that now.
+
+## Cortex-M parts: STM32F4, RP2040 and RP2350, nRF52840
+
+The first parts added as data alone (*A part is data, and so is a
+vendor*, under rule 6): two vendors (`rpi`, `nordic`) and seven entries, no
+code that names any of them. Each is built with stable Rust for a target
+rustup ships, flashed and logged through probe-rs (defmt over RTT), and
+started by the wizard from one of rusty's templates; none is simulated, and
+the plan says so by name.
+
+- **One entry per package where the package is the HAL's feature**:
+  `stm32f411ce` and `stm32f401cc` (the WeAct Black Pill's two), because
+  embassy-stm32 selects the part as `stm32f411ce` and probe-rs names it
+  `STM32F411CEUx` — so these, unlike the bare `stm32f411` above them, can be
+  flashed without asking. `rp235xa` and `rp235xb` are embassy-rp's own
+  names for the RP2350's two packages.
+- **Pins are named as each vendor prints them**: ST's lettered ports
+  sixteen to a port (PC13 is 45), Nordic's numbered ports thirty-two to a
+  port (`P0.13`, `P1.05` is 37 — `Ports { numbered }`), the RP parts by
+  GPIO number.
+- **The templates are proven, not typed** (`data/templates/stm32f411ce`,
+  `rp2040`, `rp235xa`, `nrf52840`): embassy blinkies with a button, each
+  built for its target with its lockfile in the template, and the projects
+  the wizard writes from them — the F401CC and the RP2350B through another
+  part's template — built `--locked` from what the wizard wrote. **Built,
+  not run on a board**: nobody here has one. A template whose part shares
+  another's has its feature and probe-rs's name for the part replaced
+  (`template_files`), or an F401CC is flashed as an F411CE.
+- **The RP2040's second-stage bootloader is placed by memory.x, not by
+  embassy-rp's `link-rp.x`.** That script is a `SECTIONS` with no `INSERT`,
+  and rust-lld then places `.boot2` as an orphan after the code — measured at
+  0x10003be0 in a binary that linked without a word, where the boot ROM
+  reads the first 256 bytes of flash and finds nothing. `INSERT BEFORE
+  .text` in memory.x puts it at 0x10000000. The RP2350 has the same shape
+  of trap: its boot ROM looks for the image definition in the first 4 KB,
+  so memory.x places `.start_block` straight after the vector table
+  (0x10000114). Check where a boot-critical section *landed*
+  (`llvm-objdump -h`), not that the link succeeded.
+- **The UF2 drive is not a flashing path yet.** A Pico with no probe is
+  flashed by holding BOOTSEL and copying a UF2, which is neither of the two
+  transports `flash::plan` knows (`Serial`, `Probe`); the catalogue says
+  probe-rs, and a Pico user without a Debug Probe is told so rather than
+  sent somewhere that cannot work.
 
 ## Meeting C
 

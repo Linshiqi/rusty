@@ -4,16 +4,16 @@
 use serde::{Deserialize, Serialize};
 
 use super::Rail;
-use crate::model::{Chip, KIT_REFERENCE, PinRef, Sheet, Wire};
+use crate::model::{Chip, KIT_REFERENCE, PinRef, Ports, Sheet, Wire};
 
 /// What the catalogue says about a part's pins, as the devkit's rows and
 /// every pin's name are drawn from it: which GPIOs exist, how they are named
-/// (`port_width`, [`Chip::port_width`]) and the one module header whose
+/// ([`Chip::ports`]) and the one module header whose
 /// order rusty knows ([`Chip::header`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pinout<'a> {
     pub gpio: &'a [u32],
-    pub port_width: Option<u8>,
+    pub ports: Option<Ports>,
     pub header: &'a [String],
 }
 
@@ -21,7 +21,7 @@ impl<'a> Pinout<'a> {
     pub fn of(chip: &'a Chip) -> Self {
         Pinout {
             gpio: &chip.gpio,
-            port_width: chip.port_width,
+            ports: chip.ports,
             header: &chip.header,
         }
     }
@@ -30,7 +30,7 @@ impl<'a> Pinout<'a> {
     pub fn numbered(gpio: &'a [u32]) -> Self {
         Pinout {
             gpio,
-            port_width: None,
+            ports: None,
             header: &[],
         }
     }
@@ -110,13 +110,13 @@ fn header_entry(entry: &str) -> (&str, Option<u8>) {
 /// An empty `gpio` means the catalogue does not say, and the part is drawn
 /// with rails only rather than with somebody else's pins.
 pub fn kit_rows(pins: Pinout) -> Vec<Row> {
-    let width = pins.port_width;
-    let by_port = width.is_some();
+    let ports = pins.ports;
+    let by_port = ports.is_some();
     let row = |label: &str, pin: Option<u8>| match (label, pin) {
         // A pin named by port is labelled by that name too: `PC4` is what
         // is printed beside it, where an Espressif row is labelled `4`.
-        (_, Some(n)) if by_port => Row::gpio(n, &pin_label(width, n), pin_label(width, n)),
-        (_, Some(n)) => Row::gpio(n, label, pin_label(width, n)),
+        (_, Some(n)) if by_port => Row::gpio(n, &pin_label(ports, n), pin_label(ports, n)),
+        (_, Some(n)) => Row::gpio(n, label, pin_label(ports, n)),
         ("GND", None) => Row::rail("GND", Rail::Ground),
         ("3V3" | "VIN" | "5V", None) => Row::rail(label, Rail::Supply),
         (other, None) => Row::plain(other),
@@ -168,8 +168,8 @@ pub fn kit_pin(rows: &[Row], key: &str) -> Option<usize> {
         .or_else(|| rows.iter().position(|r| r.name == key))
 }
 
-/// What pin `gpio` is called on a part whose ports are `port_width` pins
-/// wide ([`Chip::port_width`]): `PC4` on a part named by port, `GPIO4`
+/// What pin `gpio` is called on a part whose pins are named by `ports`
+/// ([`Chip::ports`]): `PC4` or `P0.13` on a part named by port, `GPIO4`
 /// elsewhere. Every place a pin number becomes words goes through this, so
 /// the board, the waves and the console agree about a pin's name.
 ///
@@ -178,12 +178,9 @@ pub fn kit_pin(rows: &[Row], key: &str) -> Option<usize> {
 /// travel on the pin channel; for rusty-mcu's parts a test holds it to the
 /// emulator's `Part::width`. A part nobody has measured has none, and is
 /// named by its number rather than by a port it may not have.
-pub fn pin_label(port_width: Option<u8>, gpio: u8) -> String {
-    match port_width {
-        Some(width) => {
-            let port = (b'A' + gpio / width) as char;
-            format!("P{port}{}", gpio % width)
-        }
+pub fn pin_label(ports: Option<Ports>, gpio: u8) -> String {
+    match ports {
+        Some(ports) => ports.name(gpio),
         None => format!("GPIO{gpio}"),
     }
 }

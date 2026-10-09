@@ -485,6 +485,13 @@ fn template_files(
                 .replace(&format!("U1.{was}"), &format!("U1.{now}"))
                 .replace(&format!("is row {was}"), &format!("is row {now}"))
                 .replace("The playground's board", "This project's board"),
+            // The runner names the part as probe-rs does, which is not its
+            // id: an F401CC written from the F411CE's template is flashed as
+            // an `STM32F401CCUx`.
+            ".cargo/config.toml" => match (&from.probe_rs_target, &chip.probe_rs_target) {
+                (Some(was), Some(now)) => text.replace(was.as_str(), now),
+                _ => text.to_string(),
+            },
             _ => text.to_string(),
         };
         files.push((path, text));
@@ -1139,6 +1146,44 @@ mod tests {
             );
             // Written once: a second time meets the files that are there.
             assert!(write_itself(parent.path(), &wanted).is_err());
+        }
+    }
+
+    /// The Cortex-M parts are written from embassy templates proven to build
+    /// for them: a project rusty detects as the chosen part, built for its
+    /// target, and run through probe-rs under the name probe-rs gives the
+    /// part — which a part sharing another's template has to be given, or
+    /// an F401CC would be flashed as an F411CE.
+    #[test]
+    fn a_cortex_m_project_is_written_for_its_part_and_its_probe() {
+        for (chip, target, probe) in [
+            ("stm32f411ce", "thumbv7em-none-eabihf", "STM32F411CEUx"),
+            ("stm32f401cc", "thumbv7em-none-eabihf", "STM32F401CCUx"),
+            ("rp2040", "thumbv6m-none-eabi", "RP2040"),
+            ("rp235xa", "thumbv8m.main-none-eabihf", "RP235x"),
+            ("rp235xb", "thumbv8m.main-none-eabihf", "RP235x"),
+            ("nrf52840", "thumbv7em-none-eabihf", "nRF52840_xxAA"),
+        ] {
+            let wanted = choice(chip, Runtime::BareMetal, &[]);
+            assert!(writes_itself(&wanted), "{chip}");
+            assert_eq!(plan(&wanted).unwrap().program, "rusty", "{chip}");
+            let parent = tempfile::tempdir().unwrap();
+            write_itself(parent.path(), &wanted).unwrap();
+            let root = parent.path().join("blinky");
+            let project = crate::project::detect(&root).unwrap();
+            assert_eq!(project.chip.as_deref(), Some(chip));
+            assert_eq!(project.configured_target.as_deref(), Some(target), "{chip}");
+            assert_eq!(project.runtime, Some(Runtime::BareMetal), "{chip}");
+            let config = std::fs::read_to_string(root.join(".cargo/config.toml")).unwrap();
+            assert!(
+                config.contains(&format!("probe-rs run --chip {probe}")),
+                "{chip}: {config}"
+            );
+            let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+            assert!(
+                lock.contains("name = \"blinky\""),
+                "{chip}: the lock is renamed"
+            );
         }
     }
 }

@@ -1,0 +1,33 @@
+# An nRF52840 DK: embassy-nrf blinking LED1 on P0.13, faster while Button 1
+# on P0.11 is held, logging defmt over the DK's on-board probe. Built for
+# thumbv7em-none-eabihf with stable Rust; not run on a board here.
+
+chip = "nrf52840"
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "memory.x"
+from = "memory.x.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"

@@ -112,7 +112,7 @@ mod tests {
             assert_eq!(by_id(spelling).unwrap().id, "esp32c3", "{spelling}");
         }
         assert_eq!(by_id("STM32F411").unwrap().id, "stm32f411");
-        assert!(by_id("nrf52840").is_none());
+        assert!(by_id("nrf9160").is_none());
     }
 
     #[test]
@@ -217,16 +217,16 @@ mod tests {
             chips.join("nordic.toml"),
             r#"
 [[vendor]]
-id = "nordic"
+id = "nordic-lte"
 name = "Nordic Semiconductor"
 hal = "embassy-nrf"
 chip_crates = ["embassy-nrf"]
 bare_metal_crates = ["embassy-nrf"]
 
 [[chip]]
-id = "nrf52840"
-name = "nRF52840"
-vendor = "nordic"
+id = "nrf9160"
+name = "nRF9160"
+vendor = "nordic-lte"
 arch = "cortex-m"
 cores = 1
 sram_bytes = 262_144
@@ -248,7 +248,7 @@ flashers = ["probe-rs"]
         )
         .unwrap();
         let catalog = Catalog::load(Some(root.path()));
-        let nrf = catalog.chip("nrf52840").expect("the project's part");
+        let nrf = catalog.chip("nrf9160").expect("the project's part");
         assert_eq!(nrf.vendor_name, "Nordic Semiconductor");
         assert_eq!(
             nrf.runtime_label(Runtime::BareMetal),
