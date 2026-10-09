@@ -9,6 +9,28 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.74
+
+**The CH32V003 is here.** rusty now knows WCH's 16 KB RISC-V part, in its
+J4M6, F4P6 and F4U6 packages, through ch32-hal. Open a ch32-hal project and
+rusty recognises the chip, builds it, tells you if nightly Rust and its
+source are missing (and installs them), and shows how much of the 16 KB of
+flash the image uses. Flash goes through a WCH-LinkE with wlink, or through
+probe-rs, and the firmware's `println!` (SDI print) comes back in the panel
+below.
+
+**Simulate it, too.** No emulator models a WCH part, so rusty now emulates
+the CH32V003 itself: the pins, TIM1 and TIM2 with PWM, SysTick, the
+external interrupts, USART1 and SDI print. Press Run and the board beside
+your code shows what the firmware does — a PWM-driven LED glows as bright as
+its duty. What the model does not have yet (the ADC, I2C, SPI, DMA, the
+watchdogs, debugging) is said before the run, and named the moment the
+firmware reaches for it.
+
+**A CH32V003 playground.** The welcome screen has a third playground: an LED
+breathing on PC4 and a button on PC1 that holds it at full, ready to edit
+and run. New Project makes the same for any of the three packages.
+
 ## v0.6.73
 
 **Completion, hints and quick fixes always answer about the text on
