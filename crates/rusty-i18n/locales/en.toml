@@ -1419,7 +1419,7 @@ nightly-not-pinned-title = "The project does not build with nightly"
 nightly-not-pinned-detail = "It builds `core` itself (`build-std` in .cargo/config.toml), which stable cargo refuses, and nothing makes cargo use nightly here — no `rust-toolchain.toml`, and the default toolchain is not nightly. A `rust-toolchain.toml` with `channel = \"nightly\"` and `components = [\"rust-src\"]` pins it for everyone who clones the project; the command below pins it on this machine only."
 target-not-installed-detail = "cargo will refuse to build for a target rustup has not added."
 no-flasher-title = "No way to flash the board"
-no-flasher-detail = "Neither espflash nor probe-rs is installed. espflash is the simpler choice — it needs only the USB cable. probe-rs adds breakpoint debugging and defmt over RTT, but wants a probe."
+no-flasher-detail = "None of the tools that flash a {chip} is installed ({tools}). {tool} is the one it is usually flashed with."
 ldproxy-missing-title = "ldproxy missing"
 ldproxy-missing-detail = "ESP-IDF (std) builds link through ldproxy. Without it the build fails at the link step with a linker-not-found error."
 [replace]

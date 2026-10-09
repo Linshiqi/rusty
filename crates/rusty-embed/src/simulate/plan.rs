@@ -4,12 +4,14 @@
 use std::path::{Path, PathBuf};
 
 use super::board_file;
-use super::machine::{MACHINES, Machine, find_gdb, qemu_data_dir};
+use super::machine::{Machine, find_gdb, qemu_data_dir};
 use super::mcu;
 use super::models::{has_gpio_model, has_peripherals, has_wave_model};
 use super::sheet::resolve_symbols;
 use crate::install::GDB_RELEASE;
-use crate::model::{CommandPlan, EmbeddedProject, Emulator, SimDebug, SimPlan, SimTool};
+use crate::model::{
+    CommandPlan, EmbeddedProject, Emulation, Emulator, EmulatorKind, SimDebug, SimPlan, SimTool,
+};
 use crate::{project, toolchain};
 
 /// Everything needed to simulate `project`, or exactly why not.
@@ -32,16 +34,35 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         );
     };
 
-    if mcu::emulates(chip) {
-        return plan_builtin(project, chip, machine);
-    }
-
-    let Some((_, emulator)) = MACHINES.iter().find(|(name, _)| *name == chip) else {
-        let known: Vec<&str> = MACHINES.iter().map(|(name, _)| *name).collect();
+    // Which emulator runs a part is the catalogue's to say (`emulator`),
+    // the project's own overlay included, so a part added there that names
+    // one is simulated and every other is refused by name.
+    let catalog = crate::catalog::Catalog::load(Some(Path::new(&project.root)));
+    let part = catalog.chip(chip);
+    let Some(emulation) = part.and_then(|c| c.emulation.clone()) else {
+        let known: Vec<&str> = catalog
+            .chips()
+            .iter()
+            .filter(|c| c.emulation.is_some())
+            .map(|c| c.id.as_str())
+            .collect();
         return SimPlan::refused(format!(
-            "QEMU has no machine model for {chip}; it can model {}",
+            "nothing rusty runs models {chip}; it can simulate {}",
             known.join(", "),
         ));
+    };
+    let gdb = part.and_then(|c| c.gdb.clone());
+
+    let emulator = match (emulation.kind, emulation.binary.as_deref()) {
+        (EmulatorKind::RustyMcu, _) => {
+            return plan_builtin(project, chip, &emulation, machine);
+        }
+        (EmulatorKind::Qemu, Some(binary)) => binary,
+        (EmulatorKind::Qemu, None) => {
+            return SimPlan::refused(format!(
+                "the catalogue says QEMU runs {chip} and does not say which QEMU binary"
+            ));
+        }
     };
 
     let mut missing = Vec::new();
@@ -171,7 +192,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
     let run = CommandPlan {
         program: qemu.to_string_lossy().into_owned(),
         ..CommandPlan::new(
-            *emulator,
+            emulator,
             qemu_args,
             "boots the image in Espressif's QEMU; the serial console streams here until \
              stopped",
@@ -180,8 +201,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
 
     // Debugging is optional on top of the same boot: present when the
     // matching gdb exists, an installable card when it does not.
-    let xtensa = *emulator == "qemu-system-xtensa";
-    let (debug, debug_tool) = match find_gdb(xtensa, machine) {
+    let (debug, debug_tool) = match gdb.as_deref().and_then(|gdb| find_gdb(gdb, machine)) {
         Some(gdb) => (
             Some(SimDebug {
                 gdb_command: format!(
@@ -194,10 +214,13 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
             None,
         ),
         None => {
-            let family = if xtensa {
+            // Espressif names the Xtensa debugger per chip inside one
+            // archive, `xtensa-esp-elf-gdb`, which is what is downloaded.
+            let gdb = gdb.as_deref().unwrap_or("gdb");
+            let family = if gdb.starts_with("xtensa-") {
                 "xtensa-esp-elf-gdb"
             } else {
-                "riscv32-esp-elf-gdb"
+                gdb
             };
             (
                 None,
@@ -221,7 +244,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         .as_ref()
         .is_some_and(|e| !(e.gpio_model && e.peripherals));
 
-    let mut limits = crate::model::SimLimit::for_chip(chip, outdated);
+    let mut limits = crate::model::SimLimit::for_emulation(Some(&emulation), outdated);
     // A signal needs the build that plays tables; any other run does not,
     // which is why this is a limit of the sheet's and not an out-of-date
     // emulator's.
@@ -284,7 +307,12 @@ fn the_board(
 /// to merge, since the emulator loads the ELF as a flasher would, and no
 /// tool to find, since it is part of rusty. No debugger either: there is no
 /// gdbstub, and the plan says so by having none.
-fn plan_builtin(project: &EmbeddedProject, chip: &str, machine: &Machine) -> SimPlan {
+fn plan_builtin(
+    project: &EmbeddedProject,
+    chip: &str,
+    emulation: &Emulation,
+    machine: &Machine,
+) -> SimPlan {
     let Some(target) = project.configured_target.as_deref() else {
         return SimPlan::refused(
             "no build target in .cargo/config.toml — the simulator cannot guess where the ELF \
@@ -326,7 +354,7 @@ fn plan_builtin(project: &EmbeddedProject, chip: &str, machine: &Machine) -> Sim
         debug: None,
         debug_tool: None,
         notes,
-        limits: crate::model::SimLimit::for_chip(chip, false),
+        limits: crate::model::SimLimit::for_emulation(Some(emulation), false),
     }
 }
 

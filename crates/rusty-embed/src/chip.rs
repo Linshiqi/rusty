@@ -46,7 +46,7 @@ pub fn chips_for_target(target: &str) -> Vec<Chip> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Arch, Flasher, Runtime, Vendor};
+    use crate::model::{Arch, Flasher, Runtime};
 
     #[test]
     fn the_builtin_catalogue_parses_without_problems() {
@@ -147,10 +147,122 @@ mod tests {
             assert!(!c.flashers.is_empty(), "{} cannot be flashed", c.id);
             // ST parts have no serial bootloader, so offering espflash would
             // send the user down a path that cannot work.
-            if c.vendor == Vendor::St {
+            if c.vendor == "st" {
                 assert_eq!(c.flashers, vec![Flasher::ProbeRs], "{}", c.id);
             }
         }
+    }
+
+    /// What a part says about how it is started, simulated and drawn has to
+    /// point at something that exists: a template rusty carries, a QEMU
+    /// binary, a header made of pins the die has. Each of these was a
+    /// `match` on the chip's id until it was data, and a typo in data is
+    /// otherwise a part that silently has no playground, no emulator or
+    /// somebody else's pins.
+    #[test]
+    fn what_a_part_names_exists() {
+        for c in catalogue() {
+            for generator in [&c.generator, &c.std_generator].into_iter().flatten() {
+                if let crate::model::Generator::Template { name } = generator {
+                    let template = crate::playground::template(name)
+                        .unwrap_or_else(|| panic!("{}: no template `{name}`", c.id));
+                    let from = template.chip.unwrap_or_else(|| {
+                        panic!("{}: template `{name}` names no chip to move from", c.id)
+                    });
+                    assert!(by_id(from).is_some(), "{}: template chip `{from}`", c.id);
+                }
+            }
+            if let Some(emulation) = &c.emulation {
+                assert_eq!(
+                    emulation.binary.is_some(),
+                    emulation.kind == crate::model::EmulatorKind::Qemu,
+                    "{}: a QEMU binary exactly when QEMU runs it",
+                    c.id
+                );
+            }
+            for entry in &c.header {
+                let pin = entry.rsplit(':').next().unwrap().parse::<u32>();
+                if let Ok(pin) = pin {
+                    assert!(c.gpio.contains(&pin), "{}: header pin {pin}", c.id);
+                }
+            }
+            if c.vendor == "espressif" {
+                assert!(
+                    c.kit.is_some(),
+                    "{}: every Espressif part has a devkit",
+                    c.id
+                );
+                assert!(c.gdb.is_some(), "{}: and a debugger", c.id);
+            }
+        }
+        // Every playground's chip is a part, and a template is offered for
+        // the parts that name it.
+        for template in crate::model::PLAYGROUNDS {
+            let template = crate::playground::template(template).expect("a template");
+            if let Some(chip) = template.chip {
+                assert!(by_id(chip).is_some(), "playground `{}`", template.name);
+            }
+        }
+    }
+
+    /// A vendor added in a project's own file is a vendor like any other:
+    /// its parts resolve to its name and HAL, and a part naming a vendor
+    /// nobody declared is said rather than dropped.
+    #[test]
+    fn a_vendor_is_data_a_project_can_add() {
+        let root = tempfile::tempdir().unwrap();
+        let chips = root.path().join(".rusty").join("chips");
+        std::fs::create_dir_all(&chips).unwrap();
+        std::fs::write(
+            chips.join("nordic.toml"),
+            r#"
+[[vendor]]
+id = "nordic"
+name = "Nordic Semiconductor"
+hal = "embassy-nrf"
+chip_crates = ["embassy-nrf"]
+bare_metal_crates = ["embassy-nrf"]
+
+[[chip]]
+id = "nrf52840"
+name = "nRF52840"
+vendor = "nordic"
+arch = "cortex-m"
+cores = 1
+sram_bytes = 262_144
+bare_metal_target = "thumbv7em-none-eabihf"
+toolchain = "stock"
+flashers = ["probe-rs"]
+
+[[chip]]
+id = "mystery1"
+name = "Mystery"
+vendor = "nobody"
+arch = "risc-v"
+cores = 1
+sram_bytes = 1
+bare_metal_target = "riscv32imc-unknown-none-elf"
+toolchain = "stock"
+flashers = ["probe-rs"]
+"#,
+        )
+        .unwrap();
+        let catalog = Catalog::load(Some(root.path()));
+        let nrf = catalog.chip("nrf52840").expect("the project's part");
+        assert_eq!(nrf.vendor_name, "Nordic Semiconductor");
+        assert_eq!(
+            nrf.runtime_label(Runtime::BareMetal),
+            "no_std (embassy-nrf)"
+        );
+        assert!(catalog.chip("mystery1").is_some(), "kept, not dropped");
+        assert!(
+            catalog
+                .problems()
+                .iter()
+                .any(|p| p.detail.contains("mystery1") && p.detail.contains("nobody")),
+            "{:?}",
+            catalog.problems()
+        );
     }
 
     #[test]

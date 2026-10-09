@@ -859,7 +859,9 @@ mod tests {
     fn the_examples_boards_load_without_notes_or_findings() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let library = crate::schematic::builtin();
-        let rows = crate::nets::kit_rows("esp32c3", &(0..=21).collect::<Vec<u32>>());
+        let rows = crate::nets::kit_rows(crate::nets::Pinout::numbered(
+            &(0..=21).collect::<Vec<u32>>(),
+        ));
         let mut seen = 0;
         for entry in std::fs::read_dir(&examples).expect("examples/") {
             let root = entry.expect("entry").path();

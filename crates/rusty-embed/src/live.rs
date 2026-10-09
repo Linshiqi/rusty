@@ -465,7 +465,7 @@ mod tests {
         wire("U1.GPIO2", "R1.1");
         wire("R1.2", "C1.1");
         wire("C1.2", "GND1.GND");
-        let rows = kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
+        let rows = kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
         (sheet, rows)
     }
 
@@ -608,7 +608,10 @@ mod tests {
         wire("R1.2", "R2.1");
         wire("R2.1", "U1.GPIO3");
         wire("R2.2", "GND1.GND");
-        (sheet, kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]))
+        (
+            sheet,
+            kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5])),
+        )
     }
 
     /// Volts become counts only where the sheet said what full scale is,
@@ -726,7 +729,10 @@ mod tests {
         wire("R1.2", "C1.1");
         wire("C1.1", "U1.GPIO3");
         wire("C1.2", "GND1.GND");
-        (sheet, kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]))
+        (
+            sheet,
+            kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5])),
+        )
     }
 
     /// **The coupling, end to end and headless.** The emulator's own lines
@@ -910,7 +916,7 @@ mod tests {
         wire("R1.2", "SW1.1");
         wire("SW1.2", "GND1.GND");
 
-        let rows = kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
+        let rows = kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
         let mut live = Live::at_rest(sheet, rows, BTreeMap::new(), Pace::default()).expect("built");
         live.advance_to(1_000).expect("advanced");
         assert_eq!(

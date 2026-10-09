@@ -591,7 +591,7 @@ mod tests {
     }
 
     fn rows() -> Vec<Row> {
-        kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5])
+        kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]))
     }
 
     /// Straight onto the pin, a generator's table is its volts in counts at

@@ -518,7 +518,9 @@ mod tests {
     }
 
     fn sheet() -> Vec<EditPart> {
-        let rows = kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21]);
+        let rows = kit_rows(rusty_embed::nets::Pinout::numbered(&[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21,
+        ]));
         vec![EditPart {
             inst: Instance {
                 reference: KIT_REFERENCE.into(),

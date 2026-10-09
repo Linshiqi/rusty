@@ -13,8 +13,10 @@
 //! boots, and the ESP32's is `qemu/esp32-probe`'s, which gate 16 boots —
 //! with a release profile made for editing rather than shipping (no LTO,
 //! incremental), since the whole point is that an edit runs in seconds.
-//! They sit in `data/playground/` with an `.in` on every name, so no tool
-//! walking the repository takes a template for a project of its own.
+//! They sit in `data/templates/`, one directory and a `template.toml` each,
+//! with an `.in` on every name, so no tool walking the repository takes a
+//! template for a project of its own; `build.rs` compiles them in, and the
+//! ones a manifest offers as a playground are the list, in its order.
 //!
 //! The drawing playground is no chip's: a vector type, a test and an
 //! example that draw through rusty-draw into the Draw tab, on stable Rust.
@@ -35,167 +37,38 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 // Spelled in the model, because the window offers the same list and opens
 // the same file.
-use crate::model::{PLAYGROUND_MAIN as MAIN, PLAYGROUNDS as CHIPS};
+use crate::model::PLAYGROUNDS as CHIPS;
 
-/// A template file: where it goes in the project, and what it says.
-type File = (&'static str, &'static str);
-
-const BUILD_RS: &str = include_str!("../data/playground/build.rs.in");
-
-fn template(chip: &str) -> Option<&'static [File]> {
-    match chip {
-        "esp32c3" => Some(&[
-            (
-                "Cargo.toml",
-                include_str!("../data/playground/esp32c3/Cargo.toml.in"),
-            ),
-            (
-                "Cargo.lock",
-                include_str!("../data/playground/esp32c3/Cargo.lock.in"),
-            ),
-            ("build.rs", BUILD_RS),
-            (
-                "rust-toolchain.toml",
-                include_str!("../data/playground/esp32c3/rust-toolchain.toml.in"),
-            ),
-            (
-                ".cargo/config.toml",
-                include_str!("../data/playground/esp32c3/cargo-config.toml.in"),
-            ),
-            (MAIN, include_str!("../data/playground/esp32c3/main.rs.in")),
-            (
-                ".rusty/sim.toml",
-                include_str!("../data/playground/esp32c3/sim.toml.in"),
-            ),
-        ]),
-        "esp32" => Some(&[
-            (
-                "Cargo.toml",
-                include_str!("../data/playground/esp32/Cargo.toml.in"),
-            ),
-            (
-                "Cargo.lock",
-                include_str!("../data/playground/esp32/Cargo.lock.in"),
-            ),
-            ("build.rs", BUILD_RS),
-            (
-                "rust-toolchain.toml",
-                include_str!("../data/playground/esp32/rust-toolchain.toml.in"),
-            ),
-            (
-                ".cargo/config.toml",
-                include_str!("../data/playground/esp32/cargo-config.toml.in"),
-            ),
-            (MAIN, include_str!("../data/playground/esp32/main.rs.in")),
-            (
-                ".rusty/sim.toml",
-                include_str!("../data/playground/esp32/sim.toml.in"),
-            ),
-        ]),
-        "ch32v003j4m6" => Some(&[
-            (
-                "Cargo.toml",
-                include_str!("../data/playground/ch32v003j4m6/Cargo.toml.in"),
-            ),
-            (
-                "Cargo.lock",
-                include_str!("../data/playground/ch32v003j4m6/Cargo.lock.in"),
-            ),
-            (
-                "build.rs",
-                include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
-            ),
-            (
-                "rust-toolchain.toml",
-                include_str!("../data/playground/ch32v003j4m6/rust-toolchain.toml.in"),
-            ),
-            (
-                ".cargo/config.toml",
-                include_str!("../data/playground/ch32v003j4m6/cargo-config.toml.in"),
-            ),
-            (
-                "riscv32ec-unknown-none-elf.json",
-                include_str!("../data/playground/ch32v003j4m6/riscv32ec-unknown-none-elf.json.in"),
-            ),
-            (
-                MAIN,
-                include_str!("../data/playground/ch32v003j4m6/main.rs.in"),
-            ),
-            (
-                ".rusty/sim.toml",
-                include_str!("../data/playground/ch32v003j4m6/sim.toml.in"),
-            ),
-        ]),
-        // The lockfile and build script are the V003's: ch32-hal's
-        // dependencies do not change with the part, and cargo writes the
-        // same lock for either.
-        "ch32x035f8u6" => Some(&[
-            (
-                "Cargo.toml",
-                include_str!("../data/playground/ch32x035f8u6/Cargo.toml.in"),
-            ),
-            (
-                "Cargo.lock",
-                include_str!("../data/playground/ch32v003j4m6/Cargo.lock.in"),
-            ),
-            (
-                "build.rs",
-                include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
-            ),
-            (
-                "rust-toolchain.toml",
-                include_str!("../data/playground/ch32x035f8u6/rust-toolchain.toml.in"),
-            ),
-            (
-                ".cargo/config.toml",
-                include_str!("../data/playground/ch32x035f8u6/cargo-config.toml.in"),
-            ),
-            (
-                MAIN,
-                include_str!("../data/playground/ch32x035f8u6/main.rs.in"),
-            ),
-            (
-                ".rusty/sim.toml",
-                include_str!("../data/playground/ch32x035f8u6/sim.toml.in"),
-            ),
-        ]),
-        "draw" => Some(&[
-            (
-                "Cargo.toml",
-                include_str!("../data/playground/draw/Cargo.toml.in"),
-            ),
-            (
-                "Cargo.lock",
-                include_str!("../data/playground/draw/Cargo.lock.in"),
-            ),
-            (
-                "src/lib.rs",
-                include_str!("../data/playground/draw/lib.rs.in"),
-            ),
-            (
-                "examples/vectors.rs",
-                include_str!("../data/playground/draw/vectors.rs.in"),
-            ),
-            (
-                "rusty-draw/Cargo.toml",
-                include_str!("../data/playground/draw/rusty-draw-Cargo.toml.in"),
-            ),
-            (
-                "rusty-draw/src/lib.rs",
-                include_str!("../../rusty-draw/src/lib.rs"),
-            ),
-        ]),
-        _ => None,
-    }
+/// One of rusty's proven projects (`data/templates/<name>/`), compiled in
+/// by `build.rs` from its `template.toml`: where each file goes and what it
+/// says. The playground writes them; so does the wizard, for a part whose
+/// catalogue entry names one as its generator.
+#[derive(Debug, Clone, Copy)]
+pub struct Template {
+    pub name: &'static str,
+    /// The part its files name, or `None` for one that is no chip's.
+    pub chip: Option<&'static str>,
+    pub files: &'static [(&'static str, &'static str)],
 }
 
-fn templates_for(chip: &str) -> Result<&'static [File]> {
-    template(chip).ok_or_else(|| {
-        Error::refused(format!(
-            "There is no playground for {chip} — there is one for each of {}.",
-            CHIPS.join(" and ")
-        ))
-    })
+include!(concat!(env!("OUT_DIR"), "/templates.rs"));
+
+/// The template called `name`.
+pub fn template(name: &str) -> Option<&'static Template> {
+    TEMPLATES.iter().find(|t| t.name == name)
+}
+
+fn templates_for(chip: &str) -> Result<&'static [(&'static str, &'static str)]> {
+    let offered = CHIPS.contains(&chip);
+    template(chip)
+        .filter(|_| offered)
+        .map(|t| t.files)
+        .ok_or_else(|| {
+            Error::refused(format!(
+                "There is no playground for {chip} — there is one for each of {}.",
+                CHIPS.join(" and ")
+            ))
+        })
 }
 
 /// Where a chip's playground lives.
@@ -317,6 +190,7 @@ fn write(path: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::PLAYGROUND_MAIN as MAIN;
 
     /// Opening writes the project; opening again after somebody has written
     /// in it keeps what they wrote; reset puts the example back.
@@ -450,8 +324,8 @@ mod tests {
             let root = prepare(data.path(), chip).unwrap();
             let sheet = crate::simulate::load_board_for_test(&root, chip)
                 .unwrap_or_else(|| panic!("{chip}: the board file loads"));
-            let gpio = crate::chip::by_id(chip).unwrap().gpio;
-            let rows = crate::nets::kit_rows(chip, &gpio);
+            let part = crate::chip::by_id(chip).unwrap();
+            let rows = crate::nets::kit_rows(crate::nets::Pinout::of(&part));
             let evaluate = |high: bool| {
                 crate::nets::evaluate(crate::nets::Inputs {
                     sheet: &sheet,

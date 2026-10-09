@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{CommandPlan, Sheet, Symbol};
+use super::{CommandPlan, Emulation, Sheet, Symbol};
 
 /// Something the emulator cannot do on this chip, said before the run so
 /// that a hang or a silence is not blamed on the firmware.
@@ -27,7 +27,10 @@ impl SimLimit {
         }
     }
 
-    /// What the emulator this plan will boot is known not to do on `chip`.
+    /// What the emulator this plan will boot is known not to do on a part
+    /// simulated by `emulation` — the catalogue's `limit`, and its
+    /// `limit_outdated` when the emulator found is not rusty's current
+    /// build.
     ///
     /// The C3 is the chip every model was written and proven against, and
     /// the ESP32 now has every one of them in its own layout — the pads'
@@ -36,14 +39,32 @@ impl SimLimit {
     /// source reaching its handler (a timer's and a software interrupt's as
     /// well as a GPIO edge's), and the FPU on from reset as the silicon has
     /// it. So neither has a limit **with rusty's current emulator**, and
-    /// the ESP32 has one with an older copy of it (`outdated_emulator`):
-    /// there, each of those fails in a way of its own, and the panel's
-    /// Upgrade is the fix. The text says what the copy one generation back
-    /// cannot do and then what the ones before it could not either, since
-    /// the plan knows only that the copy is not current.
-    pub fn for_chip(chip: &str, outdated_emulator: bool) -> Vec<SimLimit> {
-        match chip {
-            "esp32" if outdated_emulator => vec![SimLimit::new(
+    /// the ESP32 has one with an older copy of it: there, each of those
+    /// fails in a way of its own, and the panel's Upgrade is the fix.
+    pub fn for_emulation(emulation: Option<&Emulation>, outdated_emulator: bool) -> Vec<SimLimit> {
+        let Some(emulation) = emulation else {
+            return Vec::new();
+        };
+        let outdated = emulation
+            .limit_outdated
+            .as_deref()
+            .filter(|_| outdated_emulator);
+        [emulation.limit.as_deref(), outdated]
+            .into_iter()
+            .flatten()
+            .map(SimLimit::of_kind)
+            .collect()
+    }
+
+    /// The limit a catalogue entry names, in words. A kind this build has
+    /// no words for — a user's own file naming one — is said as the kind,
+    /// rather than dropped: the file meant something by it.
+    pub fn of_kind(kind: &str) -> SimLimit {
+        match kind {
+            // The text says what the copy one generation back cannot do and
+            // then what the ones before it could not either, since the plan
+            // knows only that the copy is not current.
+            "esp32-outdated" => SimLimit::new(
                 "esp32-outdated",
                 "This emulator predates rusty's current ESP32 models, so on an ESP32 a timer's \
                  interrupt and a software interrupt never reach their handlers: an Embassy \
@@ -54,22 +75,25 @@ impl SimLimit {
                  and pad pulls out as the C3's, so a read_oneshot() or a bus transaction waits \
                  for ever and every Pull::Up button reads as held down. Upgrade the emulator \
                  from this panel.",
-            )],
-            chip if chip.starts_with("ch32v003") => vec![SimLimit::new(
+            ),
+            "ch32-model" => SimLimit::new(
                 "ch32-model",
                 "rusty runs the CH32V003 itself. The pins, TIM1 and TIM2 (PWM and interrupts), SysTick, the external interrupts, USART1 and SDI print are modelled; the ADC, I2C, SPI, DMA and the watchdogs are not, so a driver waiting on one waits for ever and the run names which. There is no debugger, and pins that share one package pin on a J4M6 (PD6 with PA1; PD1, PD4 and PD5) are separate pins here.",
-            )],
-            chip if chip.starts_with("ch32x035") => vec![SimLimit::new(
+            ),
+            "ch32x035-model" => SimLimit::new(
                 "ch32x035-model",
                 "rusty runs the CH32X035 itself. The pins, TIM1, TIM2 and TIM3 (PWM and interrupts), SysTick, the external interrupts, the four USARTs and SDI print are modelled; USB, USB PD, the ADC, the op-amps and comparators, I2C, SPI, DMA and the watchdogs are not, so a driver waiting on one waits for ever and the run names which. There is no debugger, and a delay timed by SysTick counting down is not modelled.",
-            )],
-            "esp32s3" => vec![SimLimit::new(
+            ),
+            "s3-unproven" => SimLimit::new(
                 "s3-unproven",
                 "Nothing in rusty's emulator has been checked on the ESP32-S3: its pins, \
                  converter and buses are whatever Espressif's machine does, and the board \
                  shows only what the firmware prints.",
-            )],
-            _ => Vec::new(),
+            ),
+            other => SimLimit::new(
+                other,
+                &format!("The catalogue says this part's simulation is limited: `{other}`."),
+            ),
         }
     }
 
@@ -97,9 +121,10 @@ impl SimLimit {
     /// `float-save-restore` is off — and a float followed. It is the CPU's,
     /// so it is not chip-specific. `divide by zero` on an ESP32 is what a
     /// guest spinning in the double-exception vector eventually produced on
-    /// an emulator from before the FPU was on at reset, so it names the
-    /// outdated emulator rather than anybody's code.
-    pub fn explaining(chip: &str, line: &str) -> Option<SimLimit> {
+    /// an emulator from before the FPU was on at reset, so on a part whose
+    /// emulation names an outdated limit it names that, rather than
+    /// anybody's code.
+    pub fn explaining(emulation: Option<&Emulation>, line: &str) -> Option<SimLimit> {
         if line.contains("[rusty:cpu] coprocessor 0 is disabled") {
             return Some(SimLimit::new(
                 "cpu-fpu-off",
@@ -112,8 +137,10 @@ impl SimLimit {
                  or keep floats out of interrupt handlers.",
             ));
         }
-        if chip == "esp32" && line.contains("divide by zero") {
-            return SimLimit::for_chip("esp32", true).into_iter().next();
+        if line.contains("divide by zero") {
+            return emulation
+                .and_then(|e| e.limit_outdated.as_deref())
+                .map(SimLimit::of_kind);
         }
         None
     }
@@ -307,21 +334,31 @@ mod tests {
     /// The C3 is the chip every model was proven on and has no limits; the
     /// others each name what they cost, and the one that ends a run is
     /// recognised in the emulator's own last words.
+    #[cfg(feature = "backend")]
+    fn emulation(chip: &str) -> Option<Emulation> {
+        crate::chip::by_id(chip).unwrap().emulation
+    }
+
+    #[cfg(feature = "backend")]
+    fn for_chip(chip: &str, outdated: bool) -> Vec<SimLimit> {
+        SimLimit::for_emulation(emulation(chip).as_ref(), outdated)
+    }
+
+    #[cfg(feature = "backend")]
     #[test]
     fn each_chip_names_what_the_emulator_cannot_do_on_it() {
         // With rusty's current emulator neither the C3 nor the ESP32 has a
         // limit left; the S3 has never been checked, whatever the build.
         for outdated in [false, true] {
-            assert!(SimLimit::for_chip("esp32c3", outdated).is_empty());
-            assert_eq!(
-                SimLimit::for_chip("esp32s3", outdated)[0].kind,
-                "s3-unproven"
-            );
+            assert!(for_chip("esp32c3", outdated).is_empty());
+            assert_eq!(for_chip("esp32s3", outdated)[0].kind, "s3-unproven");
+            assert_eq!(for_chip("ch32v003f4p6", outdated)[0].kind, "ch32-model");
+            assert_eq!(for_chip("ch32x035f8u6", outdated)[0].kind, "ch32x035-model");
         }
-        assert!(SimLimit::for_chip("esp32", false).is_empty());
+        assert!(for_chip("esp32", false).is_empty());
         // An older copy is the one case the ESP32 still has, because every
         // model it needs arrived after that copy was built.
-        let outdated: Vec<String> = SimLimit::for_chip("esp32", true)
+        let outdated: Vec<String> = for_chip("esp32", true)
             .into_iter()
             .map(|l| l.kind)
             .collect();
@@ -335,11 +372,11 @@ mod tests {
                     pc=0x400d14ad: something wrote CPENABLE with bit 0 clear, and the FPU is \
                     on from reset.";
         assert_eq!(
-            SimLimit::explaining("esp32", said).map(|l| l.kind),
+            SimLimit::explaining(emulation("esp32").as_ref(), said).map(|l| l.kind),
             Some("cpu-fpu-off".to_string())
         );
         assert_eq!(
-            SimLimit::explaining("esp32s3", said).map(|l| l.kind),
+            SimLimit::explaining(emulation("esp32s3").as_ref(), said).map(|l| l.kind),
             Some("cpu-fpu-off".to_string()),
             "the register is the CPU's, not the machine's"
         );
@@ -349,16 +386,16 @@ mod tests {
         // — which is an outdated emulator, not anybody's code.
         let fatal = "qemu-system-xtensa: Fatal error: divide by zero";
         assert_eq!(
-            SimLimit::explaining("esp32", fatal).map(|l| l.kind),
+            SimLimit::explaining(emulation("esp32").as_ref(), fatal).map(|l| l.kind),
             Some("esp32-outdated".to_string())
         );
         assert_eq!(
-            SimLimit::explaining("esp32c3", fatal),
+            SimLimit::explaining(emulation("esp32c3").as_ref(), fatal),
             None,
             "not this chip's symptom"
         );
         assert_eq!(
-            SimLimit::explaining("esp32", "ets Jun  8 2016 00:22:57"),
+            SimLimit::explaining(emulation("esp32").as_ref(), "ets Jun  8 2016 00:22:57"),
             None
         );
     }

@@ -1,20 +1,12 @@
-//! The chips the emulator models and where this machine keeps what a plan
-//! runs: the emulator — the most capable copy, not the first — the
-//! debuggers, and QEMU's data directory.
+//! Where this machine keeps what a plan runs: the emulator — the most
+//! capable copy, not the first — the debuggers, and QEMU's data directory.
+//! Which chips each emulator models is the catalogue's (`emulator`).
 
 use std::path::{Path, PathBuf};
 
 use super::models::models_carried;
 use crate::model::EmbeddedProject;
 use crate::tools;
-
-/// Chips Espressif's QEMU actually models, with the system emulator each
-/// needs. Kept small and honest — c6/h2/p4 have no machine model yet.
-pub(super) const MACHINES: &[(&str, &str)] = &[
-    ("esp32c3", "qemu-system-riscv32"),
-    ("esp32", "qemu-system-xtensa"),
-    ("esp32s3", "qemu-system-xtensa"),
-];
 
 /// What the machine has that a plan depends on, resolved once and handed in.
 ///
@@ -102,23 +94,20 @@ pub(super) fn qemu_data_dir(emulator: &Path) -> Option<PathBuf> {
 
 /// The gdb that can debug this project's chip, if it is installed.
 ///
-/// Architecture decides: an Xtensa gdb cannot debug a RISC-V image, and the
-/// error it produces names neither the chip nor the fix.
+/// The catalogue names it per part (`gdb`): an Xtensa gdb cannot debug a
+/// RISC-V image, and the error it produces names neither the chip nor the
+/// fix. It used to be chosen by whether the target was Xtensa, which gave
+/// every other part — a CH32, a Cortex-M — Espressif's RISC-V gdb.
 pub fn gdb_for(project: &EmbeddedProject) -> Option<PathBuf> {
-    let xtensa = project
-        .configured_target
-        .as_deref()
-        .is_some_and(|t| t.starts_with("xtensa"));
-    find_gdb(xtensa, &Machine::here())
+    let root = std::path::Path::new(&project.root);
+    let catalog = crate::catalog::Catalog::load(Some(root));
+    let gdb = catalog.chip(project.chip.as_deref()?)?.gdb.clone()?;
+    find_gdb(&gdb, &Machine::here())
 }
 
-/// The debugger for one architecture, by the same ladder every other binary
-/// is found with. The Xtensa build is named after the chip family it was
+/// A debugger by name, by the same ladder every other binary is found
+/// with. Espressif's Xtensa build is named after the chip family it was
 /// built for rather than the archive it came in.
-pub(super) fn find_gdb(xtensa: bool, machine: &Machine) -> Option<PathBuf> {
-    machine.find(if xtensa {
-        "xtensa-esp32-elf-gdb"
-    } else {
-        "riscv32-esp-elf-gdb"
-    })
+pub(super) fn find_gdb(name: &str, machine: &Machine) -> Option<PathBuf> {
+    machine.find(name)
 }

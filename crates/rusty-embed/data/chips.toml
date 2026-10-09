@@ -1,14 +1,48 @@
 # The part catalogue.
 #
 # Embedded into the binary at build time, and the schema a user's own file must
-# follow. Everything here is a property of the die; anything that depends on the
-# module or the board around it — flash size, USB ids, pin names — belongs in
-# boards.toml.
+# follow. Nearly everything here is a property of the die; anything that
+# depends on the module or the board around it — flash size, USB ids, pin
+# names — belongs in boards.toml. The exceptions are what rusty needs to draw
+# and run a part with no board chosen: the devkit it draws (`kit`, `header`),
+# how it starts a project (`generator`) and how it simulates one (`emulator`).
 #
 # `sram_bytes` is datasheet headline capacity. It is not what the linker will
 # grant you: the ROM bootloader and the cache configuration both take a share.
 # The memory dashboard reads real regions from the ELF and uses this only as
 # context.
+
+# ── Vendors ──────────────────────────────────────────────────────────────────
+#
+# Who makes the parts below, and how a Rust project for one of their parts
+# reads: `chip_crates` carry the part number as a cargo feature (most
+# authoritative first — the one detection cites), `bare_metal_crates` and
+# `std_crates` say which runtime a project is on, and `hal` is what the
+# runtime's label calls bare metal. A vendor is data: a new one is a table
+# here, or in a user's or a project's own chips file.
+
+[[vendor]]
+id = "espressif"
+name = "Espressif"
+hal = "esp-hal"
+chip_crates = ["esp-hal", "esp-idf-svc", "esp-idf-hal", "esp-wifi"]
+bare_metal_crates = ["esp-hal"]
+std_crates = ["esp-idf-hal", "esp-idf-svc", "esp-idf-sys"]
+
+[[vendor]]
+id = "st"
+name = "STMicroelectronics"
+chip_crates = ["embassy-stm32", "stm32f4xx-hal", "stm32f1xx-hal", "stm32h7xx-hal"]
+bare_metal_crates = ["embassy-stm32", "stm32f4xx-hal", "stm32f1xx-hal", "stm32h7xx-hal"]
+
+# ch32-hal names the part by package — `ch32v003j4m6` — which is why the
+# catalogue's WCH ids are package names.
+[[vendor]]
+id = "wch"
+name = "WCH"
+hal = "ch32-hal"
+chip_crates = ["ch32-hal", "ch32-metapac"]
+bare_metal_crates = ["ch32-hal"]
 
 # ── Espressif ────────────────────────────────────────────────────────────────
 
@@ -27,6 +61,18 @@ probe_rs_target = "esp32"
 radios = ["Wi-Fi 4", "Bluetooth Classic", "BLE"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 32, 33, 34, 35, 36, 37, 38, 39]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "xtensa-esp32-elf-gdb"
+c_compiler = { binary = "xtensa-esp-elf-gcc", install = "espup install — the Xtensa toolchain it manages includes the C compiler" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32.svd"
+kit = { module = "ESP-WROOM-32", usb = "micro-b", reset = "EN" }
+# The one module whose header order rusty knows: the classic 30-pin
+# devkit, top to bottom, left then right. `RX:3` is GPIO3 printed RX.
+header = ["EN", "36", "39", "34", "35", "32", "33", "25", "26", "27", "14", "12", "13", "GND", "VIN", "3V3", "GND", "15", "2", "4", "16", "17", "5", "18", "19", "21", "RX:3", "TX:1", "22", "23"]
+# rusty's QEMU models every peripheral the C3's does here, in the
+# ESP32's own layout; an older copy of it does not, and says so.
+emulator = { kind = "qemu", binary = "qemu-system-xtensa", limit_outdated = "esp32-outdated" }
 
 [[chip]]
 id = "esp32s2"
@@ -43,6 +89,12 @@ probe_rs_target = "esp32s2"
 radios = ["Wi-Fi 4", "USB OTG"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "xtensa-esp32-elf-gdb"
+c_compiler = { binary = "xtensa-esp-elf-gcc", install = "espup install — the Xtensa toolchain it manages includes the C compiler" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32s2.svd"
+kit = { module = "ESP32-S2-MINI-1", usb = "type-c", rgb = true }
 
 [[chip]]
 id = "esp32s3"
@@ -59,6 +111,13 @@ probe_rs_target = "esp32s3"
 radios = ["Wi-Fi 4", "BLE 5", "USB OTG"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "xtensa-esp32-elf-gdb"
+c_compiler = { binary = "xtensa-esp-elf-gcc", install = "espup install — the Xtensa toolchain it manages includes the C compiler" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32s3.svd"
+kit = { module = "ESP32-S3-WROOM-1", usb = "dual-type-c", rgb = true }
+emulator = { kind = "qemu", binary = "qemu-system-xtensa", limit = "s3-unproven" }
 
 [[chip]]
 id = "esp32c2"
@@ -75,6 +134,12 @@ probe_rs_target = "esp32c2"
 radios = ["Wi-Fi 4", "BLE 5"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "riscv32-esp-elf-gdb"
+c_compiler = { binary = "riscv32-esp-elf-gcc", install = "download riscv32-esp-elf from https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH — espup does not install it, because Rust needs no help emitting RISC-V" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32c2.svd"
+kit = { module = "ESP8684-MINI-1", usb = "micro-b" }
 
 [[chip]]
 id = "esp32c3"
@@ -91,6 +156,14 @@ probe_rs_target = "esp32c3"
 radios = ["Wi-Fi 4", "BLE 5"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "riscv32-esp-elf-gdb"
+c_compiler = { binary = "riscv32-esp-elf-gcc", install = "download riscv32-esp-elf from https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH — espup does not install it, because Rust needs no help emitting RISC-V" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32c3.svd"
+kit = { module = "ESP32-C3-MINI-1", usb = "type-c", rgb = true }
+# The chip every one of rusty's QEMU models was written and proven against.
+emulator = { kind = "qemu", binary = "qemu-system-riscv32" }
 
 [[chip]]
 id = "esp32c6"
@@ -107,6 +180,12 @@ probe_rs_target = "esp32c6"
 radios = ["Wi-Fi 6", "BLE 5", "802.15.4 (Thread/Zigbee)"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "riscv32-esp-elf-gdb"
+c_compiler = { binary = "riscv32-esp-elf-gcc", install = "download riscv32-esp-elf from https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH — espup does not install it, because Rust needs no help emitting RISC-V" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32c6.svd"
+kit = { module = "ESP32-C6-WROOM-1", usb = "dual-type-c", rgb = true }
 
 [[chip]]
 id = "esp32h2"
@@ -123,6 +202,12 @@ probe_rs_target = "esp32h2"
 radios = ["BLE 5", "802.15.4 (Thread/Zigbee)"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 22, 23, 24, 25, 26, 27]
 hal = "esp-hal"
+generator = "esp-generate"
+std_generator = "esp-idf-template"
+gdb = "riscv32-esp-elf-gdb"
+c_compiler = { binary = "riscv32-esp-elf-gcc", install = "download riscv32-esp-elf from https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH — espup does not install it, because Rust needs no help emitting RISC-V" }
+svd = "https://raw.githubusercontent.com/espressif/svd/main/svd/esp32h2.svd"
+kit = { module = "ESP32-H2-MINI-1", usb = "type-c", rgb = true }
 
 [[chip]]
 id = "esp32p4"
@@ -137,6 +222,10 @@ flashers = ["espflash", "probe-rs"]
 probe_rs_target = "esp32p4"
 radios = ["no radio"]
 hal = "esp-hal"
+generator = "esp-generate"
+gdb = "riscv32-esp-elf-gdb"
+c_compiler = { binary = "riscv32-esp-elf-gcc", install = "download riscv32-esp-elf from https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH — espup does not install it, because Rust needs no help emitting RISC-V" }
+kit = { module = "ESP32-P4", usb = "dual-type-c" }
 
 # ── ST: a seam, not coverage ─────────────────────────────────────────────────
 #
@@ -224,6 +313,9 @@ flashers = ["wlink", "probe-rs"]
 probe_rs_target = "CH32V003J4M6"
 radios = ["none"]
 gpio = [1, 2, 17, 18, 20, 25, 28, 29, 30]
+port_width = 8
+generator = { template = "ch32v003j4m6" }
+emulator = { kind = "rusty-mcu", limit = "ch32-model" }
 
 [[chip]]
 id = "ch32v003f4p6"
@@ -239,6 +331,9 @@ flashers = ["wlink", "probe-rs"]
 probe_rs_target = "CH32V003F4P6"
 radios = ["none"]
 gpio = [1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+port_width = 8
+generator = { template = "ch32v003j4m6" }
+emulator = { kind = "rusty-mcu", limit = "ch32-model" }
 
 [[chip]]
 id = "ch32v003f4u6"
@@ -254,6 +349,9 @@ flashers = ["wlink", "probe-rs"]
 probe_rs_target = "CH32V003F4U6"
 radios = ["none"]
 gpio = [1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+port_width = 8
+generator = { template = "ch32v003j4m6" }
+emulator = { kind = "rusty-mcu", limit = "ch32-model" }
 
 # The CH32X035: a QingKe V4C core (RV32IMAC — thirty-two registers, multiply
 # and divide, atomics) with 62 KB of flash and 20 KB of RAM, USB, USB PD and
@@ -288,3 +386,6 @@ flashers = ["wlink", "probe-rs"]
 probe_rs_target = "CH32X035F8U6"
 radios = ["none"]
 gpio = [0, 1, 2, 3, 4, 5, 6, 7, 24, 25, 27, 35, 36, 62, 63, 64, 65, 66, 67]
+port_width = 24
+generator = { template = "ch32x035f8u6" }
+emulator = { kind = "rusty-mcu", limit = "ch32x035-model" }

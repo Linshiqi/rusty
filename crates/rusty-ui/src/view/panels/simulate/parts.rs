@@ -308,7 +308,9 @@ pub(super) fn PartsLayer(board: Board) -> impl IntoView {
                                 let drawn = rows.get();
                                 let kit_h = kit_height(drawn.len());
                                 let per_side = drawn.len().div_ceil(2).max(1);
-                                let art = chip_label.with_value(|label| kit_art(kit_look, kit_h, label));
+                                let art = chip_label.with_value(|label| {
+                                    kit_look.with(|look| kit_art(look, kit_h, label))
+                                });
                                 let (_, _, rot, mirror) = place.get();
                                 let flip = if mirror { -1 } else { 1 };
                                 let transform = format!("rotate({rot}) scale({flip} 1)");

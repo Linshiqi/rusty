@@ -1,0 +1,40 @@
+# ch32-hal's PWM example made into a breathing LED on PC4 with a button
+# on PC1, built with nightly and proven in rusty's emulator of the part
+# (rusty-mcu). It carries the target description its build needs, and a
+# build.rs of its own, since esp-hal's links another script. The wizard
+# writes every CH32V003 package's project from it.
+
+chip = "ch32v003j4m6"
+playground = 3
+
+[[file]]
+path = "Cargo.toml"
+from = "Cargo.toml.in"
+
+[[file]]
+path = "Cargo.lock"
+from = "Cargo.lock.in"
+
+[[file]]
+path = "build.rs"
+from = "build.rs.in"
+
+[[file]]
+path = "rust-toolchain.toml"
+from = "rust-toolchain.toml.in"
+
+[[file]]
+path = ".cargo/config.toml"
+from = "cargo-config.toml.in"
+
+[[file]]
+path = "riscv32ec-unknown-none-elf.json"
+from = "riscv32ec-unknown-none-elf.json.in"
+
+[[file]]
+path = "src/main.rs"
+from = "main.rs.in"
+
+[[file]]
+path = ".rusty/sim.toml"
+from = "sim.toml.in"

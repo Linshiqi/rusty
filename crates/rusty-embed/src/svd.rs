@@ -257,17 +257,15 @@ pub fn find(chip: &str, root: Option<&std::path::Path>) -> Option<std::path::Pat
 
 /// Where a chip's SVD comes from, and where it goes.
 ///
-/// Espressif publish theirs in one repository; anything else has to be
-/// dropped into `.rusty/svd/` by hand, and saying so beats a download that
-/// 404s into a confusing error.
+/// The catalogue says where a vendor publishes a part's SVD (`svd`) —
+/// Espressif's are in one repository. A part it says nothing for has to have
+/// its file dropped into `.rusty/svd/` by hand, and saying so beats a
+/// download that 404s into a confusing error.
 pub fn source(chip: &str) -> Option<(String, std::path::PathBuf)> {
-    let known = [
-        "esp32", "esp32c2", "esp32c3", "esp32c6", "esp32h2", "esp32s2", "esp32s3",
-    ];
-    if !known.contains(&chip) {
-        return None;
-    }
-    let url = format!("https://raw.githubusercontent.com/espressif/svd/main/svd/{chip}.svd",);
+    let url = crate::catalog::Catalog::load(None)
+        .chip(chip)?
+        .svd
+        .clone()?;
     let dest = crate::config::data_dir()?
         .join("svd")
         .join(format!("{chip}.svd"));

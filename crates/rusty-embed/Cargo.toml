@@ -45,6 +45,10 @@ rusty-mcu = { path = "../rusty-mcu", optional = true }
 [target.'cfg(windows)'.dependencies]
 cc = { version = "1.4", optional = true }
 
+# build.rs reads data/templates/*/template.toml to compile the templates in.
+[build-dependencies]
+toml = "1.1.4"
+
 [features]
 default = ["backend"]
 backend = [

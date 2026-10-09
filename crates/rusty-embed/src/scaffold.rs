@@ -21,7 +21,6 @@ use std::path::Path;
 use crate::{
     error::{Error, Result},
     model::{Chip, CommandPlan},
-    toolchain,
 };
 
 /// Which way the calls go.
@@ -64,7 +63,11 @@ pub fn c_compiler_gate(
         // whatever it is and not rusty's to judge.
         return Ok(());
     };
-    match toolchain::c_compiler(chip.arch) {
+    match chip
+        .c_compiler
+        .as_ref()
+        .map(|c| (c.binary.as_str(), c.install.as_str()))
+    {
         Some((binary, install)) if !on_path(binary) => Err(format!(
             "This project builds for {}, so C in it is compiled by `{binary}`, and that is \
              not on PATH. Nothing has been written. Install it — {install} — and the \
@@ -74,7 +77,7 @@ pub fn c_compiler_gate(
         None => Err(format!(
             "rusty does not know which C compiler a {} project uses, so it will not scaffold \
              C it cannot say how to build. Nothing has been written.",
-            chip.arch.label(),
+            chip.name,
         )),
         Some(_) => Ok(()),
     }

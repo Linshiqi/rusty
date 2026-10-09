@@ -39,8 +39,11 @@ pub const PROGRAM: &str = "rusty-mcu";
 /// its inputs and whether it has been stopped.
 const SLICE_US: u64 = 20_000;
 
-/// Whether rusty runs `chip` itself.
-pub fn emulates(chip: &str) -> bool {
+/// Whether rusty-mcu has a model of `chip`. Which parts are *run* on it is
+/// the catalogue's to say (`emulator = { kind = "rusty-mcu" }`); a test
+/// holds the two in step.
+#[cfg(test)]
+fn emulates(chip: &str) -> bool {
     Part::for_chip(chip).is_some()
 }
 
@@ -321,8 +324,11 @@ struct Unsupported {
 /// nothing is explained rather than silent.
 fn host_line(machine: &mut Machine, line: &str, said: &mut Unsupported) -> Option<String> {
     let line = line.trim();
-    let once =
-        |flag: &mut bool, text: &str| (!std::mem::replace(flag, true)).then(|| text.to_string());
+    // Named by the part that is running, not by the first one modelled.
+    let part = machine.part().name;
+    let once = |flag: &mut bool, text: &str| {
+        (!std::mem::replace(flag, true)).then(|| format!("the {part} model {text}"))
+    };
     if let Some((pin, level)) = line.split_once('=')
         && let Ok(pin) = pin.parse::<u8>()
     {
@@ -336,26 +342,26 @@ fn host_line(machine: &mut Machine, line: &str, said: &mut Unsupported) -> Optio
     if line.starts_with('A') {
         return once(
             &mut said.analog,
-            "the CH32V003 model has no ADC: analog values on the sheet do not reach the firmware",
+            "has no ADC: analog values on the sheet do not reach the firmware",
         );
     }
     if line.starts_with("i2c") || line.starts_with("spi") {
         return once(
             &mut said.bus,
-            "the CH32V003 model has no I2C or SPI: devices on the sheet's buses do not answer",
+            "has no I2C or SPI: devices on the sheet's buses do not answer",
         );
     }
     if line.starts_with("sw") {
         return once(
             &mut said.switch,
-            "the CH32V003 model does not join two pins through a switch: a switch between two \
+            "does not join two pins through a switch: a switch between two \
              GPIOs changes nothing",
         );
     }
     if line.starts_with('W') {
         return once(
             &mut said.wave,
-            "the CH32V003 model plays no signals: a generator on the sheet stays silent",
+            "plays no signals: a generator on the sheet stays silent",
         );
     }
     None
@@ -428,6 +434,21 @@ mod tests {
         assert!(emulates("ch32x035f8u6") && !emulates("ch32v203c8t6"));
     }
 
+    /// Every part the catalogue sends to rusty-mcu has a model there, and
+    /// every model is reached from the catalogue: a part named in one and
+    /// not the other is a plan that boots nothing, or a model nobody runs.
+    #[test]
+    fn the_catalogue_and_the_emulator_agree_on_what_it_runs() {
+        for chip in crate::chip::catalogue() {
+            assert_eq!(
+                chip.emulated_by(crate::model::EmulatorKind::RustyMcu),
+                emulates(&chip.id),
+                "{}",
+                chip.id
+            );
+        }
+    }
+
     /// The real firmware, end to end through the host's half: launched as a
     /// session, its pin channel connected over TCP the way `connect` does,
     /// and PWM reports arriving on it in the protocol `absorb` reads.
@@ -471,10 +492,11 @@ mod tests {
     fn the_window_and_the_emulator_count_a_port_alike() {
         for chip in ["ch32v003j4m6", "ch32v003f4p6", "ch32x035f8u6"] {
             let part = Part::for_chip(chip).expect(chip);
-            assert_eq!(crate::nets::port_width(chip), Some(part.width), "{chip}");
+            let width = crate::chip::by_id(chip).expect(chip).port_width;
+            assert_eq!(width, Some(part.width), "{chip}");
             for pin in part.pins() {
                 assert_eq!(
-                    crate::nets::pin_label(chip, pin),
+                    crate::nets::pin_label(width, pin),
                     part.pin_name(pin),
                     "{chip}"
                 );
@@ -510,7 +532,8 @@ mod tests {
         let pwm = crate::protocol::parse_pwm_report(&first)
             .unwrap_or_else(|| panic!("a PWM report: {first}"));
         assert_eq!(pwm.pins[0].0, 36, "PB12");
-        assert_eq!(crate::nets::pin_label("ch32x035f8u6", 36), "PB12");
+        let width = crate::chip::by_id("ch32x035f8u6").unwrap().port_width;
+        assert_eq!(crate::nets::pin_label(width, 36), "PB12");
         let console = session.recv().expect("a line");
         assert_eq!(console.text, "pwm max duty 8000");
         session.stopper().stop();

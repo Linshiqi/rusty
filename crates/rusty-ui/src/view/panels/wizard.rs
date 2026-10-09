@@ -13,7 +13,7 @@
 use leptos::{ev, prelude::*};
 
 use rusty_embed::{
-    Chip, CrateNameProblem, Runtime, Vendor, WizardChoice, WizardLayout, crate_name_problem,
+    Chip, CrateNameProblem, Runtime, WizardChoice, WizardLayout, crate_name_problem,
 };
 
 use rusty_i18n::t;
@@ -322,9 +322,10 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                     .map(|chip| {
                         let is_selected = chip.id == current;
                         let pick = chip.id.clone();
-                        // A WCH project is written by rusty, not esp-generate:
-                        // none of its options, and bare metal is all there is.
-                        let written = chip.vendor == Vendor::Wch;
+                        // A project rusty writes from its own template, not
+                        // esp-generate: none of its options, and bare metal
+                        // is all there is.
+                        let written = chip.writes_itself(Runtime::BareMetal);
                         view! {
                             <button
                                 type="button"
@@ -447,7 +448,7 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
         })
     });
 
-    let vendor = chip_vendor(state, &choice.chip);
+    let hal = chip_hal(state, &choice.chip);
     let list = view! {
         {[Runtime::BareMetal, Runtime::EspIdf]
                 .into_iter()
@@ -472,7 +473,7 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
                             }
                         >
                             <span class="flex-1 text-body font-medium">
-                                {runtime.label_on(vendor)}
+                                {runtime.label_on(hal.as_deref())}
                             </span>
                             {move || {
                                 (runtime == Runtime::EspIdf && !available.get())
@@ -492,7 +493,7 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     .into_any();
 
     let detail = view! {
-        <DetailHeading title=selected.label_on(vendor).to_string() />
+        <DetailHeading title=selected.label_on(hal.as_deref()) />
         <p class="text-callout leading-relaxed text-label-2">
             {match selected {
                 Runtime::BareMetal => t!("wizard.bare-metal"),
@@ -505,14 +506,25 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     view! { <Split list=list detail=detail /> }
 }
 
-/// Who makes the chip with this id, as the catalogue says — Espressif when
-/// the catalogue has not arrived, which is what every chip was before.
-fn chip_vendor(state: AppState, chip: &str) -> Vendor {
+/// The HAL a bare-metal project on the chip with this id is written
+/// against, as the catalogue says — esp-hal when the catalogue has not
+/// arrived, which is what every chip was before.
+fn chip_hal(state: AppState, chip: &str) -> Option<String> {
     state.project.chips.with_untracked(|chips| {
         chips
             .iter()
             .find(|c| c.id == chip)
-            .map_or(Vendor::Espressif, |c| c.vendor)
+            .map_or(Some("esp-hal".to_string()), |c| c.hal_label.clone())
+    })
+}
+
+/// Whether rusty writes this choice's project itself, from a template.
+fn chip_writes_itself(state: AppState, chip: &str, runtime: Runtime) -> bool {
+    state.project.chips.with_untracked(|chips| {
+        chips
+            .iter()
+            .find(|c| c.id == chip)
+            .is_some_and(|c| c.writes_itself(runtime))
     })
 }
 
@@ -569,7 +581,7 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
         </div>
     };
 
-    let written = chip_vendor(state, &choice.chip) == Vendor::Wch;
+    let written = chip_writes_itself(state, &choice.chip, choice.runtime);
     let list = view! {
         {layout_row}
         {written.then(|| view! {
@@ -711,7 +723,9 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
     let state = AppState::expect();
     let name = choice.name.clone();
     let summary_chip = choice.chip.clone();
-    let summary_runtime = choice.runtime.label_on(chip_vendor(state, &choice.chip));
+    let summary_runtime = choice
+        .runtime
+        .label_on(chip_hal(state, &choice.chip).as_deref());
     let summary_options = choice.options.clone();
 
     view! {

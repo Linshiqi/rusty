@@ -44,7 +44,7 @@ enum Section {
 fn section_of(tool: &str) -> Section {
     match tool {
         "msvc" | "ldproxy" | "riscv32-esp-elf-gcc" | "xtensa-esp-elf-gcc" => Section::Build,
-        "espflash" | "probe-rs" | "codelldb" => Section::Device,
+        "espflash" | "probe-rs" | "wlink" | "codelldb" => Section::Device,
         _ => Section::Editor,
     }
 }
@@ -85,7 +85,13 @@ fn needed(report: &ToolchainReport) -> Vec<String> {
             continue;
         }
         match problem.kind.as_str() {
-            "no-flasher" => add("espflash".to_string()),
+            // The tool the part is usually flashed with, which the
+            // problem names; espflash for a report from before it did.
+            "no-flasher" => add(problem
+                .args
+                .get("tool")
+                .cloned()
+                .unwrap_or_else(|| "espflash".to_string())),
             "nightly-missing" => add("nightly".to_string()),
             "ldproxy-missing" => add("ldproxy".to_string()),
             _ => {}

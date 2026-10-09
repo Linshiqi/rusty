@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::model::{
-    Arch, Board, CatalogProblem, CatalogSource, Chip, Flasher, PinAssignment, ToolchainRequirement,
-    UsbMatch, Vendor,
+    Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, Emulation, EmulatorKind, Flasher,
+    Generator, Kit, KitUsb, PinAssignment, ToolchainRequirement, UsbMatch, Vendor,
 };
 
 const BUILTIN_CHIPS: &str = include_str!("../data/chips.toml");
@@ -33,6 +33,7 @@ const BUILTIN_BOARDS: &str = include_str!("../data/boards.toml");
 /// Everything rusty knows about hardware, after layering.
 #[derive(Debug, Clone)]
 pub struct Catalog {
+    vendors: Vec<Vendor>,
     chips: Vec<Chip>,
     boards: Vec<Board>,
     /// Files that failed to parse, with the reason.
@@ -63,6 +64,7 @@ impl Catalog {
 
     fn parse_builtin() -> Self {
         let mut catalog = Catalog {
+            vendors: Vec::new(),
             chips: Vec::new(),
             boards: Vec::new(),
             problems: Vec::new(),
@@ -76,6 +78,7 @@ impl Catalog {
             "<builtin>/boards.toml",
             CatalogSource::Builtin,
         );
+        catalog.resolve();
         debug_assert!(
             catalog.problems.is_empty(),
             "built-in catalogue is malformed: {:?}",
@@ -94,7 +97,16 @@ impl Catalog {
         if let Some(root) = project_root {
             catalog.absorb_dir(&root.join(".rusty"), CatalogSource::Project);
         }
+        catalog.resolve();
         catalog
+    }
+
+    pub fn vendors(&self) -> &[Vendor] {
+        &self.vendors
+    }
+
+    pub fn vendor(&self, id: &str) -> Option<&Vendor> {
+        self.vendors.iter().find(|v| v.id == id)
     }
 
     pub fn chips(&self) -> &[Chip] {
@@ -172,8 +184,44 @@ impl Catalog {
                 return;
             }
         };
+        for entry in file.vendor {
+            let vendor = entry.build();
+            crate::layers::replace_or_push(&mut self.vendors, vendor, |held, vendor| {
+                held.id == vendor.id
+            });
+        }
         for entry in file.chip {
             self.replace_chip(entry.build());
+        }
+    }
+
+    /// What every chip carries from its vendor, once every layer is in —
+    /// a project's file may add a part from a vendor the built-ins name, or
+    /// a vendor and its parts together. A chip naming no vendor anybody
+    /// declared is said, not dropped: its parts still detect and flash, and
+    /// only the vendor's name and HAL are missing.
+    fn resolve(&mut self) {
+        for chip in &mut self.chips {
+            match self.vendors.iter().find(|v| v.id == chip.vendor) {
+                Some(vendor) => {
+                    chip.vendor_name = vendor.name.clone();
+                    chip.hal_label = vendor.hal.clone();
+                }
+                None => {
+                    chip.vendor_name = chip.vendor.clone();
+                    chip.hal_label = None;
+                    let detail = format!(
+                        "chip `{}` names vendor `{}`, which no [[vendor]] table declares",
+                        chip.id, chip.vendor
+                    );
+                    if !self.problems.iter().any(|p| p.detail == detail) {
+                        self.problems.push(CatalogProblem {
+                            path: "chips".to_string(),
+                            detail,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -238,7 +286,37 @@ fn user_catalog_dir() -> Option<PathBuf> {
 #[serde(deny_unknown_fields)]
 struct ChipFile {
     #[serde(default)]
+    vendor: Vec<VendorEntry>,
+    #[serde(default)]
     chip: Vec<ChipEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VendorEntry {
+    id: String,
+    name: String,
+    #[serde(default)]
+    hal: Option<String>,
+    #[serde(default)]
+    chip_crates: Vec<String>,
+    #[serde(default)]
+    bare_metal_crates: Vec<String>,
+    #[serde(default)]
+    std_crates: Vec<String>,
+}
+
+impl VendorEntry {
+    fn build(self) -> Vendor {
+        Vendor {
+            id: self.id,
+            name: self.name,
+            hal: self.hal,
+            chip_crates: self.chip_crates,
+            bare_metal_crates: self.bare_metal_crates,
+            std_crates: self.std_crates,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -246,7 +324,7 @@ struct ChipFile {
 struct ChipEntry {
     id: String,
     name: String,
-    vendor: VendorSpec,
+    vendor: String,
     arch: ArchSpec,
     cores: u8,
     sram_bytes: u32,
@@ -267,6 +345,24 @@ struct ChipEntry {
     /// no `hal` is one rusty will not offer to switch a project to.
     #[serde(default)]
     hal: Option<String>,
+    #[serde(default)]
+    port_width: Option<u8>,
+    #[serde(default)]
+    header: Vec<String>,
+    #[serde(default)]
+    kit: Option<KitEntry>,
+    #[serde(default)]
+    emulator: Option<EmulatorEntry>,
+    #[serde(default)]
+    generator: Option<GeneratorSpec>,
+    #[serde(default)]
+    std_generator: Option<GeneratorSpec>,
+    #[serde(default)]
+    gdb: Option<String>,
+    #[serde(default)]
+    c_compiler: Option<CCompilerEntry>,
+    #[serde(default)]
+    svd: Option<String>,
 }
 
 impl ChipEntry {
@@ -274,7 +370,10 @@ impl ChipEntry {
         Chip {
             id: normalize(&self.id),
             name: self.name,
-            vendor: self.vendor.into(),
+            vendor: self.vendor,
+            // Filled from the vendor's table once every layer is in.
+            vendor_name: String::new(),
+            hal_label: None,
             arch: self.arch.into(),
             cores: self.cores,
             sram_bytes: self.sram_bytes,
@@ -287,8 +386,130 @@ impl ChipEntry {
             radios: self.radios,
             gpio: self.gpio,
             hal: self.hal,
+            port_width: self.port_width,
+            header: self.header,
+            kit: self.kit.map(KitEntry::build),
+            emulation: self.emulator.map(EmulatorEntry::build),
+            generator: self.generator.map(Into::into),
+            std_generator: self.std_generator.map(Into::into),
+            gdb: self.gdb,
+            c_compiler: self.c_compiler.map(|c| CCompiler {
+                binary: c.binary,
+                install: c.install,
+            }),
+            svd: self.svd,
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KitEntry {
+    module: String,
+    usb: KitUsbSpec,
+    #[serde(default = "default_reset")]
+    reset: String,
+    #[serde(default = "default_boot")]
+    boot: String,
+    #[serde(default)]
+    rgb: bool,
+}
+
+fn default_reset() -> String {
+    "RST".to_string()
+}
+
+fn default_boot() -> String {
+    "BOOT".to_string()
+}
+
+impl KitEntry {
+    fn build(self) -> Kit {
+        Kit {
+            module: self.module,
+            usb: match self.usb {
+                KitUsbSpec::MicroB => KitUsb::MicroB,
+                KitUsbSpec::TypeC => KitUsb::TypeC,
+                KitUsbSpec::DualTypeC => KitUsb::DualTypeC,
+            },
+            reset: self.reset,
+            boot: self.boot,
+            rgb: self.rgb,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum KitUsbSpec {
+    MicroB,
+    TypeC,
+    DualTypeC,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmulatorEntry {
+    kind: EmulatorKindSpec,
+    #[serde(default)]
+    binary: Option<String>,
+    #[serde(default)]
+    limit: Option<String>,
+    #[serde(default)]
+    limit_outdated: Option<String>,
+}
+
+impl EmulatorEntry {
+    fn build(self) -> Emulation {
+        Emulation {
+            kind: match self.kind {
+                EmulatorKindSpec::Qemu => EmulatorKind::Qemu,
+                EmulatorKindSpec::RustyMcu => EmulatorKind::RustyMcu,
+            },
+            binary: self.binary,
+            limit: self.limit,
+            limit_outdated: self.limit_outdated,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum EmulatorKindSpec {
+    Qemu,
+    RustyMcu,
+}
+
+/// `"esp-generate"`, `"esp-idf-template"`, or `{ template = "<name>" }`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum GeneratorSpec {
+    Named(NamedGenerator),
+    Template { template: String },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum NamedGenerator {
+    EspGenerate,
+    EspIdfTemplate,
+}
+
+impl From<GeneratorSpec> for Generator {
+    fn from(spec: GeneratorSpec) -> Self {
+        match spec {
+            GeneratorSpec::Named(NamedGenerator::EspGenerate) => Generator::EspGenerate,
+            GeneratorSpec::Named(NamedGenerator::EspIdfTemplate) => Generator::EspIdfTemplate,
+            GeneratorSpec::Template { template } => Generator::Template { name: template },
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CCompilerEntry {
+    binary: String,
+    install: String,
 }
 
 #[derive(Deserialize)]
@@ -357,24 +578,6 @@ struct UsbEntry {
 
 // Kebab-case in files, because that is how these read as configuration; the
 // wire enums stay camelCase for the frontend.
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum VendorSpec {
-    Espressif,
-    St,
-    Wch,
-}
-
-impl From<VendorSpec> for Vendor {
-    fn from(spec: VendorSpec) -> Self {
-        match spec {
-            VendorSpec::Espressif => Vendor::Espressif,
-            VendorSpec::St => Vendor::St,
-            VendorSpec::Wch => Vendor::Wch,
-        }
-    }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]

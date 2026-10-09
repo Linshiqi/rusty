@@ -1391,7 +1391,8 @@ mod tests {
     /// to scale, and its pins are rows on it.
     #[test]
     fn the_devkit_keeps_its_row_geometry() {
-        let rows = rusty_embed::nets::kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
+        let rows =
+            rusty_embed::nets::kit_rows(rusty_embed::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
         let kit = kit_symbol("esp32c3", &rows);
         let plan = layout(&kit, "");
         assert_eq!(plan.spots.len(), rows.len());

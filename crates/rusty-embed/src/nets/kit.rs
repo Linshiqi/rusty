@@ -4,7 +4,37 @@
 use serde::{Deserialize, Serialize};
 
 use super::Rail;
-use crate::model::{KIT_REFERENCE, PinRef, Sheet, Wire};
+use crate::model::{Chip, KIT_REFERENCE, PinRef, Sheet, Wire};
+
+/// What the catalogue says about a part's pins, as the devkit's rows and
+/// every pin's name are drawn from it: which GPIOs exist, how they are named
+/// (`port_width`, [`Chip::port_width`]) and the one module header whose
+/// order rusty knows ([`Chip::header`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Pinout<'a> {
+    pub gpio: &'a [u32],
+    pub port_width: Option<u8>,
+    pub header: &'a [String],
+}
+
+impl<'a> Pinout<'a> {
+    pub fn of(chip: &'a Chip) -> Self {
+        Pinout {
+            gpio: &chip.gpio,
+            port_width: chip.port_width,
+            header: &chip.header,
+        }
+    }
+
+    /// GPIOs named by number, drawn as a chip — what a test's board needs.
+    pub fn numbered(gpio: &'a [u32]) -> Self {
+        Pinout {
+            gpio,
+            port_width: None,
+            header: &[],
+        }
+    }
+}
 
 /// One row of the devkit's header: what is printed beside it, the pin
 /// name a wire uses, and what it carries.
@@ -52,76 +82,60 @@ impl Row {
     }
 }
 
-/// The classic 30-pin ESP32 devkit header, top to bottom, left then right.
-///
-/// The one module whose *header order* rusty knows. That order is a
-/// property of the board, not the die, so it cannot be derived — and it
-/// used to be drawn for every chip, which is why an ESP32-C3 board showed
-/// GPIO36, 39, 34 and 35, none of which the part has.
-const ESP32_DEVKIT: [(&str, Option<u8>); 30] = [
-    ("EN", None),
-    ("36", Some(36)),
-    ("39", Some(39)),
-    ("34", Some(34)),
-    ("35", Some(35)),
-    ("32", Some(32)),
-    ("33", Some(33)),
-    ("25", Some(25)),
-    ("26", Some(26)),
-    ("27", Some(27)),
-    ("14", Some(14)),
-    ("12", Some(12)),
-    ("13", Some(13)),
-    ("GND", None),
-    ("VIN", None),
-    ("3V3", None),
-    ("GND", None),
-    ("15", Some(15)),
-    ("2", Some(2)),
-    ("4", Some(4)),
-    ("16", Some(16)),
-    ("17", Some(17)),
-    ("5", Some(5)),
-    ("18", Some(18)),
-    ("19", Some(19)),
-    ("21", Some(21)),
-    ("RX", Some(3)),
-    ("TX", Some(1)),
-    ("22", Some(22)),
-    ("23", Some(23)),
-];
+/// One entry of a module's header as the catalogue spells it: a number is
+/// that GPIO labelled by its number, `RX:3` is GPIO3 printed `RX`, anything
+/// else a rail or a plain row.
+fn header_entry(entry: &str) -> (&str, Option<u8>) {
+    if let Some((label, pin)) = entry.split_once(':')
+        && let Ok(pin) = pin.trim().parse()
+    {
+        return (label.trim(), Some(pin));
+    }
+    (entry, entry.parse().ok())
+}
 
-/// The devkit's rows for a chip, given the GPIOs it actually has.
+/// The devkit's rows for a part, from what the catalogue says of its pins.
 ///
 /// Two different drawings, and the difference is honest rather than
-/// cosmetic. For the ESP32 the answer is a *module*: a real 30-pin devkit
-/// whose header order somebody can match against the board on their desk.
-/// For everything else rusty knows the die's pins and not any module's
-/// header, so it draws a *chip* — the pins in numeric order, split down the
-/// middle, with the rails around them. Every row is then a pin that exists.
+/// cosmetic. For a part with a `header` the answer is a *module*: a real
+/// devkit whose header order somebody can match against the board on their
+/// desk — the classic 30-pin ESP32 devkit is the one rusty knows. That order
+/// is a property of the board, not the die, so it cannot be derived, and it
+/// used to be drawn for every chip, which is why an ESP32-C3 board showed
+/// GPIO36, 39, 34 and 35, none of which the part has. For everything else
+/// rusty knows the die's pins and not any module's header, so it draws a
+/// *chip* — the pins in numeric order, split down the middle, with the
+/// rails around them. Every row is then a pin that exists.
 ///
 /// An empty `gpio` means the catalogue does not say, and the part is drawn
 /// with rails only rather than with somebody else's pins.
-pub fn kit_rows(chip: &str, gpio: &[u32]) -> Vec<Row> {
-    let by_port = names_by_port(chip);
+pub fn kit_rows(pins: Pinout) -> Vec<Row> {
+    let width = pins.port_width;
+    let by_port = width.is_some();
     let row = |label: &str, pin: Option<u8>| match (label, pin) {
-        // A WCH pin's name is its row's label too: `PC4` is what is printed
-        // beside it, where an Espressif row is labelled `4`.
-        (_, Some(n)) if by_port => Row::gpio(n, &pin_label(chip, n), pin_label(chip, n)),
-        (_, Some(n)) => Row::gpio(n, label, pin_label(chip, n)),
+        // A pin named by port is labelled by that name too: `PC4` is what
+        // is printed beside it, where an Espressif row is labelled `4`.
+        (_, Some(n)) if by_port => Row::gpio(n, &pin_label(width, n), pin_label(width, n)),
+        (_, Some(n)) => Row::gpio(n, label, pin_label(width, n)),
         ("GND", None) => Row::rail("GND", Rail::Ground),
         ("3V3" | "VIN" | "5V", None) => Row::rail(label, Rail::Supply),
         (other, None) => Row::plain(other),
     };
-    if chip == "esp32" {
-        return ESP32_DEVKIT
+    if !pins.header.is_empty() {
+        return pins
+            .header
             .iter()
-            .map(|(label, pin)| row(label, *pin))
+            .map(|entry| {
+                let (label, pin) = header_entry(entry);
+                row(label, pin)
+            })
             .collect();
     }
+    let gpio = pins.gpio;
     let half = gpio.len().div_ceil(2);
     let mut rows: Vec<Row> = Vec::with_capacity(gpio.len() + 4);
-    // A WCH part has no enable pin; its reset is a GPIO's alternate function.
+    // A part named by port has no enable pin; its reset is a GPIO's
+    // alternate function.
     if !by_port {
         rows.push(row("EN", None));
     }
@@ -154,35 +168,18 @@ pub fn kit_pin(rows: &[Row], key: &str) -> Option<usize> {
         .or_else(|| rows.iter().position(|r| r.name == key))
 }
 
-/// How many pins a port is in rusty's numbering of `chip`, for a part that
-/// names its pins by port — `PA1`, `PC4` — rather than by number: the width
-/// of the part's GPIO registers, eight on the CH32V003 (PC4 is 20) and
-/// twenty-four on the CH32X035, whose ports run to PA23 (PB12 is 36). That
-/// is how pins travel on the pin channel, so it is rusty-mcu's `Part::width`
-/// and a test holds the two equal.
+/// What pin `gpio` is called on a part whose ports are `port_width` pins
+/// wide ([`Chip::port_width`]): `PC4` on a part named by port, `GPIO4`
+/// elsewhere. Every place a pin number becomes words goes through this, so
+/// the board, the waves and the console agree about a pin's name.
 ///
-/// `None` for a part named by number — and for a WCH family nobody has
-/// measured, which is named by its number rather than by a port it may not
-/// have.
-pub fn port_width(chip: &str) -> Option<u8> {
-    if chip.starts_with("ch32v003") {
-        Some(8)
-    } else if chip.starts_with("ch32x035") {
-        Some(24)
-    } else {
-        None
-    }
-}
-
-fn names_by_port(chip: &str) -> bool {
-    port_width(chip).is_some()
-}
-
-/// What pin `gpio` is called on `chip`: `PC4` on a part named by port,
-/// `GPIO4` elsewhere. Every place a pin number becomes words goes through
-/// this, so the board, the waves and the console agree about a pin's name.
-pub fn pin_label(chip: &str, gpio: u8) -> String {
-    match port_width(chip) {
+/// The width is the part's GPIO registers' — eight on the CH32V003 (PC4 is
+/// 20), twenty-four on the CH32X035 (PB12 is 36) — because that is how pins
+/// travel on the pin channel; for rusty-mcu's parts a test holds it to the
+/// emulator's `Part::width`. A part nobody has measured has none, and is
+/// named by its number rather than by a port it may not have.
+pub fn pin_label(port_width: Option<u8>, gpio: u8) -> String {
+    match port_width {
         Some(width) => {
             let port = (b'A' + gpio / width) as char;
             format!("P{port}{}", gpio % width)

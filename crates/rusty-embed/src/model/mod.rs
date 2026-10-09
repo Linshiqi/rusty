@@ -39,8 +39,8 @@ pub use device::{FlashAction, Probe, SerialPort, Transport, UsbIdentity};
 pub use firmware::Firmware;
 pub use memory::{CrateSize, MemoryReport, MemoryTotals, SectionKind, SectionSize};
 pub use part::{
-    Arch, Board, CatalogProblem, CatalogSource, Chip, Flasher, PinAssignment, Runtime,
-    ToolchainRequirement, UsbMatch, Vendor,
+    Arch, Board, CCompiler, CatalogProblem, CatalogSource, Chip, Emulation, EmulatorKind, Flasher,
+    Generator, Kit, KitUsb, PinAssignment, Runtime, ToolchainRequirement, UsbMatch, Vendor,
 };
 pub use playground::{
     PLAYGROUND_DRAW, PLAYGROUND_MAIN, PLAYGROUNDS, playground_has_board, playground_main,

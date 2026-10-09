@@ -243,37 +243,6 @@ fn msvc_linker() -> Option<PathBuf> {
     }
 }
 
-/// The C compiler a project for this architecture needs, and how to get it.
-///
-/// Not in [`TOOLS`] because it is the one entry that depends on the open
-/// project: `cc` shells out to a *cross* compiler, and Xtensa's and RISC-V's
-/// are different binaries from different places. A single "is there a C
-/// compiler" answer would be true and useless.
-///
-/// The asymmetry is real and worth stating rather than smoothing over: espup
-/// installs the Xtensa one as part of the toolchain it exists to manage, and
-/// installs nothing for RISC-V, because upstream rustc already emits RISC-V
-/// and needs no help. So a RISC-V project that wants C has to fetch a
-/// toolchain nothing else asked it to.
-pub fn c_compiler(arch: crate::model::Arch) -> Option<(&'static str, &'static str)> {
-    match arch {
-        crate::model::Arch::Xtensa => Some((
-            "xtensa-esp-elf-gcc",
-            "espup install — the Xtensa toolchain it manages includes the C compiler",
-        )),
-        crate::model::Arch::RiscV => Some((
-            "riscv32-esp-elf-gcc",
-            "download riscv32-esp-elf from \
-             https://github.com/espressif/crosstool-NG/releases and put its bin/ on PATH \
-             — espup does not install it, because Rust needs no help emitting RISC-V",
-        )),
-        // A Cortex-M project's C compiler is `arm-none-eabi-gcc`, but rusty
-        // has not verified that path against a real project and will not
-        // claim it from memory.
-        crate::model::Arch::CortexM => None,
-    }
-}
-
 /// How to install one of the tools rusty drives, as one line to type.
 ///
 /// The table already knew this and only the toolchain panel was reading it, so
@@ -357,11 +326,16 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         .as_ref()
         .is_some_and(|c| c.toolchain == crate::model::ToolchainRequirement::NightlyBuildStd);
 
-    // The C compiler, listed only once a chip says which one. It is reported
-    // whether or not this project speaks C: "can I add C to this" is a
-    // question people ask before they have, and answering it only after they
-    // try is the failure this panel exists to prevent.
-    if let Some((binary, install)) = chip.as_ref().and_then(|c| c_compiler(c.arch)) {
+    // The C compiler, listed only once a chip says which one (the
+    // catalogue's `c_compiler`). Not in [`TOOLS`] because it is the one
+    // entry that depends on the open project: `cc` shells out to a *cross*
+    // compiler, and Xtensa's and RISC-V's are different binaries from
+    // different places. It is reported whether or not this project speaks
+    // C: "can I add C to this" is a question people ask before they have,
+    // and answering it only after they try is the failure this panel exists
+    // to prevent.
+    if let Some(compiler) = chip.as_ref().and_then(|c| c.c_compiler.clone()) {
+        let (binary, install) = (compiler.binary.as_str(), compiler.install.as_str());
         let path = tools::find(binary);
         status.tools.push(ToolStatus {
             name: binary.to_string(),
@@ -572,22 +546,34 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
 
     // Only complain about a flashing tool if the project could actually be
     // flashed — a workspace that is not an embedded project should not be
-    // nagged about espflash.
-    if project.is_some_and(|p| p.chip.is_some()) {
-        let has_flasher = status.tools.iter().any(|t| {
-            matches!(t.name.as_str(), "espflash" | "probe-rs" | "wlink") && t.is_installed()
-        });
-        if !has_flasher {
+    // nagged about espflash — and only about the tools that flash *its*
+    // part: a CH32 with espflash installed still cannot be flashed, and an
+    // STM32 offered espflash would be sent to a tool that cannot reach it.
+    if let Some(part) = chip.as_ref() {
+        let tools: Vec<&str> = part.flashers.iter().map(|f| f.tool()).collect();
+        let has_flasher = status
+            .tools
+            .iter()
+            .any(|t| tools.contains(&t.name.as_str()) && t.is_installed());
+        if let Some(&preferred) = tools.first()
+            && !has_flasher
+        {
             problems.push(
                 Problem::new(
                     Severity::Blocking,
                     "no-flasher",
                     "No way to flash the board",
-                    "Neither espflash nor probe-rs is installed. espflash is the \
-                     simpler choice — it needs only the USB cable. probe-rs adds \
-                     breakpoint debugging and defmt over RTT, but wants a probe.",
+                    format!(
+                        "None of the tools that flash a {} is installed ({}). {preferred} is \
+                         the one it is usually flashed with.",
+                        part.name,
+                        tools.join(", ")
+                    ),
                 )
-                .fix(install_command("espflash").unwrap_or_default()),
+                .arg("chip", part.name.clone())
+                .arg("tools", tools.join(", "))
+                .arg("tool", preferred)
+                .fix(install_command(preferred).unwrap_or_default()),
             );
         }
     }

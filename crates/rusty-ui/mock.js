@@ -1074,9 +1074,9 @@
       return { program: "espflash", args: [], display, rationale: "", warning };
     },
     chip_catalogue: () => [
-      { id: "esp32", name: "ESP32", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 520000, flashBytes: null, bareMetalTarget: "xtensa-esp32-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [], gpio: ESP32_GPIO },
-      { id: "esp32c3", name: "ESP32-C3", vendor: "espressif", arch: "riscV", cores: 1, sramBytes: 400000, flashBytes: null, bareMetalTarget: "riscv32imc-unknown-none-elf", stdTarget: null, toolchain: "stock", flashers: [], probeRsTarget: null, radios: [], gpio: C3_GPIO },
-      { id: "esp32s3", name: "ESP32-S3", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 512000, flashBytes: null, bareMetalTarget: "xtensa-esp32s3-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [] },
+      { id: "esp32", name: "ESP32", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 520000, flashBytes: null, bareMetalTarget: "xtensa-esp32-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [], gpio: ESP32_GPIO, vendorName: "Espressif", halLabel: "esp-hal", header: ["EN", "36", "39", "34", "35", "32", "33", "25", "26", "27", "14", "12", "13", "GND", "VIN", "3V3", "GND", "15", "2", "4", "16", "17", "5", "18", "19", "21", "RX:3", "TX:1", "22", "23"], kit: { module: "ESP-WROOM-32", usb: "microB", reset: "EN", boot: "BOOT", rgb: false } },
+      { id: "esp32c3", name: "ESP32-C3", vendor: "espressif", arch: "riscV", cores: 1, sramBytes: 400000, flashBytes: null, bareMetalTarget: "riscv32imc-unknown-none-elf", stdTarget: null, toolchain: "stock", flashers: [], probeRsTarget: null, radios: [], gpio: C3_GPIO, vendorName: "Espressif", halLabel: "esp-hal", kit: { module: "ESP32-C3-MINI-1", usb: "typeC", reset: "RST", boot: "BOOT", rgb: true } },
+      { id: "esp32s3", name: "ESP32-S3", vendor: "espressif", arch: "xtensa", cores: 2, sramBytes: 512000, flashBytes: null, bareMetalTarget: "xtensa-esp32s3-none-elf", stdTarget: null, toolchain: "espXtensa", flashers: [], probeRsTarget: null, radios: [], vendorName: "Espressif", halLabel: "esp-hal", kit: { module: "ESP32-S3-WROOM-1", usb: "dualTypeC", reset: "RST", boot: "BOOT", rgb: true } },
     ],
     board_catalogue: () => [
       { id: "esp32-devkitc", name: "ESP32 DevKit", chip: "esp32", flashBytes: 4194304, psramBytes: null, usb: [], flashBaud: null, pins: [], source: "builtin" },

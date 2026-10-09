@@ -256,6 +256,8 @@ pub struct Outcome {
     /// The part that ran, for naming its pins (`nets::pin_label`). Empty
     /// when the run never got as far as knowing.
     pub chip: String,
+    /// How that part names its pins ([`crate::model::Chip::port_width`]).
+    pub port_width: Option<u8>,
 }
 
 impl Outcome {
@@ -269,6 +271,7 @@ impl Outcome {
             limits: Vec::new(),
             notes: Vec::new(),
             chip: String::new(),
+            port_width: None,
         }
     }
 
@@ -296,7 +299,7 @@ impl Outcome {
 
     /// What `pin` is called on the part that ran: `PC4`, `GPIO4`.
     pub fn pin_name(&self, pin: u8) -> String {
-        crate::nets::pin_label(&self.chip, pin)
+        crate::nets::pin_label(self.port_width, pin)
     }
 
     /// The last level reported for each GPIO.
@@ -341,6 +344,11 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
     };
     let mut outcome = Outcome::opening(&plan, on);
     outcome.chip = chip.clone();
+    let part = crate::catalog::Catalog::load(Some(root))
+        .chip(&chip)
+        .cloned();
+    outcome.port_width = part.as_ref().and_then(|c| c.port_width);
+    let emulation = part.and_then(|c| c.emulation);
     let waves = plan
         .emulator
         .as_ref()
@@ -473,7 +481,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         };
         match heard_now {
             Heard::Serial(text) => {
-                if let Some(verdict) = play.serial(text, &chip, &mut outcome, on) {
+                if let Some(verdict) = play.serial(text, emulation.as_ref(), &mut outcome, on) {
                     break verdict;
                 }
             }
@@ -803,7 +811,7 @@ impl<'s> Play<'s> {
     fn serial(
         &mut self,
         text: String,
-        chip: &str,
+        emulation: Option<&crate::model::Emulation>,
         outcome: &mut Outcome,
         on: &mut dyn FnMut(Event<'_>),
     ) -> Option<Verdict> {
@@ -817,7 +825,7 @@ impl<'s> Play<'s> {
         {
             self.record(&report, outcome);
         }
-        if let Some(limit) = SimLimit::explaining(chip, &text) {
+        if let Some(limit) = SimLimit::explaining(emulation, &text) {
             on(Event::Note(&limit.text));
         }
         outcome.serial.push(text.clone());
@@ -1123,7 +1131,7 @@ write-serial = "Skp=2.5"
             input: process::Input::new(Some(Box::new(console.clone()))),
             pins: Some(pins.clone()),
             sheet: Some(sheet),
-            rows: crate::nets::kit_rows("esp32c3", &[4, 9]),
+            rows: crate::nets::kit_rows(crate::nets::Pinout::numbered(&[4, 9])),
         };
         let scenario: &'static Scenario = Box::leak(Box::new(
             Scenario::from_toml("[[step]]\npress = \"SW1\"\n\n[[step]]\nrelease = \"SW1\"\n")

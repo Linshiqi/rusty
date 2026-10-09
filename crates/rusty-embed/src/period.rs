@@ -366,7 +366,7 @@ mod tests {
     }
 
     fn rows() -> Vec<Row> {
-        nets::kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5])
+        nets::kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]))
     }
 
     /// A lamp with its resistor from `gpio` to ground: the playground's.

@@ -49,11 +49,9 @@ pub fn resolve_symbols(sheet: &mut Sheet, library: &Library) {
 /// the same rows the frontend draws, so a button's GPIO is read off the
 /// same header on both sides.
 pub fn kit_rows_for(root: &Path, chip: &str) -> Vec<Row> {
-    let gpio = crate::catalog::Catalog::load(Some(root))
-        .chips()
-        .iter()
-        .find(|c| c.id == chip)
-        .map(|c| c.gpio.clone())
-        .unwrap_or_default();
-    crate::nets::kit_rows(chip, &gpio)
+    let catalog = crate::catalog::Catalog::load(Some(root));
+    match catalog.chip(chip) {
+        Some(chip) => crate::nets::kit_rows(crate::nets::Pinout::of(chip)),
+        None => crate::nets::kit_rows(crate::nets::Pinout::default()),
+    }
 }

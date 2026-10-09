@@ -389,8 +389,21 @@ fn BoardEditor(
     let sensors = StoredValue::new(sensors);
     let chip_id = StoredValue::new(chip.clone());
     let chip_label = StoredValue::new(board.chip.to_uppercase());
-    // The board around the pins — module, buttons, connector — by family.
-    let kit_look = kit_style(&board.chip);
+    // The board around the pins — module, buttons, connector — as the
+    // catalogue describes the part's devkit.
+    // A memo, as the rows are: the catalogue may arrive after the panel.
+    let kit_look = {
+        let chip = board.chip.clone();
+        Memo::new(move |_| {
+            state.project.chips.with(|chips| {
+                let part = chips.iter().find(|c| c.id == chip);
+                kit_style(
+                    part.and_then(|c| c.kit.as_ref()),
+                    part.map_or("", |c| c.vendor_name.as_str()),
+                )
+            })
+        })
+    };
 
     // The pin rows this part actually has. From the catalogue, so a chip
     // added tomorrow draws its own pins rather than the ESP32 devkit's —
@@ -399,15 +412,13 @@ fn BoardEditor(
     let rows: Memo<Vec<Row>> = {
         let chip = chip.clone();
         Memo::new(move |_| {
-            let gpio = state
+            state
                 .project
                 .chips
-                .get()
-                .into_iter()
-                .find(|c| c.id == chip)
-                .map(|c| c.gpio)
-                .unwrap_or_default();
-            nets::kit_rows(&chip, &gpio)
+                .with(|chips| match chips.iter().find(|c| c.id == chip) {
+                    Some(part) => nets::kit_rows(nets::Pinout::of(part)),
+                    None => nets::kit_rows(nets::Pinout::default()),
+                })
         })
     };
 

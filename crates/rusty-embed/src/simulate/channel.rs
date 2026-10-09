@@ -817,7 +817,7 @@ mod tests {
         )
         .unwrap();
         let sheet = crate::simulate::load_board_for_test(dir.path(), "esp32c3").unwrap();
-        let rows = nets::kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5]);
+        let rows = nets::kit_rows(crate::nets::Pinout::numbered(&[0, 1, 2, 3, 4, 5]));
         let start = start_of(&sheet, &rows, &[]);
         assert!(
             start

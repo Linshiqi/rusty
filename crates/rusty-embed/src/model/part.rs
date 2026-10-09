@@ -5,49 +5,43 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Who makes the part.
+/// Who makes the part, and how a Rust project for one of their parts reads.
 ///
-/// Present from the start even though only Espressif is populated: vendor is
-/// what decides *how* to detect a chip, which toolchain to demand, and which
-/// flasher to reach for. Threading it through later would mean touching every
-/// one of those paths at once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Data, from the catalogue's `[[vendor]]` tables: it was a closed enum, and
+/// a vendor added to the catalogue then needed code in six places — the
+/// enum, its file-format mirror, the label, the crates detection reads, the
+/// order detection reads them in, and the runtime's label — before a single
+/// part of theirs could be detected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Vendor {
-    Espressif,
-    St,
-    Wch,
-}
-
-impl Vendor {
-    pub fn label(self) -> &'static str {
-        match self {
-            Vendor::Espressif => "Espressif",
-            Vendor::St => "STMicroelectronics",
-            Vendor::Wch => "WCH",
-        }
-    }
-
+pub struct Vendor {
+    /// `espressif`, `wch` — what a chip's `vendor` names.
+    pub id: String,
+    /// `Espressif`, `STMicroelectronics`.
+    pub name: String,
+    /// The HAL a bare-metal project for their parts is written against, as
+    /// the runtime's label names it — `no_std (esp-hal)`. `None` where there
+    /// are several and none is *the* one, as for ST's.
+    #[serde(default)]
+    pub hal: Option<String>,
     /// Crates that carry the part number as a cargo feature, most
     /// authoritative first.
     ///
-    /// This is the main thing that differs per vendor: `esp-hal` names the chip
-    /// `esp32c3`, while `embassy-stm32` names it `stm32f411ce`. Detection reads
-    /// the same shape from both, but has to know where to look.
-    pub fn chip_feature_crates(self) -> &'static [&'static str] {
-        match self {
-            Vendor::Espressif => &["esp-hal", "esp-idf-svc", "esp-idf-hal", "esp-wifi"],
-            Vendor::St => &[
-                "embassy-stm32",
-                "stm32f4xx-hal",
-                "stm32f1xx-hal",
-                "stm32h7xx-hal",
-            ],
-            // ch32-hal names the part by package — `ch32v003j4m6` — which is
-            // why the catalogue's WCH ids are package names.
-            Vendor::Wch => &["ch32-hal", "ch32-metapac"],
-        }
-    }
+    /// This is the main thing that differs per vendor: `esp-hal` names the
+    /// chip `esp32c3`, while `embassy-stm32` names it `stm32f411ce`.
+    /// Detection reads the same shape from both, but has to know where to
+    /// look — and which crate it *cites*: half a dozen `esp-*` crates take
+    /// the same chip feature, and a user told their chip came from
+    /// `esp-backtrace` would go and edit the wrong line.
+    #[serde(default)]
+    pub chip_crates: Vec<String>,
+    /// Crates whose presence means a project runs bare metal on these parts.
+    #[serde(default)]
+    pub bare_metal_crates: Vec<String>,
+    /// Crates whose presence means it runs on the vendor's `std` framework —
+    /// ESP-IDF's, for Espressif.
+    #[serde(default)]
+    pub std_crates: Vec<String>,
 }
 
 /// Instruction set the chip's main cores run.
@@ -115,6 +109,17 @@ pub enum Flasher {
     Wlink,
 }
 
+impl Flasher {
+    /// The program, as the tool ladder and the Environment page name it.
+    pub fn tool(self) -> &'static str {
+        match self {
+            Flasher::Espflash => "espflash",
+            Flasher::ProbeRs => "probe-rs",
+            Flasher::Wlink => "wlink",
+        }
+    }
+}
+
 /// Whether the project links the ESP-IDF C framework and gets `std`, or runs
 /// bare-metal against `esp-hal`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,15 +140,101 @@ impl Runtime {
         }
     }
 
-    /// The label for a part from `vendor`: its bare metal is its own HAL's,
-    /// and a CH32 called "esp-hal" is a promise about the wrong crate.
-    pub fn label_on(self, vendor: Vendor) -> &'static str {
-        match (self, vendor) {
-            (Runtime::BareMetal, Vendor::Wch) => "no_std (ch32-hal)",
-            (Runtime::BareMetal, Vendor::St) => "no_std",
-            _ => self.label(),
+    /// The label for a part whose bare metal is `hal`'s — the vendor's
+    /// ([`Chip::hal_label`]) — since a CH32 called "esp-hal" is a promise
+    /// about the wrong crate.
+    pub fn label_on(self, hal: Option<&str>) -> String {
+        match (self, hal) {
+            (Runtime::BareMetal, Some(hal)) => format!("no_std ({hal})"),
+            (Runtime::BareMetal, None) => "no_std".to_string(),
+            (Runtime::EspIdf, _) => self.label().to_string(),
         }
     }
+}
+
+/// How a project for a part is started: a generator somebody else
+/// maintains, or one of rusty's own proven templates written out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Generator {
+    /// `esp-generate`, the esp-rs project's bare-metal generator, with its
+    /// own options.
+    EspGenerate,
+    /// `cargo generate esp-rs/esp-idf-template`, for a `std` project on
+    /// ESP-IDF.
+    EspIdfTemplate,
+    /// One of rusty's templates (`data/templates/<name>/`), renamed for the
+    /// project and moved onto the chosen part — a project rusty writes
+    /// itself, with no process to run.
+    Template { name: String },
+}
+
+/// The connector a devkit carries at its bottom edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KitUsb {
+    MicroB,
+    TypeC,
+    /// One socket for the USB-UART bridge and one native, as on the S3 and
+    /// C6 devkits.
+    DualTypeC,
+}
+
+/// What a part's devkit looks like beyond its pins, for the board view: the
+/// module soldered on it, its connector, its two buttons and whether it has
+/// an RGB LED. A part without one is drawn as a bare chip, which is the
+/// honest drawing of a die rusty knows no module for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Kit {
+    /// The module's printed name, `ESP32-C3-MINI-1`.
+    pub module: String,
+    pub usb: KitUsb,
+    /// The reset button's silkscreen — `EN` on the classic ESP32 devkit,
+    /// `RST` on the rest — and the boot button's.
+    pub reset: String,
+    pub boot: String,
+    pub rgb: bool,
+}
+
+/// Which emulator runs a part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EmulatorKind {
+    /// A QEMU system emulator booting the merged image espflash would burn —
+    /// rusty's build of Espressif's, or Espressif's own.
+    Qemu,
+    /// rusty-mcu, rusty's own instruction-level model of the part, run in
+    /// process.
+    RustyMcu,
+}
+
+/// How a part is simulated, and what the simulation is known not to do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Emulation {
+    pub kind: EmulatorKind,
+    /// The QEMU binary the machine needs, `qemu-system-riscv32`; QEMU's
+    /// machine is the chip's id.
+    #[serde(default)]
+    pub binary: Option<String>,
+    /// A [`SimLimit`](super::SimLimit) kind said before every run.
+    #[serde(default)]
+    pub limit: Option<String>,
+    /// A limit kind said only when the emulator found is not rusty's current
+    /// build.
+    #[serde(default)]
+    pub limit_outdated: Option<String>,
+}
+
+/// A cross C compiler for a part, and how to get it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CCompiler {
+    /// `riscv32-esp-elf-gcc`.
+    pub binary: String,
+    /// One line saying how to install it.
+    pub install: String,
 }
 
 /// A supported microcontroller.
@@ -155,7 +246,16 @@ pub struct Chip {
     pub id: String,
     /// Marketing name, e.g. `ESP32-C3`.
     pub name: String,
-    pub vendor: Vendor,
+    /// The vendor's id, as its `[[vendor]]` table names it.
+    pub vendor: String,
+    /// The vendor's name, `Espressif`, carried here so nothing on the wire
+    /// has to look a second table up to say who makes a part.
+    #[serde(default)]
+    pub vendor_name: String,
+    /// The HAL a bare-metal project for this part is written against, from
+    /// the vendor — what the runtime's label names.
+    #[serde(default)]
+    pub hal_label: Option<String>,
     pub arch: Arch,
     pub cores: u8,
     /// Nominal on-chip SRAM in bytes, from the datasheet.
@@ -210,6 +310,43 @@ pub struct Chip {
     /// someone states this.
     #[serde(default)]
     pub hal: Option<String>,
+    /// How rusty numbers and names the part's pins: `None` names them by
+    /// number (`GPIO4`), a width names them by port with that many pins to a
+    /// port (`PC4` is 20 at eight) — the width of the part's GPIO registers,
+    /// which is how pins travel on the pin channel.
+    #[serde(default)]
+    pub port_width: Option<u8>,
+    /// The header of the one module whose row order rusty knows, top to
+    /// bottom, left then right: a number is that GPIO, `RX:3` is GPIO3
+    /// printed `RX`, anything else a rail or a plain row. Empty draws the
+    /// die's pins in numeric order instead.
+    #[serde(default)]
+    pub header: Vec<String>,
+    /// The devkit drawn around the pins, or `None` for a bare chip.
+    #[serde(default)]
+    pub kit: Option<Kit>,
+    /// How the part is simulated, or `None` for one nothing here emulates —
+    /// which the plan then refuses by name.
+    #[serde(default)]
+    pub emulation: Option<Emulation>,
+    /// How a bare-metal project for the part is started, or `None` where
+    /// rusty knows no way: the wizard refuses that rather than handing the
+    /// part to a generator for somebody else's.
+    #[serde(default)]
+    pub generator: Option<Generator>,
+    /// How a `std` project is started, where the part has a `std` target.
+    #[serde(default)]
+    pub std_generator: Option<Generator>,
+    /// The gdb that debugs the part's images, by the name the tool ladder
+    /// looks for.
+    #[serde(default)]
+    pub gdb: Option<String>,
+    /// The cross C compiler a `cc` build script reaches for on this part.
+    #[serde(default)]
+    pub c_compiler: Option<CCompiler>,
+    /// Where the vendor publishes the part's SVD, when they do.
+    #[serde(default)]
+    pub svd: Option<String>,
 }
 
 impl Chip {
@@ -219,6 +356,33 @@ impl Chip {
             Runtime::BareMetal => Some(&self.bare_metal_target),
             Runtime::EspIdf => self.std_target.as_deref(),
         }
+    }
+
+    /// How a project with `runtime` is started on this part, if rusty knows.
+    pub fn generator_for(&self, runtime: Runtime) -> Option<&Generator> {
+        match runtime {
+            Runtime::BareMetal => self.generator.as_ref(),
+            Runtime::EspIdf => self.std_generator.as_ref(),
+        }
+    }
+
+    /// Whether rusty writes a `runtime` project for this part itself, from a
+    /// template, rather than running somebody's generator.
+    pub fn writes_itself(&self, runtime: Runtime) -> bool {
+        matches!(
+            self.generator_for(runtime),
+            Some(Generator::Template { .. })
+        )
+    }
+
+    /// The runtime's label on this part: `no_std (ch32-hal)` on a CH32.
+    pub fn runtime_label(&self, runtime: Runtime) -> String {
+        runtime.label_on(self.hal_label.as_deref())
+    }
+
+    /// Whether rusty simulates this part with `kind`.
+    pub fn emulated_by(&self, kind: EmulatorKind) -> bool {
+        self.emulation.as_ref().is_some_and(|e| e.kind == kind)
     }
 
     pub fn needs_esp_toolchain(&self) -> bool {

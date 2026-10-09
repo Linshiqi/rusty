@@ -1358,7 +1358,7 @@ nightly-not-pinned-title = "项目不是用 nightly 构建的"
 nightly-not-pinned-detail = "它自己编译 `core`（.cargo/config.toml 里的 `build-std`），stable 的 cargo 会拒绝；而这里没有任何东西让 cargo 用 nightly——没有 `rust-toolchain.toml`，默认工具链也不是 nightly。写一个 `channel = \"nightly\"`、`components = [\"rust-src\"]` 的 `rust-toolchain.toml`，所有克隆这个项目的人都会用上它；下面的命令只在这台机器上生效。"
 target-not-installed-detail = "rustup 没有添加过的目标，cargo 会拒绝为它构建。"
 no-flasher-title = "没有办法烧录到板子"
-no-flasher-detail = "espflash 和 probe-rs 都没装。espflash 更省事——只要一根 USB 线。probe-rs 多了断点调试和 RTT 上的 defmt，但要一个调试器。"
+no-flasher-detail = "能烧录 {chip} 的工具一个都没装（{tools}）。它通常用 {tool} 烧录。"
 ldproxy-missing-title = "缺少 ldproxy"
 ldproxy-missing-detail = "ESP-IDF（std）构建是通过 ldproxy 链接的。没有它，构建会在链接阶段以「找不到链接器」失败。"
 [replace]

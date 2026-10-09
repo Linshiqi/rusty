@@ -499,10 +499,9 @@ mod tests {
     use super::*;
 
     fn c3_rows() -> Vec<Row> {
-        crate::nets::kit_rows(
-            "esp32c3",
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 18, 19, 20, 21],
-        )
+        crate::nets::kit_rows(crate::nets::Pinout::numbered(&[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 18, 19, 20, 21,
+        ]))
     }
 
     const BLINKY: &str = r#"{
@@ -661,7 +660,9 @@ mod tests {
                 pin: "GPIO21".into()
             })
         );
-        let esp32 = crate::nets::kit_rows("esp32", &[]);
+        let esp32 = crate::nets::kit_rows(crate::nets::Pinout::of(
+            &crate::chip::by_id("esp32").unwrap(),
+        ));
         assert_eq!(
             board_pin("board-esp32-devkit-c-v4", "RX", &esp32),
             End::Pin(PinRef {

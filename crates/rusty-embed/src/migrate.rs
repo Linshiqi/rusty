@@ -537,7 +537,7 @@ fn channel_line(toolchain: &str) -> Option<(String, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Arch, Vendor};
+    use crate::model::Arch;
 
     fn chip(id: &str, target: &str, xtensa: bool) -> Chip {
         chip_with(id, target, xtensa, Some("esp-hal"))
@@ -548,7 +548,9 @@ mod tests {
             hal: hal.map(str::to_string),
             id: id.to_string(),
             name: id.to_uppercase(),
-            vendor: Vendor::Espressif,
+            vendor: "espressif".to_string(),
+            vendor_name: "Espressif".to_string(),
+            hal_label: Some("esp-hal".to_string()),
             arch: if xtensa { Arch::Xtensa } else { Arch::RiscV },
             cores: 1,
             sram_bytes: 0,
@@ -564,6 +566,15 @@ mod tests {
             probe_rs_target: None,
             radios: Vec::new(),
             gpio: Vec::new(),
+            port_width: None,
+            header: Vec::new(),
+            kit: None,
+            emulation: None,
+            generator: None,
+            std_generator: None,
+            gdb: None,
+            c_compiler: None,
+            svd: None,
         }
     }
 

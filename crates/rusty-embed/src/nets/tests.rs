@@ -130,7 +130,9 @@ fn place_with(sheet: &mut Sheet, reference: &str, symbol: &str, value: &str) {
 }
 
 fn rows() -> Vec<Row> {
-    kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21])
+    kit_rows(crate::nets::Pinout::numbered(&[
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21,
+    ]))
 }
 
 fn eval(sheet: &Sheet, gpio: &[(u8, bool)], pressed: &[&str]) -> Evaluation {
@@ -174,7 +176,9 @@ fn the_kit_rows_name_gpios_and_rails_and_a_repeated_name_is_spelled_by_number() 
     assert_eq!(kit_pin(&rows, "GND"), Some(8), "the first GND");
     assert_eq!(kit_pin(&rows, "GPIO99"), None);
     assert_eq!(kit_pin(&rows, "0"), None);
-    let esp32 = kit_rows("esp32", &[]);
+    let esp32 = kit_rows(crate::nets::Pinout::of(
+        &crate::chip::by_id("esp32").unwrap(),
+    ));
     assert_eq!(esp32[26].name, "GPIO3", "RX is GPIO3 by name");
     assert_eq!(esp32[26].label, "RX");
     assert_eq!(esp32[15].rail, Some(Rail::Supply));

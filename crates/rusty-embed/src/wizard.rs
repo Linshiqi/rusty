@@ -15,7 +15,10 @@ use std::path::Path;
 use crate::{
     chip,
     error::{Error, Result},
-    model::{CommandPlan, Explanation, Runtime, ToolchainRequirement, WizardChoice, WizardLayout},
+    model::{
+        Chip, CommandPlan, Explanation, Flasher, Generator, Runtime, ToolchainRequirement,
+        WizardChoice, WizardLayout,
+    },
 };
 
 /// Options `esp-generate` understands, what each one costs, and what it cannot
@@ -174,32 +177,50 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
         WizardLayout::Workspace => "firmware".to_string(),
     };
 
-    // A WCH part has no template generator: rusty writes the project itself
-    // (`write_itself`), from the playground it proved, and the plan only
-    // says so — there is no process to run.
-    if chip.vendor == crate::model::Vendor::Wch {
-        if let Some(option) = choice.options.first() {
-            return Err(Error::refused(format!(
-                "`{option}` is one of esp-generate's options, and a {} project is not made \
-                 by esp-generate — it has none to choose.",
-                chip.name
-            )));
-        }
-        return Ok(CommandPlan::new(
-            "rusty",
-            vec![
-                "new".to_string(),
-                "--chip".into(),
-                chip.id.clone(),
-                crate_name,
-            ],
-            "ch32-hal has no project generator, so rusty writes the project itself: the \
-             playground's breathing LED and its board, for this package.",
-        ));
+    // Which generator is the catalogue's to say, per runtime. A part it
+    // names none for is refused here: handing it to a generator written for
+    // somebody else's parts produced a complete-looking plan for a project
+    // that cannot build — every STM32 went to esp-generate.
+    let Some(generator) = chip.generator_for(choice.runtime) else {
+        return Err(Error::refused(format!(
+            "rusty knows no way to start a {} project for the {}: the catalogue names no \
+             generator for it.",
+            chip.runtime_label(choice.runtime),
+            chip.name
+        )));
+    };
+
+    // The options are esp-generate's, and only it has them to choose.
+    if *generator != Generator::EspGenerate
+        && let Some(option) = choice.options.first()
+    {
+        return Err(Error::refused(format!(
+            "`{option}` is one of esp-generate's options, and a {} project is not made by \
+             esp-generate — it has none to choose.",
+            chip.name
+        )));
     }
 
-    let (program, args, rationale) = match choice.runtime {
-        Runtime::BareMetal => {
+    let (program, args, rationale) = match generator {
+        // rusty writes the project itself (`write_itself`), from a template
+        // it proved, and the plan only says so — there is no process to run.
+        Generator::Template { name } => {
+            return Ok(CommandPlan::new(
+                "rusty",
+                vec![
+                    "new".to_string(),
+                    "--chip".into(),
+                    chip.id.clone(),
+                    crate_name,
+                ],
+                format!(
+                    "rusty writes the project itself, from its proven `{name}` template — the \
+                     playground's code and board — moved onto the {}.",
+                    chip.name
+                ),
+            ));
+        }
+        Generator::EspGenerate => {
             let mut args = vec!["--headless".to_string(), "--chip".into(), chip.id.clone()];
             for option in &choice.options {
                 args.push("-o".into());
@@ -213,7 +234,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
                  the esp-rs project.",
             )
         }
-        Runtime::EspIdf => (
+        Generator::EspIdfTemplate => (
             "cargo",
             vec![
                 "generate".to_string(),
@@ -274,7 +295,7 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
 
     let target = chip.target_for(choice.runtime).unwrap_or("(unsupported)");
     out.push(Explanation {
-        topic: format!("{} on {}", choice.runtime.label_on(chip.vendor), chip.name),
+        topic: format!("{} on {}", chip.runtime_label(choice.runtime), chip.name),
         detail: match choice.runtime {
             Runtime::BareMetal => "No operating system and no C framework. Fast builds, small \
                  binaries, and only the peripherals the HAL exposes — no \
@@ -356,19 +377,20 @@ pub fn explain(choice: &WizardChoice) -> Vec<Explanation> {
 // ─── the projects rusty writes itself ─────────────────────────────────────────
 
 /// Whether rusty writes the project for this choice itself rather than
-/// running a generator: a WCH part, whose HAL has none.
+/// running a generator: a part whose catalogue entry names one of rusty's
+/// templates as its generator — a WCH part, whose HAL has none.
 pub fn writes_itself(choice: &WizardChoice) -> bool {
-    chip::by_id(&choice.chip).is_some_and(|c| c.vendor == crate::model::Vendor::Wch)
+    chip::by_id(&choice.chip).is_some_and(|c| c.writes_itself(choice.runtime))
 }
 
-/// Write the project a WCH choice makes, into `parent` under the crate's
+/// Write the project such a choice makes, into `parent` under the crate's
 /// name — where a generator would have put it — and say which files.
 ///
-/// The playground's files, which are proven: they build with nightly and run
-/// in rusty's emulator of the part. Renamed for the project, with the
-/// package's feature, and the board redrawn for the package, because its
-/// rows — and so the row a ground wire lands on — depend on which pins the
-/// package has. Every file is created, never overwritten.
+/// The template's files, which are proven: they build and run in rusty's
+/// emulator of the part. Renamed for the project, with the part's feature,
+/// and the board redrawn for the part, because its rows — and so the row a
+/// ground wire lands on — depend on which pins the package has. Every file
+/// is created, never overwritten.
 pub fn write_itself(parent: &Path, choice: &WizardChoice) -> Result<Vec<String>> {
     let chip = chip::by_id(&choice.chip).ok_or_else(|| Error::UnknownChip {
         chip: choice.chip.clone(),
@@ -379,9 +401,9 @@ pub fn write_itself(parent: &Path, choice: &WizardChoice) -> Result<Vec<String>>
         WizardLayout::Workspace => "firmware",
     };
     let dir = parent.join(crate_name);
-    let files = ch32_files(&chip, crate_name).ok_or_else(|| {
+    let files = template_files(&chip, choice.runtime, crate_name).ok_or_else(|| {
         Error::refused(format!(
-            "rusty has no proven ch32-hal project for the {} to write",
+            "rusty has no proven project for the {} to write",
             chip.name
         ))
     })?;
@@ -393,138 +415,80 @@ pub fn write_itself(parent: &Path, choice: &WizardChoice) -> Result<Vec<String>>
     Ok(written)
 }
 
-/// A family's proven project: its playground's files, and what is said
-/// about them.
-struct Ch32Template {
-    /// The playground's chip, as its files spell it.
-    playground: &'static str,
-    manifest: &'static str,
-    board: &'static str,
-    /// The board file's ground row, as the template wires it.
-    ground: usize,
-    /// How the toolchain is chosen, for the manifest's first line.
-    toolchain: &'static str,
-    /// Everything else, written as it is.
-    files: &'static [(&'static str, &'static str)],
-}
-
-/// The template a WCH chip's projects are written from, or none for a
-/// family nobody has proven one for.
-fn ch32_template(chip: &str) -> Option<Ch32Template> {
-    if chip.starts_with("ch32v003") {
-        Some(Ch32Template {
-            playground: "ch32v003j4m6",
-            manifest: include_str!("../data/playground/ch32v003j4m6/Cargo.toml.in"),
-            board: include_str!("../data/playground/ch32v003j4m6/sim.toml.in"),
-            ground: 6,
-            toolchain: "built with nightly (see rust-toolchain.toml)",
-            files: &[
-                (
-                    "build.rs",
-                    include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
-                ),
-                (
-                    "rust-toolchain.toml",
-                    include_str!("../data/playground/ch32v003j4m6/rust-toolchain.toml.in"),
-                ),
-                (
-                    ".cargo/config.toml",
-                    include_str!("../data/playground/ch32v003j4m6/cargo-config.toml.in"),
-                ),
-                (
-                    "riscv32ec-unknown-none-elf.json",
-                    include_str!(
-                        "../data/playground/ch32v003j4m6/riscv32ec-unknown-none-elf.json.in"
-                    ),
-                ),
-                (
-                    "src/main.rs",
-                    include_str!("../data/playground/ch32v003j4m6/main.rs.in"),
-                ),
-            ],
-        })
-    } else if chip.starts_with("ch32x035") {
-        Some(Ch32Template {
-            playground: "ch32x035f8u6",
-            manifest: include_str!("../data/playground/ch32x035f8u6/Cargo.toml.in"),
-            board: include_str!("../data/playground/ch32x035f8u6/sim.toml.in"),
-            ground: 11,
-            toolchain: "built with stable Rust",
-            files: &[
-                (
-                    "build.rs",
-                    include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
-                ),
-                (
-                    "rust-toolchain.toml",
-                    include_str!("../data/playground/ch32x035f8u6/rust-toolchain.toml.in"),
-                ),
-                (
-                    ".cargo/config.toml",
-                    include_str!("../data/playground/ch32x035f8u6/cargo-config.toml.in"),
-                ),
-                (
-                    "src/main.rs",
-                    include_str!("../data/playground/ch32x035f8u6/main.rs.in"),
-                ),
-            ],
-        })
-    } else {
-        None
-    }
-}
-
-/// The files of a ch32-hal project called `name` for `chip`, from its
-/// family's playground templates — or none for a family with no template.
-fn ch32_files(chip: &crate::model::Chip, name: &str) -> Option<Vec<(&'static str, String)>> {
-    let template = ch32_template(&chip.id)?;
-    let manifest = template.manifest;
-    let dependencies = manifest
-        .find("[dependencies]")
-        .map_or(manifest, |at| &manifest[at..]);
-    let manifest = format!(
-        "# {name}: ch32-hal on the {part}, {toolchain}.\n\
-         # Run simulates it on the board in .rusty/sim.toml; Flash writes it through a\n\
-         # WCH-LinkE.\n\
-         \n\
-         [package]\n\
-         edition = \"2024\"\n\
-         name    = \"{name}\"\n\
-         version = \"0.1.0\"\n\
-         \n\
-         {dependencies}",
-        part = chip.name,
-        toolchain = template.toolchain,
-        dependencies = dependencies.replace(template.playground, &chip.id),
-    );
-    // One lockfile for both families: ch32-hal's dependencies do not change
-    // with the part.
-    let lock = include_str!("../data/playground/ch32v003j4m6/Cargo.lock.in")
-        .replace("name = \"playground\"", &format!("name = \"{name}\""));
-    // The ground the LED and the button return to is the package's first GND
-    // row, which depends on how many pins the package has.
-    let rows = crate::nets::kit_rows(&chip.id, &chip.gpio);
-    let ground = rows
-        .iter()
-        .position(|row| row.name == "GND")
-        .map_or(template.ground, |at| at + 1);
-    let board = template
-        .board
-        .replace(template.playground, &chip.id)
-        .replace(&format!("U1.{}", template.ground), &format!("U1.{ground}"))
-        .replace(
-            &format!("is row {}", template.ground),
-            &format!("is row {ground}"),
-        )
-        .replace("The playground's board", "This project's board");
-    let mut files = vec![("Cargo.toml", manifest), ("Cargo.lock", lock)];
-    files.extend(
-        template
-            .files
+/// The files of a project called `name` for `chip`, from the template its
+/// catalogue entry names as its generator — or none for a part rusty writes
+/// no project for.
+///
+/// Any template moves onto any part its catalogue entry points at it from:
+/// the package is renamed, the template's chip id becomes the part's in the
+/// manifest and on the board, and the board's ground wires move to the
+/// part's first GND row — which depends on how many pins the package has,
+/// so a CH32V003F4P6's is another row than the J4M6 template's.
+fn template_files(
+    chip: &Chip,
+    runtime: Runtime,
+    name: &str,
+) -> Option<Vec<(&'static str, String)>> {
+    let Some(Generator::Template { name: template }) = chip.generator_for(runtime) else {
+        return None;
+    };
+    let template = crate::playground::template(template)?;
+    let from = chip::by_id(template.chip?)?;
+    let ground = |part: &Chip| {
+        crate::nets::kit_rows(crate::nets::Pinout::of(part))
             .iter()
-            .map(|(path, text)| (*path, (*text).to_string())),
-    );
-    files.push((".rusty/sim.toml", board));
+            .position(|row| row.name == "GND")
+            .map(|at| at + 1)
+    };
+    let (was, now) = (ground(&from)?, ground(chip)?);
+
+    let toolchain = match chip.toolchain {
+        ToolchainRequirement::Stock => "built with stable Rust",
+        ToolchainRequirement::NightlyBuildStd => "built with nightly (see rust-toolchain.toml)",
+        ToolchainRequirement::EspXtensa => "built with the esp toolchain",
+    };
+    let flashed = match chip.flashers.first() {
+        Some(Flasher::Wlink) => "Flash writes it through a WCH-LinkE.",
+        Some(Flasher::ProbeRs) => "Flash writes it through a debug probe.",
+        Some(Flasher::Espflash) => "Flash writes it over the USB cable.",
+        None => "",
+    };
+    let run = if chip.emulation.is_some() {
+        "Run simulates it on the board in .rusty/sim.toml. "
+    } else {
+        ""
+    };
+
+    let mut files = Vec::new();
+    for &(path, text) in template.files {
+        let text = match path {
+            "Cargo.toml" => {
+                let dependencies = text.find("[dependencies]").map_or(text, |at| &text[at..]);
+                format!(
+                    "# {name}: {hal} on the {part}, {toolchain}.\n\
+                     # {run}{flashed}\n\
+                     \n\
+                     [package]\n\
+                     edition = \"2024\"\n\
+                     name    = \"{name}\"\n\
+                     version = \"0.1.0\"\n\
+                     \n\
+                     {dependencies}",
+                    hal = chip.hal_label.as_deref().unwrap_or("Rust"),
+                    part = chip.name,
+                    dependencies = dependencies.replace(&from.id, &chip.id),
+                )
+            }
+            "Cargo.lock" => text.replace("name = \"playground\"", &format!("name = \"{name}\"")),
+            ".rusty/sim.toml" => text
+                .replace(&from.id, &chip.id)
+                .replace(&format!("U1.{was}"), &format!("U1.{now}"))
+                .replace(&format!("is row {was}"), &format!("is row {now}"))
+                .replace("The playground's board", "This project's board"),
+            _ => text.to_string(),
+        };
+        files.push((path, text));
+    }
     files.push((".gitignore", "/target\n".to_string()));
     Some(files)
 }
@@ -916,6 +880,23 @@ mod tests {
         assert_eq!(plan.args.last().unwrap(), "blinky");
     }
 
+    /// A part the catalogue names no generator for is refused by name. Every
+    /// STM32 used to be handed to esp-generate — a complete-looking plan for
+    /// a project that could not build.
+    #[test]
+    fn a_part_with_no_generator_is_refused_rather_than_sent_to_esp_generate() {
+        let refused = plan(&choice("stm32f411", Runtime::BareMetal, &[]))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("STM32F411"), "{refused}");
+        assert!(refused.contains("no generator"), "{refused}");
+        assert!(!writes_itself(&choice(
+            "stm32f411",
+            Runtime::BareMetal,
+            &[]
+        )));
+    }
+
     #[test]
     fn std_projects_come_from_a_different_generator() {
         let plan = plan(&choice("esp32c3", Runtime::EspIdf, &[])).unwrap();
@@ -1141,8 +1122,8 @@ mod tests {
             assert!(!manifest.contains("[workspace]"), "{manifest}");
 
             let sheet = crate::simulate::load_board_for_test(&root, chip).unwrap();
-            let gpio = crate::chip::by_id(chip).unwrap().gpio;
-            let rows = crate::nets::kit_rows(chip, &gpio);
+            let part = crate::chip::by_id(chip).unwrap();
+            let rows = crate::nets::kit_rows(crate::nets::Pinout::of(&part));
             let lit = crate::nets::evaluate(crate::nets::Inputs {
                 sheet: &sheet,
                 rows: &rows,

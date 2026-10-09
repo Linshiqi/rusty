@@ -28,7 +28,7 @@ pub(super) struct Board {
     pub sensors: StoredValue<Vec<rusty_embed::sensor::Spec>>,
     pub chip_id: StoredValue<String>,
     pub chip_label: StoredValue<String>,
-    pub kit_look: KitStyle,
+    pub kit_look: Memo<KitStyle>,
     /// The pin rows this part actually has, from the catalogue.
     pub rows: Memo<Vec<Row>>,
     pub parts: RwSignal<Vec<EditPart>>,

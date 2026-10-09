@@ -498,42 +498,44 @@ pub(super) enum Usb {
 }
 
 /// What a devkit for a chip looks like beyond its pins: the module soldered
-/// on it, its connector, the two buttons every Espressif devkit carries and
-/// whether it has an RGB LED. Drawn from the family the catalogue names —
-/// the pin rows stay data-driven; this is the board around them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// on it, its connector, its two buttons, whether it has an RGB LED and
+/// whose name is printed on the can. Drawn from the catalogue's `kit` — the
+/// pin rows are data too; this is the board around them.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(super) struct KitStyle {
     /// The module's printed name, or `None` for a part rusty knows only as
     /// a die, which is drawn as a chip rather than as somebody's devkit.
-    pub module: Option<&'static str>,
+    pub module: Option<String>,
     pub usb: Usb,
     /// The reset button's silkscreen — `EN` on the classic ESP32 devkit,
     /// `RST` on the rest — and the boot button's.
-    pub buttons: (&'static str, &'static str),
+    pub buttons: (String, String),
     pub rgb: bool,
+    /// Who made the module, printed small on its can.
+    pub maker: String,
 }
 
-pub(super) fn kit_style(chip: &str) -> KitStyle {
-    let devkit = |module, usb, reset, rgb| KitStyle {
-        module: Some(module),
-        usb,
-        buttons: (reset, "BOOT"),
-        rgb,
-    };
-    match chip {
-        "esp32" => devkit("ESP-WROOM-32", Usb::MicroB, "EN", false),
-        "esp32s2" => devkit("ESP32-S2-MINI-1", Usb::TypeC, "RST", true),
-        "esp32s3" => devkit("ESP32-S3-WROOM-1", Usb::DualTypeC, "RST", true),
-        "esp32c2" => devkit("ESP8684-MINI-1", Usb::MicroB, "RST", false),
-        "esp32c3" => devkit("ESP32-C3-MINI-1", Usb::TypeC, "RST", true),
-        "esp32c6" => devkit("ESP32-C6-WROOM-1", Usb::DualTypeC, "RST", true),
-        "esp32h2" => devkit("ESP32-H2-MINI-1", Usb::TypeC, "RST", true),
-        "esp32p4" => devkit("ESP32-P4", Usb::DualTypeC, "RST", false),
-        _ => KitStyle {
+/// The devkit the catalogue says a part is drawn on, made by `maker` —
+/// or a bare chip when it says none.
+pub(super) fn kit_style(kit: Option<&rusty_embed::Kit>, maker: &str) -> KitStyle {
+    match kit {
+        Some(kit) => KitStyle {
+            module: Some(kit.module.clone()),
+            usb: match kit.usb {
+                rusty_embed::KitUsb::MicroB => Usb::MicroB,
+                rusty_embed::KitUsb::TypeC => Usb::TypeC,
+                rusty_embed::KitUsb::DualTypeC => Usb::DualTypeC,
+            },
+            buttons: (kit.reset.clone(), kit.boot.clone()),
+            rgb: kit.rgb,
+            maker: maker.to_lowercase(),
+        },
+        None => KitStyle {
             module: None,
             usb: Usb::None,
-            buttons: ("", ""),
+            buttons: (String::new(), String::new()),
             rgb: false,
+            maker: String::new(),
         },
     }
 }
@@ -544,7 +546,7 @@ pub(super) fn kit_style(chip: &str) -> KitStyle {
 /// the RGB LED where the devkit has one, and the connector — everything a
 /// hand reaching for the board on the desk uses to orient itself. Pure text,
 /// so a test can say which board it is; `height` follows the pin rows.
-pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
+pub(super) fn kit_art(style: &KitStyle, height: f64, label: &str) -> String {
     let w = KIT_W;
     let h = height;
     let mut svg = String::new();
@@ -554,7 +556,7 @@ pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
         w - 8.0,
         h - 4.0,
     ));
-    let Some(module) = style.module else {
+    let Some(module) = style.module.as_deref() else {
         // A die, not a devkit: the chip outline the editor always drew.
         svg.push_str(&format!(
             r##"<rect x="42" y="12" width="{}" height="84" rx="4" fill="#2e333b" stroke="#4a515d"/>"##,
@@ -600,8 +602,9 @@ pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
         cx = w / 2.0,
     ));
     svg.push_str(&format!(
-        r##"<text x="{cx}" y="84" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="6.5" font-style="italic" fill="#3d444c">espressif</text>"##,
+        r##"<text x="{cx}" y="84" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="6.5" font-style="italic" fill="#3d444c">{maker}</text>"##,
         cx = w / 2.0,
+        maker = style.maker,
     ));
     if style.rgb {
         // The addressable LED under the module, off: a dark square with the
@@ -635,7 +638,7 @@ pub(super) fn kit_art(style: KitStyle, height: f64, label: &str) -> String {
 
     // The two buttons, low on the board where every devkit has them, the
     // silkscreen above each.
-    let (reset, boot) = style.buttons;
+    let (reset, boot) = &style.buttons;
     for (bx, name) in [(42.0, reset), (94.0, boot)] {
         svg.push_str(&format!(
             r##"<text x="{tx}" y="{ty}" text-anchor="middle" font-family="ui-monospace" font-size="5.5" fill="#98a1ae">{name}</text>"##,
@@ -1269,7 +1272,9 @@ mod tests {
     }
 
     fn rows() -> Vec<Row> {
-        kit_rows("esp32c3", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21])
+        kit_rows(rusty_embed::nets::Pinout::numbered(&[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21,
+        ]))
     }
 
     fn kit(x: f64, y: f64) -> EditPart {
@@ -1580,30 +1585,44 @@ mod tests {
 
     /// module, so a board can be told apart on screen and in a test.
     #[test]
-    fn every_espressif_part_is_drawn_as_its_devkit() {
-        for chip in [
-            "esp32", "esp32s2", "esp32s3", "esp32c2", "esp32c3", "esp32c6", "esp32h2", "esp32p4",
+    fn a_devkit_is_drawn_as_the_catalogue_describes_it() {
+        let kit = |module: &str, usb, reset: &str, rgb| rusty_embed::Kit {
+            module: module.to_string(),
+            usb,
+            reset: reset.to_string(),
+            boot: "BOOT".to_string(),
+            rgb,
+        };
+        for (module, usb, reset, rgb) in [
+            ("ESP-WROOM-32", rusty_embed::KitUsb::MicroB, "EN", false),
+            ("ESP32-C3-MINI-1", rusty_embed::KitUsb::TypeC, "RST", true),
+            (
+                "ESP32-S3-WROOM-1",
+                rusty_embed::KitUsb::DualTypeC,
+                "RST",
+                true,
+            ),
         ] {
-            let style = kit_style(chip);
-            let module = style
-                .module
-                .unwrap_or_else(|| panic!("{chip} has no module"));
-            let art = kit_art(style, kit_height(26), "ESP32");
+            let style = kit_style(Some(&kit(module, usb, reset, rgb)), "Espressif");
+            let art = kit_art(&style, kit_height(26), "ESP32");
+            assert!(art.contains(module), "the can is printed with {module}");
+            assert!(art.contains("kit-can"), "{module}: a shield can");
             assert!(
-                art.contains(module),
-                "{chip}: the can is printed with {module}"
+                art.contains(reset) && art.contains("BOOT"),
+                "{module}: both buttons"
             );
-            assert!(art.contains("kit-can"), "{chip}: a shield can");
-            assert!(art.contains(style.buttons.1), "{chip}: a BOOT button");
-            assert_ne!(style.usb, Usb::None, "{chip}: a connector");
+            assert!(art.contains("espressif"), "{module}: the maker on the can");
+            assert_ne!(style.usb, Usb::None, "{module}: a connector");
+            assert_eq!(
+                art.contains(r#"cx="102" cy="110""#),
+                rgb,
+                "{module}: its RGB LED"
+            );
         }
-        assert_eq!(kit_style("esp32").buttons.0, "EN");
-        assert_eq!(kit_style("esp32c3").buttons.0, "RST");
-        assert_eq!(kit_style("esp32s3").usb, Usb::DualTypeC);
 
-        let bare = kit_style("stm32f103");
+        let bare = kit_style(None, "STMicroelectronics");
         assert_eq!(bare.module, None);
-        let art = kit_art(bare, kit_height(10), "STM32F103");
+        let art = kit_art(&bare, kit_height(10), "STM32F103");
         assert!(art.contains("STM32F103"));
         assert!(!art.contains("kit-can"), "no module, no can");
     }
@@ -1613,9 +1632,16 @@ mod tests {
     /// not from the top.
     #[test]
     fn the_connector_follows_the_boards_height() {
-        let style = kit_style("esp32c3");
-        let short = kit_art(style, 200.0, "ESP32-C3");
-        let tall = kit_art(style, 300.0, "ESP32-C3");
+        let c3 = rusty_embed::Kit {
+            module: "ESP32-C3-MINI-1".to_string(),
+            usb: rusty_embed::KitUsb::TypeC,
+            reset: "RST".to_string(),
+            boot: "BOOT".to_string(),
+            rgb: true,
+        };
+        let style = kit_style(Some(&c3), "Espressif");
+        let short = kit_art(&style, 200.0, "ESP32-C3");
+        let tall = kit_art(&style, 300.0, "ESP32-C3");
         assert!(short.contains(r#"y="188""#), "connector at 200-12: {short}");
         assert!(tall.contains(r#"y="288""#), "connector at 300-12: {tall}");
     }

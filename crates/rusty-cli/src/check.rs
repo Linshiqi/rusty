@@ -86,11 +86,11 @@ fn print_check(project: &EmbeddedProject, toolchain: &ToolchainReport) {
             .runtime
             .map(
                 |r| match project.chip.as_deref().and_then(rusty_embed::chip::by_id) {
-                    Some(chip) => r.label_on(chip.vendor),
-                    None => r.label(),
+                    Some(chip) => chip.runtime_label(r),
+                    None => r.label().to_string(),
                 }
             )
-            .unwrap_or("runtime unknown"),
+            .unwrap_or_else(|| "runtime unknown".to_string()),
         project.configured_target.as_deref().unwrap_or("unset"),
         project
             .configured_toolchain

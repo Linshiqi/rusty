@@ -18,9 +18,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
+    catalog::Catalog,
     chip,
     error::{Error, Result},
-    model::{EmbeddedProject, Problem, Runtime, Severity, Vendor},
+    model::{EmbeddedProject, Problem, Runtime, Severity},
 };
 
 /// Crates whose presence identifies the framework in use.
@@ -60,16 +61,21 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
     let uses_defmt = deps.iter().any(|d| d == "defmt");
     let uses_embassy = deps.iter().any(|d| d.starts_with("embassy-"));
 
-    // Runtime is decided by which HAL family is present, not by guessing.
-    let runtime = if deps.iter().any(|d| d.starts_with("esp-idf-")) {
+    // Runtime is decided by which HAL family is present, not by guessing —
+    // each vendor's table says which of its crates mean which. The
+    // project's own catalogue overlay counts, so a vendor added there is
+    // detected like a built-in one.
+    let catalog = Catalog::load(Some(root));
+    let uses = |crates: &[String]| deps.iter().any(|d| crates.contains(d));
+    let runtime = if catalog.vendors().iter().any(|v| uses(&v.std_crates)) {
         Some(Runtime::EspIdf)
-    } else if deps.iter().any(|d| d == "esp-hal" || d == "ch32-hal") {
+    } else if catalog.vendors().iter().any(|v| uses(&v.bare_metal_crates)) {
         Some(Runtime::BareMetal)
     } else {
         None
     };
 
-    let (mut chip_id, mut chip_source) = chip_from_manifest(&manifest);
+    let (mut chip_id, mut chip_source) = chip_from_manifest(&manifest, &catalog);
 
     let configured_target = read_build_target(root, &mut evidence)?;
     let configured_toolchain = read_toolchain_channel(root, &mut evidence)?;
@@ -441,25 +447,30 @@ fn collect_dependency_names(manifest: &toml::Table) -> Vec<String> {
     names
 }
 
-/// Vendors to consult, in the order their HAL crates are checked.
-///
-/// Each contributes its own list of crates that carry the part number as a
-/// feature — see [`Vendor::chip_feature_crates`]. Which crate gets *cited*
-/// matters: half a dozen `esp-*` crates take the same chip feature, and a user
-/// told their chip came from `esp-backtrace` would go and edit the wrong line.
-/// Plain alphabetical order reports exactly that, since `esp-backtrace` sorts
-/// before `esp-hal`.
-const VENDORS: &[Vendor] = &[Vendor::Espressif, Vendor::St, Vendor::Wch];
-
-/// The chip named by an `esp-hal`-family feature.
+/// The chip named by a HAL's feature.
 ///
 /// These crates take the part as a feature (`features = ["esp32c3"]`), which
 /// makes the manifest the most authoritative source available offline.
-fn chip_from_manifest(manifest: &toml::Table) -> (Option<String>, Option<String>) {
-    let known: Vec<String> = chip::catalogue().into_iter().map(|c| c.id).collect();
+///
+/// Vendors are consulted in the catalogue's order, each through its own
+/// `chip_crates`, most authoritative first. Which crate gets *cited*
+/// matters: half a dozen `esp-*` crates take the same chip feature, and a
+/// user told their chip came from `esp-backtrace` would go and edit the
+/// wrong line. Plain alphabetical order reports exactly that, since
+/// `esp-backtrace` sorts before `esp-hal`.
+fn chip_from_manifest(
+    manifest: &toml::Table,
+    catalog: &Catalog,
+) -> (Option<String>, Option<String>) {
+    let known: Vec<String> = catalog.chips().iter().map(|c| c.id.clone()).collect();
+    let preferred: Vec<&str> = catalog
+        .vendors()
+        .iter()
+        .flat_map(|v| v.chip_crates.iter().map(String::as_str))
+        .collect();
 
     if let Some(deps) = manifest.get("dependencies")
-        && let Some((id, source)) = chip_from_dependency_table(deps, &known)
+        && let Some((id, source)) = chip_from_dependency_table(deps, &known, &preferred)
     {
         return (Some(id), Some(source));
     }
@@ -467,7 +478,7 @@ fn chip_from_manifest(manifest: &toml::Table) -> (Option<String>, Option<String>
     if let Some(toml::Value::Table(targets)) = manifest.get("target") {
         for spec in targets.values() {
             if let Some(deps) = spec.get("dependencies")
-                && let Some((id, source)) = chip_from_dependency_table(deps, &known)
+                && let Some((id, source)) = chip_from_dependency_table(deps, &known, &preferred)
             {
                 return (Some(id), Some(source));
             }
@@ -476,7 +487,11 @@ fn chip_from_manifest(manifest: &toml::Table) -> (Option<String>, Option<String>
     (None, None)
 }
 
-fn chip_from_dependency_table(deps: &toml::Value, known: &[String]) -> Option<(String, String)> {
+fn chip_from_dependency_table(
+    deps: &toml::Value,
+    known: &[String],
+    preferred: &[&str],
+) -> Option<(String, String)> {
     let toml::Value::Table(deps) = deps else {
         return None;
     };
@@ -496,13 +511,11 @@ fn chip_from_dependency_table(deps: &toml::Value, known: &[String]) -> Option<(S
             })
     };
 
-    for vendor in VENDORS {
-        for preferred in vendor.chip_feature_crates() {
-            if let Some(spec) = deps.get(*preferred)
-                && let Some(found) = scan(preferred, spec)
-            {
-                return Some(found);
-            }
+    for preferred in preferred {
+        if let Some(spec) = deps.get(*preferred)
+            && let Some(found) = scan(preferred, spec)
+        {
+            return Some(found);
         }
     }
 

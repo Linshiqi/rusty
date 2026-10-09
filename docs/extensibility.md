@@ -75,6 +75,37 @@ absence refuse, and say why in the refusal. The alternative — a `match` on chi
 id in the code — is a capability that silently does the wrong thing for the
 next part somebody adds.
 
+#### Adding a part is data, and so is adding a vendor
+
+The shape above was applied everywhere a part used to be a `match` on its id
+or its vendor (about seventy-five places when it was counted). A part's
+entry now says, beside the die's facts:
+
+| Field | What it decides | Absent means |
+|---|---|---|
+| `generator`, `std_generator` | how the wizard starts a project: `"esp-generate"`, `"esp-idf-template"`, or `{ template = "<name>" }`, one of rusty's own (`data/templates/`) | the wizard refuses — every STM32 used to be handed to esp-generate |
+| `emulator` | `{ kind = "qemu", binary = "qemu-system-riscv32" }` or `{ kind = "rusty-mcu" }`, with the `limit` said before every run and the `limit_outdated` said on an older emulator | the plan refuses by name |
+| `port_width` | pins named by port, that many to a port (`PC4`); the pin channel's numbering | pins named by number (`GPIO4`) |
+| `header` | the one module's row order rusty draws as a module: `"EN"`, `"36"`, `"RX:3"` | the die's pins, drawn as a chip |
+| `kit` | the devkit around the pins: module, connector, buttons, RGB LED | a bare chip |
+| `gdb` | the debugger the plan and the debug session look for | no debugger offered |
+| `c_compiler` | the cross C compiler `cc` needs, and how to install it | C scaffolding refused; nothing listed |
+| `svd` | where the register description is fetched from | the user drops one into `.rusty/svd/` |
+
+A vendor is a `[[vendor]]` table in any chips file: its name, the `hal` the
+runtime's label names, the `chip_crates` detection reads the part number out
+of (most authoritative first — the one it cites), and the
+`bare_metal_crates` and `std_crates` that say which runtime a project is on.
+A project's `.rusty/chips/` can add a vendor and its parts together; a part
+naming a vendor nobody declared is kept and reported, not dropped.
+
+What stays code is what is genuinely code: a flasher's command line
+(`Flasher`, three of them, and probe-rs already reaches most Cortex-M and
+RISC-V parts), a toolchain kind (`ToolchainRequirement`), an emulator's
+peripherals, and a project template's files — which are a directory and a
+`template.toml` that `build.rs` compiles in, so adding one names no file in
+code either.
+
 ### What this does not change
 
 Code extensions still go through MCP, UI contributions are still declarative,

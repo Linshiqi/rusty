@@ -711,7 +711,8 @@ binary, so a build missing one never becomes the release rusty pins.
 
 **What the emulator cannot do on a chip is said before the run**
 (`SimLimit`, a stable kind beside the English), **and it depends on the
-emulator as well as the chip**: `for_chip(chip, outdated)`. The ESP32 has
+emulator as well as the chip**: `for_emulation(emulation, outdated)`, the
+catalogue's `limit` and, on an older copy, its `limit_outdated`. The ESP32 has
 every peripheral the C3 has, in its own layout, every interrupt source
 reaching its handler — a timer's and a software interrupt's as well as a
 GPIO edge's, which is what an Embassy application's clock is made of — and
@@ -738,6 +739,22 @@ SVD, found in `<project>/.rusty/svd/` or the data directory and fetched on
 demand — never bundled, because a vendor file is a hundred thousand lines of
 XML nobody wants in a git repository by accident. Code extensions go through MCP. UI contributions are
 declarative — extensions never ship markup or styles.
+
+**A part is data, and so is a vendor.** Everything rusty does differently
+per part — how a project is started (`generator`), which emulator runs it
+and what that cannot do (`emulator`), how its pins are named (`port_width`),
+the devkit drawn around them (`header`, `kit`), its debugger, its cross C
+compiler, where its SVD is published — is a key of its `[[chip]]` entry,
+and a vendor is a `[[vendor]]` table (its HAL, and the crates detection
+reads). It was about seventy-five `match`es on chip ids, prefixes and a
+closed `Vendor` enum, and the wrong answers they gave were the kind this
+file is about: every STM32 sent to esp-generate, every non-Espressif part
+handed Espressif's RISC-V gdb and C compiler. A key's absence refuses
+(`docs/extensibility.md` has the table), `chip::tests::what_a_part_names_
+exists` holds every key to something that exists, and a project's
+`.rusty/chips/` can add a vendor and its parts with no code. What stays
+code is what is code: a flasher's command line (`Flasher`), a toolchain
+kind, an emulator's peripherals.
 
 ## Modal editing
 
@@ -2299,7 +2316,11 @@ per chip into `<data dir>/playground/<chip>/`; the window's half is
 `controller/playground.rs`.
 
 - **The templates are the proven projects, not new ones**
-  (`data/playground/<chip>/*.in`, compiled in): the C3's is
+  (`data/templates/<name>/`, a directory and a `template.toml` each, which
+  `build.rs` compiles in — the ones whose manifest gives a `playground`
+  place are the list, in that order, so a new playground is a directory and
+  no code; the wizard writes a part's project from the template its
+  catalogue `generator` names): the C3's is
   `examples/blink-rust`'s shape and lockfile, which gate 7 boots, and the
   ESP32's is `qemu/esp32-probe`'s, which gate 16 boots. Each board is
   checked by a test against the sheet's own rules *and* required to solve —
@@ -5174,7 +5195,8 @@ debugging, and the simulator is its own.
   because ch32-hal selects the part by package feature and probe-rs names
   it by package, and the package decides which pins exist. A pin is
   numbered eight to a port (PC4 is 20) everywhere it travels, and *named*
-  by port wherever it becomes words — `nets::pin_label`, the one place, used
+  by port wherever it becomes words — `nets::pin_label` over the part's
+  catalogue `port_width`, the one place, used
   by the devkit's rows, the Waves panel, `rusty-cli sim` and the assistant's
   `simulate`. `gpio_named` does **not** read `PC4` as a pin: chip-agnostic,
   it would bind an imported STM32 schematic's `PA1` to an ESP32's GPIO1.
@@ -5266,7 +5288,7 @@ debugging, and the simulator is its own.
 - **The X035's ports are twenty-four pins wide, so it is numbered
   twenty-four to a port** (PB12 is 36, PC19 67), where the V003 is eight.
   The width is per part on both sides of the wire — `Part::width` in the
-  emulator, `nets::port_width` for every name a pin is given — and a test
+  emulator, the catalogue's `port_width` for every name a pin is given — and a test
   holds the two equal for every pin either part has; a WCH family nobody
   has measured gets no port names at all rather than eight to a port.
 - **The V4C is not the V2A with more registers.** RV32IMAC: thirty-two
