@@ -7,7 +7,8 @@
 //!   Espressif part has a serial bootloader in ROM, so this needs no extra
 //!   hardware.
 //! - A **debug probe**, over JTAG/SWD. Adds breakpoints, memory inspection, and
-//!   defmt over RTT. Required for STM32, which has no serial bootloader.
+//!   defmt over RTT. Required for STM32 and WCH's parts, whose bootloaders
+//!   espflash does not speak.
 //!
 //! Naming the bridge chip matters more than it looks: "CP210x" and "CH340" are
 //! what a user sees printed on the board, and matching that against a COM

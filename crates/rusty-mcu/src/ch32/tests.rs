@@ -7,8 +7,16 @@ use super::*;
 const PWM: &[u8] = include_bytes!("../../tests/fixtures/ch32v003-pwm/pwm.elf");
 const PC4: u8 = 16 + 4;
 
+/// The same example for the CH32X035F8U6, built with stable Rust for
+/// `riscv32imc-unknown-none-elf` from `tests/fixtures/ch32x035-pwm`: TIM1
+/// channel 4 on PB12 (remap 2) at 1 kHz, a button on PB1 holding it at
+/// full, the duty a multiply and a divide away from the level.
+const X035_PWM: &[u8] = include_bytes!("../../tests/fixtures/ch32x035-pwm/pwm.elf");
+const PB12: u8 = 24 + 12;
+const PB1: u8 = 24 + 1;
+
 fn run(ms: u64) -> Vec<Event> {
-    let mut machine = Machine::new(PWM).expect("the fixture is a CH32V003 image");
+    let mut machine = Machine::new(&CH32V003, PWM).expect("the fixture is a CH32V003 image");
     machine.run_until(ms * 1000);
     machine.take_events()
 }
@@ -103,7 +111,7 @@ fn an_image_for_somewhere_else_is_refused_by_address() {
     // Point the first program header's physical address at 0x9000_0000.
     let phoff = u32::from_le_bytes(elf[28..32].try_into().unwrap()) as usize;
     elf[phoff + 12..phoff + 16].copy_from_slice(&0x9000_0000u32.to_le_bytes());
-    let refused = Machine::new(&elf).err().expect("refused");
+    let refused = Machine::new(&CH32V003, &elf).err().expect("refused");
     assert!(refused.contains("0x90000000"), "{refused}");
 }
 
@@ -141,4 +149,104 @@ fn a_duty_lands_on_the_update_event_after_it_is_written() {
         tens > 10 * elevens,
         "{tens} steps of 10 ms, {elevens} of 11"
     );
+}
+
+fn notes(events: &[Event]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::Note(note) => Some(note.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A V4C: thirty-two registers, the M extension, a 64-bit SysTick, SDI
+/// print at its own address, GINTENR — all of it on the way to the first
+/// line, which is why that line is the test.
+#[test]
+fn the_x035_boots_through_ch32_hal_and_prints_over_sdi() {
+    let mut machine = Machine::new(&CH32X035, X035_PWM).expect("the fixture is a CH32X035 image");
+    machine.run_until(50_000);
+    let events = machine.take_events();
+    let lines = console(&events);
+    assert_eq!(
+        lines.first().map(|(_, line)| line.as_str()),
+        Some("pwm max duty 8000"),
+        "every event: {events:#?}"
+    );
+    assert!(notes(&events).is_empty(), "{:#?}", notes(&events));
+}
+
+/// 8 MHz out of reset, TIM1 counting to 8000 for 1 kHz; the duty walks up
+/// a hundredth every 10 ms on PB12, which TIM1_RM = 2 put there.
+#[test]
+fn the_x035_drives_pb12_at_one_kilohertz_and_its_duty_climbs() {
+    let mut machine = Machine::new(&CH32X035, X035_PWM).unwrap();
+    machine.run_until(600_000);
+    let events = machine.take_events();
+    let seen = duties(&events, PB12);
+    assert!(seen.len() > 40, "a duty every 10 ms: {seen:?}");
+    assert!(
+        seen.iter().all(|(_, _, hz)| (hz - 1000.0).abs() < 1.0),
+        "{seen:?}"
+    );
+    let at = |ms: u64| {
+        seen.iter()
+            .take_while(|(at_us, _, _)| *at_us <= ms * 1000)
+            .last()
+            .map(|(_, duty, _)| *duty)
+            .unwrap_or(0.0)
+    };
+    assert!(at(100) < at(300) && at(300) < at(550), "{seen:?}");
+    let quarter = at(550) - at(300);
+    assert!(
+        (0.22..0.28).contains(&quarter),
+        "a quarter in 250 ms: {quarter}"
+    );
+    // What the firmware printed is what the arithmetic says: duty is
+    // 8000 * level / 100, at every quarter.
+    let lines = console(&events);
+    assert!(
+        lines.iter().any(|(_, line)| line == "level 25 duty 2000"),
+        "{lines:?}"
+    );
+}
+
+/// The button pulls PB1 low through the pull-up the firmware set, and the
+/// duty goes to full while it is held.
+#[test]
+fn holding_the_x035_button_holds_the_duty_at_full() {
+    let mut machine = Machine::new(&CH32X035, X035_PWM).unwrap();
+    machine.run_until(100_000);
+    machine.take_events();
+    machine.drive(PB1, Some(false));
+    machine.run_until(200_000);
+    let held = duties(&machine.take_events(), PB12);
+    assert!(
+        held.last().is_some_and(|(_, duty, _)| *duty > 0.999),
+        "full while held: {held:?}"
+    );
+    machine.drive(PB1, None);
+    machine.run_until(300_000);
+    let released = duties(&machine.take_events(), PB12);
+    assert!(
+        released.last().is_some_and(|(_, duty, _)| *duty < 0.5),
+        "the ramp again once let go: {released:?}"
+    );
+}
+
+/// A V003 image is linked at the same address as an X035 one, so the
+/// address cannot refuse it — but its first instruction can: it names a
+/// register the V2A has and is built for a target the V4C would also
+/// run. What tells them apart is the flash's size, and an image that
+/// needs more than the part has is refused by it.
+#[test]
+fn an_image_bigger_than_the_parts_flash_is_refused_by_its_size() {
+    let mut elf = X035_PWM.to_vec();
+    let phoff = u32::from_le_bytes(elf[28..32].try_into().unwrap()) as usize;
+    // Load the first segment 60 KB in: past the V003's 16 KB.
+    elf[phoff + 12..phoff + 16].copy_from_slice(&0x0800_F000u32.to_le_bytes());
+    let refused = Machine::new(&CH32V003, &elf).err().expect("refused");
+    assert!(refused.contains("CH32V003"), "{refused}");
 }

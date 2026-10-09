@@ -1,6 +1,6 @@
 [package]
 name = "rusty-mcu"
-description = "Microcontrollers rusty runs itself, instruction by instruction — the CH32V003 first"
+description = "Microcontrollers rusty runs itself, instruction by instruction — WCH's CH32V003 and CH32X035"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

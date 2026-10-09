@@ -154,22 +154,40 @@ pub fn kit_pin(rows: &[Row], key: &str) -> Option<usize> {
         .or_else(|| rows.iter().position(|r| r.name == key))
 }
 
-/// Whether `chip` names its pins by port — `PA1`, `PC4` — rather than by
-/// number. WCH's do; rusty numbers them eight to a port (PC4 is 20), which
-/// is how they travel on the pin channel.
+/// How many pins a port is in rusty's numbering of `chip`, for a part that
+/// names its pins by port — `PA1`, `PC4` — rather than by number: the width
+/// of the part's GPIO registers, eight on the CH32V003 (PC4 is 20) and
+/// twenty-four on the CH32X035, whose ports run to PA23 (PB12 is 36). That
+/// is how pins travel on the pin channel, so it is rusty-mcu's `Part::width`
+/// and a test holds the two equal.
+///
+/// `None` for a part named by number — and for a WCH family nobody has
+/// measured, which is named by its number rather than by a port it may not
+/// have.
+pub fn port_width(chip: &str) -> Option<u8> {
+    if chip.starts_with("ch32v003") {
+        Some(8)
+    } else if chip.starts_with("ch32x035") {
+        Some(24)
+    } else {
+        None
+    }
+}
+
 fn names_by_port(chip: &str) -> bool {
-    chip.starts_with("ch32")
+    port_width(chip).is_some()
 }
 
 /// What pin `gpio` is called on `chip`: `PC4` on a part named by port,
 /// `GPIO4` elsewhere. Every place a pin number becomes words goes through
 /// this, so the board, the waves and the console agree about a pin's name.
 pub fn pin_label(chip: &str, gpio: u8) -> String {
-    if names_by_port(chip) {
-        let port = (b'A' + gpio / 8) as char;
-        format!("P{port}{}", gpio % 8)
-    } else {
-        format!("GPIO{gpio}")
+    match port_width(chip) {
+        Some(width) => {
+            let port = (b'A' + gpio / width) as char;
+            format!("P{port}{}", gpio % width)
+        }
+        None => format!("GPIO{gpio}"),
     }
 }
 

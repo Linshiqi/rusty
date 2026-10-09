@@ -1,8 +1,9 @@
-//! A RISC-V hart as WCH's QingKe V2A is one: RV32EC with Zicsr, machine mode
-//! only, and the two things that are QingKe's own — a vector table of
-//! addresses rather than of jumps, and a hardware stack that saves the
-//! caller-saved registers on the way into a trap and puts them back on
-//! `mret`.
+//! A RISC-V hart as WCH's QingKe cores are: the V2A's RV32EC and the V4C's
+//! RV32IMAC, each with Zicsr, machine mode only, and the two things that
+//! are QingKe's own — a vector table of addresses rather than of jumps, and
+//! a hardware stack that saves the caller-saved registers on the way into a
+//! trap and puts them back on `mret`. Which core a hart is ([`Core`]) decides
+//! how many registers it has and which extensions it decodes.
 //!
 //! **The hardware stack is the one that is not optional.** qingke-rt turns
 //! it on (`csrw 0x804, 3`) and every handler it generates saves nothing but
@@ -12,11 +13,12 @@
 //! The silicon pushes them to memory; this keeps them beside the hart, which
 //! is the same to every program that does not read its own stack below `sp`.
 //!
-//! **What V2A does not have is refused, not provided.** No M extension, so
-//! `mul` is an illegal instruction here as it is on the chip — a firmware
-//! built for the wrong target fails in the emulator the way it would fail on
-//! the desk, rather than running in one and not the other. Registers above
-//! `x15` are refused the same way: RV32E has sixteen.
+//! **What a core does not have is refused, not provided.** The V2A has no M
+//! extension, so `mul` is an illegal instruction there as it is on the chip
+//! — a firmware built for the wrong target fails in the emulator the way it
+//! would fail on the desk, rather than running in one and not the other.
+//! Registers above `x15` are refused the same way: RV32E has sixteen. The
+//! V4C decodes all thirty-two, the multiply and divide, and the atomics.
 
 /// The width of one memory access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +83,66 @@ pub mod cause {
     }
 }
 
-/// The CSRs a QingKe V2A program touches, by number.
+/// Which QingKe core a hart is: what it decodes, and what it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Core {
+    /// Sixteen for RV32E, thirty-two for RV32I.
+    pub registers: usize,
+    /// The M extension: multiply and divide.
+    pub m: bool,
+    /// The A extension: load-reserved, store-conditional and the AMOs.
+    pub a: bool,
+    /// `GINTENR` (CSR 0x800), the window onto `mstatus`'s MIE and MPIE that
+    /// qingke's critical sections use on every core but the V2.
+    pub gintenr: bool,
+    /// Where SDI print's two debug data registers are: the V2's sit at
+    /// 0xE00000F4, everything later's at 0xE0000380.
+    pub debug_data: u32,
+}
+
+impl Core {
+    /// The CH32V003's: RV32EC.
+    pub const V2A: Core = Core {
+        registers: 16,
+        m: false,
+        a: false,
+        gintenr: false,
+        debug_data: 0xE000_00F4,
+    };
+    /// The CH32X035's: RV32IMAC.
+    pub const V4C: Core = Core {
+        registers: 32,
+        m: true,
+        a: true,
+        gintenr: true,
+        debug_data: 0xE000_0380,
+    };
+
+    /// The registers the hardware stack keeps across a trap: every
+    /// caller-saved register the core has.
+    fn stacked(self) -> &'static [usize] {
+        if self.registers == 16 {
+            &[1, 5, 6, 7, 10, 11, 12, 13, 14, 15]
+        } else {
+            &[1, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 28, 29, 30, 31]
+        }
+    }
+
+    fn misa(self) -> u32 {
+        let letter = |c: u8| 1u32 << (c - b'a');
+        (1 << 30)
+            | letter(b'c')
+            | if self.registers == 16 {
+                letter(b'e')
+            } else {
+                letter(b'i')
+            }
+            | if self.m { letter(b'm') } else { 0 }
+            | if self.a { letter(b'a') } else { 0 }
+    }
+}
+
+/// The CSRs a QingKe program touches, by number.
 pub mod csr {
     pub const MSTATUS: u16 = 0x300;
     pub const MISA: u16 = 0x301;
@@ -90,6 +151,8 @@ pub mod csr {
     pub const MEPC: u16 = 0x341;
     pub const MCAUSE: u16 = 0x342;
     pub const MTVAL: u16 = 0x343;
+    /// QingKe's global interrupt enable: MIE and MPIE, at their own bits.
+    pub const GINTENR: u16 = 0x800;
     /// QingKe's interrupt system control: bit 0 the hardware stack, bit 1
     /// nesting.
     pub const INTSYSCR: u16 = 0x804;
@@ -105,9 +168,8 @@ const MSTATUS_MIE: u32 = 1 << 3;
 const MSTATUS_MPIE: u32 = 1 << 7;
 const MSTATUS_MPP: u32 = 0b11 << 11;
 
-/// The registers the hardware stack keeps across a trap: every caller-saved
-/// register RV32E has.
-const STACKED: [usize; 10] = [1, 5, 6, 7, 10, 11, 12, 13, 14, 15];
+/// `mstatus`'s bits `GINTENR` reads and writes.
+const GINTENR_BITS: u32 = MSTATUS_MIE | MSTATUS_MPIE;
 
 /// What one step did, beyond moving on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +187,8 @@ pub enum Step {
 /// One hart's architectural state.
 #[derive(Debug, Clone)]
 pub struct Hart {
-    pub x: [u32; 16],
+    pub core: Core,
+    pub x: [u32; 32],
     pub pc: u32,
     pub mstatus: u32,
     pub mtvec: u32,
@@ -139,7 +202,9 @@ pub struct Hart {
     /// once by the machine (`unknown_csr`).
     other: Vec<(u16, u32)>,
     /// What the hardware stack holds, innermost last.
-    stacked: Vec<[u32; 10]>,
+    stacked: Vec<[u32; 16]>,
+    /// The address an `lr.w` reserved, until an `sc.w` or a trap.
+    reservation: Option<u32>,
     /// The first CSR a program touched that this hart does not model, for
     /// the machine to say once.
     pub unknown_csr: Option<u16>,
@@ -152,11 +217,17 @@ impl Default for Hart {
 }
 
 impl Hart {
+    /// A V2A out of reset.
+    pub fn new() -> Self {
+        Self::with(Core::V2A)
+    }
+
     /// The state out of reset: execution at address zero, where the flash's
     /// boot alias puts the image's first word.
-    pub fn new() -> Self {
+    pub fn with(core: Core) -> Self {
         Self {
-            x: [0; 16],
+            core,
+            x: [0; 32],
             pc: 0,
             // Machine mode, interrupts off.
             mstatus: MSTATUS_MPP,
@@ -169,6 +240,7 @@ impl Hart {
             corecfgr: 0,
             other: Vec::new(),
             stacked: Vec::new(),
+            reservation: None,
             unknown_csr: None,
         }
     }
@@ -191,9 +263,9 @@ impl Hart {
                 return self.exception(bus, cause::INSTRUCTION_FAULT, pc.wrapping_add(2));
             };
             let word = u32::from(low) | (u32::from(high) << 16);
-            (decode(word), 4, word)
+            (decode(word, self.core), 4, word)
         } else {
-            (decode_compressed(low), 2, u32::from(low))
+            (decode_compressed(low, self.core), 2, u32::from(low))
         };
         self.execute(bus, op, len, raw)
     }
@@ -283,6 +355,44 @@ impl Hart {
                 let value = alu.apply(self.reg(rs1), self.reg(rs2));
                 self.set(rd, value);
             }
+            Op::Amo { amo, rd, rs1, rs2 } => {
+                let addr = self.reg(rs1);
+                if !addr.is_multiple_of(4) {
+                    let code = if amo == Amo::Lr {
+                        cause::LOAD_MISALIGNED
+                    } else {
+                        cause::STORE_MISALIGNED
+                    };
+                    return self.exception(bus, code, addr);
+                }
+                match amo {
+                    Amo::Lr => {
+                        let Ok(value) = bus.load(addr, Size::Word) else {
+                            return self.exception(bus, cause::LOAD_FAULT, addr);
+                        };
+                        self.reservation = Some(addr);
+                        self.set(rd, value);
+                    }
+                    Amo::Sc => {
+                        let held = self.reservation.take() == Some(addr);
+                        if held && bus.store(addr, Size::Word, self.reg(rs2)).is_err() {
+                            return self.exception(bus, cause::STORE_FAULT, addr);
+                        }
+                        self.set(rd, u32::from(!held));
+                    }
+                    _ => {
+                        // A fault in either half is an AMO's store fault.
+                        let Ok(old) = bus.load(addr, Size::Word) else {
+                            return self.exception(bus, cause::STORE_FAULT, addr);
+                        };
+                        let new = amo.apply(old, self.reg(rs2));
+                        if bus.store(addr, Size::Word, new).is_err() {
+                            return self.exception(bus, cause::STORE_FAULT, addr);
+                        }
+                        self.set(rd, old);
+                    }
+                }
+            }
             Op::Fence => {}
             Op::Ecall => return self.exception(bus, cause::MACHINE_ECALL, 0),
             Op::Ebreak => return self.exception(bus, cause::BREAKPOINT, pc),
@@ -293,7 +403,7 @@ impl Hart {
                     | if mpie { MSTATUS_MIE } else { 0 }
                     | MSTATUS_MPIE;
                 if let Some(saved) = self.stacked.pop() {
-                    for (slot, &reg) in STACKED.iter().enumerate() {
+                    for (slot, &reg) in self.core.stacked().iter().enumerate() {
                         self.x[reg] = saved[slot];
                     }
                 }
@@ -337,8 +447,8 @@ impl Hart {
     fn read_csr(&mut self, number: u16) -> u32 {
         match number {
             csr::MSTATUS => self.mstatus,
-            // RV32, with E and C.
-            csr::MISA => (1 << 30) | (1 << 4) | (1 << 2),
+            csr::MISA => self.core.misa(),
+            csr::GINTENR if self.core.gintenr => self.mstatus & GINTENR_BITS,
             csr::MTVEC => self.mtvec,
             csr::MSCRATCH => self.mscratch,
             csr::MEPC => self.mepc,
@@ -356,6 +466,9 @@ impl Hart {
     fn write_csr(&mut self, number: u16, value: u32) {
         match number {
             csr::MSTATUS => self.mstatus = value,
+            csr::GINTENR if self.core.gintenr => {
+                self.mstatus = (self.mstatus & !GINTENR_BITS) | (value & GINTENR_BITS);
+            }
             csr::MTVEC => self.mtvec = value,
             csr::MSCRATCH => self.mscratch = value,
             csr::MEPC => self.mepc = value & !1,
@@ -407,13 +520,14 @@ impl Hart {
         self.mepc = self.pc;
         self.mcause = code;
         self.mtval = tval;
+        self.reservation = None;
         let mie = self.mstatus & MSTATUS_MIE != 0;
         self.mstatus = (self.mstatus & !(MSTATUS_MIE | MSTATUS_MPIE))
             | if mie { MSTATUS_MPIE } else { 0 }
             | MSTATUS_MPP;
         if self.intsyscr & 1 != 0 {
-            let mut saved = [0; 10];
-            for (slot, &reg) in STACKED.iter().enumerate() {
+            let mut saved = [0; 16];
+            for (slot, &reg) in self.core.stacked().iter().enumerate() {
                 saved[slot] = self.x[reg];
             }
             self.stacked.push(saved);
@@ -486,6 +600,12 @@ enum Op {
         rs1: u8,
         rs2: u8,
     },
+    Amo {
+        amo: Amo,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
     Fence,
     Ecall,
     Ebreak,
@@ -524,10 +644,19 @@ enum Alu {
     Sra,
     Or,
     And,
+    Mul,
+    Mulh,
+    Mulhsu,
+    Mulhu,
+    Div,
+    Divu,
+    Rem,
+    Remu,
 }
 
 impl Alu {
     fn apply(self, a: u32, b: u32) -> u32 {
+        let (sa, sb) = (a as i32, b as i32);
         match self {
             Alu::Add => a.wrapping_add(b),
             Alu::Sub => a.wrapping_sub(b),
@@ -539,6 +668,53 @@ impl Alu {
             Alu::Sra => ((a as i32) >> (b & 31)) as u32,
             Alu::Or => a | b,
             Alu::And => a & b,
+            Alu::Mul => a.wrapping_mul(b),
+            Alu::Mulh => ((i64::from(sa) * i64::from(sb)) >> 32) as u32,
+            Alu::Mulhsu => ((i64::from(sa) * i64::from(b)) >> 32) as u32,
+            Alu::Mulhu => ((u64::from(a) * u64::from(b)) >> 32) as u32,
+            // Division by zero and the one overflow answer as the
+            // specification says, without a trap: all ones, the dividend,
+            // and the most negative number over minus one is itself.
+            Alu::Div if b == 0 => u32::MAX,
+            Alu::Div => sa.wrapping_div(sb) as u32,
+            Alu::Divu if b == 0 => u32::MAX,
+            Alu::Divu => a / b,
+            Alu::Rem if b == 0 => a,
+            Alu::Rem => sa.wrapping_rem(sb) as u32,
+            Alu::Remu if b == 0 => a,
+            Alu::Remu => a % b,
+        }
+    }
+}
+
+/// What an A-extension instruction does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Amo {
+    Lr,
+    Sc,
+    Swap,
+    Add,
+    Xor,
+    And,
+    Or,
+    Min,
+    Max,
+    Minu,
+    Maxu,
+}
+
+impl Amo {
+    fn apply(self, old: u32, operand: u32) -> u32 {
+        match self {
+            Amo::Swap | Amo::Lr | Amo::Sc => operand,
+            Amo::Add => old.wrapping_add(operand),
+            Amo::Xor => old ^ operand,
+            Amo::And => old & operand,
+            Amo::Or => old | operand,
+            Amo::Min => (old as i32).min(operand as i32) as u32,
+            Amo::Max => (old as i32).max(operand as i32) as u32,
+            Amo::Minu => old.min(operand),
+            Amo::Maxu => old.max(operand),
         }
     }
 }
@@ -550,12 +726,9 @@ enum CsrKind {
     Clear,
 }
 
-/// RV32E has sixteen registers; an instruction naming another is illegal.
-fn regs_ok(regs: &[u32]) -> bool {
-    regs.iter().all(|&r| r < 16)
-}
-
-fn decode(inst: u32) -> Op {
+fn decode(inst: u32, core: Core) -> Op {
+    // RV32E has sixteen registers; an instruction naming another is illegal.
+    let regs_ok = |regs: &[u32]| regs.iter().all(|&r| (r as usize) < core.registers);
     let opcode = inst & 0x7f;
     let rd = (inst >> 7) & 0x1f;
     let funct3 = (inst >> 12) & 0x7;
@@ -678,11 +851,41 @@ fn decode(inst: u32) -> Op {
                 (5, 0x20) => Alu::Sra,
                 (6, 0) => Alu::Or,
                 (7, 0) => Alu::And,
-                // funct7 1 is the M extension, which V2A does not have.
+                // funct7 1 is the M extension, which the V2A does not have.
+                (0, 1) if core.m => Alu::Mul,
+                (1, 1) if core.m => Alu::Mulh,
+                (2, 1) if core.m => Alu::Mulhsu,
+                (3, 1) if core.m => Alu::Mulhu,
+                (4, 1) if core.m => Alu::Div,
+                (5, 1) if core.m => Alu::Divu,
+                (6, 1) if core.m => Alu::Rem,
+                (7, 1) if core.m => Alu::Remu,
                 _ => return Op::Illegal,
             };
             Op::Alu {
                 alu,
+                rd: rd8,
+                rs1: rs18,
+                rs2: rs28,
+            }
+        }
+        0x2f if core.a && funct3 == 2 && regs_ok(&[rd, rs1, rs2]) => {
+            let amo = match funct7 >> 2 {
+                0x02 if rs2 == 0 => Amo::Lr,
+                0x03 => Amo::Sc,
+                0x01 => Amo::Swap,
+                0x00 => Amo::Add,
+                0x04 => Amo::Xor,
+                0x0C => Amo::And,
+                0x08 => Amo::Or,
+                0x10 => Amo::Min,
+                0x14 => Amo::Max,
+                0x18 => Amo::Minu,
+                0x1C => Amo::Maxu,
+                _ => return Op::Illegal,
+            };
+            Op::Amo {
+                amo,
                 rd: rd8,
                 rs1: rs18,
                 rs2: rs28,
@@ -697,7 +900,7 @@ fn decode(inst: u32) -> Op {
                 0x1050_0073 => Op::Wfi,
                 _ => Op::Illegal,
             },
-            1..=3 | 5..=7 if regs_ok(&[rd]) && (funct3 >= 5 || rs1 < 16) => Op::Csr {
+            1..=3 | 5..=7 if regs_ok(&[rd]) && (funct3 >= 5 || regs_ok(&[rs1])) => Op::Csr {
                 kind: match funct3 & 0b11 {
                     1 => CsrKind::Write,
                     2 => CsrKind::Set,
@@ -733,10 +936,13 @@ fn sext(value: u32, width: u32) -> i32 {
     ((value << shift) as i32) >> shift
 }
 
-fn decode_compressed(inst: u16) -> Op {
+fn decode_compressed(inst: u16, core: Core) -> Op {
     if inst == 0 {
         return Op::Illegal;
     }
+    // The full five-bit register fields name x16 and up, which RV32E has
+    // not got.
+    let limit = core.registers as u32;
     let funct3 = inst >> 13;
     let rd = bits(inst, 11, 7);
     let rs2 = bits(inst, 6, 2);
@@ -774,7 +980,7 @@ fn decode_compressed(inst: u16) -> Op {
             imm: ((bits(inst, 12, 10) << 3) | (bit(inst, 6) << 2) | (bit(inst, 5) << 6)) as i32,
         },
         // C.NOP / C.ADDI
-        (1, 0b000) if rd < 16 => Op::AluImm {
+        (1, 0b000) if rd < limit => Op::AluImm {
             alu: Alu::Add,
             rd: rd as u8,
             rs1: rd as u8,
@@ -796,7 +1002,7 @@ fn decode_compressed(inst: u16) -> Op {
             }
         }
         // C.LI
-        (1, 0b010) if rd < 16 => Op::AluImm {
+        (1, 0b010) if rd < limit => Op::AluImm {
             alu: Alu::Add,
             rd: rd as u8,
             rs1: 0,
@@ -820,7 +1026,7 @@ fn decode_compressed(inst: u16) -> Op {
             }
         }
         // C.LUI
-        (1, 0b011) if rd < 16 && rd != 0 => {
+        (1, 0b011) if rd < limit && rd != 0 => {
             if imm6 == 0 {
                 return Op::Illegal;
             }
@@ -879,21 +1085,21 @@ fn decode_compressed(inst: u16) -> Op {
             }
         }
         // C.SLLI
-        (2, 0b000) if rd < 16 && bit(inst, 12) == 0 => Op::AluImm {
+        (2, 0b000) if rd < limit && bit(inst, 12) == 0 => Op::AluImm {
             alu: Alu::Sll,
             rd: rd as u8,
             rs1: rd as u8,
             imm: rs2 as i32,
         },
         // C.LWSP
-        (2, 0b010) if rd < 16 && rd != 0 => Op::Load {
+        (2, 0b010) if rd < limit && rd != 0 => Op::Load {
             size: Size::Word,
             signed: false,
             rd: rd as u8,
             rs1: 2,
             imm: ((bit(inst, 12) << 5) | (bits(inst, 6, 4) << 2) | (bits(inst, 3, 2) << 6)) as i32,
         },
-        (2, 0b100) if rd < 16 && rs2 < 16 => match (bit(inst, 12), rd, rs2) {
+        (2, 0b100) if rd < limit && rs2 < limit => match (bit(inst, 12), rd, rs2) {
             (0, 0, _) => Op::Illegal,
             // C.JR
             (0, rs1, 0) => Op::Jalr {
@@ -924,7 +1130,7 @@ fn decode_compressed(inst: u16) -> Op {
             },
         },
         // C.SWSP
-        (2, 0b110) if rs2 < 16 => Op::Store {
+        (2, 0b110) if rs2 < limit => Op::Store {
             size: Size::Word,
             rs1: 2,
             rs2: rs2 as u8,

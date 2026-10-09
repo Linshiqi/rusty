@@ -304,8 +304,8 @@ fn plan_builtin(project: &EmbeddedProject, chip: &str, machine: &Machine) -> Sim
     let boot = CommandPlan::new(
         mcu::PROGRAM,
         mcu::boot_args(chip, &elf),
-        "runs the image on rusty's own CH32V003, in step with the clock; SDI print and \
-         USART1 stream here until stopped",
+        "runs the image on rusty's own emulator of the part, in step with the clock; SDI \
+         print and the USARTs stream here until stopped",
     );
     let (library, parts, board, notes) = the_board(root, chip);
     SimPlan {

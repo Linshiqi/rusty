@@ -72,6 +72,7 @@ pub(super) fn limit_text(limit: &rusty_embed::SimLimit) -> String {
         "s3-unproven" => t!("simulate.limit-s3-unproven"),
         "signals-outdated" => t!("simulate.limit-signals-outdated"),
         "ch32-model" => t!("simulate.limit-ch32-model"),
+        "ch32x035-model" => t!("simulate.limit-ch32x035-model"),
         _ => limit.text.clone(),
     }
 }

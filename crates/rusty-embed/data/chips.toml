@@ -254,3 +254,37 @@ flashers = ["wlink", "probe-rs"]
 probe_rs_target = "CH32V003F4U6"
 radios = ["none"]
 gpio = [1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+
+# The CH32X035: a QingKe V4C core (RV32IMAC — thirty-two registers, multiply
+# and divide, atomics) with 62 KB of flash and 20 KB of RAM, USB, USB PD and
+# op-amps beside the usual peripherals. Unlike the V003 it builds for a
+# target rustup ships, `riscv32imc-unknown-none-elf` (ch32-hal's examples'
+# own), with stable Rust: `stock`.
+#
+# Its ports are twenty-four pins wide (PA0..PA23), so rusty numbers its pins
+# twenty-four to a port — PB0 is 24, PC0 48 — where the V003's are eight.
+# One entry per package for the reason the V003 has them; the F8U6 (QFN20)
+# bonds out nineteen GPIOs, read off the datasheet's pinout: PA0..PA7, PB0,
+# PB1, PB3, PB11, PB12 and PC14..PC19. PC18 and PC19 are the debug pins SDI
+# print and the WCH-LinkE use; PC16 and PC17 are USB's D- and D+, PC14 and
+# PC15 USB PD's CC1 and CC2.
+#
+# rusty simulates it itself (rusty-mcu), as it does the V003: GPIO,
+# TIM1/TIM2/TIM3 PWM, SysTick, the USARTs and SDI print; USB, USB PD, the
+# op-amps and the analog parts are named as missing when firmware reaches
+# for them.
+
+[[chip]]
+id = "ch32x035f8u6"
+name = "CH32X035F8U6"
+vendor = "wch"
+arch = "risc-v"
+cores = 1
+sram_bytes = 20_480
+flash_bytes = 63_488
+bare_metal_target = "riscv32imc-unknown-none-elf"
+toolchain = "stock"
+flashers = ["wlink", "probe-rs"]
+probe_rs_target = "CH32X035F8U6"
+radios = ["none"]
+gpio = [0, 1, 2, 3, 4, 5, 6, 7, 24, 25, 27, 35, 36, 62, 63, 64, 65, 66, 67]

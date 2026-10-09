@@ -63,7 +63,7 @@ pub fn detect(root: &Path) -> Result<EmbeddedProject> {
     // Runtime is decided by which HAL family is present, not by guessing.
     let runtime = if deps.iter().any(|d| d.starts_with("esp-idf-")) {
         Some(Runtime::EspIdf)
-    } else if deps.iter().any(|d| d == "esp-hal") {
+    } else if deps.iter().any(|d| d == "esp-hal" || d == "ch32-hal") {
         Some(Runtime::BareMetal)
     } else {
         None

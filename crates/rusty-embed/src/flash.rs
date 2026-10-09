@@ -127,9 +127,11 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
 
     let (program, args, rationale) = match &request.transport {
         Transport::Serial { port } => {
-            // Only Espressif parts have a serial bootloader in ROM. Offering
-            // this path for anything else sends the user somewhere that cannot
-            // work, with an error that will not explain why.
+            // espflash speaks only Espressif's ROM bootloader. Other parts
+            // have bootloaders of their own — an STM32's UART one, WCH's ISP
+            // — that it cannot talk to, so offering this path for anything
+            // else sends the user somewhere that cannot work, with an error
+            // that will not explain why.
             if let Some(chip) = &chip
                 && !chip.flashers.contains(&crate::model::Flasher::Espflash)
             {
@@ -523,7 +525,8 @@ mod tests {
         assert!(fast.args.contains(&"921600".to_string()));
     }
 
-    /// STM32 has no serial bootloader. Producing an espflash command for it
+    /// espflash cannot talk to an STM32's bootloader. Producing an espflash
+    /// command for it
     /// would fail with an error about the chip, sending the user to debug
     /// entirely the wrong thing.
     #[test]
@@ -622,6 +625,17 @@ mod tests {
         .unwrap();
         assert_eq!(through_probe_rs.program, "probe-rs");
         assert!(through_probe_rs.args.contains(&"CH32V003J4M6".to_string()));
+
+        // The X035 the same way: wlink first, probe-rs by its own name.
+        let x035 = plan(&request("ch32x035f8u6", probe(None), FlashAction::Flash)).unwrap();
+        assert_eq!(x035.program, "wlink");
+        let x035 = plan(&request(
+            "ch32x035f8u6",
+            probe(Some("WCH-Link -- 1a86:8010:abc (WchLink)")),
+            FlashAction::Flash,
+        ))
+        .unwrap();
+        assert!(x035.args.contains(&"CH32X035F8U6".to_string()));
     }
 
     #[test]

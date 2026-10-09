@@ -1,7 +1,7 @@
-//! The CH32V003, run here rather than in QEMU.
+//! WCH's CH32V003 and CH32X035, run here rather than in QEMU.
 //!
-//! Nobody's QEMU has a machine for a WCH part, so rusty emulates this one
-//! itself (`rusty-mcu`) and runs it on a thread of its own process. To
+//! Nobody's QEMU has a machine for a WCH part, so rusty emulates these
+//! itself (`rusty-mcu`) and runs one on a thread of its own process. To
 //! everything that drives a simulation it is a QEMU with rusty's models in
 //! it: a [`Session`] whose lines are the console, whose input is USART1's
 //! receiver, and which stops when asked; a pin channel on a TCP port, which
@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use rusty_mcu::ch32v003::{EventKind, Machine};
+use rusty_mcu::ch32::{EventKind, Machine, Part};
 
 use crate::error::{Error, Result};
 use crate::model::{CommandPlan, LogLine, LogStream};
@@ -41,7 +41,7 @@ const SLICE_US: u64 = 20_000;
 
 /// Whether rusty runs `chip` itself.
 pub fn emulates(chip: &str) -> bool {
-    chip.starts_with("ch32v003")
+    Part::for_chip(chip).is_some()
 }
 
 /// Whether a plan's step is this emulator.
@@ -65,8 +65,8 @@ pub fn qmp_args(port: u16) -> Vec<String> {
     vec!["--qmp".to_string(), port.to_string()]
 }
 
-#[derive(Debug)]
 struct Options {
+    part: &'static Part,
     elf: PathBuf,
     pins: Option<u16>,
     qmp: Option<u16>,
@@ -96,12 +96,14 @@ fn options(args: &[String]) -> std::result::Result<Options, String> {
             other => elf = Some(PathBuf::from(other)),
         }
     }
-    match chip.as_deref() {
-        Some(chip) if emulates(chip) => {}
-        Some(chip) => return Err(format!("{PROGRAM} does not model {chip}")),
+    let part = match chip.as_deref() {
+        Some(chip) => {
+            Part::for_chip(chip).ok_or_else(|| format!("{PROGRAM} does not model {chip}"))?
+        }
         None => return Err(format!("{PROGRAM} needs --chip")),
-    }
+    };
     Ok(Options {
+        part,
         elf: elf.ok_or_else(|| format!("{PROGRAM} needs the firmware's ELF"))?,
         pins,
         qmp,
@@ -139,7 +141,7 @@ pub fn launch(plan: &CommandPlan, dir: Option<&Path>) -> Result<Session> {
             elf.display()
         ))
     })?;
-    let machine = Machine::new(&image).map_err(Error::refused)?;
+    let machine = Machine::new(options.part, &image).map_err(Error::refused)?;
 
     let (tx, lines) = mpsc::channel();
     let (typed, typing) = mpsc::channel();
@@ -410,18 +412,20 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let options = options(&args).unwrap();
+        let options = options(&args).unwrap_or_else(|refused| panic!("{refused}"));
         assert_eq!(options.elf, PathBuf::from("fw.elf"));
         assert_eq!(options.pins, Some(4000));
+        assert_eq!(options.part.name, "CH32V003");
         let other: Vec<String> = ["--chip", "esp32c3", "fw.elf"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         assert!(
             super::options(&other)
-                .unwrap_err()
-                .contains("does not model esp32c3")
+                .err()
+                .is_some_and(|refused| refused.contains("does not model esp32c3"))
         );
+        assert!(emulates("ch32x035f8u6") && !emulates("ch32v203c8t6"));
     }
 
     /// The real firmware, end to end through the host's half: launched as a
@@ -454,6 +458,61 @@ mod tests {
 
         let console = session.recv().expect("a line");
         assert!(console.text.starts_with("pwm max duty"), "{}", console.text);
+        session.stopper().stop();
+        while session.recv().is_some() {}
+        assert_eq!(session.wait(), Some(0));
+    }
+
+    /// The pin channel numbers a WCH pin as many to a port as the part's
+    /// GPIO registers are wide; the emulator that sends the number and the
+    /// name the window gives it must agree on the width, or PB12 is drawn
+    /// as some other pin.
+    #[test]
+    fn the_window_and_the_emulator_count_a_port_alike() {
+        for chip in ["ch32v003j4m6", "ch32v003f4p6", "ch32x035f8u6"] {
+            let part = Part::for_chip(chip).expect(chip);
+            assert_eq!(crate::nets::port_width(chip), Some(part.width), "{chip}");
+            for pin in part.pins() {
+                assert_eq!(
+                    crate::nets::pin_label(chip, pin),
+                    part.pin_name(pin),
+                    "{chip}"
+                );
+            }
+        }
+    }
+
+    /// The CH32X035 through the same door: `--chip` picks the part, and its
+    /// pins arrive numbered 24 to a port — PB12 is 36.
+    #[test]
+    fn a_ch32x035_run_reports_pb12_by_its_own_numbering() {
+        let elf = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../rusty-mcu/tests/fixtures/ch32x035-pwm/pwm.elf");
+        let port = super::super::free_port().expect("a free port");
+        let mut args = boot_args("ch32x035f8u6", &elf.display().to_string());
+        args.extend(pins_args(port));
+        let plan = CommandPlan::new(PROGRAM, args, "test");
+        let session = launch(&plan, None).expect("launched");
+        let stream = loop {
+            if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
+                break stream;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let first = BufReader::new(stream)
+            .lines()
+            .next()
+            .expect("a report")
+            .expect("readable");
+        let pwm = crate::protocol::parse_pwm_report(&first)
+            .unwrap_or_else(|| panic!("a PWM report: {first}"));
+        assert_eq!(pwm.pins[0].0, 36, "PB12");
+        assert_eq!(crate::nets::pin_label("ch32x035f8u6", 36), "PB12");
+        let console = session.recv().expect("a line");
+        assert_eq!(console.text, "pwm max duty 8000");
         session.stopper().stop();
         while session.recv().is_some() {}
         assert_eq!(session.wait(), Some(0));

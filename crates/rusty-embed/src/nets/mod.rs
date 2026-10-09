@@ -34,7 +34,7 @@ pub use behaviour::{Behaviour, Rail, behaviour_of, is_ground, power_rail};
 pub use bus::{BusDevice, WireDevice, bus_devices, hex_address, sensor_model, wire_devices};
 pub use evaluate::{Evaluation, Inputs, evaluate};
 pub use graph::solid_nets;
-pub use kit::{Row, bind_to_kit, gpio_named, kit_pin, kit_rows, pin_label};
+pub use kit::{Row, bind_to_kit, gpio_named, kit_pin, kit_rows, pin_label, port_width};
 pub use switch::{button_drives, keypad_tie, switch_tie};
 pub use value::{farads, ohms, volts};
 pub use warning::Warning;

@@ -194,7 +194,7 @@ pub fn plan(choice: &WizardChoice) -> Result<CommandPlan> {
                 crate_name,
             ],
             "ch32-hal has no project generator, so rusty writes the project itself: the \
-             playground's breathing LED on PC4 and its board, for this package.",
+             playground's breathing LED and its board, for this package.",
         ));
     }
 
@@ -379,7 +379,12 @@ pub fn write_itself(parent: &Path, choice: &WizardChoice) -> Result<Vec<String>>
         WizardLayout::Workspace => "firmware",
     };
     let dir = parent.join(crate_name);
-    let files = ch32_files(&chip, crate_name);
+    let files = ch32_files(&chip, crate_name).ok_or_else(|| {
+        Error::refused(format!(
+            "rusty has no proven ch32-hal project for the {} to write",
+            chip.name
+        ))
+    })?;
     let mut written = Vec::new();
     for (relative, text) in &files {
         write_new(&dir.join(relative), text)?;
@@ -388,16 +393,97 @@ pub fn write_itself(parent: &Path, choice: &WizardChoice) -> Result<Vec<String>>
     Ok(written)
 }
 
-/// The files of a ch32-hal project called `name` for `chip`, from the
-/// playground's templates.
-fn ch32_files(chip: &crate::model::Chip, name: &str) -> Vec<(&'static str, String)> {
-    const PLAYGROUND: &str = "ch32v003j4m6";
-    let manifest = include_str!("../data/playground/ch32v003j4m6/Cargo.toml.in");
+/// A family's proven project: its playground's files, and what is said
+/// about them.
+struct Ch32Template {
+    /// The playground's chip, as its files spell it.
+    playground: &'static str,
+    manifest: &'static str,
+    board: &'static str,
+    /// The board file's ground row, as the template wires it.
+    ground: usize,
+    /// How the toolchain is chosen, for the manifest's first line.
+    toolchain: &'static str,
+    /// Everything else, written as it is.
+    files: &'static [(&'static str, &'static str)],
+}
+
+/// The template a WCH chip's projects are written from, or none for a
+/// family nobody has proven one for.
+fn ch32_template(chip: &str) -> Option<Ch32Template> {
+    if chip.starts_with("ch32v003") {
+        Some(Ch32Template {
+            playground: "ch32v003j4m6",
+            manifest: include_str!("../data/playground/ch32v003j4m6/Cargo.toml.in"),
+            board: include_str!("../data/playground/ch32v003j4m6/sim.toml.in"),
+            ground: 6,
+            toolchain: "built with nightly (see rust-toolchain.toml)",
+            files: &[
+                (
+                    "build.rs",
+                    include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
+                ),
+                (
+                    "rust-toolchain.toml",
+                    include_str!("../data/playground/ch32v003j4m6/rust-toolchain.toml.in"),
+                ),
+                (
+                    ".cargo/config.toml",
+                    include_str!("../data/playground/ch32v003j4m6/cargo-config.toml.in"),
+                ),
+                (
+                    "riscv32ec-unknown-none-elf.json",
+                    include_str!(
+                        "../data/playground/ch32v003j4m6/riscv32ec-unknown-none-elf.json.in"
+                    ),
+                ),
+                (
+                    "src/main.rs",
+                    include_str!("../data/playground/ch32v003j4m6/main.rs.in"),
+                ),
+            ],
+        })
+    } else if chip.starts_with("ch32x035") {
+        Some(Ch32Template {
+            playground: "ch32x035f8u6",
+            manifest: include_str!("../data/playground/ch32x035f8u6/Cargo.toml.in"),
+            board: include_str!("../data/playground/ch32x035f8u6/sim.toml.in"),
+            ground: 11,
+            toolchain: "built with stable Rust",
+            files: &[
+                (
+                    "build.rs",
+                    include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
+                ),
+                (
+                    "rust-toolchain.toml",
+                    include_str!("../data/playground/ch32x035f8u6/rust-toolchain.toml.in"),
+                ),
+                (
+                    ".cargo/config.toml",
+                    include_str!("../data/playground/ch32x035f8u6/cargo-config.toml.in"),
+                ),
+                (
+                    "src/main.rs",
+                    include_str!("../data/playground/ch32x035f8u6/main.rs.in"),
+                ),
+            ],
+        })
+    } else {
+        None
+    }
+}
+
+/// The files of a ch32-hal project called `name` for `chip`, from its
+/// family's playground templates — or none for a family with no template.
+fn ch32_files(chip: &crate::model::Chip, name: &str) -> Option<Vec<(&'static str, String)>> {
+    let template = ch32_template(&chip.id)?;
+    let manifest = template.manifest;
     let dependencies = manifest
         .find("[dependencies]")
         .map_or(manifest, |at| &manifest[at..]);
     let manifest = format!(
-        "# {name}: ch32-hal on the {part}, built with nightly (see rust-toolchain.toml).\n\
+        "# {name}: ch32-hal on the {part}, {toolchain}.\n\
          # Run simulates it on the board in .rusty/sim.toml; Flash writes it through a\n\
          # WCH-LinkE.\n\
          \n\
@@ -408,50 +494,39 @@ fn ch32_files(chip: &crate::model::Chip, name: &str) -> Vec<(&'static str, Strin
          \n\
          {dependencies}",
         part = chip.name,
-        dependencies = dependencies.replace(PLAYGROUND, &chip.id),
+        toolchain = template.toolchain,
+        dependencies = dependencies.replace(template.playground, &chip.id),
     );
+    // One lockfile for both families: ch32-hal's dependencies do not change
+    // with the part.
     let lock = include_str!("../data/playground/ch32v003j4m6/Cargo.lock.in")
         .replace("name = \"playground\"", &format!("name = \"{name}\""));
     // The ground the LED and the button return to is the package's first GND
-    // row, which is row 6 on the J4M6 and elsewhere on a package with more
-    // pins.
+    // row, which depends on how many pins the package has.
     let rows = crate::nets::kit_rows(&chip.id, &chip.gpio);
     let ground = rows
         .iter()
         .position(|row| row.name == "GND")
-        .map_or(6, |at| at + 1);
-    let board = include_str!("../data/playground/ch32v003j4m6/sim.toml.in")
-        .replace(PLAYGROUND, &chip.id)
-        .replace("U1.6", &format!("U1.{ground}"))
-        .replace("is row 6", &format!("is row {ground}"))
+        .map_or(template.ground, |at| at + 1);
+    let board = template
+        .board
+        .replace(template.playground, &chip.id)
+        .replace(&format!("U1.{}", template.ground), &format!("U1.{ground}"))
+        .replace(
+            &format!("is row {}", template.ground),
+            &format!("is row {ground}"),
+        )
         .replace("The playground's board", "This project's board");
-    vec![
-        ("Cargo.toml", manifest),
-        ("Cargo.lock", lock),
-        (
-            "build.rs",
-            include_str!("../data/playground/ch32v003j4m6/build.rs.in").to_string(),
-        ),
-        (
-            "rust-toolchain.toml",
-            include_str!("../data/playground/ch32v003j4m6/rust-toolchain.toml.in").to_string(),
-        ),
-        (
-            ".cargo/config.toml",
-            include_str!("../data/playground/ch32v003j4m6/cargo-config.toml.in").to_string(),
-        ),
-        (
-            "riscv32ec-unknown-none-elf.json",
-            include_str!("../data/playground/ch32v003j4m6/riscv32ec-unknown-none-elf.json.in")
-                .to_string(),
-        ),
-        (
-            "src/main.rs",
-            include_str!("../data/playground/ch32v003j4m6/main.rs.in").to_string(),
-        ),
-        (".rusty/sim.toml", board),
-        (".gitignore", "/target\n".to_string()),
-    ]
+    let mut files = vec![("Cargo.toml", manifest), ("Cargo.lock", lock)];
+    files.extend(
+        template
+            .files
+            .iter()
+            .map(|(path, text)| (*path, (*text).to_string())),
+    );
+    files.push((".rusty/sim.toml", board));
+    files.push((".gitignore", "/target\n".to_string()));
+    Some(files)
 }
 
 // ─── the workspace around a generated crate ──────────────────────────────────
@@ -1005,15 +1080,40 @@ mod tests {
         }
     }
 
-    /// A CH32V003 project is written, not generated, and is a project rusty
-    /// reads as its chip, builds for the JSON target with nightly, and
+    /// A CH32 project is written, not generated, and is a project rusty
+    /// reads as its chip, builds for its family's target — the V003's JSON
+    /// description with nightly, the X035's riscv32imc with stable — and
     /// simulates on a board whose wires land on that package's own rows —
-    /// the F4P6 has twice the pins, so its ground is another row.
+    /// the F4P6 has twice the J4M6's pins, so its ground is another row.
     #[test]
     fn a_ch32_project_is_written_for_its_package_with_a_board_that_works() {
         use std::collections::{HashMap, HashSet};
 
-        for chip in ["ch32v003j4m6", "ch32v003f4p6"] {
+        // The LED's pin and the button's, in each part's own numbering, and
+        // what the project builds with.
+        for (chip, led, button, target, channel) in [
+            (
+                "ch32v003j4m6",
+                20u8,
+                17u8,
+                "riscv32ec-unknown-none-elf",
+                "nightly",
+            ),
+            (
+                "ch32v003f4p6",
+                20,
+                17,
+                "riscv32ec-unknown-none-elf",
+                "nightly",
+            ),
+            (
+                "ch32x035f8u6",
+                36,
+                25,
+                "riscv32imc-unknown-none-elf",
+                "stable",
+            ),
+        ] {
             let mut wanted = choice(chip, Runtime::BareMetal, &[]);
             assert!(writes_itself(&wanted));
             let shown = plan(&wanted).unwrap();
@@ -1024,19 +1124,18 @@ mod tests {
 
             let parent = tempfile::tempdir().unwrap();
             let written = write_itself(parent.path(), &wanted).unwrap();
-            assert!(
+            assert_eq!(
                 written
                     .iter()
-                    .any(|f| f == "blinky/riscv32ec-unknown-none-elf.json")
+                    .any(|f| f == "blinky/riscv32ec-unknown-none-elf.json"),
+                chip.starts_with("ch32v003"),
+                "{chip}: the target description only where the target needs one"
             );
             let root = parent.path().join("blinky");
             let project = crate::project::detect(&root).unwrap();
             assert_eq!(project.chip.as_deref(), Some(chip));
-            assert_eq!(
-                project.configured_target.as_deref(),
-                Some("riscv32ec-unknown-none-elf")
-            );
-            assert_eq!(project.configured_toolchain.as_deref(), Some("nightly"));
+            assert_eq!(project.configured_target.as_deref(), Some(target));
+            assert_eq!(project.configured_toolchain.as_deref(), Some(channel));
             let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
             assert!(manifest.contains("name    = \"blinky\""), "{manifest}");
             assert!(!manifest.contains("[workspace]"), "{manifest}");
@@ -1047,15 +1146,15 @@ mod tests {
             let lit = crate::nets::evaluate(crate::nets::Inputs {
                 sheet: &sheet,
                 rows: &rows,
-                gpio: &HashMap::from([(20u8, true)]),
+                gpio: &HashMap::from([(led, true)]),
                 pressed: &HashSet::new(),
             });
             assert!(lit.warnings.is_empty(), "{chip}: {:?}", lit.warnings);
-            assert!(lit.is_lit("D1"), "{chip}: PC4 high lights the LED");
+            assert!(lit.is_lit("D1"), "{chip}: the LED's pin high lights it");
             assert_eq!(
                 crate::nets::button_drives(&sheet, &rows, "SW1"),
-                Some((17, false)),
-                "{chip}: the button pulls PC1 to ground"
+                Some((button, false)),
+                "{chip}: the button pulls its pin to ground"
             );
             // Written once: a second time meets the files that are there.
             assert!(write_itself(parent.path(), &wanted).is_err());

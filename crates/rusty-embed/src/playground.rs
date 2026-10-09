@@ -26,6 +26,9 @@
 //! LED with a button, built with nightly and proven in rusty's emulator of
 //! the part (`rusty-mcu`) — it carries the target description its build
 //! needs, and a `build.rs` of its own, since esp-hal's links another script.
+//! The CH32X035F8U6's is the same example on PB12 and PB1, for a target
+//! rustup ships and stable Rust, proven in the same emulator; it shares the
+//! V003's lockfile and `build.rs`, which do not change with the part.
 
 use std::path::{Path, PathBuf};
 
@@ -121,6 +124,39 @@ fn template(chip: &str) -> Option<&'static [File]> {
             (
                 ".rusty/sim.toml",
                 include_str!("../data/playground/ch32v003j4m6/sim.toml.in"),
+            ),
+        ]),
+        // The lockfile and build script are the V003's: ch32-hal's
+        // dependencies do not change with the part, and cargo writes the
+        // same lock for either.
+        "ch32x035f8u6" => Some(&[
+            (
+                "Cargo.toml",
+                include_str!("../data/playground/ch32x035f8u6/Cargo.toml.in"),
+            ),
+            (
+                "Cargo.lock",
+                include_str!("../data/playground/ch32v003j4m6/Cargo.lock.in"),
+            ),
+            (
+                "build.rs",
+                include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
+            ),
+            (
+                "rust-toolchain.toml",
+                include_str!("../data/playground/ch32x035f8u6/rust-toolchain.toml.in"),
+            ),
+            (
+                ".cargo/config.toml",
+                include_str!("../data/playground/ch32x035f8u6/cargo-config.toml.in"),
+            ),
+            (
+                MAIN,
+                include_str!("../data/playground/ch32x035f8u6/main.rs.in"),
+            ),
+            (
+                ".rusty/sim.toml",
+                include_str!("../data/playground/ch32x035f8u6/sim.toml.in"),
             ),
         ]),
         "draw" => Some(&[
@@ -403,11 +439,13 @@ mod tests {
         use std::collections::{HashMap, HashSet};
 
         let data = tempfile::tempdir().unwrap();
-        // The CH32V003's pins are numbered eight to a port: PC4 is 20, PC1 17.
+        // The CH32V003's pins are numbered eight to a port: PC4 is 20, PC1
+        // 17. The CH32X035's twenty-four: PB12 is 36, PB1 25.
         for (chip, led, button) in [
             ("esp32c3", 0u8, 4u8),
             ("esp32", 2, 4),
             ("ch32v003j4m6", 20, 17),
+            ("ch32x035f8u6", 36, 25),
         ] {
             let root = prepare(data.path(), chip).unwrap();
             let sheet = crate::simulate::load_board_for_test(&root, chip)

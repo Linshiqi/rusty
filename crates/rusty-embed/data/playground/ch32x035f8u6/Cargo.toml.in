@@ -1,0 +1,29 @@
+# rusty's playground for the CH32X035F8U6. Edit src/main.rs and press Run.
+#
+# `[workspace]` on its own keeps this a project of its own, wherever the
+# data directory happens to sit.
+[workspace]
+
+[package]
+edition = "2024"
+name    = "playground"
+version = "0.1.0"
+
+[[bin]]
+name = "playground"
+path = "./src/main.rs"
+
+[dependencies]
+# ch32-hal is not on crates.io yet; the revision is the one this playground
+# was proven against, and Cargo.lock holds everything under it.
+ch32-hal   = { git = "https://github.com/ch32-rs/ch32-hal", rev = "5f0e963e4074fd3335902c79cc9c0fa342e39606", features = ["ch32x035f8u6", "memory-x", "rt"] }
+qingke     = "0.8"
+qingke-rt  = "0.8"
+panic-halt = "1.0"
+
+# Optimised for size even while trying things, and with link-time
+# optimisation: 62 KB is room enough, and the size is what Flash will write.
+[profile.release]
+debug     = 2
+lto       = true
+opt-level = "z"

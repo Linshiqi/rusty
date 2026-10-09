@@ -6,10 +6,16 @@
 
 /// The playgrounds, in the order they are offered: one per chip rusty's
 /// emulators model whole — the C3 first, because it builds with stable Rust
-/// and needs nothing else installed; the CH32V003J4M6, which rusty emulates
-/// itself, after the Espressif parts, because it needs nightly — and
-/// [`PLAYGROUND_DRAW`], which is no chip at all.
-pub const PLAYGROUNDS: [&str; 4] = ["esp32c3", "esp32", "ch32v003j4m6", PLAYGROUND_DRAW];
+/// and needs nothing else installed; WCH's two, which rusty emulates itself,
+/// after the Espressif parts, the CH32V003J4M6 needing nightly and the
+/// CH32X035F8U6 stable — and [`PLAYGROUND_DRAW`], which is no chip at all.
+pub const PLAYGROUNDS: [&str; 5] = [
+    "esp32c3",
+    "esp32",
+    "ch32v003j4m6",
+    "ch32x035f8u6",
+    PLAYGROUND_DRAW,
+];
 
 /// The drawing playground: Rust on this machine drawing vectors into the
 /// Draw tab through rusty-draw — no chip, no board, stable Rust.

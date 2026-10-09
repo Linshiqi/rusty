@@ -215,12 +215,19 @@ cargo run -p rusty-edit --features backend --example unlinked_probe -- <project>
 # the reader made of it -- how tests/fixtures/easyeda/ was captured
 cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 
-# A CH32V003 firmware in rusty's own emulator of the part, with no window:
+# A CH32 firmware in rusty's own emulator of the part, with no window:
 # every pin it drove, every PWM duty, every line it printed, stamped with the
-# part's time, and how long the host took. The fixture is ch32-hal's PWM
-# example, built with nightly; `rusty-cli sim` runs a CH32 project the same
+# part's time, and how long the host took. The fixtures are ch32-hal's PWM
+# example, the V003's built with nightly and the X035's with stable; the
+# chip is the V003 unless named. `rusty-cli sim` runs a CH32 project the same
 # way the window does, build included.
 cargo run --release -p rusty-mcu --example mcu_probe -- crates/rusty-mcu/tests/fixtures/ch32v003-pwm/pwm.elf 2000
+cargo run --release -p rusty-mcu --example mcu_probe -- crates/rusty-mcu/tests/fixtures/ch32x035-pwm/pwm.elf 2000 ch32x035f8u6
+
+# The CH32X035's remap tables, generated from ch32-metapac rather than typed
+python crates/rusty-mcu/scripts/x035_pins.py \
+  ~/.cargo/registry/src/*/ch32-metapac-0.1.1/src/chips/metadata_0036.rs \
+  crates/rusty-mcu/src/ch32/x035_pins.rs
 
 # Drawing from code, the worked end: an f32 vector type, an example that
 # draws two vectors and their cross product, and a test that draws and
@@ -246,7 +253,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it. So is the math toolbox: `scene` is its 3-D view — a camera, a projection, shapes turned into SVG paths sorted back to front, the quadcopter — pure and tested, and `view/panels/math/` is the page |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
-| `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — the CH32V003, which nobody's QEMU models. Pure: `cpu` is a QingKe V2A hart (RV32EC, Zicsr, the address vector table, the hardware stack), `elf` loads a flasher's view of an image, `ch32v003/` is the part — the clock tree, GPIO with AFIO's remaps and EXTI, TIM1/TIM2, SysTick, the PFIC, USART1 and the debug registers SDI print writes through — and its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *The CH32V003* |
+| `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — WCH's CH32V003 and CH32X035, which nobody's QEMU models. Pure: `cpu` is a QingKe hart, the V2A's RV32EC or the V4C's RV32IMAC (`Core`), with Zicsr, the address vector table and the hardware stack; `elf` loads a flasher's view of an image; `ch32/` is one machine for both parts — the clock tree, GPIO with AFIO's remaps and EXTI, the timers, SysTick, the PFIC, the USARTs and the debug registers SDI print writes through — with what differs between them as data in `ch32/part.rs`; its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *WCH's parts* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
 
 ## The rules that are load-bearing
@@ -5154,12 +5161,14 @@ of their own. So the picture comes from their code.
   observer — shared by the Math panel and the Draw tab, so a vector is the
   same arrow in the same colours in both.
 
-## The CH32V003
+## WCH's parts: the CH32V003 and the CH32X035
 
-WCH's 16 KB RISC-V part, through ch32-rs's crates: ch32-hal (from git — it
-is not on crates.io), qingke-rt, wlink. Everything rusty does for an ESP32
-it does for a CH32V003 project except debugging, and the simulator is its
-own.
+WCH's small RISC-V parts, through ch32-rs's crates: ch32-hal (from git — it
+is not on crates.io), qingke-rt, wlink. The CH32V003 (16 KB, a QingKe V2A)
+came first and most of what follows was learned on it; the CH32X035F8U6
+(62 KB, a V4C, USB and USB PD) followed, and the last bullets say what it
+changed. Everything rusty does for an ESP32 it does for either except
+debugging, and the simulator is its own.
 
 - **One catalogue entry per package**, `ch32v003j4m6`, `…f4p6`, `…f4u6`,
   because ch32-hal selects the part by package feature and probe-rs names
@@ -5246,6 +5255,44 @@ own.
   an F4P6's row 6 is a GPIO. SDI print is printed once: it waits for a
   debugger to take each line, and a board with no WCH-LinkE would wait for
   ever at the second.
+- **One machine, two parts; what differs is data** (`ch32/part.rs`): the
+  core, the memories, the die's pins, how wide a port is, which timers and
+  USARTs sit where and which interrupt each raises, the blocks and what is
+  missing. Where a layout differs in kind — the X035's RCC has only its
+  48 MHz HSI and a divider, its AFIO two `EXTICR`s and a remap field per
+  timer, its GPIO `CFGHR`/`CFGXR`/`BSXR` — the peripheral asks `Family`.
+  The V003's machine was generalised, not copied: eight hundred lines of
+  run loop twice is two run loops that drift.
+- **The X035's ports are twenty-four pins wide, so it is numbered
+  twenty-four to a port** (PB12 is 36, PC19 67), where the V003 is eight.
+  The width is per part on both sides of the wire — `Part::width` in the
+  emulator, `nets::port_width` for every name a pin is given — and a test
+  holds the two equal for every pin either part has; a WCH family nobody
+  has measured gets no port names at all rather than eight to a port.
+- **The V4C is not the V2A with more registers.** RV32IMAC: thirty-two
+  registers, multiply and divide (the fixture's image has twelve), the
+  atomics; `GINTENR` (CSR 0x800), qingke's critical sections' window onto
+  MIE and MPIE, without which `gintenr::set_enable()` enabled nothing; SDI
+  print at 0xE0000380, not 0xE00000F4; a 64-bit SysTick with `INIT`; and a
+  hardware stack that keeps sixteen registers. Each is a field of `Core` or
+  a `wide` SysTick, and the V2A still refuses everything it lacks.
+- **The X035 builds with stable Rust**, for `riscv32imc-unknown-none-elf`,
+  a target rustup ships — ch32-hal's examples' own — so it is `stock` in
+  the catalogue and none of the nightly machinery applies. The playground
+  and the wizard's template share the V003's lockfile and `build.rs`:
+  ch32-hal's dependencies do not change with the part, and cargo writes
+  the same lock (`--locked` builds it). Its PWM is ch32-hal's example's
+  PB12, TIM1 channel 4 under remap 2, with the button on PB1.
+- **Its remap tables are generated, never typed** (`scripts/x035_pins.py`
+  over ch32-metapac's `metadata_0036.rs`): four timers' and four USARTs'
+  pins by remap value. The F8U6's nineteen GPIOs were read off the
+  datasheet's QFN20 pinout, since ch32-data lists the family's pins and not
+  a package's. **Proven in the emulator and against ch32-hal's code, not
+  against a board**: nobody here has one.
+- **"Has no serial bootloader" was never true.** The refusal for a serial
+  flash said so of every part without espflash, and an STM32 has a UART
+  bootloader, the X035 WCH's ISP. What is true is that espflash speaks only
+  Espressif's ROM protocol; the refusal says that now.
 
 ## Meeting C
 

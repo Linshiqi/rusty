@@ -75,7 +75,10 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("{chip} has no serial bootloader — flash it through a debug probe instead")]
+    #[error(
+        "{chip} is not flashed over a serial port here: espflash speaks only Espressif's ROM \
+         bootloader — flash it through a debug probe instead"
+    )]
     NoSerialBootloader { chip: String },
 
     /// A port that would not open. Usually something else already has it: a

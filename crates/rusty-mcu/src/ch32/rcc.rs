@@ -2,7 +2,12 @@
 //! the system runs from and how far the AHB divides it. Every timer, SysTick
 //! and the hart itself count in HCLK, so HCLK is the one number this exists
 //! to answer — in ticks of the machine's 48 MHz time base.
+//!
+//! The CH32V003 runs from a 24 MHz HSI, doubled by a PLL, or an external
+//! crystal; the CH32X035 from a 48 MHz HSI and nothing else — no PLL, no
+//! HSE, so its `CTLR` and `CFGR0` keep only the HSI and the AHB divider.
 
+use super::part::Family;
 pub use crate::BASE_HZ;
 
 const HSION: u32 = 1 << 0;
@@ -13,6 +18,7 @@ const PLLON: u32 = 1 << 24;
 const PLLRDY: u32 = 1 << 25;
 
 pub struct Rcc {
+    family: Family,
     ctlr: u32,
     cfgr0: u32,
     intr: u32,
@@ -27,14 +33,19 @@ pub struct Rcc {
     pub wants_crystal: bool,
 }
 
-impl Default for Rcc {
-    fn default() -> Self {
+impl Rcc {
+    pub fn new(family: Family) -> Self {
         Self {
+            family,
             // HSI on and ready, trimmed to the middle.
             ctlr: HSION | HSIRDY | (16 << 3),
-            // HPRE = DIV3: the part comes out of reset at 24 / 3 = 8 MHz,
-            // which ch32-hal's default configuration keeps.
-            cfgr0: 0b0010 << 4,
+            // Both parts come out of reset at 8 MHz, which ch32-hal's
+            // default configuration keeps: HPRE DIV3 of 24 on the V003,
+            // DIV6 of 48 on the X035.
+            cfgr0: match family {
+                Family::V003 => 0b0010 << 4,
+                Family::X035 => 0b0101 << 4,
+            },
             intr: 0,
             apb2prstr: 0,
             apb1prstr: 0,
@@ -46,9 +57,7 @@ impl Default for Rcc {
             wants_crystal: false,
         }
     }
-}
 
-impl Rcc {
     /// Ready bits follow their enables at once — except HSE's, because the
     /// board has no crystal. A firmware that waits for one waits for ever,
     /// as it would on a J4M6 board without one, and the machine names why.
@@ -92,14 +101,20 @@ impl Rcc {
     }
 
     pub fn write(&mut self, offset: u32, value: u32) {
+        // The X035 has nothing but the HSI and the divider: the bits the
+        // V003 gives its PLL and its crystal are not there.
+        let (ctlr_bits, cfgr0_bits) = match self.family {
+            Family::V003 => (u32::MAX, u32::MAX),
+            Family::X035 => (0x0000_FFFF, 0x0700_00F0),
+        };
         match offset {
             0x00 => {
-                if value & HSEON != 0 {
+                if self.family == Family::V003 && value & HSEON != 0 {
                     self.wants_crystal = true;
                 }
-                self.ctlr = value;
+                self.ctlr = value & ctlr_bits;
             }
-            0x04 => self.cfgr0 = value,
+            0x04 => self.cfgr0 = value & cfgr0_bits,
             // Flags clear by writing their clear bits; nothing here raises
             // one, so only the enables are kept.
             0x08 => self.intr = value & 0x0000_1F00,
@@ -120,9 +135,14 @@ impl Rcc {
         }
     }
 
-    /// SYSCLK in MHz: 24 from HSI, 48 from the PLL doubling it.
+    /// SYSCLK in MHz: on the V003 24 from HSI, 48 from the PLL doubling
+    /// it; on the X035 always its 48 MHz HSI.
     fn sysclk_mhz(&self) -> u64 {
-        if self.sws() == 0b10 { 48 } else { 24 }
+        match self.family {
+            Family::X035 => 48,
+            Family::V003 if self.sws() == 0b10 => 48,
+            Family::V003 => 24,
+        }
     }
 
     /// One HCLK period in base ticks.
@@ -139,13 +159,13 @@ mod tests {
 
     #[test]
     fn out_of_reset_the_part_runs_at_eight_megahertz() {
-        let rcc = Rcc::default();
+        let rcc = Rcc::new(Family::V003);
         assert_eq!(BASE_HZ / rcc.hclk_period(), 8_000_000);
     }
 
     #[test]
     fn the_pll_from_hsi_with_no_divider_is_forty_eight() {
-        let mut rcc = Rcc::default();
+        let mut rcc = Rcc::new(Family::V003);
         rcc.write(0x04, 0); // HPRE DIV1, PLLSRC HSI, SW HSI
         rcc.write(0x00, rcc.read(0x00) | PLLON);
         assert_ne!(rcc.read(0x00) & PLLRDY, 0);
@@ -155,8 +175,22 @@ mod tests {
     }
 
     #[test]
+    fn the_x035_runs_at_eight_megahertz_from_reset_and_its_divider_alone_moves_it() {
+        let mut rcc = Rcc::new(Family::X035);
+        assert_eq!(BASE_HZ / rcc.hclk_period(), 8_000_000);
+        // ch32-hal's SYSCLK_FREQ_48MHZ_HSI: HPRE DIV1, and nothing else.
+        rcc.write(0x04, 0);
+        assert_eq!(BASE_HZ / rcc.hclk_period(), 48_000_000);
+        rcc.write(0x04, 0b0001 << 4);
+        assert_eq!(BASE_HZ / rcc.hclk_period(), 24_000_000);
+        // A V003's PLL switch means nothing here.
+        rcc.write(0x04, 0b10);
+        assert_eq!(BASE_HZ / rcc.hclk_period(), 48_000_000);
+    }
+
+    #[test]
     fn hse_never_comes_ready_and_says_it_was_wanted() {
-        let mut rcc = Rcc::default();
+        let mut rcc = Rcc::new(Family::V003);
         rcc.write(0x00, rcc.read(0x00) | HSEON);
         assert_eq!(rcc.read(0x00) & HSERDY, 0);
         assert!(rcc.wants_crystal);

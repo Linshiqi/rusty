@@ -328,3 +328,132 @@ fn an_unmapped_fetch_faults_with_its_address() {
         }
     );
 }
+
+/// An A-extension word: funct5, aq/rl clear, rs2, rs1, funct3 2, rd.
+fn amo(funct5: u32, rd: u32, rs1: u32, rs2: u32) -> u32 {
+    (funct5 << 27) | (rs2 << 20) | (rs1 << 15) | (2 << 12) | (rd << 7) | 0x2F
+}
+
+#[test]
+fn the_v4c_multiplies_and_divides_as_the_specification_says() {
+    let mut bus = Flat::with(&[
+        addi(1, 0, -7),
+        addi(2, 0, 3),
+        r_type(1, 2, 1, 0, 3), // mul   -21
+        r_type(1, 2, 1, 4, 4), // div   -2, toward zero
+        r_type(1, 2, 1, 6, 5), // rem   -1, the dividend's sign
+        r_type(1, 2, 1, 3, 6), // mulhu (2^32 - 7) * 3 >> 32 = 2
+        r_type(1, 0, 1, 4, 7), // div by zero: all ones
+        r_type(1, 0, 1, 6, 8), // rem by zero: the dividend
+        r_type(1, 0, 1, 5, 9), // divu by zero: all ones
+        lui(10, 0x8000_0000),
+        addi(11, 0, -1),
+        r_type(1, 11, 10, 4, 12), // the one overflow: MIN / -1 is MIN
+        r_type(1, 11, 10, 6, 13), // and its remainder zero
+        r_type(1, 2, 1, 1, 16),   // mulh -7 * 3: the high half of -21
+    ]);
+    let mut hart = Hart::with(Core::V4C);
+    run(&mut hart, &mut bus, 14);
+    assert_eq!(hart.x[3] as i32, -21);
+    assert_eq!(hart.x[4] as i32, -2);
+    assert_eq!(hart.x[5] as i32, -1);
+    assert_eq!(hart.x[6], 2);
+    assert_eq!(hart.x[7], u32::MAX);
+    assert_eq!(hart.x[8] as i32, -7);
+    assert_eq!(hart.x[9], u32::MAX);
+    assert_eq!(hart.x[12], 0x8000_0000);
+    assert_eq!(hart.x[13], 0);
+    assert_eq!(hart.x[16], u32::MAX, "x16 exists on an RV32I core");
+}
+
+#[test]
+fn the_v4c_has_thirty_two_registers_and_misa_says_imac() {
+    let mut bus = Flat::with(&[addi(31, 0, 5), csrrs(30, 0x301, 0)]);
+    let mut hart = Hart::with(Core::V4C);
+    run(&mut hart, &mut bus, 2);
+    assert_eq!(hart.x[31], 5);
+    let misa = hart.x[30];
+    for letter in *b"imac" {
+        assert_ne!(misa & (1 << (letter - b'a')), 0, "{}", letter as char);
+    }
+    assert_eq!(misa & (1 << 4), 0, "not E");
+}
+
+/// An AMO returns the old word and stores the new; `sc.w` stores only
+/// under the reservation `lr.w` made, and says which with zero or one.
+#[test]
+fn the_v4c_atomics_swap_add_and_hold_a_reservation() {
+    let mut bus = Flat::with(&[
+        addi(1, 0, 0x200),
+        addi(2, 0, 5),
+        sw(2, 1, 0),
+        addi(3, 0, 3),
+        amo(0x00, 4, 1, 3),  // amoadd.w x4, x3, (x1): x4 = 5, word = 8
+        amo(0x01, 5, 1, 2),  // amoswap.w x5, x2, (x1): x5 = 8, word = 5
+        amo(0x02, 6, 1, 0),  // lr.w x6, (x1): 5, reserved
+        amo(0x03, 7, 1, 3),  // sc.w x7, x3, (x1): stores 3, x7 = 0
+        amo(0x03, 8, 1, 2),  // sc.w again: no reservation, x8 = 1
+        amo(0x10, 9, 1, 11), // amomin.w with x11 = 0: word = 0
+    ]);
+    let mut hart = Hart::with(Core::V4C);
+    run(&mut hart, &mut bus, 10);
+    assert_eq!((hart.x[4], hart.x[5], hart.x[6]), (5, 8, 5));
+    assert_eq!((hart.x[7], hart.x[8]), (0, 1));
+    assert_eq!(hart.x[9], 3);
+    assert_eq!(bus.word(0x200), 0);
+}
+
+#[test]
+fn the_v2a_refuses_the_atomics_and_gintenr_is_not_there() {
+    let mut bus = Flat::with(&[amo(0x00, 4, 1, 3)]);
+    let mut hart = Hart::new();
+    assert!(matches!(
+        hart.step(&mut bus),
+        Step::Trapped {
+            cause: cause::ILLEGAL_INSTRUCTION,
+            ..
+        }
+    ));
+    let mut bus = Flat::with(&[csrrs(1, 0x800, 0)]);
+    let mut hart = Hart::new();
+    hart.step(&mut bus);
+    assert_eq!(hart.unknown_csr, Some(0x800), "named, not modelled");
+}
+
+/// qingke's critical section on a V4: `csrrc 0x800, 0x88` takes MIE and
+/// MPIE away and hands back what they were; `csrs 0x800, 0x88` restores.
+#[test]
+fn gintenr_is_mstatus_mie_and_mpie_on_the_v4c() {
+    let mut bus = Flat::with(&[
+        addi(1, 0, 0x88),
+        csrrs(0, 0x800, 1),
+        (0x800 << 20) | (1 << 15) | (3 << 12) | (2 << 7) | 0x73, // csrrc x2, 0x800, x1
+        csrrs(3, 0x300, 0),
+    ]);
+    let mut hart = Hart::with(Core::V4C);
+    run(&mut hart, &mut bus, 4);
+    assert_eq!(hart.x[2], 0x88, "both were on");
+    assert_eq!(hart.x[3] & 0x88, 0, "and are off in mstatus");
+    assert_eq!(hart.unknown_csr, None);
+}
+
+/// The V4C's hardware stack keeps the RV32I caller-saved registers too:
+/// a6, a7 and t3..t6, which the V2A has not got.
+#[test]
+fn the_v4c_hardware_stack_keeps_the_registers_rv32e_lacks() {
+    let mut bus = Flat::with(&[]);
+    bus.store(0x100, Size::Word, addi(17, 0, 99)).unwrap();
+    bus.store(0x104, Size::Word, addi(31, 0, 98)).unwrap();
+    bus.store(0x108, Size::Word, MRET).unwrap();
+    bus.store(0x40 + 4 * 12, Size::Word, 0x100).unwrap();
+    let mut hart = Hart::with(Core::V4C);
+    hart.mtvec = 0x40 | 0b11;
+    hart.intsyscr = 1;
+    hart.mstatus |= MSTATUS_MIE;
+    hart.x[17] = 1;
+    hart.x[31] = 2;
+    hart.pc = 0x20;
+    hart.interrupt(&mut bus, 12);
+    run(&mut hart, &mut bus, 3);
+    assert_eq!((hart.x[17], hart.x[31]), (1, 2));
+}
