@@ -9,6 +9,29 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.75
+
+**A playground for drawing from Rust.** The welcome screen has a fourth
+playground, *Drawing in Rust*: plain Rust on your machine, stable toolchain,
+no board. Press ▶ Run above `main` and the Draw tab below shows what the
+code drew — vectors, points, lines and a turned coordinate frame — with the
+angles between the arrows worked out beside them. It carries the
+`rusty-draw` crate with it, so nothing needs downloading.
+
+**Every scene is listed.** A program that draws several scenes used to show
+only the last, with the others hidden in a drop-down. The Draw tab now lists
+them all — click one to see it — and the picture carries its scene's title.
+
+**Choose the colours in code.** `.color(Color::RED)` draws every shape after
+it in that colour, label included, and `.auto_color()` goes back to rusty's
+own. `Color::hex(0xe5484d)` and `Color::rgb(..)` work too. A coloured frame
+draws all three of its axes in its colour, so two attitudes can be told
+apart in one scene.
+
+**Labels no longer pile up.** Names that would be written over each other
+are stacked a line apart, and a frame names each of its axes (`body x`,
+`body y`, `body z`) instead of the first alone.
+
 ## v0.6.74
 
 **The CH32V003 is here.** rusty now knows WCH's 16 KB RISC-V part, in its
