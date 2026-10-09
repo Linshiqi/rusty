@@ -390,13 +390,19 @@ fn Playgrounds() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        let cards = rusty_embed::PLAYGROUND_CHIPS
+        let cards = rusty_embed::PLAYGROUNDS
             .into_iter()
             .map(|chip| {
-                let name = crate::command::chip_name(state, chip);
+                let name = crate::command::playground_name(state, chip);
+                let drawing = chip == rusty_embed::PLAYGROUND_DRAW;
+                let icon = if drawing { Icon::Math } else { Icon::Simulate };
                 // What it takes, from the catalogue: the architecture, and
-                // whether stable Rust builds for it or espup's has to.
-                let needs = state.project.chips.with(|chips| {
+                // whether stable Rust builds for it or espup's has to. The
+                // drawing playground is no chip's, and says what it draws.
+                let needs = if drawing {
+                    Some(t!("chrome.playground-draw-detail"))
+                } else {
+                    state.project.chips.with(|chips| {
                     chips.iter().find(|c| c.id == chip).map(|c| {
                         let toolchain = match c.toolchain {
                             rusty_embed::ToolchainRequirement::Stock => {
@@ -411,7 +417,8 @@ fn Playgrounds() -> impl IntoView {
                         };
                         format!("{} · {toolchain}", c.arch.label())
                     })
-                });
+                    })
+                };
                 view! {
                     <button
                         type="button"
@@ -420,7 +427,7 @@ fn Playgrounds() -> impl IntoView {
                     >
                         <span class="flex items-center gap-1.5 text-callout font-medium">
                             <span class="text-rust">
-                                <IconView icon=Icon::Simulate size=14 />
+                                <IconView icon=icon size=14 />
                             </span>
                             {name}
                         </span>

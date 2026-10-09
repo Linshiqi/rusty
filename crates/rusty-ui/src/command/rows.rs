@@ -50,10 +50,13 @@ pub fn all(state: AppState) -> Vec<Command> {
         &t!("menu.file.clone"),
         chord(Action::CloneRepository),
     ));
-    for chip in rusty_embed::PLAYGROUND_CHIPS {
+    for chip in rusty_embed::PLAYGROUNDS {
         out.push(action(
             Action::OpenPlayground(chip),
-            &t!("palette.playground", chip = chip_name(state, chip)),
+            &t!(
+                "palette.playground",
+                chip = super::playground_name(state, chip)
+            ),
             None,
         ));
     }

@@ -290,6 +290,8 @@ pub enum Ink {
     Guide,
     /// A row's own colour, from a small palette.
     Row(u8),
+    /// A colour a program chose for what it drew.
+    Rgb(u8, u8, u8),
 }
 
 /// A thing to draw, in world axes.
@@ -377,7 +379,59 @@ pub fn render(items: &[(Item, f64)], p: &Projector) -> Vec<Drawn> {
         .flat_map(|(item, opacity)| draw(item, *opacity, p))
         .collect();
     out.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+    declutter(&mut out);
     out
+}
+
+/// How tall a label's line is on the page, and how wide one of its
+/// characters: the 11 px monospace the view writes them in.
+const LABEL_LINE: f64 = 12.0;
+const LABEL_CHAR: f64 = 6.7;
+
+/// Move each label that would be written over another down a line, until it
+/// is clear. Three names at one point — an arrow's head, a point, a second
+/// arrow's head where the first ended — were written over each other into
+/// one unreadable smudge; stacked, each is read. In page order, so the same
+/// scene always stacks the same way and nothing jumps as it turns.
+fn declutter(drawn: &mut [Drawn]) {
+    let mut placed: Vec<(f64, f64, f64)> = Vec::new();
+    let mut order: Vec<usize> = drawn
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| matches!(d.svg, Svg::Text { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    // Top to bottom, then left to right: a label only ever moves down, past
+    // the ones above it.
+    order.sort_by(|&a, &b| {
+        let at = |i: usize| match &drawn[i].svg {
+            Svg::Text { x, y, .. } => (*y, *x),
+            _ => (0.0, 0.0),
+        };
+        let (ya, xa) = at(a);
+        let (yb, xb) = at(b);
+        ya.total_cmp(&yb).then(xa.total_cmp(&xb))
+    });
+    for i in order {
+        let Svg::Text { x, y, text } = &mut drawn[i].svg else {
+            continue;
+        };
+        let width = text.chars().count() as f64 * LABEL_CHAR;
+        let overlaps = |y: f64, placed: &[(f64, f64, f64)]| {
+            placed
+                .iter()
+                .any(|&(px, py, pw)| (y - py).abs() < LABEL_LINE && *x < px + pw && px < *x + width)
+        };
+        // A bounded walk: a pile of a hundred names at one point is a
+        // column, not a loop.
+        for _ in 0..64 {
+            if !overlaps(*y, &placed) {
+                break;
+            }
+            *y += LABEL_LINE;
+        }
+        placed.push((*x, *y, width));
+    }
 }
 
 fn draw(item: &Item, opacity: f64, p: &Projector) -> Vec<Drawn> {
@@ -578,6 +632,63 @@ fn f(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text_at(x: f64, y: f64, text: &str) -> Drawn {
+        Drawn {
+            svg: Svg::Text {
+                x,
+                y,
+                text: text.to_string(),
+            },
+            ink: Ink::Guide,
+            width: 0.0,
+            dashed: false,
+            fill: 0.0,
+            opacity: 1.0,
+            depth: 0.0,
+        }
+    }
+
+    fn ys(drawn: &[Drawn]) -> Vec<f64> {
+        drawn
+            .iter()
+            .map(|d| match d.svg {
+                Svg::Text { y, .. } => y,
+                _ => f64::NAN,
+            })
+            .collect()
+    }
+
+    /// Three names at one point — an arrow's head, a point, a second
+    /// arrow's head — stack a line apart instead of being written over
+    /// each other; a name with room of its own is left where it was.
+    #[test]
+    fn labels_at_one_point_are_stacked_and_a_clear_one_stays_put() {
+        let mut drawn = vec![
+            text_at(100.0, 50.0, "b"),
+            text_at(101.0, 51.0, "end"),
+            text_at(100.0, 50.0, "a + b"),
+            text_at(400.0, 50.0, "far"),
+        ];
+        declutter(&mut drawn);
+        let y = ys(&drawn);
+        assert_eq!(y[3], 50.0, "nothing near it, so it does not move");
+        let mut stack = [y[0], y[1], y[2]];
+        stack.sort_by(f64::total_cmp);
+        for pair in stack.windows(2) {
+            assert!(pair[1] - pair[0] >= LABEL_LINE, "{stack:?}");
+        }
+        assert_eq!(stack[0], 50.0, "the first keeps its place");
+    }
+
+    /// Side by side on one line is not an overlap: two names whose boxes
+    /// do not meet are both left alone.
+    #[test]
+    fn labels_side_by_side_are_not_moved() {
+        let mut drawn = vec![text_at(100.0, 50.0, "ab"), text_at(130.0, 50.0, "cd")];
+        declutter(&mut drawn);
+        assert_eq!(ys(&drawn), vec![50.0, 50.0]);
+    }
 
     fn projector(frame: Frame, preset: Preset) -> Projector {
         Projector::new(&Camera::preset(preset, frame), frame, 800.0, 600.0)

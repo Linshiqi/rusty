@@ -50,11 +50,13 @@ pub enum Shape {
     },
 }
 
-/// A shape and what the program called it.
+/// A shape, what the program called it, and the colour it chose for it —
+/// `None` leaves the colour to the view's palette.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mark {
     pub shape: Shape,
     pub label: String,
+    pub color: Option<[u8; 3]>,
 }
 
 /// One line of the protocol.
@@ -92,6 +94,15 @@ pub fn parse_draw(line: &str) -> Option<DrawLine> {
 
 fn read(rest: &str) -> Option<DrawLine> {
     let (verb, mut tail) = word(rest);
+    // A chosen colour rides on the verb: `vector#e5484d`. One that is not
+    // six hex digits makes the line no drawing, rather than a guess at it.
+    let (verb, color) = match verb.split_once('#') {
+        Some((verb, hex)) => (verb, Some(rgb(hex)?)),
+        None => (verb, None),
+    };
+    if color.is_some() && matches!(verb, "scene" | "end") {
+        return None;
+    }
     let (count, make): (usize, fn(&[f64; 9]) -> Shape) = match verb {
         "scene" => return Some(DrawLine::Scene(tail.trim().to_string())),
         "end" => return tail.trim().is_empty().then_some(DrawLine::End),
@@ -134,7 +145,17 @@ fn read(rest: &str) -> Option<DrawLine> {
     Some(DrawLine::Mark(Mark {
         shape: make(&numbers),
         label: tail.trim().to_string(),
+        color,
     }))
+}
+
+/// `rrggbb` as three bytes.
+fn rgb(hex: &str) -> Option<[u8; 3]> {
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 fn xyz(n: &[f64; 9], from: usize) -> Vec3 {
@@ -427,7 +448,26 @@ mod tests {
                 v: Vec3::new(v[0], v[1], v[2]),
             },
             label: label.to_string(),
+            color: None,
         }
+    }
+
+    /// A colour on the verb is the mark's; one that is not six hex digits,
+    /// or one on a scene's title, makes the line no drawing.
+    #[test]
+    fn a_colour_rides_on_the_verb() {
+        assert_eq!(
+            mark("[rusty:draw] vector#e5484d 1 0 0 a").color,
+            Some([0xe5, 0x48, 0x4d])
+        );
+        assert_eq!(
+            mark("[rusty:draw] frame#0080FF 1 0 0 0 q").color,
+            Some([0, 0x80, 0xff])
+        );
+        assert_eq!(mark("[rusty:draw] vector 1 0 0 a").color, None);
+        assert_eq!(parse_draw("[rusty:draw] vector#e548 1 0 0 a"), None);
+        assert_eq!(parse_draw("[rusty:draw] vector#gggggg 1 0 0 a"), None);
+        assert_eq!(parse_draw("[rusty:draw] scene#e5484d title"), None);
     }
 
     #[test]
@@ -673,6 +713,7 @@ mod tests {
                 v: Vec3::Y,
             },
             label: String::new(),
+            color: None,
         };
         let marks = [
             vector([1.0, 0.0, 0.0], "a"),
@@ -722,6 +763,7 @@ mod tests {
         let frame = |q: Quat| Mark {
             shape: Shape::Frame { q },
             label: String::new(),
+            color: None,
         };
         assert_eq!(flaw(&frame(Quat::IDENTITY)), None);
         assert_eq!(
@@ -743,6 +785,7 @@ mod tests {
                 Mark {
                     shape: Shape::Frame { q: Quat::IDENTITY },
                     label: String::new(),
+                    color: None,
                 },
             ],
             ..Sketch::default()

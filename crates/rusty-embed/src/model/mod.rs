@@ -42,7 +42,9 @@ pub use part::{
     Arch, Board, CatalogProblem, CatalogSource, Chip, Flasher, PinAssignment, Runtime,
     ToolchainRequirement, UsbMatch, Vendor,
 };
-pub use playground::{PLAYGROUND_CHIPS, PLAYGROUND_MAIN};
+pub use playground::{
+    PLAYGROUND_DRAW, PLAYGROUND_MAIN, PLAYGROUNDS, playground_has_board, playground_main,
+};
 pub use project::{
     CInterop, Edit, EmbeddedProject, FileChange, Migration, PinClaim, PinInfo, PinReport, Problem,
     ScaffoldReport, Severity,

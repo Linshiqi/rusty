@@ -16,6 +16,12 @@
 //! They sit in `data/playground/` with an `.in` on every name, so no tool
 //! walking the repository takes a template for a project of its own.
 //!
+//! The drawing playground is no chip's: a vector type, a test and an
+//! example that draw through rusty-draw into the Draw tab, on stable Rust.
+//! rusty-draw itself is written beside them from this rusty's own copy of
+//! its source, so the playground needs no network and draws exactly the
+//! lines this rusty reads.
+//!
 //! The CH32V003J4M6's is ch32-hal's own PWM example made into a breathing
 //! LED with a button, built with nightly and proven in rusty's emulator of
 //! the part (`rusty-mcu`) — it carries the target description its build
@@ -26,7 +32,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 // Spelled in the model, because the window offers the same list and opens
 // the same file.
-use crate::model::{PLAYGROUND_CHIPS as CHIPS, PLAYGROUND_MAIN as MAIN};
+use crate::model::{PLAYGROUND_MAIN as MAIN, PLAYGROUNDS as CHIPS};
 
 /// A template file: where it goes in the project, and what it says.
 type File = (&'static str, &'static str);
@@ -115,6 +121,32 @@ fn template(chip: &str) -> Option<&'static [File]> {
             (
                 ".rusty/sim.toml",
                 include_str!("../data/playground/ch32v003j4m6/sim.toml.in"),
+            ),
+        ]),
+        "draw" => Some(&[
+            (
+                "Cargo.toml",
+                include_str!("../data/playground/draw/Cargo.toml.in"),
+            ),
+            (
+                "Cargo.lock",
+                include_str!("../data/playground/draw/Cargo.lock.in"),
+            ),
+            (
+                "src/lib.rs",
+                include_str!("../data/playground/draw/lib.rs.in"),
+            ),
+            (
+                "examples/vectors.rs",
+                include_str!("../data/playground/draw/vectors.rs.in"),
+            ),
+            (
+                "rusty-draw/Cargo.toml",
+                include_str!("../data/playground/draw/rusty-draw-Cargo.toml.in"),
+            ),
+            (
+                "rusty-draw/src/lib.rs",
+                include_str!("../../rusty-draw/src/lib.rs"),
             ),
         ]),
         _ => None,
@@ -301,6 +333,30 @@ mod tests {
         assert!(unopened.contains("open it first"), "{unopened}");
     }
 
+    /// The drawing playground carries rusty-draw beside its code, the copy
+    /// this rusty reads, and takes it by path: nothing to fetch.
+    #[test]
+    fn the_drawing_playground_carries_the_crate_it_draws_with() {
+        let data = tempfile::tempdir().unwrap();
+        let root = prepare(data.path(), crate::model::PLAYGROUND_DRAW).unwrap();
+        let carried = std::fs::read_to_string(root.join("rusty-draw/src/lib.rs")).unwrap();
+        assert_eq!(carried, include_str!("../../rusty-draw/src/lib.rs"));
+        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(
+            manifest.contains("rusty-draw = { path = \"rusty-draw\" }"),
+            "{manifest}"
+        );
+        let example = std::fs::read_to_string(root.join("examples/vectors.rs")).unwrap();
+        let run = rusty_edit_like_example_main(&example);
+        assert!(run, "▶ Run has a `main` to stand over");
+    }
+
+    /// The lens's own rule, spelled in a line: an example file with a
+    /// top-level `fn main`. (rusty-edit is not a dependency of this crate.)
+    fn rusty_edit_like_example_main(text: &str) -> bool {
+        text.lines().any(|line| line.starts_with("fn main()"))
+    }
+
     /// A chip with no template is refused by name, with the ones there are.
     #[test]
     fn a_chip_without_a_playground_is_refused_with_the_ones_there_are() {
@@ -311,16 +367,28 @@ mod tests {
     }
 
     /// Each template is a project rusty itself reads the way it reads any
-    /// other: the chip it detects is the playground's and the target is set.
+    /// other: the chip it detects is the playground's and the target is set
+    /// — and the drawing playground is a plain host crate, with no chip and
+    /// no target, which is what lets ▶ Run appear over its example.
     #[test]
     fn every_playground_is_a_project_rusty_detects_as_its_chip() {
         let data = tempfile::tempdir().unwrap();
         for chip in CHIPS {
             let root = prepare(data.path(), chip).unwrap();
             let project = crate::project::detect(&root).unwrap();
+            assert!(
+                root.join(crate::model::playground_main(chip)).is_file(),
+                "{chip}: the file it opens on"
+            );
+            assert_eq!(chip_of(data.path(), &root), Some(chip));
+            if chip == crate::model::PLAYGROUND_DRAW {
+                assert_eq!(project.chip, None);
+                assert_eq!(project.configured_target, None);
+                assert!(!project.root_is_firmware());
+                continue;
+            }
             assert_eq!(project.chip.as_deref(), Some(chip), "{chip}");
             assert!(project.configured_target.is_some(), "{chip}");
-            assert_eq!(chip_of(data.path(), &root), Some(chip));
         }
         assert_eq!(chip_of(data.path(), &data.path().join("elsewhere")), None);
     }

@@ -110,7 +110,7 @@ pub fn keep_playground(state: AppState) {
                                 // A folder that was never a project has no
                                 // strip to put back; it opens on its code,
                                 // as the playground did.
-                                open_file(state, rusty_embed::PLAYGROUND_MAIN.to_string());
+                                open_file(state, rusty_embed::playground_main(chip).to_string());
                             })
                         },
                     ),
@@ -135,7 +135,7 @@ pub fn toggle_board(state: AppState) {
 /// backend takes — `None` for any other project.
 fn playground_chip(state: AppState) -> Option<&'static str> {
     let open = state.playground_now()?;
-    rusty_embed::PLAYGROUND_CHIPS
+    rusty_embed::PLAYGROUNDS
         .into_iter()
         .find(|chip| *chip == open)
 }

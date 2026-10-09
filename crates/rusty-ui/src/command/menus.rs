@@ -87,12 +87,12 @@ pub fn menus(state: AppState) -> Vec<Menu> {
                     Item::Submenu {
                         label: t!("menu.file.playground"),
                         items: {
-                            let mut items: Vec<Item> = rusty_embed::PLAYGROUND_CHIPS
+                            let mut items: Vec<Item> = rusty_embed::PLAYGROUNDS
                                 .into_iter()
                                 .map(|chip| {
                                     entry(
                                         Action::OpenPlayground(chip),
-                                        &chip_name(state, chip),
+                                        &super::playground_name(state, chip),
                                         None,
                                     )
                                 })

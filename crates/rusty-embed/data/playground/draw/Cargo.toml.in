@@ -1,0 +1,18 @@
+# rusty's drawing playground: Rust on this machine, drawing into the Draw tab.
+# Open examples/vectors.rs and press ▶ Run above `main`.
+#
+# `[workspace]` on its own keeps this a project of its own, wherever the
+# data directory happens to sit.
+[workspace]
+
+[package]
+edition = "2024"
+name    = "playground"
+version = "0.1.0"
+
+# What draws, kept beside the code rather than fetched: rusty-draw depends on
+# nothing, and this copy is the one this rusty reads. A project of your own
+# takes it from git instead:
+#   rusty-draw = { git = "https://github.com/Linshiqi/rusty" }
+[dev-dependencies]
+rusty-draw = { path = "rusty-draw" }

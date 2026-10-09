@@ -61,7 +61,7 @@ pub enum Action {
     StepInto,
     StepOut,
     /// A chip's playground, opened: code beside the board, no project to
-    /// make first. The chip as `rusty_embed::PLAYGROUND_CHIPS` spells it.
+    /// make first. The chip as `rusty_embed::PLAYGROUNDS` spells it.
     OpenPlayground(&'static str),
     /// The open playground's example back, and what is in it kept as a
     /// project of its own.
@@ -176,6 +176,16 @@ pub fn chip_name(state: AppState, chip: &str) -> String {
         .chips
         .with_untracked(|chips| chips.iter().find(|c| c.id == chip).map(|c| c.name.clone()))
         .unwrap_or_else(|| chip.to_uppercase())
+}
+
+/// A playground as the window names it: its chip, or for the drawing
+/// playground what it is for.
+pub fn playground_name(state: AppState, playground: &str) -> String {
+    if playground == rusty_embed::PLAYGROUND_DRAW {
+        t!("chrome.playground-draw")
+    } else {
+        chip_name(state, playground)
+    }
 }
 
 /// A recents entry as a menu label: the folder, then where it is — two

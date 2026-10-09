@@ -130,8 +130,13 @@ pub(super) fn project_opened(state: AppState, result: OpenResult) {
             // opens on its code; leaving one puts the board back where it
             // was. Between two ordinary projects the board stays as it was
             // set — anybody may put it beside their code.
-            if playground.is_some() {
-                state.layout.board_beside.set(true);
+            if let Some(playground) = &playground {
+                // The drawing playground has no board: what it draws is
+                // in the Draw tab below the code.
+                state
+                    .layout
+                    .board_beside
+                    .set(rusty_embed::playground_has_board(playground));
                 state.layout.panel.set("files".to_string());
             } else if was_playground {
                 state.layout.board_beside.set(false);
@@ -191,7 +196,9 @@ pub(super) fn project_opened(state: AppState, result: OpenResult) {
                 .detected
                 .with_untracked(|p| p.as_ref().map(|p| p.root.clone()))
             {
-                let first = playground.map(|_| rusty_embed::PLAYGROUND_MAIN.to_string());
+                let first = playground
+                    .as_deref()
+                    .map(|playground| rusty_embed::playground_main(playground).to_string());
                 restore_tabs(state, &root, first);
             }
         }
@@ -224,12 +231,17 @@ fn reload_project(state: AppState) {
             let root = project.root.clone();
             let first = project
                 .playground
-                .as_ref()
-                .map(|_| rusty_embed::PLAYGROUND_MAIN.to_string());
+                .as_deref()
+                .map(|playground| rusty_embed::playground_main(playground).to_string());
             // A window coming back to a playground lays it out as one; a
             // re-check leaves the board where the user put it.
-            if !state.has_project_now() && project.playground.is_some() {
-                state.layout.board_beside.set(true);
+            if !state.has_project_now()
+                && let Some(playground) = &project.playground
+            {
+                state
+                    .layout
+                    .board_beside
+                    .set(rusty_embed::playground_has_board(playground));
             }
             state.project.detected.set(Some(project));
             refresh_toolchain(state);

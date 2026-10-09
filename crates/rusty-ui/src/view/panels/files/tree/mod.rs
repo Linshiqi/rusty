@@ -120,11 +120,18 @@ fn PlaygroundBar() -> impl IntoView {
 
     move || {
         let open = state.playground()?;
-        let chips = rusty_embed::PLAYGROUND_CHIPS
+        // What the playground is for, said beside its tabs: a chip's runs
+        // on its board, the drawing playground's draws below.
+        let hint = if open == rusty_embed::PLAYGROUND_DRAW {
+            t!("playground.hint-draw")
+        } else {
+            t!("playground.hint")
+        };
+        let chips = rusty_embed::PLAYGROUNDS
             .into_iter()
             .map(|chip| {
                 let here = chip == open;
-                let name = crate::command::chip_name(state, chip);
+                let name = crate::command::playground_name(state, chip);
                 view! {
                     <button
                         type="button"
@@ -148,9 +155,7 @@ fn PlaygroundBar() -> impl IntoView {
                 </span>
                 <span class="text-footnote font-semibold">{t!("playground.title")}</span>
                 <div class="flex items-center gap-px rounded-[6px] bg-sunken p-0.5">{chips}</div>
-                <span class="min-w-0 truncate text-caption text-label-4">
-                    {t!("playground.hint")}
-                </span>
+                <span class="min-w-0 truncate text-caption text-label-4">{hint}</span>
                 <span class="flex-1" />
                 <button
                     type="button"

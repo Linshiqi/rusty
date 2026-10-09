@@ -386,12 +386,12 @@ signals = "Signals"
 draw = "Draw"
 
 [draw]
+scenes = "{count} scenes"
 # The Draw tab: what a program drew with the rusty-draw crate — vectors,
 # points and frames in space, and the angles between them.
 empty = "Nothing drawn yet. A test or an example that draws with the rusty-draw crate shows here when it runs."
 dependency = "In the crate's Cargo.toml:"
-newest = "Newest"
-pick-hint = "Every scene drawn so far; the newest shows unless you choose one"
+pick-hint = "Show this scene; the newest is followed when it is picked"
 untitled = "Untitled"
 unfinished = "Unfinished — the program stopped before the scene ended"
 truncated = "Only the first {count} shapes are kept"
@@ -529,12 +529,15 @@ playground-detail = "Code beside a simulated board that runs it — no project t
 playground-stable = "stable Rust"
 playground-espup = "needs espup's toolchain"
 playground-nightly = "nightly Rust"
+playground-draw = "Drawing in Rust"
+playground-draw-detail = "vectors, points and frames · stable Rust"
 
 [playground]
 # The row across the top of a playground: that it is one, which chip it is
 # for, and the two things only a playground can do.
 title = "Playground"
 hint = "Change the code, then Run — running again restarts it with the change."
+hint-draw = "Press ▶ Run above main — the scene appears in the Draw tab below."
 reset = "Restore example"
 reset-question = "Put the example back? The code and the board in this playground are replaced by the example's."
 keep = "Keep as project…"

@@ -68,7 +68,10 @@ pub fn palette(index: usize) -> &'static str {
 /// A colour for what something stands for: the theme's, through its
 /// variables, except the axes and the palette, which are the same colours
 /// in every theme for the reason the Git lanes are.
-pub fn colour(ink: Ink) -> &'static str {
+pub fn colour(ink: Ink) -> std::borrow::Cow<'static, str> {
+    if let Ink::Rgb(r, g, b) = ink {
+        return format!("#{r:02x}{g:02x}{b:02x}").into();
+    }
     match ink {
         Ink::AxisX => "#e5484d",
         Ink::AxisY => "#30a46c",
@@ -81,7 +84,9 @@ pub fn colour(ink: Ink) -> &'static str {
         Ink::Second => "var(--amber)",
         Ink::Term => "var(--patina)",
         Ink::Row(i) => palette(usize::from(i)),
+        Ink::Rgb(..) => unreachable!("answered above"),
     }
+    .into()
 }
 
 /// One drawn piece as the element that puts it on the page.

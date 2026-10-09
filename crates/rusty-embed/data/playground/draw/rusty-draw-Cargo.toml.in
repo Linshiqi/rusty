@@ -1,0 +1,13 @@
+[package]
+name = "rusty-draw"
+description = "Draw vectors, points and frames from Rust code into rusty's 3-D view"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# `Scene`, which prints itself; without it only `SceneOn`, which writes to
+# whatever `fmt::Write` it is handed — a UART, esp-println's `Printer`.
+default = ["std"]
+std = []
+
+[dependencies]

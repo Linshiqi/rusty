@@ -367,10 +367,10 @@ signals = "信号"
 draw = "绘图"
 
 [draw]
+scenes = "{count} 个场景"
 empty = "还没有绘制。用 rusty-draw crate 绘图的测试或示例，运行后会显示在这里。"
 dependency = "在 crate 的 Cargo.toml 里："
-newest = "最新"
-pick-hint = "目前绘制过的所有场景；不选时显示最新的"
+pick-hint = "显示这个场景；选最新的一个时，之后总跟着最新的"
 untitled = "未命名"
 unfinished = "未完成——程序在场景结束前停止了"
 truncated = "只保留前 {count} 个图形"
@@ -499,10 +499,13 @@ playground-detail = "代码旁边就是运行它的仿真开发板，无需先�
 playground-stable = "稳定版 Rust"
 playground-espup = "需要 espup 安装的工具链"
 playground-nightly = "nightly 版 Rust"
+playground-draw = "Rust 绘图"
+playground-draw-detail = "向量、点和坐标系 · 稳定版 Rust"
 
 [playground]
 title = "演练场"
 hint = "改完代码点运行；再点一次，会带着改动重新启动。"
+hint-draw = "点 main 上方的 ▶ 运行，场景会出现在下方的「绘图」标签页。"
 reset = "恢复示例"
 reset-question = "恢复示例？这个演练场里的代码和电路都会被示例替换。"
 keep = "保存为项目…"

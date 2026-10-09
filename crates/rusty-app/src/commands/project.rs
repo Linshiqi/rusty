@@ -108,6 +108,13 @@ fn detected_at(root: &Path, firmware: &Path) -> Answer<EmbeddedProject> {
     project.playground = storage::data_dir()
         .and_then(|data| rusty_embed::playground::chip_of(&data, root))
         .map(str::to_string);
+    // The drawing playground is a host crate on purpose: "no chip" is what
+    // it is, not a firmware that forgot to say which.
+    if project.playground.as_deref() == Some(rusty_embed::PLAYGROUND_DRAW) {
+        project
+            .problems
+            .retain(|problem| problem.kind != "chip-none");
+    }
     Ok(project)
 }
 

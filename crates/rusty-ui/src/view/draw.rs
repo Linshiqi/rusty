@@ -18,7 +18,7 @@ use crate::controller;
 use crate::scene::{self, Camera, Ink, Item, Look, Projector, model};
 use crate::state::{AppState, Framed};
 use crate::view::icon::{Icon, IconView};
-use crate::view::space::{PALETTE, follow_size, nice_step, palette, svg_of};
+use crate::view::space::{PALETTE, colour, follow_size, nice_step, svg_of};
 
 /// The scene the tab shows, and what it says about itself.
 #[component]
@@ -145,52 +145,68 @@ fn Legend(shown: Memo<Option<Sketch>>) -> impl IntoView {
     let hand =
         Memo::new(move |_| shown.with(|s| s.as_ref().and_then(|s| draw::handedness(&s.marks))));
 
-    let heading = move || {
-        let titles: Vec<String> = state
+    let title_of = |title: &str| {
+        if title.is_empty() {
+            t!("draw.untitled")
+        } else {
+            title.to_string()
+        }
+    };
+    let titles = move || {
+        state
             .draw
             .sketches
-            .with(|all| all.iter().map(|s| s.title.clone()).collect());
-        let title_of = |title: &str| {
-            if title.is_empty() {
-                t!("draw.untitled")
-            } else {
-                title.to_string()
-            }
-        };
-        if titles.len() < 2 {
-            let title = titles.first().map(|t| title_of(t)).unwrap_or_default();
-            return view! { <span class="min-w-0 flex-1 truncate font-medium text-label">{title}</span> }
-                .into_any();
+            .with(|all| all.iter().map(|s| s.title.clone()).collect::<Vec<_>>())
+    };
+    let heading = move || {
+        let titles = titles();
+        match titles.as_slice() {
+            [] => String::new(),
+            [only] => title_of(only),
+            many => t!("draw.scenes", count = many.len().to_string()),
         }
-        let chosen = state.draw.chosen.get();
-        let selected = chosen
-            .as_ref()
-            .and_then(|c| titles.iter().position(|t| t == c))
-            .map_or_else(|| "follow".to_string(), |i| i.to_string());
-        let options = titles
-            .iter()
-            .enumerate()
-            .map(|(i, title)| {
-                let value = i.to_string();
-                let on = value == selected;
-                view! { <option value=value selected=on>{title_of(title)}</option> }
+    };
+
+    // Every scene a run drew, one row each, the one on the page lit: a
+    // program that draws three scenes shows three rows. They were a
+    // drop-down that showed the newest, and the two before it read as
+    // never drawn. A click on the newest follows the newest again.
+    let scenes = move || {
+        let titles = titles();
+        if titles.len() < 2 {
+            return ().into_any();
+        }
+        let latest = state.draw.latest.get();
+        let showing = state.draw.chosen.get().or_else(|| latest.clone());
+        let rows = titles
+            .into_iter()
+            .map(|title| {
+                let on = showing.as_deref() == Some(title.as_str());
+                let class = if on {
+                    "flex w-full items-center gap-2 rounded-[5px] bg-sunken px-2 py-[3px] text-left text-label"
+                } else {
+                    "flex w-full items-center gap-2 rounded-[5px] px-2 py-[3px] text-left text-label-2 hover:bg-sunken hover:text-label"
+                };
+                let newest = latest.as_deref() == Some(title.as_str());
+                let shown_title = title_of(&title);
+                view! {
+                    <button
+                        type="button"
+                        class=class
+                        title=t!("draw.pick-hint")
+                        on:click=move |_| {
+                            let title = (!newest).then(|| title.clone());
+                            controller::choose_sketch(state, title);
+                        }
+                    >
+                        <span class=if on { "text-rust" } else { "text-transparent" }>"▸"</span>
+                        <span class="min-w-0 flex-1 truncate">{shown_title}</span>
+                    </button>
+                }
             })
             .collect_view();
-        let follow_on = selected == "follow";
-        let picked = titles.clone();
         view! {
-            <select
-                title=t!("draw.pick-hint")
-                class="h-[22px] min-w-0 flex-1 rounded-[5px] bg-sunken px-1 font-sans text-footnote text-label outline-none"
-                on:change=move |event| {
-                    let value = event_target_value(&event);
-                    let title = value.parse::<usize>().ok().and_then(|i| picked.get(i).cloned());
-                    controller::choose_sketch(state, title);
-                }
-            >
-                <option value="follow" selected=follow_on>{t!("draw.newest")}</option>
-                {options}
-            </select>
+            <div class="mb-1 flex flex-col gap-px border-b border-line px-1 pb-1 font-sans">{rows}</div>
         }
         .into_any()
     };
@@ -281,7 +297,7 @@ fn Legend(shown: Memo<Option<Sketch>>) -> impl IntoView {
     view! {
         <div class="flex w-[300px] flex-none flex-col overflow-y-auto border-r border-line py-1 font-mono text-footnote select-text">
             <div class="flex items-center gap-1 px-3 pt-0.5 pb-1 font-sans text-footnote">
-                {heading}
+                <span class="min-w-0 flex-1 truncate font-medium text-label">{heading}</span>
                 <button
                     type="button"
                     title=t!("draw.clear")
@@ -291,6 +307,7 @@ fn Legend(shown: Memo<Option<Sketch>>) -> impl IntoView {
                     <IconView icon=Icon::Close size=12 />
                 </button>
             </div>
+            {scenes}
             {notes}
             {rows}
             {relations}
@@ -315,7 +332,7 @@ fn mark_row(state: AppState, index: usize, mark: &Mark) -> impl IntoView + use<>
             <div class="flex items-center gap-2">
                 <span
                     class="size-2 flex-none rounded-full"
-                    style=format!("background: {}", palette(index))
+                    style=format!("background: {}", colour(ink(index, mark)))
                 />
                 <span class="min-w-0 flex-1 truncate text-label">{name}</span>
                 <span class="flex-none font-sans text-label-3">{detail}</span>
@@ -353,8 +370,7 @@ fn mark_points(sketch: &Sketch) -> Vec<Vec3> {
             Shape::Span { at, a, b } => points.extend([at, at + a, at + a + b, at + b]),
             Shape::Frame { q } => {
                 if let Some(q) = q.normalized() {
-                    points.extend([Vec3::X, Vec3::Y, Vec3::Z].map(|axis| q.rotate(axis)));
-                    points.push(q.rotate(Vec3::X) * 1.12);
+                    points.extend([Vec3::X, Vec3::Y, Vec3::Z].map(|axis| q.rotate(axis) * 1.12));
                 }
             }
         }
@@ -437,8 +453,13 @@ fn frame_points(sketch: &Sketch) -> Vec<Vec3> {
 /// down: room for a name written beside a tip, which runs across.
 const MARGIN: (f64, f64) = (30.0, 16.0);
 
-fn ink(index: usize) -> Ink {
-    Ink::Row((index % PALETTE.len()) as u8)
+/// The colour a mark is drawn in: the one its program chose, or the
+/// palette's colour for its place in the list.
+fn ink(index: usize, mark: &Mark) -> Ink {
+    match mark.color {
+        Some([r, g, b]) => Ink::Rgb(r, g, b),
+        None => Ink::Row((index % PALETTE.len()) as u8),
+    }
 }
 
 /// What one mark draws.
@@ -501,8 +522,39 @@ fn items_of(mark: &Mark, ink: Ink) -> Vec<Item> {
             let Some(q) = q.normalized() else {
                 return Vec::new();
             };
+            // A frame its program coloured is that colour throughout — two
+            // attitudes in one scene told apart — and otherwise its axes
+            // keep the red, green and blue of the axes they stand for.
+            let chosen = mark.color.map(|_| ink);
             let mut items = model::triad(q, 1.0, false);
-            items.extend(label(q.rotate(Vec3::X) * 1.12));
+            if let Some(chosen) = chosen {
+                for item in &mut items {
+                    if let Item::Arrow { ink, .. } = item {
+                        *ink = chosen;
+                    }
+                }
+            }
+            // Each of the body's axes named at its end — `body x`, `body y`,
+            // `body z`. Named at its X alone, the other two arrows were
+            // nobody's, and the name read as the label of whatever else ended
+            // near the X axis's tip.
+            for (axis, name, axis_ink) in [
+                (Vec3::X, "x", Ink::AxisX),
+                (Vec3::Y, "y", Ink::AxisY),
+                (Vec3::Z, "z", Ink::AxisZ),
+            ] {
+                let ink = chosen.unwrap_or(axis_ink);
+                let text = if mark.label.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{} {name}", mark.label)
+                };
+                items.push(Item::Label {
+                    at: q.rotate(axis) * 1.12,
+                    text,
+                    ink,
+                });
+            }
             items
         }
     }
@@ -539,7 +591,11 @@ pub(crate) fn compose(
             continue;
         }
         let o = strength(&[i]);
-        out.extend(items_of(mark, ink(i)).into_iter().map(|item| (item, o)));
+        out.extend(
+            items_of(mark, ink(i, mark))
+                .into_iter()
+                .map(|item| (item, o)),
+        );
     }
     for angle in angles.iter().filter(|angle| angle.square) {
         let shape = |i: usize| sketch.marks.get(i).map(|mark| mark.shape);
@@ -679,6 +735,9 @@ fn Space(shown: Memo<Option<Sketch>>) -> impl IntoView {
             >
                 {move || drawn.get().into_iter().map(svg_of).collect_view()}
             </svg>
+            <div class="pointer-events-none absolute top-2 left-3 max-w-[50%] truncate font-sans text-footnote font-medium text-label-2">
+                {move || shown.with(|s| s.as_ref().map(|s| s.title.clone()).unwrap_or_default())}
+            </div>
             <div class="absolute top-1.5 right-2 flex items-center gap-0.5 rounded-[7px] bg-raised/90 p-0.5 ring-1 ring-line">
                 <button type="button" class=tool title=t!("draw.look-iso-hint") on:click=move |_| look(Look::Iso)>
                     {t!("draw.look-iso")}

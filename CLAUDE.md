@@ -5090,6 +5090,28 @@ of their own. So the picture comes from their code.
   second, not fifty scenes. The first scene of a run brings the tab
   forward, and only the first — after that it would take the dock back
   every time somebody looked at Output.
+- **Every scene a run drew is a row, not an option.** The tab followed the
+  newest scene and kept the rest in a drop-down, so an example drawing
+  three scenes was reported as "where did a and b go" — the two before
+  the last read as never drawn. The list on the left has a row per scene
+  with the one on the page lit, the page carries its scene's title, and a
+  click on the newest row follows the newest again.
+- **Names do not sit on each other** (`scene::declutter`, after the depth
+  sort): a label whose box meets one already placed moves down a line, in
+  page order so a scene always stacks the same way. An arrow's head, a
+  point and a second arrow's head at one place were three names written
+  into one smudge. And a frame names each of its axes (`body x`, `body y`,
+  `body z`): named at its X alone, the other two arrows were nobody's and
+  the name read as a label of whatever ended near the X tip.
+- **A colour rides on the verb** (`vector#e5484d 1 0 0 a`), set by
+  `Scene::color` for every shape after it and handed back by
+  `auto_color`; a colour that is not six hex digits makes the line no
+  drawing. On the verb and not as a word before the label, because the
+  label is the rest of the line and may begin with anything. A coloured
+  frame draws all three axes in its colour — two attitudes told apart —
+  and an uncoloured one keeps red, green and blue. The drawing playground
+  (`PLAYGROUND_DRAW`, a host crate carrying rusty's own copy of
+  rusty-draw) shows all of it.
 - **The angles are worked out, not left to the eye.** Perspective
   foreshortens every angle, so a right angle cannot be judged in a turned
   view. `draw::angles` measures every pair of arrows sharing a tail from

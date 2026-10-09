@@ -34,6 +34,28 @@
 //! under the same title replaces the one before, which is what a loop
 //! drawing an attitude fifty times a second wants.
 //!
+//! # Colours
+//!
+//! Each shape takes a colour of rusty's palette unless one is chosen:
+//! [`Scene::color`] sets the colour of every shape drawn after it, its
+//! label included, until another is set or [`Scene::auto_color`] hands the
+//! choice back.
+//!
+//! ```
+//! use rusty_draw::{Color, Scene};
+//!
+//! Scene::new("estimate against truth")
+//!     .color(Color::GREEN)
+//!     .vector("truth", [0.0, 0.0, 1.0])
+//!     .color(Color::hex(0xe5484d))
+//!     .vector("estimate", [0.1, 0.0, 0.99]);
+//! ```
+//!
+//! A coloured `frame` draws all three of its axes in that colour — named
+//! `x`, `y` and `z` at their ends — which is how two attitudes are told
+//! apart in one scene; an uncoloured one keeps the red, green and blue of
+//! the axes it stands for.
+//!
 //! # Without `std`
 //!
 //! [`SceneOn`] writes each line as it is drawn, to anything that implements
@@ -50,7 +72,9 @@
 //!
 //! # The lines
 //!
-//! Numbers first, then a label that is the rest of the line:
+//! Numbers first, then a label that is the rest of the line. A shape in a
+//! chosen colour carries it on its verb — `vector#e5484d 1 0 0 a` — and one
+//! without draws in the next colour of rusty's palette:
 //!
 //! ```text
 //! [rusty:draw] scene <title>
@@ -141,6 +165,53 @@ impl<T: Xyz + ?Sized> Xyz for &T {
     }
 }
 
+/// A colour, as red, green and blue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Color {
+    pub const RED: Color = Color::hex(0xe5484d);
+    pub const ORANGE: Color = Color::hex(0xe8a33d);
+    pub const YELLOW: Color = Color::hex(0xd8c03a);
+    pub const GREEN: Color = Color::hex(0x30a46c);
+    pub const CYAN: Color = Color::hex(0x4fc1d1);
+    pub const BLUE: Color = Color::hex(0x3e63dd);
+    pub const PURPLE: Color = Color::hex(0x9a7bf0);
+    pub const PINK: Color = Color::hex(0xd9658a);
+    pub const GRAY: Color = Color::hex(0x8b8d98);
+    pub const WHITE: Color = Color::hex(0xffffff);
+
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
+        Color { r, g, b }
+    }
+
+    /// `0xRRGGBB`, as a colour is written on the web: `Color::hex(0xe5484d)`.
+    pub const fn hex(rgb: u32) -> Color {
+        Color {
+            r: (rgb >> 16) as u8,
+            g: (rgb >> 8) as u8,
+            b: rgb as u8,
+        }
+    }
+}
+
+/// A shape's verb, and its colour after a `#` when one was chosen.
+struct Verb(&'static str, Option<Color>);
+
+impl fmt::Display for Verb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)?;
+        if let Some(Color { r, g, b }) = self.1 {
+            write!(f, "#{r:02x}{g:02x}{b:02x}")?;
+        }
+        Ok(())
+    }
+}
+
 /// A label or a title as the end of one line: a space before it when there
 /// is one, and a line break inside it turned into a space — a break would
 /// end the line early and begin one rusty reads as something else.
@@ -200,7 +271,12 @@ macro_rules! shapes {
     () => {
         /// An arrow from the origin to `v`.
         pub fn vector(&mut self, label: &str, v: impl Xyz) -> &mut Self {
-            self.put(format_args!("vector {}{}", Three(v.xyz()), Label(label)));
+            self.put(format_args!(
+                "{} {}{}",
+                Verb("vector", self.pen),
+                Three(v.xyz()),
+                Label(label)
+            ));
             self
         }
 
@@ -208,7 +284,8 @@ macro_rules! shapes {
         /// of space: its tip is at `origin + v`.
         pub fn vector_at(&mut self, label: &str, origin: impl Xyz, v: impl Xyz) -> &mut Self {
             self.put(format_args!(
-                "vector_at {} {}{}",
+                "{} {} {}{}",
+                Verb("vector_at", self.pen),
                 Three(origin.xyz()),
                 Three(v.xyz()),
                 Label(label)
@@ -218,14 +295,20 @@ macro_rules! shapes {
 
         /// A point.
         pub fn point(&mut self, label: &str, p: impl Xyz) -> &mut Self {
-            self.put(format_args!("point {}{}", Three(p.xyz()), Label(label)));
+            self.put(format_args!(
+                "{} {}{}",
+                Verb("point", self.pen),
+                Three(p.xyz()),
+                Label(label)
+            ));
             self
         }
 
         /// A straight line between two points.
         pub fn line(&mut self, label: &str, a: impl Xyz, b: impl Xyz) -> &mut Self {
             self.put(format_args!(
-                "line {} {}{}",
+                "{} {} {}{}",
+                Verb("line", self.pen),
                 Three(a.xyz()),
                 Three(b.xyz()),
                 Label(label)
@@ -237,7 +320,8 @@ macro_rules! shapes {
         /// `|a × b|` is, and the plane `a × b` stands up out of.
         pub fn span(&mut self, label: &str, a: impl Xyz, b: impl Xyz) -> &mut Self {
             self.put(format_args!(
-                "span {} {}{}",
+                "{} {} {}{}",
+                Verb("span", self.pen),
                 Three(a.xyz()),
                 Three(b.xyz()),
                 Label(label)
@@ -254,7 +338,8 @@ macro_rules! shapes {
             b: impl Xyz,
         ) -> &mut Self {
             self.put(format_args!(
-                "span_at {} {} {}{}",
+                "{} {} {} {}{}",
+                Verb("span_at", self.pen),
                 Three(origin.xyz()),
                 Three(a.xyz()),
                 Three(b.xyz()),
@@ -267,7 +352,24 @@ macro_rules! shapes {
         /// Hamilton quaternion turns X, Y and Z.
         pub fn frame(&mut self, label: &str, w: f64, x: f64, y: f64, z: f64) -> &mut Self {
             let [w, x, y, z] = [w, x, y, z].map(Number);
-            self.put(format_args!("frame {w} {x} {y} {z}{}", Label(label)));
+            self.put(format_args!(
+                "{} {w} {x} {y} {z}{}",
+                Verb("frame", self.pen),
+                Label(label)
+            ));
+            self
+        }
+
+        /// Draw every shape after this in `color`, its label included.
+        pub fn color(&mut self, color: Color) -> &mut Self {
+            self.pen = Some(color);
+            self
+        }
+
+        /// Hand the colours of the shapes after this back to rusty's
+        /// palette.
+        pub fn auto_color(&mut self) -> &mut Self {
+            self.pen = None;
             self
         }
     };
@@ -282,6 +384,7 @@ macro_rules! shapes {
 #[cfg(feature = "std")]
 pub struct Scene {
     text: std::string::String,
+    pen: Option<Color>,
 }
 
 #[cfg(feature = "std")]
@@ -291,6 +394,7 @@ impl Scene {
     pub fn new(title: &str) -> Scene {
         let mut scene = Scene {
             text: std::string::String::new(),
+            pen: None,
         };
         scene.put(format_args!("scene{}", Label(title)));
         scene
@@ -328,12 +432,13 @@ impl Drop for Scene {
 /// reading the scene until its `end`, which is written when this is dropped.
 pub struct SceneOn<W: fmt::Write> {
     out: W,
+    pen: Option<Color>,
 }
 
 impl<W: fmt::Write> SceneOn<W> {
     /// A scene called `title`, written to `out`.
     pub fn new(out: W, title: &str) -> SceneOn<W> {
-        let mut scene = SceneOn { out };
+        let mut scene = SceneOn { out, pen: None };
         scene.put(format_args!("scene{}", Label(title)));
         scene
     }
@@ -394,6 +499,32 @@ mod tests {
                 "[rusty:draw] span 1 0 0 0 1 0 a, b",
                 "[rusty:draw] span_at 1 1 1 1 0 0 0 0 1 face",
                 "[rusty:draw] frame 1 0 0 0 q",
+                "[rusty:draw] end",
+            ]
+        );
+    }
+
+    /// A chosen colour rides on the verb of every shape after it, until
+    /// it is handed back.
+    #[test]
+    fn a_colour_is_on_every_shape_after_it_until_handed_back() {
+        let mut out = String::new();
+        SceneOn::new(&mut out, "colours")
+            .color(Color::hex(0xe5484d))
+            .vector("a", [1.0, 0.0, 0.0])
+            .frame("q", 1.0, 0.0, 0.0, 0.0)
+            .color(Color::rgb(0, 128, 255))
+            .line("l", [0.0; 3], [1.0, 1.0, 1.0])
+            .auto_color()
+            .point("p", [0.0; 3]);
+        assert_eq!(
+            lines(&out),
+            [
+                "[rusty:draw] scene colours",
+                "[rusty:draw] vector#e5484d 1 0 0 a",
+                "[rusty:draw] frame#e5484d 1 0 0 0 q",
+                "[rusty:draw] line#0080ff 0 0 0 1 1 1 l",
+                "[rusty:draw] point 0 0 0 p",
                 "[rusty:draw] end",
             ]
         );

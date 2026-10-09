@@ -1,0 +1,70 @@
+//! Drawing from Rust: press ▶ Run above `main`, and the Draw tab in the
+//! panel below shows what it drew — turn it with the mouse, and read the
+//! angles between the arrows written out beside it. This draws three
+//! scenes; the list at the top left of the tab has a row for each, and a
+//! click on one shows it.
+//!
+//! A scene is a title and its shapes, and it is drawn when it goes out of
+//! scope. Every shape takes anything with three coordinates: `[f32; 3]`,
+//! `(f64, f64, f64)`, or a type of your own through `rusty_draw::Xyz`.
+//!
+//!     vector(label, v)            an arrow from the origin
+//!     vector_at(label, at, v)     the arrow v, starting at `at`
+//!     point(label, p)             a point
+//!     line(label, a, b)           a line between two points
+//!     span(label, a, b)           the parallelogram a and b span
+//!     frame(label, w, x, y, z)    a body's axes at a quaternion, w first
+//!
+//!     color(Color::RED)           every shape after it in that colour —
+//!                                 also Color::hex(0xe5484d), Color::rgb(..)
+//!     auto_color()                back to rusty's own palette
+//!
+//! Space is right-handed with Z up. A right angle between two arrows from
+//! one point is marked with a small square, and which hand three arrows make
+//! is said too — `a × b` and `b × a` are both square to `a` and `b`, and only
+//! that tells them apart.
+
+use playground::Vector;
+use rusty_draw::{Color, Scene};
+
+fn main() {
+    let a = Vector::new(1.0, 0.4, 0.0);
+    let b = Vector::new(0.3, 1.0, 0.5);
+    let c = a.cross(b);
+    println!("a × b = {c:?}, |a × b| = {:.3}", c.norm());
+
+    // One scene: the two vectors, their cross product, and the parallelogram
+    // they span — whose area is |a × b|.
+    Scene::new("cross product")
+        .vector("a", a.xyz())
+        .vector("b", b.xyz())
+        .vector("a × b", c.xyz())
+        .span("a, b", a.xyz(), b.xyz());
+
+    // Adding vectors head to tail: b drawn from where a ends, and a + b
+    // from the origin to where b ends — the sum in a colour of its own.
+    let sum = a.plus(b);
+    Scene::new("a + b, head to tail")
+        .color(Color::BLUE)
+        .vector("a", a.xyz())
+        .color(Color::ORANGE)
+        .vector_at("b", a.xyz(), b.xyz())
+        .color(Color::GREEN)
+        .vector("a + b", sum.xyz());
+
+    // A body turned 30° about Z and then tipped 20° about its own x — its
+    // attitude a quaternion, w first — beside a point and its drop to the
+    // floor. Each of the body's axes is named at its end: body x, y and z.
+    let (yaw, roll) = (30f64.to_radians() / 2.0, 20f64.to_radians() / 2.0);
+    let (w, x, y, z) = (
+        yaw.cos() * roll.cos(),
+        yaw.cos() * roll.sin(),
+        yaw.sin() * roll.sin(),
+        yaw.sin() * roll.cos(),
+    );
+    let p = [0.6f32, -0.9, 0.5];
+    Scene::new("a turned body, and a point")
+        .frame("body", w, x, y, z)
+        .point("p", p)
+        .line("p to the floor", p, [p[0], p[1], 0.0]);
+}
