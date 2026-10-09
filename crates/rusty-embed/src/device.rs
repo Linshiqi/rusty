@@ -131,6 +131,42 @@ pub fn list_serial_ports(catalog: &Catalog) -> Vec<SerialPort> {
 /// library would pull a USB stack into a desktop app that mostly does not need
 /// one.
 pub fn list_probes() -> Vec<Probe> {
+    let mut probes = probe_rs_probes();
+    probes.extend(wlink_probes());
+    probes
+}
+
+/// WCH-Link probes, as `wlink list` numbers them — the number is what its
+/// `-d` takes, so it travels as the identifier (`wlink:0`). Asked of wlink
+/// rather than read off USB because a WCH-LinkE in DAP mode answers to
+/// another product id, and wlink says which mode it is in.
+fn wlink_probes() -> Vec<Probe> {
+    let Some(wlink) = tools::find("wlink") else {
+        return Vec::new();
+    };
+    let mut command = process::command(wlink);
+    command.arg("list");
+    let Ok(output) = command.output() else {
+        return Vec::new();
+    };
+    parse_wlink_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// `<WCH-Link#0 nusb device> ID 1a86:8010 Serial … (RV mode)`, one per probe.
+fn parse_wlink_list(text: &str) -> Vec<Probe> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("<WCH-Link#")?;
+            let index: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            (!index.is_empty()).then(|| Probe {
+                identifier: format!("wlink:{index}"),
+                description: line.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn probe_rs_probes() -> Vec<Probe> {
     // Found by the same ladder the toolchain panel reports it with, so a
     // probe-rs in `~/.cargo/bin` that is not on this window's PATH is listed
     // as installed *and* asked. Absent means no probes, and costs no spawn.
@@ -184,6 +220,17 @@ mod tests {
         assert_eq!(describe(0x0483, 0x3748), Some("ST-LINK"));
         assert_eq!(describe(0x1366, 0x9999), Some("SEGGER J-Link"));
         assert_eq!(describe(0xDEAD, 0xBEEF), None);
+    }
+
+    #[test]
+    fn a_wlink_probe_is_identified_by_the_index_its_d_flag_takes() {
+        let listed = "<WCH-Link#0 nusb device> ID 1a86:8010 Serial 1234 (Full) (RV mode)\n\
+                      <WCH-Link#1 WCHLinkDLL device> CH375Driver Device 1a86:8010\n\
+                      some log line\n";
+        let probes = parse_wlink_list(listed);
+        let ids: Vec<&str> = probes.iter().map(|p| p.identifier.as_str()).collect();
+        assert_eq!(ids, ["wlink:0", "wlink:1"]);
+        assert!(probes[0].description.contains("RV mode"));
     }
 
     #[test]

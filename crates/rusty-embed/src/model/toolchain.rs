@@ -78,6 +78,12 @@ pub struct ToolchainReport {
     pub required_target_installed: bool,
     /// Whether this project needs the Xtensa toolchain.
     pub needs_esp_toolchain: bool,
+    /// Whether the target is a description the project carries, whose
+    /// `core` the build compiles itself — the CH32V003's. There is then no
+    /// target for rustup to add: `required_target_installed` says whether
+    /// nightly with `rust-src` is there and the project builds with it.
+    #[serde(default)]
+    pub builds_std: bool,
     pub problems: Vec<Problem>,
 }
 

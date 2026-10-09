@@ -262,7 +262,16 @@ pub fn WavesTab() -> impl IntoView {
                                     font-size="11"
                                     fill="#98a1ae"
                                 >
-                                    {format!("GPIO{pin}")}
+                                    {
+                                        let chip = state
+                                            .project
+                                            .detected
+                                            .with_untracked(|p| {
+                                                p.as_ref().and_then(|p| p.chip.clone())
+                                            })
+                                            .unwrap_or_default();
+                                        rusty_embed::nets::pin_label(&chip, *pin)
+                                    }
                                 </text>
                                 <g transform=format!("translate({LABEL_W}, 0)")>
                                     <line

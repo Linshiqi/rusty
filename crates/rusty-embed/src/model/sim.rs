@@ -55,6 +55,10 @@ impl SimLimit {
                  for ever and every Pull::Up button reads as held down. Upgrade the emulator \
                  from this panel.",
             )],
+            chip if chip.starts_with("ch32v003") => vec![SimLimit::new(
+                "ch32-model",
+                "rusty runs the CH32V003 itself. The pins, TIM1 and TIM2 (PWM and interrupts), SysTick, the external interrupts, USART1 and SDI print are modelled; the ADC, I2C, SPI, DMA and the watchdogs are not, so a driver waiting on one waits for ever and the run names which. There is no debugger, and pins that share one package pin on a J4M6 (PD6 with PA1; PD1, PD4 and PD5) are separate pins here.",
+            )],
             "esp32s3" => vec![SimLimit::new(
                 "s3-unproven",
                 "Nothing in rusty's emulator has been checked on the ESP32-S3: its pins, \

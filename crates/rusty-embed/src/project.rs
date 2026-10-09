@@ -449,7 +449,7 @@ fn collect_dependency_names(manifest: &toml::Table) -> Vec<String> {
 /// told their chip came from `esp-backtrace` would go and edit the wrong line.
 /// Plain alphabetical order reports exactly that, since `esp-backtrace` sorts
 /// before `esp-hal`.
-const VENDORS: &[Vendor] = &[Vendor::Espressif, Vendor::St];
+const VENDORS: &[Vendor] = &[Vendor::Espressif, Vendor::St, Vendor::Wch];
 
 /// The chip named by an `esp-hal`-family feature.
 ///
@@ -526,11 +526,22 @@ fn read_build_target(root: &Path, evidence: &mut Vec<String>) -> Result<Option<S
             .and_then(|b| b.get("target"))
             .and_then(|t| t.as_str())
         {
-            return Ok(Some(target.to_string()));
+            return Ok(Some(target_name(target)));
         }
         return Ok(None);
     }
     Ok(None)
+}
+
+/// A target as cargo names it: a triple as written, and a target
+/// description — `riscv32ec-unknown-none-elf.json`, which ch32-hal's
+/// projects build for — by its file's stem, which is the directory cargo
+/// puts the build under and the triple everything else compares against.
+fn target_name(target: &str) -> String {
+    match target.strip_suffix(".json") {
+        Some(path) => path.rsplit(['/', '\\']).next().unwrap_or(path).to_string(),
+        None => target.to_string(),
+    }
 }
 
 fn read_toolchain_channel(root: &Path, evidence: &mut Vec<String>) -> Result<Option<String>> {

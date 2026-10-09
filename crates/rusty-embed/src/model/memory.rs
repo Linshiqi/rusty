@@ -72,9 +72,20 @@ pub struct MemoryTotals {
     /// the ROM bootloader and by the cache configuration. Treat a reading close
     /// to this number as trouble well before it reaches it.
     pub ram_capacity: Option<u32>,
+    /// On-die flash, when the part has its own — a CH32V003's 16 KB, which
+    /// an image outgrows long before its RAM fills. `None` for a part whose
+    /// flash is an external chip of whatever size the module carries.
+    #[serde(default)]
+    pub flash_capacity: Option<u32>,
 }
 
 impl MemoryTotals {
+    /// The image as a fraction of on-die flash.
+    pub fn flash_fraction(&self) -> Option<f32> {
+        let capacity = self.flash_capacity?;
+        (capacity > 0).then(|| self.flash_bytes as f32 / capacity as f32)
+    }
+
     /// Static RAM use as a fraction of nominal capacity.
     ///
     /// Static only: the stack and any heap grow on top of this at runtime,

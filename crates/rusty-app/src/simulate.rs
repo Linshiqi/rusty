@@ -522,7 +522,7 @@ pub async fn run_simulation(
         // before them was a command nobody could copy and run.
         let mut said: Vec<String> = Vec::new();
 
-        let is_emulator = step.program.contains("qemu-system");
+        let is_emulator = simulate::is_emulator(&step.program);
         if let (true, Some(port)) = (debug && is_emulator, gdb_port) {
             step.extend_args(debug_args(port));
             said.push(format!(
@@ -540,7 +540,8 @@ pub async fn run_simulation(
         // The monitor, so the run can be stopped and started again. Opened
         // for the emulator only: there is nothing to pause about a build.
         if is_emulator && let Some(port) = simulate::free_port() {
-            step.extend_args(simulate::qmp_args(port));
+            let args = simulate::qmp_args_for(&step.program, port);
+            step.extend_args(args);
             state.set_qmp(Some(port)).await;
         }
         if is_emulator {
@@ -550,7 +551,8 @@ pub async fn run_simulation(
             })
             .await?;
             if has_model && let Some(port) = simulate::free_port() {
-                step.extend_args(simulate::pins_args(port));
+                let args = simulate::pins_args_for(&step.program, port);
+                step.extend_args(args);
                 pins_port = Some(port);
                 // Said in the dock and read by the board, so the panel can stop
                 // claiming these levels came from the firmware. One line per
@@ -582,7 +584,7 @@ pub async fn run_simulation(
         for line in said {
             note(&on_line, line);
         }
-        let session = process::spawn(&step, Some(root.as_path()))?;
+        let session = simulate::launch(&step, Some(root.as_path()))?;
         current = Some(state.start_session(session.stopper()).await);
         // The boot step is QEMU; its stdin is the board's input path.
         state.set_session_input(Some(session.input())).await;

@@ -27,6 +27,7 @@ mod channel;
 pub mod headless;
 
 mod machine;
+mod mcu;
 mod models;
 mod plan;
 mod qemu;
@@ -41,6 +42,44 @@ pub use qemu::{free_port, pins_args, qmp, qmp_args};
 #[cfg(test)]
 pub(crate) use sheet::load_board_for_test;
 pub use sheet::{kit_rows_for, resolve_symbols};
+
+use crate::model::CommandPlan;
+use crate::process::Session;
+
+/// Whether a plan's step is the one that boots the firmware: rusty's QEMU,
+/// Espressif's, or the CH32V003 rusty runs itself.
+pub fn is_emulator(program: &str) -> bool {
+    program.contains("qemu-system") || mcu::is_program(program)
+}
+
+/// The arguments that give the boot step a pin channel on `port`, in its
+/// emulator's own spelling.
+pub fn pins_args_for(program: &str, port: u16) -> Vec<String> {
+    if mcu::is_program(program) {
+        mcu::pins_args(port)
+    } else {
+        pins_args(port)
+    }
+}
+
+/// The arguments that give the boot step a monitor on `port`.
+pub fn qmp_args_for(program: &str, port: u16) -> Vec<String> {
+    if mcu::is_program(program) {
+        mcu::qmp_args(port)
+    } else {
+        qmp_args(port)
+    }
+}
+
+/// Start a step of a simulation's plan: a process, or the CH32V003 on a
+/// thread of this one — the same session either way.
+pub fn launch(step: &CommandPlan, dir: Option<&std::path::Path>) -> crate::Result<Session> {
+    if mcu::is_program(&step.program) {
+        mcu::launch(step, dir)
+    } else {
+        crate::process::spawn(step, dir)
+    }
+}
 
 #[cfg(test)]
 mod tests {

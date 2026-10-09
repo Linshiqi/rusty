@@ -39,8 +39,21 @@ pub async fn run_flash(
     // The reader loop is synchronous by nature — it sits on a pipe — so it
     // belongs on a blocking thread rather than starving an async worker for
     // however long a flash takes.
+    // What the firmware said, without what the flasher stamped on it.
+    let program = plan.program.clone();
     let code = blocking("the flash session", move || {
-        stream::forward(|| session.recv(), &on_line);
+        stream::forward(
+            || {
+                session.recv().map(|mut line| {
+                    let tidy = rusty_embed::flash::firmware_line(&program, &line.text);
+                    if tidy.len() != line.text.len() {
+                        line.text = tidy.to_string();
+                    }
+                    line
+                })
+            },
+            &on_line,
+        );
         session.wait()
     })
     .await?;
@@ -137,6 +150,35 @@ pub async fn create_project(
     } else {
         parent.clone()
     };
+
+    // A WCH part has no generator to run: rusty writes the project itself,
+    // and says which files, where a generator's output would have gone.
+    if wizard::writes_itself(&choice) {
+        let say = |text: String| {
+            let _ = on_line.send(LogLine {
+                stream: rusty_embed::LogStream::Stdout,
+                text,
+                level: None,
+            });
+        };
+        say(format!("$ {}", plan.display));
+        let (into, wanted) = (run_in.clone(), choice.clone());
+        let written = blocking("writing the project", move || {
+            wizard::write_itself(&into, &wanted)
+        })
+        .await??;
+        for file in written {
+            say(format!("  wrote {file}"));
+        }
+        if workspace {
+            let root = destination.clone();
+            blocking("writing the workspace", move || {
+                wizard::scaffold_workspace(&root, &choice)
+            })
+            .await??;
+        }
+        return Ok(destination.display().to_string());
+    }
 
     // A missing generator is the most likely failure here and the one that most
     // needs an answer rather than a diagnosis. The tool table already knows how

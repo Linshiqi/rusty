@@ -113,16 +113,22 @@ pub(crate) fn no_console_window(command: &mut Command) {
 #[cfg(not(windows))]
 pub(crate) fn no_console_window(_command: &mut Command) {}
 
-/// A running child process.
+/// A running child process — or something that behaves as one.
 ///
 /// stdout and stderr are read on their own threads and merged into one ordered
 /// channel: espflash writes progress to one and errors to the other, and a UI
 /// that showed them in separate panes would split the story of a failed flash
 /// down the middle.
+///
+/// A session is its lines, its input, a way to end it and a way to wait for
+/// it, and nothing about a process beyond that: the CH32V003 emulator runs
+/// on a thread of this one (`simulate::mcu`), and every caller that reads a
+/// run's output, types into it and stops it does the same to both.
 pub struct Session {
-    child: Arc<Mutex<Child>>,
     lines: Receiver<LogLine>,
     input: Input,
+    stopper: Stopper,
+    waiter: Arc<dyn Fn() -> Option<i32> + Send + Sync>,
 }
 
 impl Session {
@@ -143,20 +149,46 @@ impl Session {
     /// `recv`: whoever wants to stop a monitor cannot be the thread that is
     /// sitting inside it.
     pub fn stopper(&self) -> Stopper {
-        let child = Arc::clone(&self.child);
-        Stopper::new(move || {
-            let mut child = child.lock().expect("session lock");
-            let _ = child.kill();
-            let _ = child.wait();
-        })
+        self.stopper.clone()
     }
 
     /// Wait for the process and return its exit code.
     ///
     /// Call after `recv` returns `None`, which is when both streams are drained.
     pub fn wait(&self) -> Option<i32> {
-        let mut child = self.child.lock().expect("session lock");
-        child.wait().ok().and_then(|status| status.code())
+        (self.waiter)()
+    }
+
+    /// A session that is not a child process: `lines` closes when it ends,
+    /// `stopper` ends it, and `wait` says how it ended.
+    pub fn from_parts(
+        lines: Receiver<LogLine>,
+        input: Input,
+        stopper: Stopper,
+        wait: impl Fn() -> Option<i32> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            lines,
+            input,
+            stopper,
+            waiter: Arc::new(wait),
+        }
+    }
+
+    fn of_child(child: Child, lines: Receiver<LogLine>, input: Input) -> Self {
+        let child = Arc::new(Mutex::new(child));
+        let stopper = Stopper::new({
+            let child = Arc::clone(&child);
+            move || {
+                let mut child = child.lock().expect("session lock");
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        });
+        Self::from_parts(lines, input, stopper, move || {
+            let mut child = child.lock().expect("session lock");
+            child.wait().ok().and_then(|status| status.code())
+        })
     }
 }
 
@@ -263,11 +295,7 @@ pub fn spawn(plan: &CommandPlan, working_dir: Option<&Path>) -> Result<Session> 
             .map(|stdin| Box::new(stdin) as Box<dyn std::io::Write + Send>),
     );
 
-    Ok(Session {
-        child: Arc::new(Mutex::new(child)),
-        lines,
-        input,
-    })
+    Ok(Session::of_child(child, lines, input))
 }
 
 /// Read a stream into ordered [`LogLine`]s on its own thread.

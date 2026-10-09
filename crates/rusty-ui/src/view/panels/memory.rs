@@ -168,6 +168,24 @@ fn Report(report: MemoryReport) -> impl IntoView {
         _ => t!("memory.capacity-unknown"),
     };
 
+    // On-die flash is a wall an image meets; external flash is whatever the
+    // module carries, and then there is no number to hold it to.
+    let flash_fraction = report.totals.flash_fraction();
+    let flash_tone = match flash_fraction {
+        Some(f) if f >= 0.9 => Tone::Crimson,
+        Some(f) if f >= 0.75 => Tone::Amber,
+        Some(_) => Tone::Patina,
+        None => Tone::Neutral,
+    };
+    let flash_hint = match (flash_fraction, report.totals.flash_capacity) {
+        (Some(f), Some(capacity)) => t!(
+            "memory.flash-of",
+            percent = format::percent(f),
+            capacity = format::bytes(u64::from(capacity))
+        ),
+        _ => t!("memory.flash-hint"),
+    };
+
     let attributed: u64 = report.crates.iter().map(|c| c.total).sum();
     let largest = report.crates.first().map(|c| c.total).unwrap_or(0);
 
@@ -177,7 +195,8 @@ fn Report(report: MemoryReport) -> impl IntoView {
                 label=t!("memory.flash-image")
                 value=flash_value
                 unit=flash_unit
-                hint=t!("memory.flash-hint")
+                tone=flash_tone
+                hint=flash_hint
             />
             <Readout
                 label=t!("memory.static-ram")

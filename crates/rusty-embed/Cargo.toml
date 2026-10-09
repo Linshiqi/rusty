@@ -35,6 +35,9 @@ serialport = { version = "4.9.0", optional = true }
 # the wizard removes such a `.git` after esp-generate, and the panel offers
 # to for a project generated before it did.
 rusty-git = { path = "../rusty-git", optional = true }
+# The CH32V003, emulated in-process: nobody's QEMU models a WCH part, and
+# this one is small enough that a machine of its own costs less than one.
+rusty-mcu = { path = "../rusty-mcu", optional = true }
 
 # Finding Visual Studio's `link.exe` the way rustc does, so the Toolchain
 # panel cannot call a linker missing that rustc would use. Already in the
@@ -51,6 +54,7 @@ backend = [
     "dep:rustc-demangle",
     "dep:serialport",
     "dep:rusty-git",
+    "dep:rusty-mcu",
     "dep:cc",
 ]
 

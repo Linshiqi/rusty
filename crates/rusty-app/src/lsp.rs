@@ -43,6 +43,20 @@ pub async fn lsp_start(
         move || {
             rusty_embed::project::detect(&root)
                 .ok()
+                // A target the project carries as a description (a CH32's
+                // `riscv32ec-unknown-none-elf.json`) is named by its file in
+                // .cargo/config.toml, which rust-analyzer's cargo reads for
+                // itself; its stem as `cargo.target` is a triple no rustc
+                // knows, and the check would fail on it.
+                .filter(|project| {
+                    !project
+                        .chip
+                        .as_deref()
+                        .and_then(rusty_embed::chip::by_id)
+                        .is_some_and(|chip| {
+                            chip.toolchain == rusty_embed::ToolchainRequirement::NightlyBuildStd
+                        })
+                })
                 .and_then(|project| {
                     project.configured_target.or_else(|| {
                         project

@@ -405,6 +405,9 @@ fn Playgrounds() -> impl IntoView {
                             rusty_embed::ToolchainRequirement::EspXtensa => {
                                 t!("chrome.playground-espup")
                             }
+                            rusty_embed::ToolchainRequirement::NightlyBuildStd => {
+                                t!("chrome.playground-nightly")
+                            }
                         };
                         format!("{} · {toolchain}", c.arch.label())
                     })

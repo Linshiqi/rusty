@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::board_file;
 use super::machine::{MACHINES, Machine, find_gdb, qemu_data_dir};
+use super::mcu;
 use super::models::{has_gpio_model, has_peripherals, has_wave_model};
 use super::sheet::resolve_symbols;
 use crate::install::GDB_RELEASE;
@@ -30,6 +31,10 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
              which machine to model — set the target in .cargo/config.toml",
         );
     };
+
+    if mcu::emulates(chip) {
+        return plan_builtin(project, chip, machine);
+    }
 
     let Some((_, emulator)) = MACHINES.iter().find(|(name, _)| *name == chip) else {
         let known: Vec<&str> = MACHINES.iter().map(|(name, _)| *name).collect();
@@ -206,23 +211,7 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         }
     };
 
-    // The symbol library first, so a sheet's parts can be resolved against
-    // it and a library file that would not read is said before the sheet
-    // that needed it.
-    let library = crate::schematic::load(Some(root));
-    let mut notes: Vec<String> = library.warnings.clone();
-    // And the parts those symbols may answer as, from the same three
-    // layers. A declaration that would not read is a note beside the
-    // library's, not a refusal: the board is still a board without it.
-    let parts = crate::partfile::load(Some(root));
-    notes.extend(parts.warnings);
-    let board = board_file::load(root, chip).map(|loaded| {
-        notes.extend(loaded.note);
-        let mut sheet = loaded.sheet;
-        resolve_symbols(&mut sheet, &library);
-        notes.append(&mut sheet.notes);
-        sheet
-    });
+    let (library, parts, board, notes) = the_board(root, chip);
 
     // Whether the copy it will boot is older than every model this rusty
     // drives — the one thing that still limits an ESP32. Only a copy that
@@ -257,6 +246,87 @@ pub(crate) fn plan_on(project: &EmbeddedProject, debug: bool, machine: &Machine)
         debug_tool,
         notes,
         limits,
+    }
+}
+
+/// The sheet a run puts on the pins, with the symbols and the parts it is
+/// read through, and everything about them worth saying.
+fn the_board(
+    root: &Path,
+    chip: &str,
+) -> (
+    crate::schematic::Library,
+    crate::partfile::Parts,
+    Option<crate::model::Sheet>,
+    Vec<String>,
+) {
+    // The symbol library first, so a sheet's parts can be resolved against
+    // it and a library file that would not read is said before the sheet
+    // that needed it.
+    let library = crate::schematic::load(Some(root));
+    let mut notes: Vec<String> = library.warnings.clone();
+    // And the parts those symbols may answer as, from the same three
+    // layers. A declaration that would not read is a note beside the
+    // library's, not a refusal: the board is still a board without it.
+    let parts = crate::partfile::load(Some(root));
+    notes.extend(parts.warnings.iter().cloned());
+    let board = board_file::load(root, chip).map(|loaded| {
+        notes.extend(loaded.note);
+        let mut sheet = loaded.sheet;
+        resolve_symbols(&mut sheet, &library);
+        notes.append(&mut sheet.notes);
+        sheet
+    });
+    (library, parts, board, notes)
+}
+
+/// A part rusty emulates itself (`mcu`): the build, then the boot — no image
+/// to merge, since the emulator loads the ELF as a flasher would, and no
+/// tool to find, since it is part of rusty. No debugger either: there is no
+/// gdbstub, and the plan says so by having none.
+fn plan_builtin(project: &EmbeddedProject, chip: &str, machine: &Machine) -> SimPlan {
+    let Some(target) = project.configured_target.as_deref() else {
+        return SimPlan::refused(
+            "no build target in .cargo/config.toml — the simulator cannot guess where the ELF \
+             will land",
+        );
+    };
+    let root = Path::new(&project.root);
+    let elf = match elf_path(root, target, "release", machine.target_dir.as_deref()) {
+        Ok(elf) => elf,
+        Err(reason) => return SimPlan::refused(reason),
+    };
+    let build = CommandPlan::new(
+        "cargo",
+        vec!["build".to_string(), "--release".to_string()],
+        "the project's own toolchain builds the exact firmware a device would get",
+    );
+    let boot = CommandPlan::new(
+        mcu::PROGRAM,
+        mcu::boot_args(chip, &elf),
+        "runs the image on rusty's own CH32V003, in step with the clock; SDI print and \
+         USART1 stream here until stopped",
+    );
+    let (library, parts, board, notes) = the_board(root, chip);
+    SimPlan {
+        supported: true,
+        reason: None,
+        missing: Vec::new(),
+        emulator: Some(Emulator {
+            name: mcu::PROGRAM.to_string(),
+            path: mcu::PROGRAM.to_string(),
+            gpio_model: true,
+            peripherals: true,
+            waves: false,
+        }),
+        steps: vec![build, boot],
+        board,
+        library: library.symbols,
+        parts: parts.specs,
+        debug: None,
+        debug_tool: None,
+        notes,
+        limits: crate::model::SimLimit::for_chip(chip, false),
     }
 }
 

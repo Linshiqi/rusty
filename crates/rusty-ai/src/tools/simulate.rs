@@ -39,7 +39,9 @@ impl Tool for Simulate {
         ToolDef {
             name: "simulate".to_string(),
             description: "Build the open project's firmware, boot it in rusty's emulator \
-                (Espressif's QEMU with rusty's pin, ADC, I2C, SPI, LEDC and RMT models), \
+                (for Espressif parts, QEMU with rusty's pin, ADC, I2C, SPI, LEDC and RMT \
+                models; for a WCH CH32V003, rusty's own model of the part — its pins, \
+                TIM1/TIM2 PWM, SysTick, USART1 and SDI print, with pins named PA1..PD7), \
                 and report what it did: every line it printed, the level of every GPIO \
                 that moved, and everything that crossed a peripheral — I2C and SPI \
                 transactions, a duty with the frequency its timer sets, the bytes a LED \
@@ -60,8 +62,8 @@ impl Tool for Simulate {
                 noise). \
                 `expect` lists text the run must see to pass; `fail` text ends it as a \
                 failure. The first build can take minutes; the timeout counts from boot. \
-                Supported on ESP32-C3; on an ESP32 or S3 the answer says what the emulator \
-                cannot do there."
+                Supported on ESP32-C3, ESP32 and the CH32V003's packages; the answer's \
+                limits say what the emulator cannot do on the part it ran."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -133,7 +135,7 @@ impl Tool for Simulate {
         for (pin, level) in outcome.levels() {
             let reports = outcome.events.iter().filter(|(_, p, _)| *p == pin).count();
             pins.insert(
-                format!("GPIO{pin}"),
+                outcome.pin_name(pin),
                 json!({ "level": u8::from(level), "reports": reports }),
             );
         }

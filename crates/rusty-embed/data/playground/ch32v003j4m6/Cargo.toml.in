@@ -1,0 +1,29 @@
+# rusty's playground for the CH32V003J4M6. Edit src/main.rs and press Run.
+#
+# `[workspace]` on its own keeps this a project of its own, wherever the
+# data directory happens to sit.
+[workspace]
+
+[package]
+edition = "2024"
+name    = "playground"
+version = "0.1.0"
+
+[[bin]]
+name = "playground"
+path = "./src/main.rs"
+
+[dependencies]
+# ch32-hal is not on crates.io yet; the revision is the one this playground
+# was proven against, and Cargo.lock holds everything under it.
+ch32-hal   = { git = "https://github.com/ch32-rs/ch32-hal", rev = "5f0e963e4074fd3335902c79cc9c0fa342e39606", features = ["ch32v003j4m6", "memory-x", "rt"] }
+qingke     = "0.8"
+qingke-rt  = { version = "0.8", features = ["highcode"] }
+panic-halt = "1.0"
+
+# 16 KB of flash: optimised for size even while trying things, and with
+# link-time optimisation, which is what makes ch32-hal fit with room to spare.
+[profile.release]
+debug     = 2
+lto       = true
+opt-level = "z"

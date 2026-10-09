@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub enum Vendor {
     Espressif,
     St,
+    Wch,
 }
 
 impl Vendor {
@@ -23,6 +24,7 @@ impl Vendor {
         match self {
             Vendor::Espressif => "Espressif",
             Vendor::St => "STMicroelectronics",
+            Vendor::Wch => "WCH",
         }
     }
 
@@ -41,6 +43,9 @@ impl Vendor {
                 "stm32f1xx-hal",
                 "stm32h7xx-hal",
             ],
+            // ch32-hal names the part by package — `ch32v003j4m6` — which is
+            // why the catalogue's WCH ids are package names.
+            Vendor::Wch => &["ch32-hal", "ch32-metapac"],
         }
     }
 }
@@ -76,6 +81,11 @@ pub enum ToolchainRequirement {
     /// says nothing about espup — which is why this is modelled rather than
     /// inferred from the triple at each call site.
     EspXtensa,
+    /// A nightly rustup toolchain with `rust-src`: the part's target is a
+    /// JSON spec rustup has no standard library for, so cargo builds `core`
+    /// itself (`-Zbuild-std`). The CH32V003's RV32EC is one — the built-in
+    /// `riscv32e*` targets are RV32E without C, or with M it lacks.
+    NightlyBuildStd,
 }
 
 impl ToolchainRequirement {
@@ -83,6 +93,9 @@ impl ToolchainRequirement {
         match self {
             ToolchainRequirement::Stock => None,
             ToolchainRequirement::EspXtensa => Some("espup install"),
+            ToolchainRequirement::NightlyBuildStd => {
+                Some("rustup toolchain install nightly --component rust-src")
+            }
         }
     }
 }
@@ -96,6 +109,10 @@ pub enum Flasher {
     /// Flashes and debugs through a JTAG/SWD probe, and decodes defmt over RTT.
     /// The only option for parts with no serial bootloader.
     ProbeRs,
+    /// WCH's own probe, WCH-LinkE, through ch32-rs's `wlink`: flashes over
+    /// the one-wire debug pin and relays SDI print to its serial port. What
+    /// ch32-hal's examples run.
+    Wlink,
 }
 
 /// Whether the project links the ESP-IDF C framework and gets `std`, or runs
@@ -115,6 +132,16 @@ impl Runtime {
         match self {
             Runtime::BareMetal => "no_std (esp-hal)",
             Runtime::EspIdf => "std (esp-idf)",
+        }
+    }
+
+    /// The label for a part from `vendor`: its bare metal is its own HAL's,
+    /// and a CH32 called "esp-hal" is a promise about the wrong crate.
+    pub fn label_on(self, vendor: Vendor) -> &'static str {
+        match (self, vendor) {
+            (Runtime::BareMetal, Vendor::Wch) => "no_std (ch32-hal)",
+            (Runtime::BareMetal, Vendor::St) => "no_std",
+            _ => self.label(),
         }
     }
 }

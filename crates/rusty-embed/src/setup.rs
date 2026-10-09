@@ -163,9 +163,32 @@ pub fn plan(report: &ToolchainReport) -> Vec<SetupStep> {
     // installed" and reads as something having gone wrong. Everything that
     // blocks a build comes before anything that does not, so a queue somebody
     // interrupts halfway has fixed the parts that mattered.
+    // A target the build compiles `core` for has nothing for rustup to add;
+    // what it needs is nightly with the source, when that is what is missing.
+    if report.builds_std
+        && report
+            .problems
+            .iter()
+            .any(|problem| problem.kind == "nightly-missing")
+    {
+        steps.push(SetupStep {
+            tool: "nightly".to_string(),
+            purpose: "Nightly Rust with the standard library's source: this chip's target \
+                      has no ready-made library, so the build compiles `core` itself."
+                .to_string(),
+            command: crate::model::ToolchainRequirement::NightlyBuildStd
+                .install_command()
+                .unwrap_or_default()
+                .to_string(),
+            destination: Destination::RustupHome,
+            slow: true,
+            manual: None,
+        });
+    }
     if let Some(target) = &report.required_target
         && !report.required_target_installed
         && !report.needs_esp_toolchain
+        && !report.builds_std
     {
         steps.push(SetupStep {
             tool: format!("target:{target}"),
@@ -195,7 +218,7 @@ pub fn blocked(report: &ToolchainReport) -> bool {
 }
 
 fn is_blocking(report: &ToolchainReport, tool: &str) -> bool {
-    if tool.starts_with("target:") || tool == "espup" {
+    if tool.starts_with("target:") || tool == "espup" || tool == "nightly" {
         return true;
     }
     report
@@ -222,7 +245,7 @@ fn missing_tool<'a>(
 pub(crate) fn destination_of(tool: &str) -> Destination {
     if tool.starts_with("qemu-system-") || tool.ends_with("-gdb") || tool.ends_with("-gcc") {
         Destination::DataDirectory
-    } else if tool == "rust-analyzer" || tool == "espup" {
+    } else if tool == "rust-analyzer" || tool == "espup" || tool == "nightly" {
         Destination::RustupHome
     } else {
         Destination::CargoBin
@@ -261,6 +284,7 @@ mod tests {
             required_target: None,
             required_target_installed: true,
             needs_esp_toolchain: false,
+            builds_std: false,
             problems: Vec::new(),
         }
     }
@@ -437,5 +461,35 @@ mod tests {
         missing.installable = false;
         let r = report(vec![tool("rustup", true, true), missing]);
         assert!(plan(&r).is_empty());
+    }
+
+    /// A target the build compiles `core` for is never a `rustup target
+    /// add`: what is offered is nightly with its source, and only when that
+    /// is what the report found missing.
+    #[test]
+    fn a_build_std_target_asks_for_nightly_and_never_for_the_target() {
+        let mut r = report(vec![tool("rustup", true, true)]);
+        r.required_target = Some("riscv32ec-unknown-none-elf".to_string());
+        r.required_target_installed = false;
+        r.builds_std = true;
+        assert!(
+            plan(&r).is_empty(),
+            "pinned wrong is a note, not an install"
+        );
+        r.problems.push(crate::model::Problem::new(
+            crate::model::Severity::Blocking,
+            "nightly-missing",
+            "Nightly Rust with its source missing",
+            "",
+        ));
+        let steps = plan(&r);
+        let tools: Vec<&str> = steps.iter().map(|s| s.tool.as_str()).collect();
+        assert_eq!(tools, ["nightly"]);
+        assert!(
+            steps[0].command.contains("rust-src"),
+            "{}",
+            steps[0].command
+        );
+        assert!(blocked(&r));
     }
 }

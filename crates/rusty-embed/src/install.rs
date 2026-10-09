@@ -89,6 +89,18 @@ pub fn install_steps(tool: &str) -> Result<Vec<CommandPlan>> {
              into the data directory's tools/"
         )));
     }
+    // A toolchain rather than a tool: the setup plan's step for a part whose
+    // build compiles `core` itself.
+    if tool == "nightly" {
+        return Ok(vec![CommandPlan::new(
+            "rustup",
+            ["toolchain", "install", "nightly", "--component", "rust-src"]
+                .map(str::to_string)
+                .to_vec(),
+            "nightly Rust with the standard library's source, which a build-std target \
+             compiles `core` from",
+        )]);
+    }
     crate::toolchain::recipe(tool)
 }
 

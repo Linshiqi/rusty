@@ -123,6 +123,14 @@ fn initialization_options(root: &Path, target: Option<&str>) -> Map<String, Valu
     if let Some(target) = target {
         cargo.insert("target".into(), json!(target));
     }
+    let env = discover::cargo_env(root);
+    if !env.is_empty() {
+        let env: Map<String, Value> = env
+            .into_iter()
+            .map(|(key, value)| (key, Value::String(value)))
+            .collect();
+        cargo.insert("extraEnv".into(), Value::Object(env));
+    }
 
     // Named only when there is something to name. An empty `linkedProjects`
     // is not the same as an absent one — it tells rust-analyzer the set of

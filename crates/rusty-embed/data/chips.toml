@@ -185,3 +185,72 @@ bare_metal_target = "thumbv7em-none-eabihf"
 toolchain = "stock"
 flashers = ["probe-rs"]
 radios = ["none"]
+
+# ── WCH ──────────────────────────────────────────────────────────────────────
+#
+# The CH32V003: a QingKe V2A core (RV32EC — sixteen registers, compressed
+# instructions, no multiply) with 16 KB of flash and 2 KB of RAM. One entry
+# per package rather than per die, because that is how ch32-hal names the
+# part (`features = ["ch32v003j4m6"]`) and how probe-rs does, and because the
+# package decides which pins exist: the SOP-8 J4M6 bonds nine GPIOs to six
+# pins — PD6 and PA1 share pin 1, PD1 (the debug pin), PD4 and PD5 share pin 8
+# — so a J4M6 board's pin 1 is both.
+#
+# `bare_metal_target` names ch32-hal's own target description,
+# `riscv32ec-unknown-none-elf.json`, by the triple cargo files the build
+# under. rustup has no standard library for it: `nightly-build-std` says a
+# project builds `core` itself, which takes nightly and `rust-src`.
+#
+# `hal` is deliberately absent for now: switching packages is a feature name
+# and nothing else, but the migration rewrites a project's flash runner and
+# build-std line on the Espressif shape, and doing that to a CH32 project is
+# a rewrite nobody has proven.
+#
+# rusty simulates these itself (rusty-mcu), not in QEMU: GPIO, TIM1/TIM2 PWM,
+# SysTick, USART1 and SDI print. `gpio` is the package's own pins — PA1/PA2,
+# PC0..PC7 and PD0..PD7 numbered eight to a port (PC4 is 20).
+
+[[chip]]
+id = "ch32v003j4m6"
+name = "CH32V003J4M6"
+vendor = "wch"
+arch = "risc-v"
+cores = 1
+sram_bytes = 2_048
+flash_bytes = 16_384
+bare_metal_target = "riscv32ec-unknown-none-elf"
+toolchain = "nightly-build-std"
+flashers = ["wlink", "probe-rs"]
+probe_rs_target = "CH32V003J4M6"
+radios = ["none"]
+gpio = [1, 2, 17, 18, 20, 25, 28, 29, 30]
+
+[[chip]]
+id = "ch32v003f4p6"
+name = "CH32V003F4P6"
+vendor = "wch"
+arch = "risc-v"
+cores = 1
+sram_bytes = 2_048
+flash_bytes = 16_384
+bare_metal_target = "riscv32ec-unknown-none-elf"
+toolchain = "nightly-build-std"
+flashers = ["wlink", "probe-rs"]
+probe_rs_target = "CH32V003F4P6"
+radios = ["none"]
+gpio = [1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+
+[[chip]]
+id = "ch32v003f4u6"
+name = "CH32V003F4U6"
+vendor = "wch"
+arch = "risc-v"
+cores = 1
+sram_bytes = 2_048
+flash_bytes = 16_384
+bare_metal_target = "riscv32ec-unknown-none-elf"
+toolchain = "nightly-build-std"
+flashers = ["wlink", "probe-rs"]
+probe_rs_target = "CH32V003F4U6"
+radios = ["none"]
+gpio = [1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]

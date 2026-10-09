@@ -71,6 +71,7 @@ pub(super) fn limit_text(limit: &rusty_embed::SimLimit) -> String {
         "cpu-fpu-off" => t!("simulate.limit-cpu-fpu-off"),
         "s3-unproven" => t!("simulate.limit-s3-unproven"),
         "signals-outdated" => t!("simulate.limit-signals-outdated"),
+        "ch32-model" => t!("simulate.limit-ch32-model"),
         _ => limit.text.clone(),
     }
 }

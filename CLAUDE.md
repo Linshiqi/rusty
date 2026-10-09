@@ -215,6 +215,13 @@ cargo run -p rusty-edit --features backend --example unlinked_probe -- <project>
 # the reader made of it -- how tests/fixtures/easyeda/ was captured
 cargo run -p rusty-embed --example lcsc_probe -- C25804 [out.json]
 
+# A CH32V003 firmware in rusty's own emulator of the part, with no window:
+# every pin it drove, every PWM duty, every line it printed, stamped with the
+# part's time, and how long the host took. The fixture is ch32-hal's PWM
+# example, built with nightly; `rusty-cli sim` runs a CH32 project the same
+# way the window does, build included.
+cargo run --release -p rusty-mcu --example mcu_probe -- crates/rusty-mcu/tests/fixtures/ch32v003-pwm/pwm.elf 2000
+
 # Drawing from code, the worked end: an f32 vector type, an example that
 # draws two vectors and their cross product, and a test that draws and
 # asserts it. In rusty, ▶ Run above `main`; from a shell, the lines rusty
@@ -239,6 +246,7 @@ cd examples/draw-vectors && cargo run --example cross
 | `rusty-app` | Tauri backend — thin, no analysis lives here. The request/response commands are `commands/`, one module per concern and glob re-exported (`#[tauri::command]` puts a hidden macro beside each command, and `generate_handler!` finds it by the command's own path); the long-running, streaming ones have modules of their own (`ai`, `flash`, `simulate`, `lsp`, `terminal`, `debug`). A command that needs the project asks `AppState::require_root`; blocking work goes through `state::blocking` |
 | `rusty-ui` | Leptos frontend (Trunk + Tailwind, no npm). Four layers: `view` renders and never calls IPC, `controller` is where every cross-layer action begins, `state` holds signals and pure operations on them, `ipc` is transport. `ipc::call` appears in `controller/` and nowhere else — check that with a grep before believing it. **Anything that grows past ~1,000 lines is holding more than one concern**: `controller/`, `state/`, `command/`, `view/panels/files/`, `view/settings/` and `view/dock/` are all directories now, one module per thing, and each was one file that had accreted six to fifteen. **A component that outgrows its function keeps what its pieces share in a `Copy` struct** — the signals as fields, the commands as methods — and each piece becomes a component that takes one: `Board` for the sheet editor (`view/panels/simulate/board.rs`), `Pane` for the editing surface (`view/panels/files/surface/pane.rs`). Each was one function of thousands of lines whose view captured whatever it needed from the scope. The signal lab is split the same way: `lab` is its arithmetic — what a source plays, the records every instrument reads, a sweep's steps — pure and tested beside `activity` and `calls`, and `view/lab/` draws it. So is the math toolbox: `scene` is its 3-D view — a camera, a projection, shapes turned into SVG paths sorted back to front, the quadcopter — pure and tested, and `view/panels/math/` is the page |
 | `rusty-cli` | Headless entry point; the CI and bug-report surface, `rusty-cli sim` (the simulator without the window) and `rusty-cli mcp`. One function per subcommand, beside its printers (`check.rs`, `hardware.rs`, `disk.rs`, `sim.rs`, `workspace.rs`); `main.rs` is the arguments and the dispatch |
+| `rusty-mcu` | Microcontrollers rusty emulates itself, instruction by instruction — the CH32V003, which nobody's QEMU models. Pure: `cpu` is a QingKe V2A hart (RV32EC, Zicsr, the address vector table, the hardware stack), `elf` loads a flasher's view of an image, `ch32v003/` is the part — the clock tree, GPIO with AFIO's remaps and EXTI, TIM1/TIM2, SysTick, the PFIC, USART1 and the debug registers SDI print writes through — and its output is `Event`s stamped with the part's own time. rusty-embed's `simulate::mcu` is the host: it paces the machine to the wall clock and puts the events on the pin channel. See *The CH32V003* |
 | `rusty-draw` | The one crate here that other people's code depends on: drawing from Rust code into the Draw tab. `Scene::new("…").vector("a", a)` prints one `[rusty:draw]` line per shape; `SceneOn` writes them to any `fmt::Write` without `std`. No dependencies and a version of its own; `rusty_embed::draw` is its reader. See *Drawing from code* |
 
 ## The rules that are load-bearing
@@ -5123,6 +5131,99 @@ of their own. So the picture comes from their code.
   `Ink`'s colour, the SVG element each drawn piece becomes, the size
   observer — shared by the Math panel and the Draw tab, so a vector is the
   same arrow in the same colours in both.
+
+## The CH32V003
+
+WCH's 16 KB RISC-V part, through ch32-rs's crates: ch32-hal (from git — it
+is not on crates.io), qingke-rt, wlink. Everything rusty does for an ESP32
+it does for a CH32V003 project except debugging, and the simulator is its
+own.
+
+- **One catalogue entry per package**, `ch32v003j4m6`, `…f4p6`, `…f4u6`,
+  because ch32-hal selects the part by package feature and probe-rs names
+  it by package, and the package decides which pins exist. A pin is
+  numbered eight to a port (PC4 is 20) everywhere it travels, and *named*
+  by port wherever it becomes words — `nets::pin_label`, the one place, used
+  by the devkit's rows, the Waves panel, `rusty-cli sim` and the assistant's
+  `simulate`. `gpio_named` does **not** read `PC4` as a pin: chip-agnostic,
+  it would bind an imported STM32 schematic's `PA1` to an ESP32's GPIO1.
+- **The target is a description the project carries**,
+  `riscv32ec-unknown-none-elf.json`, which detection names by its stem — the
+  directory cargo builds under — and which needs nightly and `rust-src`
+  (`-Zbuild-std=core`). `ToolchainRequirement::NightlyBuildStd` says so;
+  the report checks nightly with its source and that the project builds
+  with it (`rust-toolchain.toml`, a rustup override, or a nightly default)
+  instead of a `rustup target add` that cannot exist, and
+  `ToolchainReport::builds_std` keeps the Environment page and the setup
+  plan from offering one. ch32-hal's own examples pin nothing, so they
+  report `nightly-not-pinned` — the playground and the wizard's projects
+  carry the pin. rust-analyzer is given no `cargo.target` for such a
+  project: the stem is a triple no rustc knows, and its cargo reads the
+  config's `build.target` for itself. **But not the `[unstable]` table,
+  where it loads the sysroot**: rust-analyzer runs `cargo metadata` for
+  the standard library's own workspace from the sysroot's directory, and
+  nightly cargo refuses a `.json` target there without
+  `json-target-spec` — the status bar said "partly loaded", with `core::`
+  answering nothing, on the playground. `discover::cargo_env` passes the
+  key as `CARGO_UNSTABLE_JSON_TARGET_SPEC` in `cargo.extraEnv` for a project
+  (or linked firmware crate) whose config turns it on, and the same window
+  then loaded whole, ch32-hal's types in its inlay hints.
+- **Flashing is wlink first, probe-rs when its probe is picked**
+  (`flash::uses_wlink`). `wlink list`'s probes are listed beside probe-rs's
+  as `wlink:<index>`, the number its `-d` takes. Flash-and-monitor is
+  `wlink -v flash --enable-sdi-print --watch-serial`; a monitor resets
+  rather than writes, since wlink turns SDI print on only across a reset;
+  `flash::firmware_line` takes off the timestamp `--watch-serial` puts in
+  front of every line, or no protocol line on hardware would read as one.
+  Proven against wlink's documented CLI and its source, **not against a
+  board**: nobody here had one.
+- **The simulator is rusty's own** (`rusty-mcu`), run on a thread of the
+  process that wants it, not a program to find. The plan names it as one —
+  `rusty-mcu --chip … <elf>` — so the dock shows what ran, and
+  `simulate::launch` is the one place that knows it is not a file:
+  `process::Session` is its lines, its input, a stopper and a wait, and
+  nothing about a process beyond that, so the app, `rusty-cli sim` and the
+  MCP `simulate` drive both the same way. To them it is a QEMU with rusty's
+  models: a pin channel it listens on and waits for (`--pins`), the same
+  `[rusty:gpio@<us>]`/`[rusty:pwm@<us>]` lines, and enough QMP for the
+  panel's pause (`--qmp`). Paced to the wall clock in slices of 20 ms of
+  the part's time; 2 s of the PWM example run in about 230 ms on this
+  machine, so pacing is all it needs.
+- **What it models is what ch32-hal's ordinary firmware reaches for**: the
+  clock tree (HSI, the PLL, HPRE — the part starts at 8 MHz), GPIO with
+  AFIO's remap tables (transcribed from ch32-data), EXTI, TIM1/TIM2 with
+  preload and update events, SysTick (every `Delay`), the PFIC, USART1 and
+  SDI print. Interrupts go through the vector table of addresses, with the
+  hardware stack qingke-rt turns on (`csrw 0x804, 3`) — its handlers save
+  only `ra`, so without it the first interrupt corrupts whatever it
+  interrupted. **What it does not model it names on first touch** — ADC,
+  I2C, SPI, DMA, the watchdogs — with what the firmware will find missing;
+  their registers read back what was written. **HSE never comes ready**: a
+  J4M6 board has no crystal, and blinky's `SYSCLK_FREQ_48MHZ_HSE` waits for
+  ever there as on the desk, said once with the HSI preset to use. The plan
+  says all of it before the run (`SimLimit` `ch32-model`), and that the
+  J4M6's shared package pins are separate pins here.
+- **No M extension, refused as the chip refuses it**: `mul` is an illegal
+  instruction, so firmware built for the wrong target fails here as it
+  would on the desk. Timing is one instruction per HCLK cycle; anything
+  timed by SysTick or a timer keeps the part's time exactly.
+- **A preloaded duty lands at the next update event, and is reported
+  then.** A step of a 10 ms ramp is 10 ms of `Delay` plus the loop's own
+  microseconds, so one in a few dozen lands 11 ms after the last: the
+  drift crossing a 1 kHz period. The test that held every step to 10 ms
+  was wrong, not the model; `a_duty_lands_on_the_update_event_after_it_is_
+  written` holds the property instead. What the test *did* find was a
+  register read that brought a timer up to date and dropped the "duty
+  changed" answer — a timer now keeps that until the machine takes it
+  (`take_changed`), whoever caused the update.
+- **The playground and the wizard write the same proven project**: ch32-hal
+  at a pinned revision with its lockfile, the target description, nightly
+  pinned, a `build.rs` of its own (esp-hal's links another script), a
+  breathing LED on PC4 with a button on PC1, and the board — redrawn per
+  package by the wizard, because a ground wire lands on a row number and
+  an F4P6's row 6 is a GPIO. SDI print is printed once: it waits for a
+  debugger to take each line, and a board with no WCH-LinkE would wait for
+  ever at the second.
 
 ## Meeting C
 

@@ -77,6 +77,7 @@ pub fn analyze(elf_path: &Path, chip_id: Option<&str>) -> Result<MemoryReport> {
             flash_bytes,
             ram_bytes,
             ram_capacity: chip_info.as_ref().map(|c| c.sram_bytes),
+            flash_capacity: chip_info.as_ref().and_then(|c| c.flash_bytes),
         },
         crates,
         unattributed_bytes,
@@ -247,8 +248,13 @@ mod tests {
             flash_bytes: 100_000,
             ram_bytes: 40_000,
             ram_capacity: None,
+            flash_capacity: None,
         };
         assert!(unknown.ram_fraction().is_none());
+        assert!(
+            unknown.flash_fraction().is_none(),
+            "external flash has no wall"
+        );
 
         let c3 = MemoryTotals {
             ram_capacity: Some(400 * 1024),
@@ -256,5 +262,13 @@ mod tests {
         };
         let fraction = c3.ram_fraction().unwrap();
         assert!((fraction - 0.0977).abs() < 0.001, "{fraction}");
+
+        let ch32 = MemoryTotals {
+            flash_bytes: 5_222,
+            flash_capacity: Some(16 * 1024),
+            ..unknown
+        };
+        let flash = ch32.flash_fraction().unwrap();
+        assert!((flash - 0.3187).abs() < 0.001, "{flash}");
     }
 }

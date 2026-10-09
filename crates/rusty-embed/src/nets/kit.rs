@@ -24,10 +24,10 @@ pub struct Row {
 }
 
 impl Row {
-    fn gpio(n: u8, label: &str) -> Self {
+    fn gpio(n: u8, label: &str, name: String) -> Self {
         Row {
             label: label.to_string(),
-            name: format!("GPIO{n}"),
+            name,
             gpio: Some(n),
             rail: None,
         }
@@ -103,8 +103,12 @@ const ESP32_DEVKIT: [(&str, Option<u8>); 30] = [
 /// An empty `gpio` means the catalogue does not say, and the part is drawn
 /// with rails only rather than with somebody else's pins.
 pub fn kit_rows(chip: &str, gpio: &[u32]) -> Vec<Row> {
+    let by_port = names_by_port(chip);
     let row = |label: &str, pin: Option<u8>| match (label, pin) {
-        (_, Some(n)) => Row::gpio(n, label),
+        // A WCH pin's name is its row's label too: `PC4` is what is printed
+        // beside it, where an Espressif row is labelled `4`.
+        (_, Some(n)) if by_port => Row::gpio(n, &pin_label(chip, n), pin_label(chip, n)),
+        (_, Some(n)) => Row::gpio(n, label, pin_label(chip, n)),
         ("GND", None) => Row::rail("GND", Rail::Ground),
         ("3V3" | "VIN" | "5V", None) => Row::rail(label, Rail::Supply),
         (other, None) => Row::plain(other),
@@ -117,7 +121,10 @@ pub fn kit_rows(chip: &str, gpio: &[u32]) -> Vec<Row> {
     }
     let half = gpio.len().div_ceil(2);
     let mut rows: Vec<Row> = Vec::with_capacity(gpio.len() + 4);
-    rows.push(row("EN", None));
+    // A WCH part has no enable pin; its reset is a GPIO's alternate function.
+    if !by_port {
+        rows.push(row("EN", None));
+    }
     rows.extend(
         gpio[..half]
             .iter()
@@ -145,6 +152,25 @@ pub fn kit_pin(rows: &[Row], key: &str) -> Option<usize> {
         .filter(|n| (1..=rows.len()).contains(n))
         .map(|n| n - 1)
         .or_else(|| rows.iter().position(|r| r.name == key))
+}
+
+/// Whether `chip` names its pins by port — `PA1`, `PC4` — rather than by
+/// number. WCH's do; rusty numbers them eight to a port (PC4 is 20), which
+/// is how they travel on the pin channel.
+fn names_by_port(chip: &str) -> bool {
+    chip.starts_with("ch32")
+}
+
+/// What pin `gpio` is called on `chip`: `PC4` on a part named by port,
+/// `GPIO4` elsewhere. Every place a pin number becomes words goes through
+/// this, so the board, the waves and the console agree about a pin's name.
+pub fn pin_label(chip: &str, gpio: u8) -> String {
+    if names_by_port(chip) {
+        let port = (b'A' + gpio / 8) as char;
+        format!("P{port}{}", gpio % 8)
+    } else {
+        format!("GPIO{gpio}")
+    }
 }
 
 /// The GPIO a pin's *name* claims, or nothing.

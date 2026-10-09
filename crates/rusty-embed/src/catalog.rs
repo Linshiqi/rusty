@@ -363,6 +363,7 @@ struct UsbEntry {
 enum VendorSpec {
     Espressif,
     St,
+    Wch,
 }
 
 impl From<VendorSpec> for Vendor {
@@ -370,6 +371,7 @@ impl From<VendorSpec> for Vendor {
         match spec {
             VendorSpec::Espressif => Vendor::Espressif,
             VendorSpec::St => Vendor::St,
+            VendorSpec::Wch => Vendor::Wch,
         }
     }
 }
@@ -397,6 +399,7 @@ impl From<ArchSpec> for Arch {
 enum ToolchainSpec {
     Stock,
     EspXtensa,
+    NightlyBuildStd,
 }
 
 impl From<ToolchainSpec> for ToolchainRequirement {
@@ -404,6 +407,7 @@ impl From<ToolchainSpec> for ToolchainRequirement {
         match spec {
             ToolchainSpec::Stock => ToolchainRequirement::Stock,
             ToolchainSpec::EspXtensa => ToolchainRequirement::EspXtensa,
+            ToolchainSpec::NightlyBuildStd => ToolchainRequirement::NightlyBuildStd,
         }
     }
 }
@@ -413,6 +417,7 @@ impl From<ToolchainSpec> for ToolchainRequirement {
 enum FlasherSpec {
     Espflash,
     ProbeRs,
+    Wlink,
 }
 
 impl From<FlasherSpec> for Flasher {
@@ -420,6 +425,7 @@ impl From<FlasherSpec> for Flasher {
         match spec {
             FlasherSpec::Espflash => Flasher::Espflash,
             FlasherSpec::ProbeRs => Flasher::ProbeRs,
+            FlasherSpec::Wlink => Flasher::Wlink,
         }
     }
 }

@@ -5509,6 +5509,7 @@ dependencies = [
  "rustc-demangle",
  "rusty-draw",
  "rusty-git",
+ "rusty-mcu",
  "serde",
  "serde_json",
  "serialport",
@@ -5548,6 +5549,10 @@ dependencies = [
  "thiserror 2.0.20",
  "toml 1.1.4+spec-1.1.0",
 ]
+
+[[package]]
+name = "rusty-mcu"
+version = "0.6.73"
 
 [[package]]
 name = "rusty-term"

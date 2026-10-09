@@ -13,7 +13,7 @@
 use leptos::{ev, prelude::*};
 
 use rusty_embed::{
-    Chip, CrateNameProblem, Runtime, WizardChoice, WizardLayout, crate_name_problem,
+    Chip, CrateNameProblem, Runtime, Vendor, WizardChoice, WizardLayout, crate_name_problem,
 };
 
 use rusty_i18n::t;
@@ -322,11 +322,23 @@ fn ChipStep(choice: WizardChoice) -> impl IntoView {
                     .map(|chip| {
                         let is_selected = chip.id == current;
                         let pick = chip.id.clone();
+                        // A WCH project is written by rusty, not esp-generate:
+                        // none of its options, and bare metal is all there is.
+                        let written = chip.vendor == Vendor::Wch;
                         view! {
                             <button
                                 type="button"
                                 on:click=move |_| {
-                                    amend(state, |next| next.chip = pick.clone())
+                                    amend(
+                                        state,
+                                        |next| {
+                                            next.chip = pick.clone();
+                                            if written {
+                                                next.options.clear();
+                                                next.runtime = Runtime::BareMetal;
+                                            }
+                                        },
+                                    )
                                 }
                                 class=move || {
                                     let base = "flex w-full items-center gap-2 rounded-[6px] \
@@ -435,6 +447,7 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
         })
     });
 
+    let vendor = chip_vendor(state, &choice.chip);
     let list = view! {
         {[Runtime::BareMetal, Runtime::EspIdf]
                 .into_iter()
@@ -458,7 +471,9 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
                                 }
                             }
                         >
-                            <span class="flex-1 text-body font-medium">{runtime.label()}</span>
+                            <span class="flex-1 text-body font-medium">
+                                {runtime.label_on(vendor)}
+                            </span>
                             {move || {
                                 (runtime == Runtime::EspIdf && !available.get())
                                     .then(|| {
@@ -477,7 +492,7 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     .into_any();
 
     let detail = view! {
-        <DetailHeading title=selected.label().to_string() />
+        <DetailHeading title=selected.label_on(vendor).to_string() />
         <p class="text-callout leading-relaxed text-label-2">
             {match selected {
                 Runtime::BareMetal => t!("wizard.bare-metal"),
@@ -488,6 +503,17 @@ fn RuntimeStep(choice: WizardChoice) -> impl IntoView {
     .into_any();
 
     view! { <Split list=list detail=detail /> }
+}
+
+/// Who makes the chip with this id, as the catalogue says — Espressif when
+/// the catalogue has not arrived, which is what every chip was before.
+fn chip_vendor(state: AppState, chip: &str) -> Vendor {
+    state.project.chips.with_untracked(|chips| {
+        chips
+            .iter()
+            .find(|c| c.id == chip)
+            .map_or(Vendor::Espressif, |c| c.vendor)
+    })
 }
 
 /// The detail pane's key for the layout row, beside the generator's option
@@ -543,9 +569,18 @@ fn OptionsStep(choice: WizardChoice) -> impl IntoView {
         </div>
     };
 
+    let written = chip_vendor(state, &choice.chip) == Vendor::Wch;
     let list = view! {
         {layout_row}
+        {written.then(|| view! {
+            <p class="px-2 py-1 text-callout leading-relaxed text-label-2">
+                {t!("wizard.written-by-rusty")}
+            </p>
+        })}
         {move || {
+                if written {
+                    return Vec::new();
+                }
                 let chosen = chosen.clone();
                 state
                     .wizard.options
@@ -676,7 +711,7 @@ fn ReviewStep(choice: WizardChoice) -> impl IntoView {
     let state = AppState::expect();
     let name = choice.name.clone();
     let summary_chip = choice.chip.clone();
-    let summary_runtime = choice.runtime.label();
+    let summary_runtime = choice.runtime.label_on(chip_vendor(state, &choice.chip));
     let summary_options = choice.options.clone();
 
     view! {

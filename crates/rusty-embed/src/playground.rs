@@ -15,6 +15,11 @@
 //! incremental), since the whole point is that an edit runs in seconds.
 //! They sit in `data/playground/` with an `.in` on every name, so no tool
 //! walking the repository takes a template for a project of its own.
+//!
+//! The CH32V003J4M6's is ch32-hal's own PWM example made into a breathing
+//! LED with a button, built with nightly and proven in rusty's emulator of
+//! the part (`rusty-mcu`) — it carries the target description its build
+//! needs, and a `build.rs` of its own, since esp-hal's links another script.
 
 use std::path::{Path, PathBuf};
 
@@ -28,9 +33,9 @@ type File = (&'static str, &'static str);
 
 const BUILD_RS: &str = include_str!("../data/playground/build.rs.in");
 
-fn template(chip: &str) -> Option<[File; 7]> {
+fn template(chip: &str) -> Option<&'static [File]> {
     match chip {
-        "esp32c3" => Some([
+        "esp32c3" => Some(&[
             (
                 "Cargo.toml",
                 include_str!("../data/playground/esp32c3/Cargo.toml.in"),
@@ -54,7 +59,7 @@ fn template(chip: &str) -> Option<[File; 7]> {
                 include_str!("../data/playground/esp32c3/sim.toml.in"),
             ),
         ]),
-        "esp32" => Some([
+        "esp32" => Some(&[
             (
                 "Cargo.toml",
                 include_str!("../data/playground/esp32/Cargo.toml.in"),
@@ -78,11 +83,45 @@ fn template(chip: &str) -> Option<[File; 7]> {
                 include_str!("../data/playground/esp32/sim.toml.in"),
             ),
         ]),
+        "ch32v003j4m6" => Some(&[
+            (
+                "Cargo.toml",
+                include_str!("../data/playground/ch32v003j4m6/Cargo.toml.in"),
+            ),
+            (
+                "Cargo.lock",
+                include_str!("../data/playground/ch32v003j4m6/Cargo.lock.in"),
+            ),
+            (
+                "build.rs",
+                include_str!("../data/playground/ch32v003j4m6/build.rs.in"),
+            ),
+            (
+                "rust-toolchain.toml",
+                include_str!("../data/playground/ch32v003j4m6/rust-toolchain.toml.in"),
+            ),
+            (
+                ".cargo/config.toml",
+                include_str!("../data/playground/ch32v003j4m6/cargo-config.toml.in"),
+            ),
+            (
+                "riscv32ec-unknown-none-elf.json",
+                include_str!("../data/playground/ch32v003j4m6/riscv32ec-unknown-none-elf.json.in"),
+            ),
+            (
+                MAIN,
+                include_str!("../data/playground/ch32v003j4m6/main.rs.in"),
+            ),
+            (
+                ".rusty/sim.toml",
+                include_str!("../data/playground/ch32v003j4m6/sim.toml.in"),
+            ),
+        ]),
         _ => None,
     }
 }
 
-fn templates_for(chip: &str) -> Result<[File; 7]> {
+fn templates_for(chip: &str) -> Result<&'static [File]> {
     template(chip).ok_or_else(|| {
         Error::refused(format!(
             "There is no playground for {chip} — there is one for each of {}.",
@@ -119,7 +158,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 pub fn prepare(data: &Path, chip: &str) -> Result<PathBuf> {
     let files = templates_for(chip)?;
     let root = dir(data, chip);
-    for (relative, text) in files {
+    for &(relative, text) in files {
         let path = root.join(relative);
         if !path.exists() {
             write(&path, text)?;
@@ -134,7 +173,7 @@ pub fn prepare(data: &Path, chip: &str) -> Result<PathBuf> {
 pub fn reset(data: &Path, chip: &str) -> Result<PathBuf> {
     let files = templates_for(chip)?;
     let root = dir(data, chip);
-    for (relative, text) in files {
+    for &(relative, text) in files {
         write(&root.join(relative), text)?;
     }
     Ok(root)
@@ -296,7 +335,12 @@ mod tests {
         use std::collections::{HashMap, HashSet};
 
         let data = tempfile::tempdir().unwrap();
-        for (chip, led, button) in [("esp32c3", 0u8, 4u8), ("esp32", 2, 4)] {
+        // The CH32V003's pins are numbered eight to a port: PC4 is 20, PC1 17.
+        for (chip, led, button) in [
+            ("esp32c3", 0u8, 4u8),
+            ("esp32", 2, 4),
+            ("ch32v003j4m6", 20, 17),
+        ] {
             let root = prepare(data.path(), chip).unwrap();
             let sheet = crate::simulate::load_board_for_test(&root, chip)
                 .unwrap_or_else(|| panic!("{chip}: the board file loads"));

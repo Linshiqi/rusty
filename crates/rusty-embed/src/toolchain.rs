@@ -117,6 +117,15 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "wlink",
+        purpose: "Flashes WCH's CH32 parts through a WCH-LinkE and relays their SDI print",
+        required: false,
+        recipe: Recipe::CargoInstall {
+            package: "wlink",
+            why: "ch32-rs's flasher for WCH-Link probes, which ch32-hal's projects run",
+        },
+    },
+    Tool {
         name: "esp-generate",
         purpose: "Generates bare-metal project templates",
         required: false,
@@ -341,6 +350,12 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         .and_then(chip::by_id);
 
     let needs_esp_toolchain = chip.as_ref().is_some_and(|c| c.needs_esp_toolchain());
+    // A part whose target is a description the project carries: there is no
+    // target to add, and what the build needs instead is a nightly cargo
+    // that builds `core` itself, with the source to build it from.
+    let builds_std = chip
+        .as_ref()
+        .is_some_and(|c| c.toolchain == crate::model::ToolchainRequirement::NightlyBuildStd);
 
     // The C compiler, listed only once a chip says which one. It is reported
     // whether or not this project speaks C: "can I add C to this" is a
@@ -431,11 +446,51 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         _ => project.and_then(|p| p.configured_target.clone()),
     };
 
-    let required_target_installed = target_installed(
-        required_target.as_deref(),
-        &status.installed_targets,
-        status.has_esp_toolchain,
-    );
+    let nightly = builds_std.then(|| build_std_state(project, &status.toolchains));
+    let required_target_installed = match &nightly {
+        Some(state) => state.ready(),
+        None => target_installed(
+            required_target.as_deref(),
+            &status.installed_targets,
+            status.has_esp_toolchain,
+        ),
+    };
+
+    if let Some(state) = &nightly {
+        if !state.nightly_with_source {
+            problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "nightly-missing",
+                    "Nightly Rust with its source missing",
+                    "This part's target is a description the project carries, with no \
+                     standard library rustup can add: cargo builds `core` for it from \
+                     source, which only a nightly toolchain with the `rust-src` component \
+                     can do.",
+                )
+                .fix(
+                    crate::model::ToolchainRequirement::NightlyBuildStd
+                        .install_command()
+                        .unwrap_or_default(),
+                ),
+            );
+        } else if !state.project_on_nightly {
+            problems.push(
+                Problem::new(
+                    Severity::Blocking,
+                    "nightly-not-pinned",
+                    "The project does not build with nightly",
+                    "It builds `core` itself (`build-std` in .cargo/config.toml), which \
+                     stable cargo refuses, and nothing makes cargo use nightly here — no \
+                     `rust-toolchain.toml`, and the default toolchain is not nightly. A \
+                     `rust-toolchain.toml` with `channel = \"nightly\"` and \
+                     `components = [\"rust-src\"]` pins it for everyone who clones the \
+                     project; the command below pins it on this machine only.",
+                )
+                .fix("rustup override set nightly"),
+            );
+        }
+    }
 
     if needs_esp_toolchain && !status.has_esp_toolchain {
         let chip_name = chip.as_ref().map(|c| c.name.clone()).unwrap_or_default();
@@ -501,6 +556,7 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     if let Some(target) = &required_target
         && !required_target_installed
         && !target.starts_with("xtensa-")
+        && !builds_std
     {
         problems.push(
             Problem::new(
@@ -518,10 +574,9 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     // flashed — a workspace that is not an embedded project should not be
     // nagged about espflash.
     if project.is_some_and(|p| p.chip.is_some()) {
-        let has_flasher = status
-            .tools
-            .iter()
-            .any(|t| matches!(t.name.as_str(), "espflash" | "probe-rs") && t.is_installed());
+        let has_flasher = status.tools.iter().any(|t| {
+            matches!(t.name.as_str(), "espflash" | "probe-rs" | "wlink") && t.is_installed()
+        });
         if !has_flasher {
             problems.push(
                 Problem::new(
@@ -561,8 +616,70 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         required_target,
         required_target_installed,
         needs_esp_toolchain,
+        builds_std,
         problems,
     }
+}
+
+/// What a project that builds `core` itself has of what that takes.
+struct BuildStd {
+    /// A nightly toolchain with `rust-src` in it.
+    nightly_with_source: bool,
+    /// The build will run on nightly: pinned by the project, or nightly is
+    /// the machine's default.
+    project_on_nightly: bool,
+}
+
+impl BuildStd {
+    fn ready(&self) -> bool {
+        self.nightly_with_source && self.project_on_nightly
+    }
+}
+
+fn build_std_state(
+    project: Option<&EmbeddedProject>,
+    toolchains: &[crate::model::Toolchain],
+) -> BuildStd {
+    let is_nightly = |name: &str| name.starts_with("nightly");
+    let pinned = project
+        .and_then(|p| p.configured_toolchain.as_deref())
+        .is_some_and(is_nightly);
+    let default_nightly = toolchains
+        .iter()
+        .any(|t| t.is_default && is_nightly(&t.name));
+    let has_nightly = toolchains.iter().any(|t| is_nightly(&t.name));
+    BuildStd {
+        nightly_with_source: has_nightly && nightly_has_source(),
+        project_on_nightly: pinned || default_nightly || rustup_override_is_nightly(project),
+    }
+}
+
+/// Whether the nightly toolchain carries the standard library's source,
+/// which `-Zbuild-std` compiles. Asked only of a project that builds `core`.
+fn nightly_has_source() -> bool {
+    let mut command = crate::process::command("rustup");
+    command.args(["component", "list", "--installed", "--toolchain", "nightly"]);
+    command.output().ok().is_some_and(|out| {
+        out.status.success()
+            && String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim() == "rust-src")
+    })
+}
+
+/// Whether `rustup override set nightly` was run for the project's
+/// directory — ch32-hal's own instructions, and invisible in its files.
+fn rustup_override_is_nightly(project: Option<&EmbeddedProject>) -> bool {
+    let Some(project) = project else {
+        return false;
+    };
+    let mut command = crate::process::command("rustup");
+    command
+        .args(["show", "active-toolchain"])
+        .current_dir(&project.root);
+    command.output().ok().is_some_and(|out| {
+        out.status.success() && String::from_utf8_lossy(&out.stdout).starts_with("nightly")
+    })
 }
 
 /// What the Xtensa toolchain's own cargo calls itself.

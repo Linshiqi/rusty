@@ -1,0 +1,18 @@
+[package]
+name = "rusty-mcu"
+description = "Microcontrollers rusty runs itself, instruction by instruction — the CH32V003 first"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Nothing: an emulator is arithmetic over a register file and a memory map,
+# and it is tested as exactly that — no process, no socket, no clock. The
+# host's half (pacing it against the wall clock, the pin channel, the
+# console) is rusty-embed's.
+[dependencies]
+
+[lints]
+workspace = true

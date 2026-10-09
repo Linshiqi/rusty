@@ -130,7 +130,15 @@ fn print_check(project: &EmbeddedProject, toolchain: &ToolchainReport) {
 fn print_size(report: &MemoryReport) {
     let totals = &report.totals;
     println!("{}", report.elf_path);
-    print!("flash {}", human(totals.flash_bytes));
+    match totals.flash_fraction() {
+        Some(fraction) => print!(
+            "flash {} of {} ({:.0}%)",
+            human(totals.flash_bytes),
+            human(u64::from(totals.flash_capacity.unwrap_or(0))),
+            fraction * 100.0
+        ),
+        None => print!("flash {}", human(totals.flash_bytes)),
+    }
     match totals.ram_fraction() {
         Some(fraction) => println!(
             "   ram {} of {} ({:.0}% static)",

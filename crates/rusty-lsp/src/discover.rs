@@ -152,6 +152,44 @@ pub(crate) fn command_for(binary: &Path, root: &Path) -> Command {
 /// Read from `workspace.exclude` rather than guessed by walking: a directory
 /// the workspace deliberately named is a fact, and linking every `Cargo.toml`
 /// under the root would pull in vendored copies and fixtures.
+/// The environment rust-analyzer's cargo needs to load a project whose
+/// target is a JSON description: `CARGO_UNSTABLE_JSON_TARGET_SPEC`, cargo's
+/// spelling of the `[unstable] json-target-spec` key such a project sets.
+///
+/// The project's config says it, and cargo reads it — in the project. But
+/// rust-analyzer also runs `cargo metadata` for the standard library's own
+/// workspace, from the sysroot's directory, where the project's config does
+/// not reach; nightly cargo then refuses the `.json` target outright, and
+/// the server loads without the sysroot: "partly loaded", and `core::` and
+/// `alloc::` answer nothing. Measured on the CH32V003 playground. Only for a
+/// project that asks for the key — the root's or a linked crate's — because
+/// a stable cargo given unstable configuration is a warning at best.
+pub(crate) fn cargo_env(root: &Path) -> Vec<(String, String)> {
+    let mut dirs = vec![root.to_path_buf()];
+    dirs.extend(
+        linked_projects(root)
+            .iter()
+            .filter_map(|manifest| Path::new(manifest).parent().map(Path::to_path_buf)),
+    );
+    let wants_json_targets = dirs.iter().any(|dir| {
+        [".cargo/config.toml", ".cargo/config"].iter().any(|name| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|text| text.parse::<toml::Table>().ok())
+                .and_then(|config| config.get("unstable")?.get("json-target-spec")?.as_bool())
+                .unwrap_or(false)
+        })
+    });
+    if wants_json_targets {
+        vec![(
+            "CARGO_UNSTABLE_JSON_TARGET_SPEC".to_string(),
+            "true".to_string(),
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
 pub(crate) fn linked_projects(root: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
         return Vec::new();
@@ -206,6 +244,42 @@ mod tests {
         assert!(!is_rust_analyzer_version(
             "error: 'rust-analyzer' is not installed for the toolchain 'stable-x86_64-pc-windows-msvc'\n"
         ));
+    }
+
+    /// A project whose config turns on JSON targets passes the key on to
+    /// rust-analyzer's cargo — found in the root or in a linked firmware
+    /// crate — and one that does not passes nothing.
+    #[test]
+    fn json_targets_reach_rust_analyzer_s_cargo_only_when_asked_for() {
+        let plain = tempfile::tempdir().expect("tempdir");
+        std::fs::write(plain.path().join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        assert!(cargo_env(plain.path()).is_empty());
+
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let root = workspace.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\nexclude = [\"firmware\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("firmware/.cargo")).unwrap();
+        std::fs::write(
+            root.join("firmware/Cargo.toml"),
+            "[package]\nname = \"f\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("firmware/.cargo/config.toml"),
+            "[unstable]\nbuild-std = [\"core\"]\njson-target-spec = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cargo_env(root),
+            [(
+                "CARGO_UNSTABLE_JSON_TARGET_SPEC".to_string(),
+                "true".to_string()
+            )]
+        );
     }
 
     /// The layout this exists for: a workspace whose firmware is excluded

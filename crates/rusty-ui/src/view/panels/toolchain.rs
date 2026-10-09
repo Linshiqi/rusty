@@ -76,6 +76,7 @@ fn needed(report: &ToolchainReport) -> Vec<String> {
     if let Some(target) = &report.required_target
         && !report.required_target_installed
         && !target.starts_with("xtensa-")
+        && !report.builds_std
     {
         add(format!("target:{target}"));
     }
@@ -85,6 +86,7 @@ fn needed(report: &ToolchainReport) -> Vec<String> {
         }
         match problem.kind.as_str() {
             "no-flasher" => add("espflash".to_string()),
+            "nightly-missing" => add("nightly".to_string()),
             "ldproxy-missing" => add("ldproxy".to_string()),
             _ => {}
         }
@@ -360,10 +362,13 @@ fn Hero(report: ToolchainReport) -> impl IntoView {
 /// toolchain that loses rust-analyzer its dependencies, say.
 #[component]
 fn Notes(report: ToolchainReport) -> impl IntoView {
+    // And the one blocking problem no row can fix with an install: a
+    // project that builds `core` itself, on a machine that has nightly, not
+    // set to use it.
     let warnings: Vec<_> = report
         .problems
         .into_iter()
-        .filter(|p| p.severity != rusty_embed::Severity::Blocking)
+        .filter(|p| p.severity != rusty_embed::Severity::Blocking || p.kind == "nightly-not-pinned")
         .collect();
     (!warnings.is_empty()).then(|| {
         view! {
@@ -386,6 +391,7 @@ fn display_name(tool: &str) -> String {
     match tool {
         "espup" => t!("environment.xtensa"),
         "msvc" => t!("environment.msvc"),
+        "nightly" => t!("environment.nightly"),
         other => other.to_string(),
     }
 }
@@ -423,14 +429,26 @@ fn BuildGroup(report: ToolchainReport) -> impl IntoView {
 
     // The chip's target, when a project names one. An Xtensa target is not
     // rustup's to add — espup brings it — so it has no button of its own.
+    let builds_std = report.builds_std;
+    let nightly_missing = needed.iter().any(|tool| tool == "nightly");
     let target_row = report.required_target.clone().map(|target| {
         let installed = report.required_target_installed;
         let xtensa = target.starts_with("xtensa-");
         let step = format!("target:{target}");
         view! {
             <Row label=t!("environment.target") detail=target.clone()>
-                {if installed {
+                {if installed && builds_std {
+                    view! { <Present version=Some("nightly · build-std".to_string()) path=None /> }
+                        .into_any()
+                } else if installed {
                     view! { <Present version=None path=None /> }.into_any()
+                } else if builds_std && nightly_missing {
+                    view! { <InstallCell tool="nightly".to_string() needed=true /> }.into_any()
+                } else if builds_std {
+                    view! {
+                        <span class="text-footnote text-label-3">{t!("environment.target-pin-nightly")}</span>
+                    }
+                        .into_any()
                 } else if xtensa {
                     view! {
                         <span class="text-footnote text-label-3">{t!("environment.target-by-espup")}</span>
@@ -829,6 +847,7 @@ mod tests {
             required_target: Some("riscv32imc-unknown-none-elf".to_string()),
             required_target_installed: false,
             needs_esp_toolchain: false,
+            builds_std: false,
             problems,
         }
     }

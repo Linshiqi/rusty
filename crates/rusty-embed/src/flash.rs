@@ -188,6 +188,49 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
             }
         }
 
+        Transport::Probe { identifier } if uses_wlink(chip.as_ref(), identifier.as_deref()) => {
+            // wlink numbers probes itself; a probe listed by it carries the
+            // number, and with none chosen it takes the first.
+            let mut args = vec!["-v".to_string()];
+            if let Some(index) = identifier
+                .as_deref()
+                .and_then(|id| id.strip_prefix("wlink:"))
+            {
+                args.push("-d".into());
+                args.push(index.to_string());
+            }
+            // SDI print reaches the WCH-LinkE's own serial port, and
+            // `--watch-serial` reads it there — the whole of ch32-hal's
+            // `println!` path. A monitor resets rather than writes: wlink
+            // turns SDI print on only across a reset.
+            let rationale = match request.action {
+                FlashAction::Flash => {
+                    args.extend(["flash".to_string(), built()?]);
+                    "Flashing through the WCH-LinkE over the one-wire debug pin, and stopping \
+                     there."
+                }
+                FlashAction::FlashAndMonitor => {
+                    args.extend([
+                        "flash".to_string(),
+                        "--enable-sdi-print".into(),
+                        "--watch-serial".into(),
+                        built()?,
+                    ]);
+                    "Flashing through the WCH-LinkE; SDI print arrives on its serial port."
+                }
+                FlashAction::Monitor => {
+                    args.extend([
+                        "reset".to_string(),
+                        "--enable-sdi-print".into(),
+                        "--watch-serial".into(),
+                    ]);
+                    "Restarting the part without rewriting its flash, with SDI print on — \
+                     wlink turns it on only across a reset."
+                }
+            };
+            ("wlink", args, rationale)
+        }
+
         Transport::Probe { identifier } => {
             let target = chip
                 .as_ref()
@@ -240,6 +283,43 @@ pub fn plan(request: &FlashRequest) -> Result<CommandPlan> {
         rationale: rationale.to_string(),
         warning: None,
     })
+}
+
+/// Whether a probe flash goes through wlink: a probe wlink listed, or no
+/// probe chosen on a part that prefers it. A probe probe-rs listed goes
+/// through probe-rs, which knows the CH32V003 too.
+fn uses_wlink(chip: Option<&crate::model::Chip>, identifier: Option<&str>) -> bool {
+    match identifier {
+        Some(id) => id.starts_with("wlink:"),
+        None => chip.is_some_and(|c| c.flashers.first() == Some(&crate::model::Flasher::Wlink)),
+    }
+}
+
+/// A line of a flash or monitor's output, without what the tool put in front
+/// of the firmware's own words: `wlink --watch-serial` stamps every line with
+/// the time it arrived (`2026-10-08 17:30:01.234 `), and a protocol line
+/// behind a stamp is a line nothing reads as protocol.
+pub fn firmware_line<'a>(program: &str, line: &'a str) -> &'a str {
+    if !program.ends_with("wlink") && !program.ends_with("wlink.exe") {
+        return line;
+    }
+    let bytes = line.as_bytes();
+    // YYYY-MM-DD HH:MM:SS.mmm
+    let stamped = bytes.len() >= 23
+        && bytes[..23].iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => *b == b'-',
+            10 => *b == b' ',
+            13 | 16 => *b == b':',
+            19 => *b == b'.',
+            _ => b.is_ascii_digit(),
+        });
+    if !stamped {
+        return line;
+    }
+    let rest = &line[23..];
+    rest.strip_prefix(": ")
+        .or_else(|| rest.strip_prefix(' '))
+        .unwrap_or(rest)
 }
 
 /// Quote an argument that would not survive being pasted into a shell.
@@ -496,5 +576,71 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("probe-rs chip list"), "{err}");
+    }
+
+    /// A CH32V003 flashes through its own probe's tool unless a probe-rs
+    /// probe was picked, and a probe wlink listed carries its number.
+    #[test]
+    fn a_ch32_flashes_through_wlink_and_monitors_its_sdi_print() {
+        let probe = |identifier: Option<&str>| Transport::Probe {
+            identifier: identifier.map(str::to_string),
+        };
+        let run = plan(&request(
+            "ch32v003j4m6",
+            probe(None),
+            FlashAction::FlashAndMonitor,
+        ))
+        .unwrap();
+        assert_eq!(run.program, "wlink");
+        assert_eq!(
+            run.args,
+            [
+                "-v",
+                "flash",
+                "--enable-sdi-print",
+                "--watch-serial",
+                "target/blinky"
+            ]
+        );
+        let second = plan(&request(
+            "ch32v003j4m6",
+            probe(Some("wlink:1")),
+            FlashAction::Flash,
+        ))
+        .unwrap();
+        assert_eq!(second.args, ["-v", "-d", "1", "flash", "target/blinky"]);
+        let watch = plan(&request("ch32v003j4m6", probe(None), FlashAction::Monitor)).unwrap();
+        assert!(
+            !watch.args.contains(&"flash".to_string()),
+            "a monitor never writes"
+        );
+        let through_probe_rs = plan(&request(
+            "ch32v003j4m6",
+            probe(Some("WCH-Link -- 1a86:8010:abc (WchLink)")),
+            FlashAction::Flash,
+        ))
+        .unwrap();
+        assert_eq!(through_probe_rs.program, "probe-rs");
+        assert!(through_probe_rs.args.contains(&"CH32V003J4M6".to_string()));
+    }
+
+    #[test]
+    fn a_ch32_has_no_serial_bootloader_to_flash_through() {
+        let serial = Transport::Serial {
+            port: "COM5".to_string(),
+        };
+        assert!(plan(&request("ch32v003j4m6", serial, FlashAction::Flash)).is_err());
+    }
+
+    #[test]
+    fn wlink_s_timestamp_comes_off_a_watched_line() {
+        let line = "2026-10-08 17:30:01.234 [rusty:tel@10] y=1";
+        assert_eq!(firmware_line("wlink", line), "[rusty:tel@10] y=1");
+        assert_eq!(
+            firmware_line("C:/x/wlink.exe", "2026-10-08 17:30:01.234: hi"),
+            "hi"
+        );
+        assert_eq!(firmware_line("espflash", line), line);
+        assert_eq!(firmware_line("wlink", "Flash done"), "Flash done");
     }
 }

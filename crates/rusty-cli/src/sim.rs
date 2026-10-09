@@ -62,7 +62,8 @@ pub(crate) fn sim(
         for (pin, level) in outcome.levels() {
             let changes = outcome.events.iter().filter(|(_, p, _)| *p == pin).count();
             eprintln!(
-                "rusty: GPIO{pin} ended {}, {changes} report(s)",
+                "rusty: {} ended {}, {changes} report(s)",
+                outcome.pin_name(pin),
                 u8::from(level)
             );
         }

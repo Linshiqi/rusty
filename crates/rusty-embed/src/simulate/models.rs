@@ -109,7 +109,17 @@ pub(super) fn markers_of(qemu: &Path) -> impl Iterator<Item = &'static [u8]> {
 /// Does this emulator model the converter, both buses, LEDC, RMT and the
 /// pads' own pulls and switches — and, for an ESP32, its interrupts?
 pub fn has_peripherals(qemu: &Path) -> bool {
+    // rusty's own CH32V003 is current by construction: what it lacks is a
+    // limit of the model, said by the plan, not an older build to upgrade.
+    if is_builtin(qemu) {
+        return true;
+    }
     markers_of(qemu).all(|marker| carries(qemu, marker))
+}
+
+/// The emulator rusty runs itself, which is no file to scan.
+fn is_builtin(program: &Path) -> bool {
+    super::mcu::is_program(&program.to_string_lossy())
 }
 
 /// How many of rusty's models this binary carries, pins included — the
@@ -145,7 +155,7 @@ pub fn has_adc_model(qemu: &Path) -> bool {
 }
 
 pub fn has_gpio_model(qemu: &Path) -> bool {
-    carries(qemu, GPIO_MODEL_MARKER)
+    is_builtin(qemu) || carries(qemu, GPIO_MODEL_MARKER)
 }
 
 /// Does this binary carry `marker`, asked once per binary?

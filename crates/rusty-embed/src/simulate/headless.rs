@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::{PinChannel, free_port, kit_rows_for, pins_args};
+use super::{PinChannel, free_port, kit_rows_for, launch, pins_args_for};
 use crate::live::Live;
 use crate::model::{CommandPlan, Sheet, SimLimit, SimPlan};
 use crate::nets::Row;
@@ -253,6 +253,9 @@ pub struct Outcome {
     pub limits: Vec<SimLimit>,
     /// Things the run wants read that are not verdicts.
     pub notes: Vec<String>,
+    /// The part that ran, for naming its pins (`nets::pin_label`). Empty
+    /// when the run never got as far as knowing.
+    pub chip: String,
 }
 
 impl Outcome {
@@ -265,6 +268,7 @@ impl Outcome {
             pins_from_emulator: false,
             limits: Vec::new(),
             notes: Vec::new(),
+            chip: String::new(),
         }
     }
 
@@ -288,6 +292,11 @@ impl Outcome {
     fn note(&mut self, text: String, on: &mut dyn FnMut(Event<'_>)) {
         on(Event::Note(&text));
         self.notes.push(text);
+    }
+
+    /// What `pin` is called on the part that ran: `PC4`, `GPIO4`.
+    pub fn pin_name(&self, pin: u8) -> String {
+        crate::nets::pin_label(&self.chip, pin)
     }
 
     /// The last level reported for each GPIO.
@@ -331,6 +340,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         Err(reason) => return Outcome::unrunnable(reason),
     };
     let mut outcome = Outcome::opening(&plan, on);
+    outcome.chip = chip.clone();
     let waves = plan
         .emulator
         .as_ref()
@@ -365,7 +375,8 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         .then(free_port)
         .flatten();
     if let Some(port) = pins_port {
-        boot.extend_args(pins_args(port));
+        let args = pins_args_for(&boot.program, port);
+        boot.extend_args(args);
     }
     outcome.pins_from_emulator = pins_port.is_some();
     if pins_port.is_none() {
@@ -375,7 +386,7 @@ pub fn run(root: &Path, scenario: &Scenario, on: &mut dyn FnMut(Event<'_>)) -> O
         outcome.note(note.to_string(), on);
     }
     on(Event::Command(&boot.display));
-    let session = match process::spawn(&boot, Some(root)) {
+    let session = match launch(&boot, Some(root)) {
         Ok(session) => session,
         Err(error) => {
             outcome.verdict = Verdict::Unrunnable(error.to_string());
