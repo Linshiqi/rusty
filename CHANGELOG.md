@@ -9,6 +9,28 @@ document.
 
 One `## v<version>` heading per release, newest first.
 
+## v0.6.76
+
+**The CH32X035F8U6 is here.** rusty now knows WCH's USB-PD part — 62 KB of
+flash, 20 KB of RAM, a QingKe V4C core — through ch32-hal. Unlike the
+CH32V003 it builds with ordinary stable Rust: open a ch32-hal project for
+it and rusty recognises the chip, checks the toolchain, shows how much of
+the flash the image uses, and flashes it through a WCH-LinkE with wlink or
+through probe-rs, with the firmware's `println!` (SDI print) in the panel
+below. Its pins are named as the datasheet names them — PA0, PB12, PC19.
+
+**Simulate it too.** rusty's own emulator now runs the X035 as well as the
+V003: the core's multiply, divide and atomics, the pins, TIM1, TIM2 and
+TIM3 with PWM, SysTick, the external interrupts, the four USARTs and SDI
+print. Press Run and the LED on the board beside your code breathes as the
+firmware drives it. USB, USB PD, the ADC and the op-amps are not modelled
+yet; the panel says so before the run, and the run names whichever one the
+firmware reaches for.
+
+**A CH32X035 playground.** The welcome screen has a card for it — an LED
+breathing on PB12 and a button on PB1 that holds it at full — and New
+Project makes the same.
+
 ## v0.6.75
 
 **A playground for drawing from Rust.** The welcome screen has a fourth
