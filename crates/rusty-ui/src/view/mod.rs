@@ -333,7 +333,23 @@ fn Stage() -> impl IntoView {
                         title=t!("chrome.no-project-title")
                         detail=t!("chrome.no-project-detail")
                     >
-                        <OpenProjectButton kind=ButtonKind::Primary />
+                        // The three ways to have a project, as VS Code's
+                        // welcome page offers them: the welcome screen had
+                        // only Open, and New project and Clone were a menu
+                        // away from somebody who had just installed rusty.
+                        <div class="flex flex-wrap justify-center gap-2">
+                            <OpenProjectButton kind=ButtonKind::Primary />
+                            <Button
+                                label=t!("menu.file.new-project")
+                                on_click=Callback::new(move |_| {
+                                    state.layout.panel.set("wizard".to_string())
+                                })
+                            />
+                            <Button
+                                label=t!("menu.file.clone")
+                                on_click=Callback::new(move |_| controller::open_clone_dialog(state))
+                            />
+                        </div>
                         <Playgrounds />
                         // The way back to yesterday's work, one click deep.
                         {move || {

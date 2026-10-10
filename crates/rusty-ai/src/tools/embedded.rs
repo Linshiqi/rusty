@@ -117,9 +117,14 @@ impl Tool for MemoryReport {
     fn call(&self, _args: &Value, ctx: &ToolContext<'_>) -> Result<Value> {
         let firmware = ctx.require_firmware()?;
         let chip_id = ctx.project().and_then(|p| p.chip);
-        Ok(serde_json::to_value(memory::analyze(
+        let root = ctx
+            .require_root()
+            .ok()
+            .map(rusty_embed::project::firmware_root);
+        Ok(serde_json::to_value(memory::analyze_project(
             firmware,
             chip_id.as_deref(),
+            root.as_deref(),
         )?)?)
     }
 }

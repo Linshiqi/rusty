@@ -37,7 +37,11 @@ pub fn UpdateSheet() -> impl IntoView {
     let state = AppState::expect();
 
     move || {
-        if !state.app.update_open.get() {
+        // One sheet at a time. The launch check answers a moment after the
+        // setup sheet opens on a machine that cannot build, and drew itself
+        // on top of it: two modals, the one underneath the one that matters.
+        // It waits instead, still open, and shows once setup is put away.
+        if !state.app.update_open.get() || state.setup.open.get() {
             return None;
         }
         let status = state.app.update.get()?;

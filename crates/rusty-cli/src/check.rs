@@ -87,7 +87,7 @@ pub(crate) fn size(elf: PathBuf, path: PathBuf, json: bool) -> Result<()> {
                 )
             })?,
     };
-    let report = memory::analyze(&elf, chip.as_deref())
+    let report = memory::analyze_project(&elf, chip.as_deref(), Some(&firmware_dir))
         .with_context(|| format!("reading {}", elf.display()))?;
     if json {
         emit(&report)?;

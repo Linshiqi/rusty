@@ -66,7 +66,11 @@ pub fn plan(report: &ToolchainReport) -> Vec<SetupStep> {
     // rustup first, and alone. `cargo install` and `rustup target add` are
     // both downstream of it, so listing the rest beside an absent rustup
     // offers buttons that cannot work.
-    if let Some(missing) = missing_tool(&report.status, "rustup") {
+    // Only where Rust is built: a PlatformIO or CMake project's row says
+    // `required: false`, and its user was told Rust was missing.
+    if let Some(missing) = missing_tool(&report.status, "rustup")
+        && missing.required
+    {
         return vec![SetupStep {
             tool: "rustup".to_string(),
             purpose: missing.purpose.clone(),
@@ -299,6 +303,16 @@ mod tests {
             tool("espflash", true, true),
         ]);
         assert!(plan(&r).is_empty());
+        assert!(!blocked(&r));
+    }
+
+    /// A PlatformIO or CMake project builds no Rust, and its report says so
+    /// by making rustup optional: a C user without rustup is not stopped at
+    /// "Rust itself is not installed", and is not interrupted by the sheet.
+    #[test]
+    fn a_c_project_is_not_stopped_for_want_of_rust() {
+        let r = report(vec![tool("rustup", false, false), tool("pio", true, true)]);
+        assert!(plan(&r).iter().all(|step| step.tool != "rustup"));
         assert!(!blocked(&r));
     }
 

@@ -29,7 +29,10 @@ impl CommandError {
 
     /// Nothing has been opened yet. Common on a cold start, not a bug.
     pub fn no_project() -> Self {
-        Self::new("No project is open. Choose a folder containing a Cargo.toml.")
+        Self::new(
+            "No project is open. Choose a folder with a Cargo.toml, a platformio.ini or a \
+             CMakeLists.txt.",
+        )
     }
 
     /// A project is open but `cargo metadata` did not succeed for it.

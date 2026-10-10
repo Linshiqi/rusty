@@ -42,8 +42,12 @@ enum Section {
 }
 
 fn section_of(tool: &str) -> Section {
+    // A cross C compiler builds, whichever part it is for.
+    if tool.ends_with("-gcc") {
+        return Section::Build;
+    }
     match tool {
-        "msvc" | "ldproxy" | "riscv32-esp-elf-gcc" | "xtensa-esp-elf-gcc" => Section::Build,
+        "msvc" | "ldproxy" | "pio" | "cmake" | "ninja" | "idf.py" => Section::Build,
         "espflash" | "probe-rs" | "wlink" | "codelldb" => Section::Device,
         _ => Section::Editor,
     }
@@ -98,6 +102,20 @@ fn needed(report: &ToolchainReport) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether rusty's own install can fetch a missing item: a target, nightly
+/// or espup always; a tool when its row says so.
+fn can_install(report: &ToolchainReport, name: &str) -> bool {
+    if name.starts_with("target:") || matches!(name, "nightly" | "espup") {
+        return true;
+    }
+    report
+        .status
+        .tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .is_some_and(|tool| tool.installable)
 }
 
 /// The page's answer, before any list.
@@ -260,11 +278,18 @@ fn Hero(report: ToolchainReport) -> impl IntoView {
                         count = tools.len().to_string()
                     )
                 },
-                tools
-                    .iter()
-                    .map(|tool| display_name(tool))
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                {
+                    let names = tools
+                        .iter()
+                        .map(|tool| display_name(tool))
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    if tools.iter().any(|t| can_install(&report, t)) {
+                        names
+                    } else {
+                        t!("environment.install-yourself", tools = names)
+                    }
+                },
             ),
             Verdict::Ready(optional) => (
                 Icon::Check,
@@ -317,6 +342,10 @@ fn Hero(report: ToolchainReport) -> impl IntoView {
                     .into_any(),
                 )
             }
+            // Only what rusty can install: pio, CMake, Ninja and a CMake
+            // project's cross compiler are the user's to install, and a
+            // button that installed none of them said it had.
+            Verdict::Missing(tools) if !tools.iter().any(|t| can_install(&report, t)) => None,
             Verdict::Missing(tools) => {
                 let tools = tools.clone();
                 Some(
@@ -928,6 +957,10 @@ mod tests {
         assert_eq!(section_of("probe-rs"), Section::Device);
         assert_eq!(section_of("msvc"), Section::Build);
         assert_eq!(section_of("riscv32-esp-elf-gcc"), Section::Build);
+        assert_eq!(section_of("arm-none-eabi-gcc"), Section::Build);
+        assert_eq!(section_of("pio"), Section::Build);
+        assert_eq!(section_of("cmake"), Section::Build);
+        assert_eq!(section_of("clangd"), Section::Editor);
         assert_eq!(section_of("rust-analyzer"), Section::Editor);
         assert_eq!(section_of("something-new"), Section::Editor);
     }

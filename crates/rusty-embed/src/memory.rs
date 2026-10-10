@@ -27,6 +27,26 @@ use crate::{
     model::{CrateSize, MemoryReport, MemoryTotals, SectionKind, SectionSize},
 };
 
+/// Analyse a linked ELF built in the project at `root`: [`analyze`], and
+/// where the catalogue has no flash size for the part, the one the
+/// project's own `memory.x` gives (`flash_in_linker_script`). One door for
+/// the panel, `rusty-cli size` and the assistant, so the three cannot say
+/// different things about one image.
+pub fn analyze_project(
+    elf_path: &Path,
+    chip_id: Option<&str>,
+    root: Option<&Path>,
+) -> Result<MemoryReport> {
+    let mut report = analyze(elf_path, chip_id)?;
+    if report.totals.flash_capacity.is_none()
+        && let Some(text) =
+            root.and_then(|root| std::fs::read_to_string(root.join("memory.x")).ok())
+    {
+        report.totals.flash_capacity = flash_in_linker_script(&text);
+    }
+    Ok(report)
+}
+
 /// Analyse a linked ELF.
 pub fn analyze(elf_path: &Path, chip_id: Option<&str>) -> Result<MemoryReport> {
     let bytes = std::fs::read(elf_path).map_err(Error::reading(elf_path))?;
@@ -85,6 +105,71 @@ pub fn analyze(elf_path: &Path, chip_id: Option<&str>) -> Result<MemoryReport> {
         crates,
         unattributed_bytes,
     })
+}
+
+/// The flash a project's `memory.x` gives the image, where the catalogue has
+/// no number for the part — an RP2040 or RP2350, whose flash is on the board
+/// and differs between boards. The project's linker script is the project's
+/// own word for it: the regions named `FLASH`, and the RP2040's `BOOT2`, which
+/// is the first 256 bytes of the same chip. `None` for a length this cannot
+/// evaluate — a symbol, a function — rather than a number half-read.
+pub fn flash_in_linker_script(text: &str) -> Option<u32> {
+    let block = text.split_once("MEMORY")?.1;
+    let block = block.split_once('{')?.1.split_once('}')?.0;
+    let mut total = 0u64;
+    let mut found = false;
+    for line in block.lines() {
+        let line = line.split("/*").next().unwrap_or(line);
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name
+            .split('(')
+            .next()
+            .unwrap_or(name)
+            .trim()
+            .to_ascii_uppercase();
+        if !(name.contains("FLASH") || name == "BOOT2") {
+            continue;
+        }
+        let length = rest.split(',').find_map(|field| {
+            let (key, value) = field.split_once('=')?;
+            matches!(key.trim(), "LENGTH" | "len" | "l").then(|| value.trim().to_string())
+        })?;
+        total += length_of(&length)?;
+        found = true;
+    }
+    found.then(|| u32::try_from(total).ok()).flatten()
+}
+
+/// `2048K - 0x100`, `1M`, `0x80000`: numbers in decimal or hex with an
+/// optional `K` or `M`, added and subtracted. Anything else is `None`.
+fn length_of(expression: &str) -> Option<u64> {
+    let mut total: i64 = 0;
+    let mut sign = 1i64;
+    let spaced = expression.replace('+', " + ").replace('-', " - ");
+    for token in spaced.split_whitespace() {
+        match token {
+            "+" => sign = 1,
+            "-" => sign = -1,
+            number => {
+                let (digits, scale) = match number.as_bytes().last()? {
+                    b'K' | b'k' => (&number[..number.len() - 1], 1024),
+                    b'M' | b'm' => (&number[..number.len() - 1], 1024 * 1024),
+                    _ => (number, 1),
+                };
+                let value = match digits
+                    .strip_prefix("0x")
+                    .or_else(|| digits.strip_prefix("0X"))
+                {
+                    Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+                    None => digits.parse::<i64>().ok()?,
+                };
+                total += sign * value * scale;
+            }
+        }
+    }
+    u64::try_from(total).ok()
 }
 
 // Read straight off the ELF header rather than through `object`'s own section
@@ -352,6 +437,26 @@ fn v0_crate(symbol: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What each template's `memory.x` says, read back: the RP2040's flash
+    /// split into its boot block and the rest, and a script whose length is
+    /// a symbol refused rather than half-read.
+    #[test]
+    fn the_flash_a_linker_script_gives_is_read_off_its_memory_block() {
+        let rp2040 = include_str!("../data/templates/rp2040/memory.x.in");
+        assert_eq!(flash_in_linker_script(rp2040), Some(2048 * 1024));
+        let rp2350 = include_str!("../data/templates/rp235xa/memory.x.in");
+        assert_eq!(flash_in_linker_script(rp2350), Some(4096 * 1024));
+        let nrf = r"MEMORY
+{
+  FLASH : ORIGIN = 0x00000000, LENGTH = 1024K /* app */
+  RAM : ORIGIN = 0x20000000, LENGTH = 256K
+}";
+        assert_eq!(flash_in_linker_script(nrf), Some(1024 * 1024));
+        let symbol = "MEMORY { FLASH : ORIGIN = 0x0, LENGTH = _flash_size }";
+        assert_eq!(flash_in_linker_script(symbol), None);
+        assert_eq!(flash_in_linker_script("SECTIONS { }"), None);
+    }
 
     #[test]
     fn an_impls_methods_belong_to_the_crate_the_impl_is_in() {

@@ -2309,6 +2309,32 @@ their board-and-port box, Xcode's destination picker and activity view,
   key on Windows, and WebView2 still gives it to the page: the host's
   `AcceleratorKeyPressed` runs first, wry does not subscribe to it, and F10
   is none of WebView2's browser keys.
+- **The Environment page lists what the open project can use**
+  (`toolchain::relevant`). An STM32 user was told "4 optional tools not
+  installed" — espup, espflash, esp-generate and ldproxy — and a CMake user
+  that Rust itself was missing. With a project and a catalogued part, a
+  flasher appears only where the part is flashed with it, a generator only
+  where it starts the part's projects, and Rust's own tools only where Rust
+  is built; rustup's row says `required: false` on a PlatformIO or CMake
+  project, which is what keeps `setup::plan` from collapsing to "install
+  Rust first" there. With no project every row stays. pio, CMake, Ninja and
+  the cross compilers sit under Build. **"Install what is missing" is shown
+  only when rusty can install one of them**: a C project's tools are the
+  user's to install, and the button that ran and installed none of them
+  now says so and points at the rows' commands.
+- **One sheet at a time.** The launch update check answers a moment after
+  the setup sheet opens on a machine that cannot build, and drew over it;
+  the update sheet waits, still open, until setup is put away.
+- **The welcome screen offers the three ways to have a project** — Open,
+  New project and Clone, as VS Code's does — and says a PlatformIO or CMake
+  folder opens as well as a Cargo one.
+- **A part's flash comes from the project's `memory.x` where the catalogue
+  has none** (`memory::analyze_project`, one door for the panel, `rusty-cli
+  size` and the assistant). An RP2040's and RP2350's flash is on the board,
+  so the catalogue rightly has no number, and the memory panel said
+  "capacity unknown" over a Pico. The reader sums the `FLASH` regions and
+  the RP2040's `BOOT2` and refuses a length it cannot evaluate rather than
+  half-reading it; every template's own script is its test.
 
 ## The playground
 

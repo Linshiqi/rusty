@@ -308,6 +308,32 @@ fn status_in(rustup: &RustupContext<'_>) -> ToolchainStatus {
     }
 }
 
+/// Whether a tool row is worth showing for the open project: a flasher the
+/// part is flashed with, a generator that starts its projects, Rust's own
+/// tools only where Rust is built. Everything is relevant with no project, or
+/// with a part the catalogue does not know.
+fn relevant(tool: &str, chip: Option<&crate::model::Chip>, cargo: bool, project: bool) -> bool {
+    use crate::model::{Flasher, Generator};
+    if !project {
+        return true;
+    }
+    if !cargo && matches!(tool, "espup" | "esp-generate" | "ldproxy" | "rust-analyzer") {
+        return false;
+    }
+    let Some(chip) = chip else {
+        return true;
+    };
+    match tool {
+        "espflash" => chip.flashers.contains(&Flasher::Espflash),
+        "probe-rs" => chip.flashers.contains(&Flasher::ProbeRs) || chip.probe_rs_target.is_some(),
+        "wlink" => chip.flashers.contains(&Flasher::Wlink),
+        "espup" => chip.needs_esp_toolchain(),
+        "esp-generate" => matches!(chip.generator, Some(Generator::EspGenerate)),
+        "ldproxy" => chip.std_target.is_some(),
+        _ => true,
+    }
+}
+
 /// Machine state plus what this project needs from it.
 pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     let rustup = RustupContext::for_project(project);
@@ -325,6 +351,23 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
     let cargo = build.system == crate::model::BuildSystem::Cargo;
 
     let needs_esp_toolchain = cargo && chip.as_ref().is_some_and(|c| c.needs_esp_toolchain());
+
+    // What the open project's part and build system can use, and nothing
+    // else: an STM32 user was told "4 optional tools not installed" about
+    // espup, espflash, esp-generate and ldproxy, and a CMake user was told
+    // Rust itself was missing. With no project, or a part the catalogue does
+    // not know, every row stays — "is my machine set up" is asked before
+    // there is anything to set it up for.
+    status
+        .tools
+        .retain(|tool| relevant(&tool.name, chip.as_ref(), cargo, project.is_some()));
+    if !cargo {
+        for tool in &mut status.tools {
+            if tool.name == "rustup" {
+                tool.required = false;
+            }
+        }
+    }
     // A part whose target is a description the project carries: there is no
     // target to add, and what the build needs instead is a nightly cargo
     // that builds `core` itself, with the source to build it from.
@@ -415,11 +458,18 @@ pub fn report(project: Option<&EmbeddedProject>) -> ToolchainReport {
         }
         status.tools.push(ToolStatus {
             name: binary.to_string(),
-            purpose: format!(
-                "Compiles C into the build for {} — needed by `cc`, bindgen and \
-                 esp-idf-sys, and by nothing else",
-                chip.as_ref().map_or("this part", |c| c.name.as_str()),
-            ),
+            purpose: if needs_c_compiler {
+                format!(
+                    "Compiles this project's C and C++ for {} — the CMake build's compiler",
+                    chip.as_ref().map_or("this part", |c| c.name.as_str()),
+                )
+            } else {
+                format!(
+                    "Compiles C into the build for {} — needed by `cc`, bindgen and \
+                     esp-idf-sys, and by nothing else",
+                    chip.as_ref().map_or("this part", |c| c.name.as_str()),
+                )
+            },
             version: path.as_ref().and_then(|found| probe_version(found)),
             path: path.map(|found| found.display().to_string()),
             install_command: install.to_string(),
@@ -942,6 +992,36 @@ fn run(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rows an STM32 project gets are the ones it can use: probe-rs and
+    /// the editor's tools, not espflash, espup, esp-generate or ldproxy. A
+    /// CMake project gets no Rust generator either. With no project every
+    /// row stays.
+    #[test]
+    fn only_tools_the_project_can_use_are_listed() {
+        let stm32 = chip::by_id("stm32f411ce").expect("a catalogued STM32");
+        for tool in ["espflash", "espup", "esp-generate", "ldproxy", "wlink"] {
+            assert!(
+                !relevant(tool, Some(&stm32), true, true),
+                "{tool} for an STM32"
+            );
+        }
+        for tool in ["probe-rs", "rust-analyzer", "rustup"] {
+            assert!(
+                relevant(tool, Some(&stm32), true, true),
+                "{tool} for an STM32"
+            );
+        }
+        let c3 = chip::by_id("esp32c3").expect("the C3");
+        assert!(relevant("espflash", Some(&c3), true, true));
+        assert!(relevant("esp-generate", Some(&c3), true, true));
+        assert!(!relevant("esp-generate", Some(&stm32), false, true));
+        assert!(!relevant("rust-analyzer", Some(&stm32), false, true));
+        assert!(
+            relevant("espflash", Some(&stm32), true, false),
+            "no project: every row"
+        );
+    }
 
     /// A current rustup annotates its lines `(active, default)`; an older one
     /// `(default)`. The default has to be found under both, or the panel

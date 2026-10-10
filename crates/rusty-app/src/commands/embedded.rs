@@ -159,8 +159,10 @@ pub async fn memory_report(elf_path: String, state: State<'_, AppState>) -> Answ
     let report = {
         let path = path.clone();
         blocking("the memory report", move || {
-            let chip_id = root.and_then(|root| project::detect(&root).ok().and_then(|p| p.chip));
-            memory::analyze(&path, chip_id.as_deref())
+            let chip_id = root
+                .as_ref()
+                .and_then(|root| project::detect(root).ok().and_then(|p| p.chip));
+            memory::analyze_project(&path, chip_id.as_deref(), root.as_deref())
         })
         .await??
     };
