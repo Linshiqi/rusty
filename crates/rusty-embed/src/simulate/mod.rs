@@ -38,7 +38,7 @@ pub use channel::{PinChannel, Sensor, Start, connect, pin_level, start_of};
 pub use machine::gdb_for;
 pub use models::{has_adc_model, has_gpio_model, has_peripherals, has_wave_model};
 pub use plan::{plan, prepare};
-pub use qemu::{free_port, pins_args, qmp, qmp_args};
+pub use qemu::{connect_local, free_port, pins_args, qmp, qmp_args};
 #[cfg(test)]
 pub(crate) use sheet::load_board_for_test;
 pub use sheet::{kit_rows_for, resolve_symbols};

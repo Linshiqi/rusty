@@ -1119,13 +1119,11 @@ write-serial = "Skp=2.5"
         }
 
         // Nobody listens on the port: what the channel would say is lost,
-        // which is the case where a step must still be taken.
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let pins = super::super::connect(port, Default::default(), None, |_| {});
+        // which is the case where a step must still be taken. Port 0, which
+        // no connection can reach: a free port let go of here can be handed
+        // straight on to another test's emulator, and this channel, trying
+        // it every ten milliseconds, would reach that emulator first.
+        let pins = super::super::connect(0, Default::default(), None, |_| {});
         let console = Console::default();
         let board = Board {
             input: process::Input::new(Some(Box::new(console.clone()))),

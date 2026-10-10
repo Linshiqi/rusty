@@ -134,6 +134,14 @@ impl Write for Typed {
 /// here, as a command that cannot start fails at its spawn.
 pub fn launch(plan: &CommandPlan, dir: Option<&Path>) -> Result<Session> {
     let options = options(&plan.args).map_err(Error::refused)?;
+    // The pin channel's port first, before the image is read: the plan's
+    // port was let go of by `free_port`, and it is claimed again as soon as
+    // it can be. And listening before `launch` returns, so whoever connects
+    // next finds the emulator there: bound on the thread, it was a moment
+    // later, and a connection tried in that moment met nobody.
+    let pins = options
+        .pins
+        .map(|port| (port, TcpListener::bind(("127.0.0.1", port))));
     let elf = match dir {
         Some(dir) if options.elf.is_relative() => dir.join(&options.elf),
         _ => options.elf.clone(),
@@ -153,7 +161,7 @@ pub fn launch(plan: &CommandPlan, dir: Option<&Path>) -> Result<Session> {
         .name("rusty-mcu".to_string())
         .spawn({
             let stop = Arc::clone(&stop);
-            move || run(machine, options, &tx, &typing, &stop)
+            move || run(machine, options, pins, &tx, &typing, &stop)
         })
         .map_err(|error| Error::refused(format!("could not start the emulator: {error}")))?;
     let thread: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(Some(thread)));
@@ -188,6 +196,7 @@ fn say(tx: &mpsc::Sender<LogLine>, text: String) {
 fn run(
     mut machine: Machine,
     options: Options,
+    pins: Option<(u16, std::io::Result<TcpListener>)>,
     tx: &mpsc::Sender<LogLine>,
     typing: &mpsc::Receiver<Vec<u8>>,
     stop: &AtomicBool,
@@ -198,8 +207,8 @@ fn run(
     }
     let mut channel = None;
     let (heard_tx, heard) = mpsc::channel::<String>();
-    if let Some(port) = options.pins {
-        match wait_for_channel(port, stop) {
+    if let Some((port, listener)) = pins {
+        match listener.and_then(|listener| wait_for_channel(listener, stop)) {
             Ok(Some(stream)) => {
                 if let Ok(reader) = stream.try_clone() {
                     std::thread::spawn(move || {
@@ -287,10 +296,12 @@ fn run(
     }
 }
 
-/// Listen on `port` and wait for rusty's side to connect, as `wait=on`
-/// does — `Ok(None)` if the run was stopped first.
-fn wait_for_channel(port: u16, stop: &AtomicBool) -> std::io::Result<Option<TcpStream>> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
+/// Wait on the pin channel for rusty's side to connect, as `wait=on` does —
+/// `Ok(None)` if the run was stopped first.
+fn wait_for_channel(
+    listener: TcpListener,
+    stop: &AtomicBool,
+) -> std::io::Result<Option<TcpStream>> {
     listener.set_nonblocking(true)?;
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -449,30 +460,58 @@ mod tests {
         }
     }
 
+    /// A run of a fixture's PWM example on `chip`, its pin channel connected
+    /// as [`super::super::connect`] connects.
+    fn launched(chip: &str, fixture: &str) -> (Session, BufReader<TcpStream>) {
+        let elf = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../rusty-mcu/tests/fixtures")
+            .join(fixture)
+            .join("pwm.elf");
+        let port = super::super::free_port().expect("a free port");
+        let mut args = boot_args(chip, &elf.display().to_string());
+        args.extend(pins_args(port));
+        let plan = CommandPlan::new(PROGRAM, args, "test");
+        let session = launch(&plan, None).expect("launched");
+        // `launch` listens before it returns, so one attempt is the test: a
+        // refusal is the emulator's, and its console says why.
+        let stream = match super::super::connect_local(port) {
+            Ok(stream) => stream,
+            Err(error) => failed(&session, format!("no pin channel on {port}: {error}")),
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        (session, BufReader::new(stream))
+    }
+
+    /// The first report on the channel.
+    fn first_report(session: &Session, channel: &mut BufReader<TcpStream>) -> String {
+        let mut line = String::new();
+        match channel.read_line(&mut line) {
+            Ok(0) => failed(session, "the pin channel closed before a report".into()),
+            Ok(_) => line.trim_end().to_string(),
+            Err(error) => failed(session, format!("no report on the pin channel: {error}")),
+        }
+    }
+
+    /// Stop the run and fail with everything its console said, which is
+    /// where the emulator explains a channel it could not open.
+    fn failed(session: &Session, what: String) -> ! {
+        session.stopper().stop();
+        let mut said = Vec::new();
+        while let Some(line) = session.recv() {
+            said.push(line.text);
+        }
+        panic!("{what}; the emulator said {said:?}");
+    }
+
     /// The real firmware, end to end through the host's half: launched as a
     /// session, its pin channel connected over TCP the way `connect` does,
     /// and PWM reports arriving on it in the protocol `absorb` reads.
     #[test]
     fn a_launched_run_reports_pwm_on_its_pin_channel_and_prints_on_its_console() {
-        let elf = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../rusty-mcu/tests/fixtures/ch32v003-pwm/pwm.elf");
-        let port = super::super::free_port().expect("a free port");
-        let mut args = boot_args("ch32v003j4m6", &elf.display().to_string());
-        args.extend(pins_args(port));
-        let plan = CommandPlan::new(PROGRAM, args, "test");
-        let session = launch(&plan, None).expect("launched");
-
-        let stream = loop {
-            if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
-                break stream;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let mut reports = BufReader::new(stream).lines();
-        let first = reports.next().expect("a report").expect("readable");
+        let (session, mut channel) = launched("ch32v003j4m6", "ch32v003-pwm");
+        let first = first_report(&session, &mut channel);
         let pwm = crate::protocol::parse_pwm_report(&first)
             .unwrap_or_else(|| panic!("a PWM report: {first}"));
         assert_eq!(pwm.pins[0].0, 20, "PC4");
@@ -508,27 +547,8 @@ mod tests {
     /// pins arrive numbered 24 to a port — PB12 is 36.
     #[test]
     fn a_ch32x035_run_reports_pb12_by_its_own_numbering() {
-        let elf = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../rusty-mcu/tests/fixtures/ch32x035-pwm/pwm.elf");
-        let port = super::super::free_port().expect("a free port");
-        let mut args = boot_args("ch32x035f8u6", &elf.display().to_string());
-        args.extend(pins_args(port));
-        let plan = CommandPlan::new(PROGRAM, args, "test");
-        let session = launch(&plan, None).expect("launched");
-        let stream = loop {
-            if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
-                break stream;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let first = BufReader::new(stream)
-            .lines()
-            .next()
-            .expect("a report")
-            .expect("readable");
+        let (session, mut channel) = launched("ch32x035f8u6", "ch32x035-pwm");
+        let first = first_report(&session, &mut channel);
         let pwm = crate::protocol::parse_pwm_report(&first)
             .unwrap_or_else(|| panic!("a PWM report: {first}"));
         assert_eq!(pwm.pins[0].0, 36, "PB12");

@@ -611,11 +611,28 @@ impl Drop for DapSession {
     }
 }
 
-/// A port of our own. Bound and released so the adapter can take it: a race
-/// with another process is possible in principle and has never been the
-/// failure worth engineering against, while "ask the adapter which port it
-/// chose" is not something both adapters agree on.
+/// A port of our own. Bound and released so the adapter can take it — "ask
+/// the adapter which port it chose" is not something both adapters agree
+/// on — and so taken from below the range the system gives outgoing
+/// connections their source ports from (32768 up on Linux, 49152 up on
+/// Windows and macOS). From inside it, `bind(0)`'s, the released port was
+/// the likeliest source port for the next connection made on the machine —
+/// this loop's own, while the adapter starts, among them — and the adapter
+/// then could not listen. rusty-embed's `simulate::free_port` is the same
+/// walk and says how it was measured; this crate does not depend on it.
 fn free_port() -> Result<u16> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static STEP: AtomicU32 = AtomicU32::new(0);
+    const QUIET: std::ops::Range<u16> = 20_000..32_000;
+    let span = u32::from(QUIET.end - QUIET.start);
+    let start = std::process::id().wrapping_mul(2_654_435_761);
+    for _ in 0..256 {
+        let step = STEP.fetch_add(1, Ordering::Relaxed);
+        let port = QUIET.start + (start.wrapping_add(step.wrapping_mul(7919)) % span) as u16;
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return Ok(port);
+        }
+    }
     let refused = |source| Error::Spawn {
         gdb: "a local port".to_string(),
         source,
@@ -742,6 +759,16 @@ fn connect(port: u16, child: &mut Child, adapter: &Path) -> Result<TcpStream> {
             });
         }
         match TcpStream::connect(("127.0.0.1", port)) {
+            // A port `free_port` let go of can come back as this very
+            // connection's source port, and with the adapter not listening
+            // yet the socket joins itself: connected, and every answer its
+            // own request. rusty-embed's `connect_local` measured it.
+            Ok(socket) if socket.local_addr().ok() == socket.peer_addr().ok() => {
+                last = std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "connected to itself; the adapter is not listening yet",
+                );
+            }
             Ok(socket) => return Ok(socket),
             Err(e) => last = e,
         }

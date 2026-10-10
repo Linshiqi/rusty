@@ -565,7 +565,7 @@ pub fn connect(
             if handle.closed.load(Ordering::Relaxed) {
                 return;
             }
-            match TcpStream::connect(("127.0.0.1", port)) {
+            match super::connect_local(port) {
                 Ok(socket) => break socket,
                 Err(_) => std::thread::sleep(Duration::from_millis(10)),
             }

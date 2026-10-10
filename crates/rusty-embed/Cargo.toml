@@ -76,3 +76,7 @@ workspace = true
 rusty-draw = { path = "../rusty-draw" }
 object = { version = "0.40.0", features = ["write"] }
 tempfile = "3.27.0"
+# A socket bound before it connects, which std cannot make: how a test makes
+# the connection that meets itself (`simulate::connect_local`). Already in
+# the lock through reqwest.
+socket2 = "0.6.5"

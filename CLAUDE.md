@@ -3651,6 +3651,26 @@ usty`) holds `location.toml`
   and connects afterwards — which is how gate 10 asserted on a write it had
   provably already missed. QEMU opens the socket during machine init, before
   the first instruction, so the only thing to wait for is the process.
+- **A port `bind(0)` gave and was let go of is the likeliest source port
+  for the next connection on the machine.** `free_port` used to be that,
+  and two failures came of it, both found by running rusty-mcu's launch
+  tests in eight processes at once beside the headless test whose channel
+  dials a port nobody listens on — the one flake that had reached CI, made
+  to happen about once in a thousand runs. First, a connection tried before
+  the emulator listened was given the port it dialled as its own source and
+  met itself (TCP's simultaneous open): `connect` succeeded, and the read
+  timed out ten seconds later with both ends `127.0.0.1:61652`. Then, with
+  that refused, the emulator's own bind failed (`os error 10048`), and
+  `netstat` at that moment showed the port as the source of another run's
+  connection to *its* emulator, three ports along. `free_port` walks
+  20000–32000 now, below every system's ephemeral range, where neither can
+  happen; `connect_local` still refuses a socket joined to itself, since a
+  machine's range can be moved; the in-process emulator listens before
+  `launch` returns; and the headless test's unconnected channel dials port
+  0. Twelve thousand launches after, none failed. **A flake is a race with
+  a witness somewhere: make the failure print both ends of the socket and
+  who holds the port**, and two rounds of it named what an afternoon of
+  reasoning would have guessed at.
 - **A step a model does not recognise must say so, not be skipped.** The
   `default:` arm that quietly did nothing is what made the above invisible
   for three rounds. It reports `?op<N>` on the channel now.
